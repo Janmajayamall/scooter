@@ -30,6 +30,7 @@ These were settled with the owner.
 | Default channel | Replies go back to the channel of the message they answer. What Scooter sends on its own, such as scheduled tasks and notices, and replies about emails go to `DEFAULT_CHANNEL`, which in v2 can only be `whatsapp` (5.3). |
 | Agent | pi (`@earendil-works/pi-coding-agent`) through OpenRouter. The model is configurable; the default is `anthropic/claude-sonnet-5.5`. |
 | Sandbox | pi runs in a fresh Gondolin micro-VM for every batch (6.6). The runner holds the OpenRouter key and swaps it in on pi's requests; pi only ever sees a placeholder. |
+| Data retention | Every OpenRouter request goes only to endpoints that keep no prompts or responses. The runner adds OpenRouter's zero-data-retention flag to each request (`OPENROUTER_ZDR=on`, the default), and the owner also enforces it on Scooter's OpenRouter key (6.13). |
 | Number of agents | One agent, named `lifelog`. The config format allows more later; v2 refuses more than one. |
 | Code | Node.js, ES modules. The bridge and the runner use `yaml`, pinned to an exact version (for example 2.9.1). The runner also uses `@earendil-works/gondolin` to run pi in a VM (6.6), pinned the same way (for example 0.14.0). The email reader, which runs apart as its own user (5.6), uses `imapflow` and `postal-mime` (for example 2.11.0 and 4.2.1). Tests use `node:test`. |
 | Platforms | Linux and macOS, on amd64 and arm64 (Apple silicon). pi's VMs run fast with KVM on Linux or Apple's hypervisor on a Mac, and fall back to much slower emulation where neither is available, such as under Docker Desktop (6.6). |
@@ -236,7 +237,7 @@ Commands come only from WhatsApp. They're logged as `command` lines and never gi
 
 | Command | Handled by | Effect |
 |---|---|---|
-| `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated and when the VM image was built, the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
+| `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated, when the VM image was built, whether zero data retention is on, whether runs are paused and why, the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
 | `/backup` | bridge | Runs a backup now and replies with the snapshot ID or the error. |
 | `/help` | bridge | Lists the commands. |
 | `/new` | runner | Starts a fresh pi session for the rest of the day and replies "Started a fresh conversation." |
@@ -362,6 +363,7 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 
 - `cursor` is the highest `seq` the runner has dealt with, either by giving it to the agent or by skipping it. Everything after it is new.
 - `backfill` exists only while a backfill is in progress (6.11). `backfillDone` lists the finished ones.
+- `paused` exists only while a setup error or an outage holds runs back (6.9): since when, the reason, and the next try.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day in `SCOOTER_TZ`, because the session and the schedule follow that day.
 - **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) is context: the cursor moves past it, and the agent is shown it but doesn't report on it.
 
@@ -373,6 +375,7 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - **`backfill`:** at startup, the runner starts the first `backfill` whose ID isn't in `backfillDone`. Its batches run only when nothing live is waiting (6.11).
 - **Overlap:** runs never overlap. During a run the runner holds `/data/exchange/locks/run.lock`, and it doesn't start a run while `locks/backup.lock` exists. It removes a leftover `run.lock` at startup.
 - **Commands:** before building a batch, the runner handles command lines after the cursor itself. `/new` bumps the session and replies, with `about` set to the command (5.3); the other commands belong to the bridge and are skipped.
+- **While paused** (6.9), nothing runs until the next try: no batches, scheduled tasks or backfill batches. Commands still work.
 
 ### 6.5 What the agent is given
 
@@ -479,7 +482,7 @@ In this order:
 5. **State:**
    - Remove items reported `DONE` from `retry`.
    - Move items reported `FAILED` to `failed`. The agent explains these in its own answer, so the runner sends no notice.
-   - For items in the batch that weren't reported, add one to `attempts` and set `due` to 1, 5 or 30 minutes ahead. After the fourth attempt, move them to `failed` with the reason "not handled after 4 attempts", and tell the owner (6.9).
+   - For items in the batch that weren't reported, add one to `attempts` and set `due` to 1 minute ahead. A longer wait wouldn't help: these failures come from the model or the message, not from outside, and the model often succeeds on another try. After the fourth attempt, move them to `failed` with the reason "not handled after 4 attempts", and tell the owner (6.9).
    - Keep only the newest 100 entries in `failed`.
    - Set `cursor` to the highest `seq` the batch covered, and record `lastRun`.
 
@@ -487,7 +490,13 @@ With this order, a crash part-way through only means the batch is retried. The a
 
 ### 6.9 Failures and notices
 
-- **pi fails** (non-zero exit or timeout), or leaves an unexpected file (6.8): throw away the run's uncommitted changes in `views/` and `memory/` (`git restore` and `git clean -fdx`, both limited to those two folders; `-x` also removes files git ignores), and its session changes (6.6), so the retry starts from the last good state. Every item in the batch counts one attempt, with the same backoff. The first failure in a row sends the owner one notice ("⚠️ I couldn't process your last messages (<short reason>). I'll try again."); later failures send nothing until a run succeeds.
+- **pi fails** (non-zero exit or timeout), or leaves an unexpected file (6.8): throw away the run's uncommitted changes in `views/` and `memory/` (`git restore` and `git clean -fdx`, both limited to those two folders; `-x` also removes files git ignores), and its session changes (6.6), so the next try starts from the last good state. What happens next depends on the cause. The runner reads it from OpenRouter's last response during the run, in its own network log (6.13):
+  - **Setup error:** OpenRouter answered 401, 402, 403 or 404. For example, a revoked key, no credit left, a model the key's guardrail doesn't allow, a model that's gone, or no endpoint meeting ZDR. No item counts an attempt. Runs pause: the runner starts nothing until the next try, every 30 minutes and whenever it restarts, until a run gets through.
+  - **Outage:** OpenRouter answered 408, 429 or a 5xx, or couldn't be reached. No item counts an attempt, and the runner tries again after 1, 5 and 30 minutes, then every 30 minutes.
+  - **Anything else:** pi crashed or timed out while OpenRouter was answering normally, or it left an unexpected file. Every item in the batch counts one attempt, and is due again a minute later (6.8).
+
+  After a setup error or an outage, the batch's items wait in `retry` for the next try, with their attempt counts unchanged. Each try builds its batch as usual (6.5), so those items come first and messages that arrived meanwhile join in. So the whole batch is handled once OpenRouter works again, and nothing a setup error or an outage holds up ends in `failed`.
+- **The notice:** the first failure in a row sends the owner one notice ("⚠️ I couldn't process your last messages (<short reason>). I'll try again."); later failures send nothing until a run succeeds. The short reason is OpenRouter's error when it refused or failed a request, such as no endpoint meeting the data policy; otherwise it's pi's exit status, or "timed out". A setup error's notice also says that runs are paused until it's fixed.
 - **Items run out of attempts:** send one notice listing them, for example "⚠️ I gave up on #1051 ("coffee 120") after 4 attempts. Send it again if it matters."
 - Notices are outbox entries with `by: "runner"`, and go to `DEFAULT_CHANNEL` (5.3).
 
@@ -513,7 +522,7 @@ Live runs use a skill from the moment it's added, but the messages before that w
 
 - **Starting one:** add the skill to the agent, then a `backfill` entry for it (6.1), and restart the runner. At startup the runner starts the first entry whose ID isn't in `backfillDone`, and records `until`, the current `cursor`. Live runs, which now load the new skill, handle everything after `until`, and the backfill handles everything up to it, so every message is covered once. Backfills run one at a time. If an entry is removed from the config, the runner drops its backfill at the next start.
 - **When it runs:** a backfill batch starts only when nothing live is waiting: no work items after `cursor`, no due retries, and no scheduled task or command. Runs still never overlap (6.4), so a new message waits at most for the backfill batch in progress.
-- **Its own lane:** the backfill keeps its own `cursor`, `retry` list and `skipped` list in `state.json` (6.3), and handles them like the live ones (6.8, 6.9). Unreported items are retried with the same backoff. Items reported `FAILED`, or given up on after 4 attempts, go to `skipped`.
+- **Its own lane:** the backfill keeps its own `cursor`, `retry` list and `skipped` list in `state.json` (6.3), and handles them like the live ones (6.8, 6.9). Unreported items are retried a minute later, as live ones are. Items reported `FAILED`, or given up on after 4 attempts, go to `skipped`.
 - **The batch:** work items after the backfill's cursor, up to `until`, with their context, shown as in 6.5 and replayed as in 6.10. The prompt starts with `Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and the day pages.` pi gets that skill and `day-pages`, with the same system prompt as live runs, so the owner's current preferences apply to all of history.
 - **What it may change:** only the paths in `writes`, and the day pages. After pi exits, the runner applies the check in 6.8, and also fails the batch if anything else changed, `memory/` included. It can't tell which section of a day page changed; git history shows that.
 - **Silent:** nothing is sent per batch. Text, `REPLY_TO` and `NO_REPLY` lines are ignored, and failures send no notice. Guesses stay marked ❓ in the rows instead of going to `needs-review.md`, which old questions would otherwise flood.
@@ -551,6 +560,10 @@ The rules:
   - every image or document is inline: a `data:` URL, or a `base64` source.
 
   The hook then forwards its own re-encoding of the checked JSON, so a body with a duplicated key can't show the check one value and OpenRouter another. Without these checks, OpenRouter could fetch from the web for the agent, past this policy and its log (13.3).
+- **Zero data retention:** with `OPENROUTER_ZDR=on`, the default, the hook also sets `provider.zdr` to `true` and `provider.data_collection` to `"deny"` in every body it forwards, on both routes, whatever pi sent. OpenRouter then routes the request only to endpoints that keep no prompts or responses (13.3).
+  - If the configured model has no endpoint that qualifies, OpenRouter refuses every request, so runs pause and the owner gets one notice with OpenRouter's reason (6.9). There's no separate startup check. `doctor` can list the model's qualifying endpoints, from OpenRouter's public list (`GET /api/v1/endpoints/zdr`).
+  - A request can only tighten OpenRouter's own settings, never loosen them, so the owner also enforces ZDR there. Scooter gets its own OpenRouter key, with a guardrail that enforces ZDR for every model group and excludes Safety Retention ("ZDR only"), allows only the configured model, and caps spending. The account's own prompt logging stays off. Then even a request without the flag can't reach an endpoint that keeps data.
+  - With `OPENROUTER_ZDR=off`, the hook leaves routing to OpenRouter's settings.
 - **The log:** the runner appends to `/data/runner/log/YYYY-MM-DD.jsonl` (the UTC date):
   ```jsonl
   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:12Z","event":"request","host":"openrouter.ai","method":"POST","path":"/api/v1/messages"}
@@ -657,7 +670,8 @@ The day page template (leave out empty sections):
 docs/DESIGN.md, docs/DECISIONS.md
 src/cli.mjs          entry point: bridge, runner, setup, doctor, build-image, pair, email-check, backup-init,
                      snapshots, check, restore, rebuild
-src/common/          settings, logging, time zones, atomic files, processes, locks, datastore reader and writer
+src/common/          settings, limits.mjs (every constant, 8.6), logging, time zones, atomic files, processes,
+                     locks, datastore reader and writer
 src/bridge/          intake, outbox and routing, commands, backups
 src/bridge/channels/ whatsapp.js (wacli client and supervisor), email.js (runs the email reader, reads its spool, sender check)
 src/mail/            the email reader, run as user mail: imapflow, postal-mime, the spool writer
@@ -686,6 +700,7 @@ Dockerfile, compose.yaml, bridge.env.example, runner.env.example, README.md
 | `EMAIL_AUTHSERV_ID` | required for email | bridge | The server name the mailbox's provider writes in `Authentication-Results`, such as `mx.google.com`; `email-check` shows it (8.4) |
 | `EMAIL_CHECK_SECONDS` | `60` | email reader | The longest the reader goes between checks, even with IDLE |
 | `OPENROUTER_API_KEY` | required | runner | The key the runner swaps in on pi's requests to OpenRouter (6.13). It never enters pi's VM. |
+| `OPENROUTER_ZDR` | `on` | runner | `on` sends every OpenRouter request only to endpoints that keep no prompts or responses (6.13) |
 | `SCOOTER_TZ` | `Asia/Kolkata` | both | The owner's IANA time zone, used only for what the owner sees or sets (section 2) |
 | `HOME_CURRENCY` | `INR` | runner | ISO currency code |
 | `BATCH_SECONDS` | `8` | runner | How long the owner must be quiet before a batch runs |
@@ -738,7 +753,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `bridge` | bridge | Runs the bridge (the service's default command) |
 | `runner` | runner | Runs the runner (the service's default command) |
 | `setup` | the host, as root | Natively: creates the users and folders in 3.2, adds `runner` to the `kvm` group on Linux, writes `bridge.env` and `runner.env` from the examples if they don't exist, and installs the two services (8.5). Safe to repeat. |
-| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; folder owners and modes; and whether `openrouter.ai` is reachable. |
+| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; folder owners and modes; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. |
 | `build-image` | runner | Builds the VM image (6.12) |
 | `pair [--phone +91…]` | bridge | Runs `wacli auth` as the wacli user with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
 | `email-check` | bridge | Runs the email reader once, as user `mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. |
@@ -763,6 +778,36 @@ Scooter runs the same natively on Linux and macOS, on amd64 and arm64:
 - **Development:** the code and its tests run natively without `setup`, as an ordinary user (section 10).
 - Host scripts, if any, must work with macOS's bash 3.2 and BSD tools as well as on Linux.
 
+### 8.6 Constants
+
+Every fixed number that tunes how Scooter behaves lives in one module, `src/common/limits.mjs`. Each has a name, a comment saying what it protects, and the section that uses it. Code never repeats these numbers inline, and tests override them through the module.
+
+They aren't settings. A value becomes a setting (8.2) only when the owner has a reason to change it, and then it gets a valid range and a test. That way a bad value can't, for example, make Scooter retry in a tight loop or flood WhatsApp.
+
+| Name | Value | Used in | What it does |
+|---|---|---|---|
+| `BATCH_MAX_ITEMS` | 20 | 6.5 | The most messages in one batch, retries first |
+| `MAX_ATTEMPTS` | 4 | 6.8 | Attempts before a message moves to `failed` |
+| `RETRY_WAIT` | 1 minute | 6.8 | The wait before a message that failed for its own reasons is tried again |
+| `OUTAGE_RETRY_WAITS` | 1, 5 and 30 minutes, then every 30 | 6.9 | The waits between tries while OpenRouter is down |
+| `SETUP_RETRY_WAIT` | 30 minutes | 6.9 | The wait between tries after a setup error |
+| `FAILED_KEEP` | 100 | 6.8 | How many entries `failed` keeps |
+| `POLL_INTERVAL` | 1 second | 5.3, 5.6, 6.4 | How often the runner looks for new lines, and the bridge checks the outbox and the email spool |
+| `SEND_INTERVAL` | 1.5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam |
+| `CHUNK_CHARS` | 3,500 | 5.3 | The longest piece of a reply, under WhatsApp's limit |
+| `WEBHOOK_MAX_BYTES` | 2 MB | 5.2 | The largest webhook body accepted from wacli |
+| `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back, how many rows |
+| `MEDIA_DOWNLOAD_RETRIES` | 2 | 5.2 | Retries for a failed media download |
+| `ATTACHMENT_MAX_BYTES` | 100 MB | 4.4, 5.6 | The largest attachment, or email, that's stored |
+| `EMAIL_TEXT_MAX_CHARS` | 20,000 | 5.6 | Where an email's body is cut |
+| `MODEL_REQUEST_MAX_BYTES` | 50 MB | 6.13 | The largest model request the network policy reads |
+| `RESTART_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.1, 5.6 | Restart waits for wacli and the email reader |
+| `STOP_GRACE` | 15 seconds | 5.1 | From SIGTERM to SIGKILL when stopping wacli |
+| `AUTH_CHECK_INTERVAL` | 1 minute | 5.1 | How often an unpaired wacli is checked again |
+| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | Added to the agent's timeout while a backup waits for a run to finish |
+| `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
+| `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
+
 ## 9. Security
 
 The controls, and what each one protects against:
@@ -778,7 +823,7 @@ The controls, and what each one protects against:
 - **Backups:** restic encrypts everything before upload, so the bucket holds only ciphertext. `bridge.env` and `runner.env` aren't backed up; the owner keeps `RESTIC_PASSWORD` in a password manager.
 
 Accepted risks:
-- OpenRouter and the model provider see the content of messages.
+- OpenRouter and the model provider see the content of messages while they process them. With zero data retention (6.13) neither keeps it afterwards, except that OpenRouter screens every request for child sexual abuse material and may keep what it flags (13.3).
 - With internet access on, a misled run can send the owner's data to any public website, and even an ordinary lookup tells a website what was looked up. The log shows when, which host and path, and how much, not what.
 - A malicious document can still mislead the agent into misfiling things, editing its memory, or telling the owner something wrong. Git history shows what changed.
 - A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner. There it would reach the OpenRouter key and the agent's folders, but not the bridge's secrets, because the runner is its own unprivileged user, apart from the bridge.
@@ -826,9 +871,9 @@ Required tests, at least:
 - **Least privilege:** the folders Scooter creates get the owners and modes in 3.2; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
 - **Runner:**
   - Batching after the quiet period, and the batch limit.
-  - Cursor, retry and failed transitions with an injected clock (backoff of 1, 5 and 30 minutes; 4 attempts).
+  - Cursor, retry and failed transitions with an injected clock (a 1-minute wait between attempts; 4 attempts).
   - `FAILED`.
-  - A pi failure counts as one attempt, sends one notice, and discards uncommitted changes.
+  - A pi failure discards uncommitted changes and sends one notice. It counts one attempt, unless OpenRouter caused it. A 401, 402, 403 or 404 pauses runs, with a try every 30 minutes and on restart. A 408, 429, 5xx or no answer is retried after 1, 5 and 30 minutes, then every 30. Neither counts attempts, and messages that arrive meanwhile are handled once a run gets through.
   - Context lines and reply labels in the prompt.
   - Emails in the prompt, and `about` on an answer's plain text (the batch's newest item), but not on a scheduled task's.
   - An edit or deletion of a message waiting in `retry`, or in `failed`, brings that message into the same batch, shown as last edited.
@@ -852,6 +897,7 @@ Required tests, at least:
   - Each refusal: another model, an `:online` model, a tool that isn't `function` or is a server tool, `plugins`, `mcp_servers`, an unknown top-level field or `anthropic-beta` value, an image or document given by URL, another path or method on `openrouter.ai`, another host with internet access off, and plain HTTP with it on.
   - A body with a duplicated key goes out only as the hook's own re-encoding.
   - The placeholder is replaced only on requests to `openrouter.ai`.
+  - With `OPENROUTER_ZDR=on`, every forwarded body carries `provider.zdr: true` and `data_collection: "deny"`, overriding anything pi sent; with it off, routing is left alone. When OpenRouter refuses a request because no endpoint meets ZDR, runs pause, and the owner's notice gives that reason.
   - The `request` line is written before the request goes out, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
 - **Sandbox** (these need QEMU, and skip themselves without it):
   - A VM boots from the built image and runs `pi --version`.
@@ -868,7 +914,7 @@ Required tests, at least:
 
 Work through these milestones in order. Each one ends with `npm test` passing and a commit that describes it.
 
-1. **Foundations.** `package.json` (Node ≥ 22.19; `yaml`, `@earendil-works/gondolin`, `imapflow` and `postal-mime` pinned), a `src/cli.mjs` skeleton, settings and their validation (both env files), time-zone helpers, logging, atomic file writes, running processes with timeouts and a uid/gid, locks, and the datastore module (4.3, 4.4).
+1. **Foundations.** `package.json` (Node ≥ 22.19; `yaml`, `@earendil-works/gondolin`, `imapflow` and `postal-mime` pinned), a `src/cli.mjs` skeleton, settings and their validation (both env files), the constants module (8.6), time-zone helpers, logging, atomic file writes, running processes with timeouts and a uid/gid, locks, and the datastore module (4.3, 4.4).
    *Done when* the datastore tests pass, including recovery from an incomplete last line.
 2. **Bridge intake.** The channel interface (5), the wacli client and sync supervisor (5.1), the webhook server, normalization, filtering, media, replies, reactions, edits, deletions, commands and catch-up (5.2), and email: the reader and the spool (5.6).
    *Done when* signed webhook posts end up as the right datastore lines and attachments, and unsigned ones don't; and the same goes for sample emails from a fake mailbox, while mail that fails the sender check isn't stored.
@@ -885,7 +931,7 @@ Work through these milestones in order. Each one ends with `npm test` passing an
    *Done when* the stubbed flow and the real restic round trip pass.
 7. **Agent instructions and docs.** The protocol (7.1), `config/prompts/lifelog.md` (7.2), the six skills (7.3), the default `config/agents.yaml`, `config/image/build.json`, `bridge.env.example`, `runner.env.example`, and a `README.md`. The README covers:
    - setup natively on Linux and on a Mac (8.5), and in Docker (8.3), including how to enable KVM in each case, the udev rule for rootless Docker, and what emulation costs;
-   - the bot number, the Scooter mailbox and its app password, the env files, `build-image`, `doctor`, `backup-init`, `pair` and `email-check`;
+   - the bot number, the Scooter mailbox and its app password, Scooter's OpenRouter key and its guardrail (6.13), the env files, `build-image`, `doctor`, `backup-init`, `pair` and `email-check`;
    - daily use (including copying the views out), commands, backups and restore, rebuilds, and development;
    - the security model, including what turning internet access on means, and how to read the network log.
 
@@ -897,6 +943,7 @@ Work through these milestones in order. Each one ends with `npm test` passing an
 - More than one agent, and channels other than WhatsApp and the owner's email, such as Telegram or bank alerts.
 - Sending email, and keeping email from anyone but the owner.
 - Approvals for preference changes, notices about them, and an `/undo` command.
+- A `/retry` command that puts messages in `failed` back in the queue. Until then, editing or resending a message brings it back (6.5).
 - Group chats, and messages typed directly on the bot's phone.
 - Voice transcription, reminders, and a web interface.
 - Answering questions about the data, sending views as files, and acting for the owner, such as creating calendar events. These belong to a separate assistant agent, later.
@@ -964,6 +1011,13 @@ Work through these milestones in order. Each one ends with `npm test` passing an
   - B2: `b2:<bucket>:scooter`.
 - **Docker:** its default seccomp profile blocks creating user namespaces, so sandboxes like bubblewrap don't work inside containers. Gondolin's VMs don't need them (13.4). Docker Desktop on macOS gives containers no KVM.
 - **OpenRouter** can fetch from the web on a request's behalf: the server tools `openrouter:web_search` and `openrouter:web_fetch` (which fetches any URL the model picks), the `web` plugin, the `:online` model suffix, and images given by URL. The settings on an account's Plugins tab don't apply to server tools, and its guardrails can limit a key's models and spending but not these tools, so only the runner's network policy can stop them (6.13). A request with a dummy key gets 401; a well-formed but unknown key gets "User not found".
+- **OpenRouter's zero data retention (ZDR)**, from its docs on 2026-11-15:
+  - ZDR means no routine storage of prompts or responses after processing. From 27 October 2026, OpenRouter screens every request, ZDR included, for child sexual abuse material, and may keep what it flags.
+  - It can be enforced in the account's privacy settings, in a guardrail on a key, or per request with `provider: {"zdr": true}`. These combine with OR, so a request can add ZDR but never remove it. Settings and guardrails apply it per model group: Anthropic, OpenAI, Google, SpaceXAI and all other models.
+  - Endpoints with "Safety Retention" may keep prompts to detect abuse. ZDR-enforced requests can still use them unless the account or the guardrail is set to "ZDR only"; self-serve accounts allow them by default.
+  - For Anthropic models, ZDR removes Anthropic's own endpoints and leaves Amazon Bedrock and Google Vertex. On 2026-11-15, `anthropic/claude-sonnet-5.5` had six ZDR endpoints (Bedrock: `us-east-1`, `eu-west-1` and global; Vertex: global, `us` and `europe`), none with Safety Retention, in the public list at `GET /api/v1/endpoints/zdr`.
+  - In-memory prompt caching doesn't count as retention, so it's allowed under ZDR.
+  - ZDR covers model inference only, not plugins or server tools such as web search, which Scooter refuses anyway (6.13).
 
 ### 13.4 Gondolin 0.14.0 (`@earendil-works/gondolin`)
 
@@ -1006,6 +1060,8 @@ Check these during implementation where you can, and put the rest in the README 
 - The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused.
 - `--skill` together with `--no-skills` in the pinned pi version.
 - A real batch end to end, with the owner's key, in the sandbox.
+- Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13).
+- That ZDR-only routing works for the configured model, and how much latency it adds.
 - KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3).
 - Gondolin natively on a Mac with Apple's hypervisor, and the launchd services (8.5).
 - Building the VM image natively on Linux and macOS, and in the runner container.
