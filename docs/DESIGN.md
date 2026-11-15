@@ -6,6 +6,8 @@ The `main` branch holds an earlier prototype. Don't read it, run it or copy from
 
 When this document doesn't settle a question, pick the simplest option that keeps the principles in section 1, and record the choice in `docs/DECISIONS.md`. Don't change anything in section 2 without asking the owner.
 
+Two documents go with this one. `docs/ARCHITECTURE.md` maps the components, their boundaries and the decisions behind them; its section 8 lists the changes made to this document on 2026-11-15, while planning, with the reason for each. The implementation plan, under `docs/plans/`, sets the order of work.
+
 ## 1. What Scooter does
 
 The owner sends receipts, run screenshots, food photos, travel tickets, notes about time spent with people, and other short notes to a second WhatsApp number, the bot. They can also email things to a mailbox of Scooter's own, such as a forwarded booking or a file. Scooter keeps every message permanently. An AI agent turns the messages into spreadsheets and a page per day, and asks the owner when it's unsure. Everything is backed up nightly, encrypted. Answering questions about the data, and acting for the owner, are for a separate assistant later (section 12).
@@ -32,9 +34,9 @@ These were settled with the owner.
 | Sandbox | pi runs in a fresh Gondolin micro-VM for every batch (6.6). The runner holds the OpenRouter key and swaps it in on pi's requests; pi only ever sees a placeholder. |
 | Data retention | Every OpenRouter request goes only to endpoints that keep no prompts or responses. The runner adds OpenRouter's zero-data-retention flag to each request (`OPENROUTER_ZDR=on`, the default), and the owner also enforces it on Scooter's OpenRouter key (6.13). |
 | Number of agents | One agent, named `lifelog`. The config format allows more later; v2 refuses more than one. |
-| Code | Node.js, ES modules. The bridge and the runner use `yaml`, pinned to an exact version (for example 2.9.1). The runner also uses `@earendil-works/gondolin` to run pi in a VM (6.6), pinned the same way (for example 0.14.0). The email reader, which runs apart as its own user (5.6), uses `imapflow` and `postal-mime` (for example 2.11.0 and 4.2.1). Tests use `node:test`. |
-| Platforms | Linux and macOS, on amd64 and arm64 (Apple silicon). pi's VMs run fast with KVM on Linux or Apple's hypervisor on a Mac, and fall back to much slower emulation where neither is available, such as under Docker Desktop (6.6). |
-| Deployment | The owner's choice: native services (systemd on Linux, launchd on macOS), or Docker Compose with one image and two services (`bridge` and `runner`). Either way there are no published ports (section 8). |
+| Code | Node.js, ES modules. The runner uses `yaml` to read `agents.yaml`, pinned to an exact version (for example 2.9.1), and `@earendil-works/gondolin` to run pi in a VM (6.6), pinned the same way (for example 0.14.0). The email reader, which runs apart as its own user (5.6), uses `imapflow` and `postal-mime` (for example 2.11.0 and 4.2.1). The bridge uses no third-party library. Tests use `node:test`. |
+| Platforms | Linux, on amd64 and arm64. macOS comes later, and nothing is built or tested for it until then (section 12). pi's VMs run fast with KVM, and fall back to much slower emulation where it isn't available, such as in a container that can't open `/dev/kvm` (6.6). |
+| Deployment | The owner's choice: native systemd services, or Docker Compose with one image and two services (`bridge` and `runner`). Either way there are no published ports (section 8). |
 | Backups | restic 0.19.1 to an S3-compatible bucket (Cloudflare R2 or Backblaze B2), encrypted on the server before upload, nightly. |
 | Settings | Time zone, home currency, reply mode, model, the agent's internet access and how its VMs are accelerated are configurable. |
 | Internet | The agent has no internet access unless the owner turns it on (`AGENT_INTERNET=on`). Off, its VM can reach only OpenRouter's two chat endpoints. On, it can also reach public HTTPS websites. In both modes the runner refuses requests that would make OpenRouter fetch from the web for the agent, and logs every request: when, which host and path, and how many bytes each way, but not what was sent (6.13). |
@@ -55,12 +57,12 @@ pi's requests ──▶ the runner's network policy ──▶ OpenRouter, and HT
 | Component | Runs as | Does | Writes |
 |---|---|---|---|
 | Bridge | root | Runs wacli and the email reader, each as its own user. Writes incoming messages to the datastore. Delivers outbox entries, choosing the channel for each, and logs them. Handles `/status`, `/backup` and `/help`, and runs the backups. | datastore, exchange, its own state |
-| wacli | user `wacli`, started by the bridge | Keeps the WhatsApp session, downloads media, sends messages | its own folder |
-| Email reader | user `mail`, started by the bridge | Reads the mailbox, parses each email, and hands it to the bridge through a spool folder (5.6) | its own folder |
-| Runner | user `runner`, with access to the machine's hypervisor | Reads `agents.yaml`. Decides when the agent runs and what it works on. Starts a VM for each run and runs pi in it, applying the network policy and logging every request (6.6, 6.13). Reads pi's answer, keeps `state.json`, commits to git, writes the outbox. Handles `/new`. | the agent's folder, exchange, its own folder |
+| wacli | user `scooter-wacli`, started by the bridge | Keeps the WhatsApp session, downloads media, sends messages | its own folder |
+| Email reader | user `scooter-mail`, started by the bridge | Reads the mailbox, parses each email, and hands it to the bridge through a spool folder (5.6) | its own folder |
+| Runner | user `scooter-runner`, with access to the machine's hypervisor | Reads `agents.yaml`. Decides when the agent runs and what it works on. Starts a VM for each run and runs pi in it, applying the network policy and logging every request (6.6, 6.13). Reads pi's answer, keeps `state.json`, commits to git, writes the outbox. Handles `/new`. | the agent's folder, exchange, its own folder |
 | pi | inside a fresh VM for each run | Reads messages and attachments, updates views and memory, writes its answer | `views/`, `memory/` and its copy of the current session, through the folders the runner mounts |
 
-The bridge and the runner are two services: natively under systemd or launchd, or as two containers from one image in Docker (section 8). They don't talk over the network; they work through shared folders, mainly the datastore and the exchange.
+The bridge and the runner are two services: natively under systemd, or as two containers from one image in Docker (section 8). They don't talk over the network; they work through shared folders, mainly the datastore and the exchange.
 
 ### 3.1 Network access
 
@@ -78,23 +80,26 @@ The paths in this document are as they appear in Docker, under `/data`. Natively
 | `datastore` | read-write | read-only, and mounted read-only into the VM | the log and attachments |
 | `agents` | read-write (backups, restore, `/status`) | read-write | one folder per agent |
 | `exchange` | read-write | read-write | `outbox/`, `locks/` |
-| `runner` | read-only (backups, `/status`) | read-write | the network log and the VM image |
+| `runner` | read-only (backups, `/status`) | read-write | the network log, the VM image, `status.json` (6.3), and the runner's home and temporary folder (6.6) |
 | `bridge` | read-write | — | the bridge's own state |
 | `wacli` | read-write, as wacli | — | the WhatsApp session and wacli's message store |
 | `mail` | read-write, as the email reader | — | the email reader's position and its spool |
 | `config` | — | read-only | `agents.yaml`, prompts, skills and the VM image's build file. In Docker, a bind mount of `./config`. |
 
-Scooter uses four Unix users: root for the bridge, `wacli` (uid 10001), `runner` (10002) and `mail` (10003). In Docker the image defines them, so the uids match across volumes; natively, `setup` creates them (8.4). On Linux the `runner` user is also in the host's `kvm` group (8.3, 8.5).
+Scooter uses four Unix users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user, and on Ubuntu its group can write the system's mail spool (13.3). Sharing an account would share its files and its environment too.
+- In Docker the image defines them with the uids 10001, 10002 and 10003, so they match across volumes.
+- Natively, `setup` creates them as system users (8.4). It lets the system choose their uids, and everything refers to them by name.
+- `scooter-runner` is also in the host's `kvm` group (8.3, 8.5).
 
 **Who can read what.** Each program reaches only what it needs. wacli and the email reader talk to the outside world and run third-party code, so they're kept out of Scooter's other folders. pi sees only what the runner mounts into its VM (6.6).
 
 | Folder | Owner and mode | Readable by |
 |---|---|---|
-| `datastore` | root, group `runner`; folders 0750, files 0640 | root and the runner |
-| `agents`, `exchange`, `runner` | `runner`, 0700 | the runner and root |
+| `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | root and the runner |
+| `agents`, `exchange`, `runner` | `scooter-runner`, 0700 | the runner and root |
 | `bridge` | root, 0700 | root |
-| `wacli` | `wacli`, 0700 | wacli and root |
-| `mail` | `mail`, 0700 | the email reader and root |
+| `wacli` | `scooter-wacli`, 0700 | wacli and root |
+| `mail` | `scooter-mail`, 0700 | the email reader and root |
 
 Each program's environment also holds only its own settings. The bridge reads `bridge.env` and the runner `runner.env` (8.2). Within the bridge, wacli gets none of it and the email reader only the mailbox settings (5.6). pi gets only what 6.6 lists, with a placeholder in place of the key. No secret goes on a command line, where every user on the machine can read it, except wacli's webhook secret (5.1).
 
@@ -154,18 +159,21 @@ An email with an attachment:
 - For each line: take the next `seq`; copy any attachments into the day folder under a temporary name (they come from wacli's staging folder or the email spool, which are on other volumes) and rename them to their final names (4.1); then append the line with a single `write` call followed by `fsync`.
 - On startup, read every `log.jsonl` in date order. If the last line of the newest file is incomplete, truncate it. Rebuild the in-memory index (`seq` to line, and `(source, sourceId)` to `seq`) and work out the next `seq`. An attachment whose `seq` has no line is left over from a crash and may be overwritten.
 - Never rewrite or delete a line. Edits, deletions and reactions are new lines that point at the original.
-- Directories are 0750 and files 0640, owned by root with group `runner`, so only root and the runner can read them (3.2). pi sees the datastore through a read-only mount in its VM (6.6).
+- Directories are 0750 and files 0640, owned by root with group `scooter-runner`, so only root and the runner can read them (3.2). pi sees the datastore through a read-only mount in its VM (6.6).
 
 ### 4.4 Rules
 
-- **Duplicates:** a `message` whose `(source, sourceId)` is already in the index is ignored. Edits carry the original message's ID (13.1), so they aren't duplicates.
+- **Duplicates:** a `message` whose `(source, sourceId)` is already in the index is ignored. The webhook and catch-up can both deliver the same event (5.2), so the other kinds need a rule too:
+  - an `edit` carries the original message's ID (13.1), so it's skipped when its text equals its target's current text;
+  - a `delete` is skipped when its target is already deleted;
+  - a `reaction` is skipped when its own `(source, sourceId)` is already stored.
 - **Attachment names:** the extension comes from the original file name if there is one, else from the MIME type, else `.bin`.
 - **Size limit:** attachments over 100 MB aren't downloaded; the line gets a `media` object explaining why.
 - **Not stored:** messages from anyone but the owner, group and broadcast chats, stickers, empty messages, the bot's own messages echoed back by wacli, and emails that fail the sender check (5.6). The bridge logs its own messages when it sends them.
 
 ## 5. The bridge
 
-The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which receives and sends, and email (5.6), which only receives. Each channel is one module in `src/bridge/channels/`, and only that module deals with its service: only `whatsapp.js` runs wacli, and only `email.js` runs the email reader. wacli and the email reader are the programs that talk to the outside world, and each runs as its own user that can reach only its own folder (3.2). The rest of the bridge, the **core**, calls every channel through the same functions, so adding one later, such as Telegram, means writing one more module.
+The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which receives and sends, and email (5.6), which only receives. Each channel is one module in `src/bridge/channels/`, and only that module deals with its service: only `whatsapp.mjs` runs wacli, and only `email.mjs` runs the email reader. wacli and the email reader are the programs that talk to the outside world, and each runs as its own user that can reach only its own folder (3.2). The rest of the bridge, the **core**, calls every channel through the same functions, so adding one later, such as Telegram, means writing one more module.
 
 | Function | Does | WhatsApp | Email |
 |---|---|---|---|
@@ -174,14 +182,13 @@ The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which re
 | `download(record, n, path)` | Saves the record's `n`th attachment | `wacli media download` into wacli's staging folder, then a copy | A copy from the spool |
 | `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text` | — |
 | `react(id, emoji)` | Reacts to a message and returns the reaction's ID | `wacli send react` | — |
-| `findSent(text, since)` | After a crash: the ID of this text if it was already sent, or `null` if it can't tell | Searches wacli's store | — |
 | `status()` | One line for `/status` | The link state | Whether the reader is connected, and the emails stored and skipped in the last 24 hours |
 
 A **record** is the normalized message of 5.2 step 3 without the fields only WhatsApp needs (chat, sender, fromMe), plus `subject` for email. The core turns records into datastore lines (5.2 step 6), chooses the channel for each outbox entry (5.3), and runs the commands and backups. Tests can drive the core with a fake channel.
 
 ### 5.1 wacli
 
-- Every wacli call runs as user `wacli` with `HOME=/data/wacli`, `WACLI_STORE_DIR=/data/wacli/store`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` under `/data/wacli`, `TZ=UTC`, and nothing else in its environment. It can read and write only `/data/wacli` (3.2). Media downloads go to `/data/wacli/staging`, and the bridge copies them from there.
+- Every wacli call runs as user `scooter-wacli` with `HOME=/data/wacli`, `WACLI_STORE_DIR=/data/wacli/store`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` under `/data/wacli`, `TZ=UTC`, and nothing else in its environment. It can read and write only `/data/wacli` (3.2). Media downloads go to `/data/wacli/staging`, and the bridge copies them from there.
 - The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line; if wacli can take it from its environment instead, pass it that way (section 14). Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
 - Before starting sync, check `wacli --json --read-only auth status`. If it isn't authenticated, log that the owner should run `pair`, and check again every minute.
 - Other calls use `--json` and return the `data` part of the result (13.1). While sync runs, wacli passes these calls to it internally; no special handling is needed.
@@ -202,11 +209,13 @@ Steps 1–5 and 7 belong to the WhatsApp module. Step 6 belongs to the core, and
    - A reaction becomes a `reaction` with its `target`. Skip it if the target is unknown.
    - An edit becomes an `edit` with its `target` and the new text. A revoked message becomes a `delete` with its `target`. Skip either if the target is unknown.
    - WhatsApp text that is one of the commands in 5.4 becomes a `command`. An email is never a command.
-7. **Catch-up:** at startup and every 10 minutes, list the owner's chat with `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit 500`, starting 2 minutes before the newest incoming `at` in the datastore, and pass the rows through the same steps. Duplicate checks make this safe. On the very first start, with an empty datastore, start from the current time; don't import the chat's history.
+7. **Catch-up:** at startup and every 10 minutes, list the owner's chat with `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit 500`, and pass the rows through the same steps. Duplicate checks make this safe.
+   - Start 2 minutes before the `at` of the newest incoming WhatsApp line in the datastore. Lines from other channels don't count: an email that arrives while wacli is down says nothing about WhatsApp, and would move the start past the messages wacli missed.
+   - Before the first incoming WhatsApp line, start from the time of the bridge's first start (5.1), which on the very first start is the current time. Never import the chat's earlier history.
 
 ### 5.3 Delivery: the outbox
 
-The runner asks for messages to be sent by writing entries to `/data/exchange/outbox/`. Only root can write there, so pi can't.
+The runner asks for messages to be sent by writing entries to `/data/exchange/outbox/`. Only the runner's user and root can write there (3.2). pi can't: the exchange isn't mounted into its VM (6.6).
 
 - **Entries:** each entry is a folder `outbox/<id>/` containing `entry.json`. The runner creates it as `outbox/.tmp-<id>/` and renames it once it's complete. Entry IDs are the UTC creation time plus a counter, so they sort in creation order, for example `20261109T155015123-0001`.
 - **`entry.json`:**
@@ -228,7 +237,7 @@ The runner asks for messages to be sent by writing entries to `/data/exchange/ou
   - `react`: the channel's `react`. WhatsApp: `wacli send react --to <owner chat> --id <sourceId of target> --sender <owner JID> --reaction <emoji>`.
   - After each successful send, log an `out` line with the channel as `source` and the ID it returned as `sourceId`, then delete the entry.
   - If `replyTo` points at a message whose `sourceId` is unknown, send it without quoting.
-- **Crash safety:** rename `entry.json` to `sending.json` before sending. At startup, for each `sending.json` of type `text`, ask the channel's `findSent`: WhatsApp looks in wacli's store for a message from the bot in the owner's chat with the same text, sent after the entry was created. If it finds one, log it and delete the entry; otherwise send it again. Reactions are simply sent again.
+- **Crash safety:** rename `entry.json` to `sending.json` before sending, and record in it how many chunks have gone out, rewriting it after each one. At startup, send each `sending.json` again from the first chunk it doesn't record as sent; a reaction is simply sent again. So a crash can repeat one message, and never loses one. The bridge doesn't search wacli's store for what already went out.
 - The bridge's own messages (replies to `/status`, `/backup` and `/help`, and backup failure notices) are sent the same way and logged with `by: "bridge"`.
 
 ### 5.4 Commands
@@ -242,22 +251,24 @@ Commands come only from WhatsApp. They're logged as `command` lines and never gi
 | `/help` | bridge | Lists the commands. |
 | `/new` | runner | Starts a fresh pi session for the rest of the day and replies "Started a fresh conversation." |
 
+The bridge reads neither `/config` nor `runner.env` (3.2). What `/status` says about the runner comes from three of the runner's files: `state.json` and `status.json` (6.3), and the network log (6.13). It reports what it can read, and says so when the runner hasn't written them yet.
+
 ### 5.5 Backups
 
-- `scripts/backup.sh` (compatible with bash 3.2) has the commands `init`, `run`, `snapshots`, `check` and `restore [snapshot] [--force]`.
-  - It exits with code 2 and a clear message if `RESTIC_REPOSITORY` or `RESTIC_PASSWORD` isn't set.
+- The backup logic is a module in the bridge, `src/bridge/backup.mjs`, and the only code that runs restic. It runs restic directly, with the arguments as a list and the settings in restic's environment, never through a shell. Its operations are `init`, `run`, `snapshots`, `check` and `restore [snapshot] [--force]`, which the commands in 8.4 call.
+  - A command exits with code 2 and a clear message if `RESTIC_REPOSITORY` or `RESTIC_PASSWORD` isn't set.
   - `init` is safe to repeat: it runs `restic cat config` first.
-  - `run` runs `restic backup /data/datastore /data/agents /data/wacli /data/bridge /data/mail /data/runner/log /data/exchange/outbox --host scooter --tag scooter --exclude /data/wacli/cache --exclude-caches`, then `restic forget --host scooter --tag scooter --keep-daily $RESTIC_KEEP_DAILY --keep-weekly $RESTIC_KEEP_WEEKLY --keep-monthly $RESTIC_KEEP_MONTHLY --prune` (defaults 7, 4 and 12). It runs `restic check` on Sundays (ISO weekday 7) or when `FORCE_CHECK=1`.
+  - `run` runs `restic backup /data/datastore /data/agents /data/wacli /data/bridge /data/mail /data/runner/log /data/exchange/outbox --host scooter --tag scooter --exclude /data/wacli/cache --exclude-caches`, then `restic forget --host scooter --tag scooter --keep-daily <RESTIC_KEEP_DAILY> --keep-weekly <RESTIC_KEEP_WEEKLY> --keep-monthly <RESTIC_KEEP_MONTHLY> --prune` (defaults 7, 4 and 12). It runs `restic check` on Sundays (ISO weekday 7) or when `FORCE_CHECK=1`.
   - `restore` restores into `RESTORE_TARGET` (default `/`) and refuses a non-empty destination without `--force`.
 - **Schedule:** daily at `BACKUP_TIME` (`HH:MM` in `SCOOTER_TZ`, or `off`). If `RESTIC_REPOSITORY` isn't set, disable backups with a warning at startup instead of failing every night. If the bridge starts after the day's backup time, the first backup is the next day.
 - **Consistency:**
   1. Create `/data/exchange/locks/backup.lock`.
-  2. Wait for `locks/run.lock` to disappear, for up to the agent's timeout plus 2 minutes.
+  2. Wait for `locks/run.lock` to disappear. The lock records when its run must be over (6.4). If it's still there 2 minutes after that, a runner that died left it, and the backup goes ahead.
   3. Stop the channels (wacli sync and the email reader) and pause outbox processing.
   4. Run the backup.
   5. Restart the channels and remove the lock.
 
-  The runner doesn't start a run while `backup.lock` exists.
+  The runner doesn't start a run while `backup.lock` exists. Each side creates its own lock before it looks for the other's, so a run and a backup can't both start at the same instant: when the two locks appear together, the runner gives way (6.4). At startup the bridge removes a leftover `backup.lock`, which would otherwise stop the agent for good.
 - **Results:** read the snapshot ID from restic's `snapshot <id> saved` line. If a scheduled backup fails, message the owner. A backup requested with `/backup` always replies.
 
 ### 5.6 Email
@@ -265,7 +276,7 @@ Commands come only from WhatsApp. They're logged as `command` lines and never gi
 The owner can also email Scooter: a forwarded booking or invoice, or a file such as a voice memo, perhaps announced in a WhatsApp message ("I've emailed you the recording"). Email only comes in. Scooter never sends email, so replies about an email go to `DEFAULT_CHANNEL` (5.3). Email is on when `EMAIL_IMAP_HOST` is set (8.2).
 
 - **The mailbox:** an address used only by Scooter, at a provider that allows IMAP with an app password, such as Gmail, iCloud or Fastmail. Never the owner's own mailbox, or the bridge would see all their mail.
-- **The email reader:** a separate program, `src/mail/reader.mjs`. The bridge starts it as user `mail` and restarts it with backoff (5 seconds, doubling up to 5 minutes), like wacli. It's the only part of Scooter that uses `imapflow` and `postal-mime` (section 2), so their code never runs in the bridge process. Its environment holds only `HOME=/data/mail`, `TZ=UTC`, `PATH`, `LANG` and the mailbox settings (`EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_OWNER_ADDRESSES`, `EMAIL_CHECK_SECONDS`), and the password never goes on its command line. It can read and write only `/data/mail` (3.2).
+- **The email reader:** a separate program, `src/mail/reader.mjs`. The bridge starts it as user `scooter-mail` and restarts it with backoff (5 seconds, doubling up to 5 minutes), like wacli. It's the only part of Scooter that uses `imapflow` and `postal-mime` (section 2), so their code never runs in the bridge process. Its environment holds only `HOME=/data/mail`, `TZ=UTC`, `PATH`, `LANG` and the mailbox settings (`EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_OWNER_ADDRESSES`, `EMAIL_CHECK_SECONDS`), and the password never goes on its command line. It can read and write only `/data/mail` (3.2).
 - **Reading:** the reader keeps a TLS connection to the mailbox, opens `INBOX` read-only, and waits for new mail with IDLE, checking at least every `EMAIL_CHECK_SECONDS` (default 60) in case IDLE misses something. For each new message, in UID order, it fetches the headers first, and the whole message only if `From` is one of `EMAIL_OWNER_ADDRESSES`. Other mail is handed over with its headers only, so the bridge can log and count it. A message over 100 MB isn't fetched; mail providers cap messages far below that. The reader ignores UIDs below `next`, because for `n:*` IMAP always returns the newest message, even an older one. It never deletes, moves or flags mail, so the mailbox doubles as a copy.
 - **Position:** `/data/mail/state.json` keeps the mailbox's `UIDVALIDITY` and `next`, the UID after the last message handed over, plus whether the reader is connected and when it last checked, for `/status`. The first time email is on, `next` is the mailbox's `UIDNEXT`, so nothing already there is imported. If `UIDVALIDITY` changes, the server has renumbered the mailbox: log it, hand over the messages `SINCE` the day before the newest one handed over, and let the bridge's duplicate check (4.4) skip what's already stored.
 - **Parsing:** with `postal-mime`. The body is the plain-text part, or else the HTML part turned into text: tags dropped, entities decoded, line breaks kept at block elements. If parsing fails, the reader hands over the raw message with an error instead, so one malformed email can't hold up the ones after it.
@@ -330,7 +341,7 @@ Validation:
 ### 6.2 The agent's folder
 
 ```
-/data/agents/lifelog/      runner, 0700; a git repository
+/data/agents/lifelog/      scooter-runner, 0700; a git repository
   views/                   expenses.csv, runs.csv, meals.csv, travel.csv, people.csv, days/YYYY/MM/YYYY-MM-DD.md
   memory/                  preferences.md, needs-review.md
   sessions/                pi sessions (not in git); pi only gets a copy of the current one (6.6)
@@ -339,7 +350,7 @@ Validation:
   state.json               the runner's state, 0600 (not in git)
 ```
 
-- Everything here belongs to the `runner` user. pi reaches it only through its VM's mounts, which make `views/`, `memory/` and `run/session/` writable and everything else read-only (6.6).
+- Everything here belongs to the `scooter-runner` user. pi reaches it only through its VM's mounts, which make `views/`, `memory/` and `run/session/` writable and everything else read-only (6.6).
 - On first start the runner creates this layout, runs `git init` with a `.gitignore` listing `/sessions/`, `/run/` and `/state.json` (anchored with `/`, so they can't match anything inside `views/` or `memory/`), and makes an initial commit.
 - The VM image sets `git config --system --add safe.directory '*'`, so pi can use read-only commands like `git log` on the mounted repository (6.12).
 
@@ -350,6 +361,7 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 ```json
 {
   "cursor": 1049,
+  "commandSeq": 1038,
   "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
   "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
   "session": {"day": "2026-11-09", "bump": 0},
@@ -362,10 +374,13 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 ```
 
 - `cursor` is the highest `seq` the runner has dealt with, either by giving it to the agent or by skipping it. Everything after it is new.
+- `commandSeq` is the `seq` of the newest command line the runner has handled (6.4).
 - `backfill` exists only while a backfill is in progress (6.11). `backfillDone` lists the finished ones.
 - `paused` exists only while a setup error or an outage holds runs back (6.9): since when, the reason, and the next try.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day in `SCOOTER_TZ`, because the session and the schedule follow that day.
 - **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) is context: the cursor moves past it, and the agent is shown it but doesn't report on it.
+
+**`status.json`.** The bridge reads neither `/config` nor `runner.env`, so the runner tells it what `/status` needs from them (5.4). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, and each agent's `timeout_minutes` and `reads`.
 
 ### 6.4 When the agent runs
 
@@ -373,13 +388,15 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - **`at`:** once a day (or a week) at that time. If a run is in progress, the task waits for it. If the runner starts after the time, the task waits until the next day. A scheduled run gets its task and no messages.
 - **`once`:** at startup, the runner runs each `once` task whose ID isn't in `onceDone`, then records the ID.
 - **`backfill`:** at startup, the runner starts the first `backfill` whose ID isn't in `backfillDone`. Its batches run only when nothing live is waiting (6.11).
-- **Overlap:** runs never overlap. During a run the runner holds `/data/exchange/locks/run.lock`, and it doesn't start a run while `locks/backup.lock` exists. It removes a leftover `run.lock` at startup.
-- **Commands:** before building a batch, the runner handles command lines after the cursor itself. `/new` bumps the session and replies, with `about` set to the command (5.3); the other commands belong to the bridge and are skipped.
+- **Overlap:** runs never overlap, with each other or with a backup. To start a run, the runner first creates `/data/exchange/locks/run.lock`, recording in it when the run must be over: its start plus the agent's timeout. Then it looks for `locks/backup.lock`. If a backup holds that, the runner removes its own lock and waits; otherwise it runs, and removes its lock when the run is finished. Taking its own lock before looking for the other's is what keeps a run and a backup from starting at the same instant (5.5). The runner removes a leftover `run.lock` at startup.
+- **Commands:** before building a batch, the runner handles the command lines newer than `commandSeq` (6.3) itself, and saves the state at once. Going by the cursor instead would handle the same command again after a crash or a failed batch, which leave the cursor where it was. `/new` bumps the session and replies, with `about` set to the command (5.3). It applies to all work not yet given to the agent, wherever the command sits among the waiting messages. The other commands belong to the bridge and are skipped.
 - **While paused** (6.9), nothing runs until the next try: no batches, scheduled tasks or backfill batches. Commands still work.
 
 ### 6.5 What the agent is given
 
 **The batch:** due retries first, then work items after the cursor, oldest first, at most 20 in all. An `edit` or `delete` in the batch also brings in the message it changes when that message is waiting in `retry` (due or not) or is in `failed`. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. Otherwise the edit could be handled before the message it changes, and the retry would later file the old text. These additions may take the batch past 20. The context is the `out` lines and reactions from the oldest item onwards, plus every quoted message.
+
+**The size limit:** the prompt is a single command-line argument (6.6), and Linux refuses one over 128 KB (13.3). So the batch also stops growing once the prompt would pass `PROMPT_MAX_BYTES` (96 KB), though it always keeps at least one item. An item too long to fit even on its own is shown cut, followed by where the rest is: its line in `log.jsonl`, or its `.eml` file. Without this limit, a batch of long emails would fail on every attempt and end up in `failed`.
 
 **The prompt** (pi's user message):
 
@@ -428,15 +445,16 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
   - `/data/agents/lifelog`, read-only, except `views/`, `memory/` and `run/session/`, which are read-write;
   - `/data/datastore`, read-only.
 
-  Nothing else from the host is visible.
+  Nothing else from the host is visible. Gondolin 0.14.0 puts its own file system at `/data` inside the VM by default, which is where Scooter's folders are in Docker, so the runner moves Gondolin's mount point somewhere else (13.4).
 - **Network:** only through the runner's network policy (6.13).
 - **Environment:** only `PATH`, `HOME` (a fresh folder inside the VM), `LANG=C.UTF-8`, `TZ=<SCOOTER_TZ>`, `PI_SKIP_VERSION_CHECK=1`, `PI_OFFLINE=1`, `PI_TELEMETRY=0`, and `OPENROUTER_API_KEY` set to Gondolin's placeholder. The real key never enters the VM; the runner swaps it in on the way out (6.13).
 - **Acceleration** (`AGENT_ACCEL`, 8.2):
-  - `auto`, the default, uses the fastest one available: KVM on Linux, Apple's hypervisor on a Mac, otherwise emulation. The runner logs which one at startup, and `/status` shows it. Falling back to emulation also sends the owner one notice at startup, since runs become much slower (13.4).
-  - `kvm`, `hvf` or `emulation` forces one. If a forced accelerator can't be used, the runner stops with an error that says how to enable it (8.3, 8.5), rather than quietly using another.
+  - `auto`, the default, uses the fastest one available: KVM, otherwise emulation. The runner logs which one at startup, and `/status` shows it. Falling back to emulation also sends the owner one notice, since runs become much slower (13.4). The notice goes out when the accelerator changes to emulation, not at every start, or a runner that keeps restarting would message the owner each time.
+  - `kvm` or `emulation` forces one. If a forced accelerator can't be used, the runner stops with an error that says how to enable it (8.3, 8.5), rather than quietly using another.
+  - `hvf`, Apple's hypervisor, is a known value kept for macOS (section 12). On Linux it can't be used, so it stops the runner like any other forced accelerator that isn't there.
 - **The command**, run in the VM in `/data/agents/lifelog`:
   ```
-  pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-context-files --offline \
+  pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --offline \
      --provider openrouter --model <model> [--thinking <level>] \
      --tools read,bash,edit,write,grep,find,ls \
      --session-dir /data/agents/lifelog/run/session --session-id <session ID> \
@@ -444,18 +462,21 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
      --skill /data/agents/lifelog/run/config/skills/expenses --skill /data/agents/lifelog/run/config/skills/runs … \
      -- "<prompt>"
   ```
-  pi talks to OpenRouter at its usual address, with `OPENROUTER_API_KEY`, so it needs no `models.json`.
+  pi talks to OpenRouter at its usual address, with `OPENROUTER_API_KEY`, so it needs no `models.json`. `--no-mcp` turns off pi's built-in MCP support (13.2). The prompt is one argument, which is why a batch has a size limit (6.5).
 - **The model:** the network policy accepts only the agent's configured model (6.13), so a misled run can't switch to another, more expensive one.
 - **Session ID:** `lifelog-<day>`, where `<day>` is the local date of the current time minus `SESSION_ROLLOVER_HOUR` hours, with `-<n>` appended after `/new`. With `session: none`, use `--no-session` instead.
 - **Sessions belong to the runner.** pi never sees `sessions/`. Before a run, the runner empties `run/session/` and copies the current session's file into it, if there is one. After a successful run, once the files pass the check in 6.8, it copies that one file back if it's a regular file (not a symlink), and ignores anything else in `run/session/`. After a failed run it copies nothing back (6.9). So a run can only extend the session it continues; it can't change another session or plant one for a later day.
 - **Nothing carries over between runs.** Each run is a new VM from the same image. pi's home, `/tmp`, anything it installed and any process it left running are gone when the VM closes.
 - **Timeout:** after `timeout_minutes`, the runner closes the VM.
 - **Supervision:** if the runner dies, its VMs must die with it. Gondolin 0.14.0 leaves a VM's QEMU process running when the process that started it is killed (13.4), so the runner always runs under something that stops its whole process group: systemd with `KillMode=control-group` (8.5), or Docker as the container's main process (8.3).
+- **The runner's own folders:** Gondolin keeps the policy's certificate authority and its session files in the home folder of the user it runs as, and its disk overlays and sockets in the temporary folder (13.4). So the runner runs with its home and its temporary folder under `/data/runner`, as `home/` and `tmp/`. It empties `tmp/` at startup, because a runner that was killed leaves files there.
 - Ignore the stderr line "Warning: No project session found…" that pi prints when it creates a session.
 - **Things to check in the pinned pi version:**
   - Skills passed with `--skill` must still load with `--no-skills`. If they don't, drop `--no-skills`: the VM's home starts empty on every run, so nothing can be planted there.
   - Which file pi writes for a `--session-id` in `--session-dir`, so the runner copies the right one in and out.
   - Whether pi's `edit` and `write` tools leave temporary files behind, such as dotfiles next to the file they edit. The check in 6.8 would refuse them and fail every run.
+  - That `--no-mcp` works together with `-p`.
+  - That pi and its tools work when pi was installed with `npm install --ignore-scripts`, as the image build does (6.12).
 
 ### 6.7 Reading the answer
 
@@ -502,17 +523,17 @@ With this order, a crash part-way through only means the batch is retried. The a
 
 ### 6.10 Rebuilding the views
 
-`scooter rebuild lifelog` as the `runner` user (in Docker, `docker compose run --rm runner rebuild lifelog`), with the runner's service stopped. The bridge keeps running, so messages that arrive meanwhile are stored, and handled once the runner is back.
+`scooter rebuild lifelog` as the `scooter-runner` user (in Docker, `docker compose run --rm runner rebuild lifelog`), with the runner's service stopped. The bridge keeps running, so messages that arrive meanwhile are stored, and handled once the runner is back.
 1. Tag the current commit `before-rebuild-<UTC timestamp>`.
 2. Note the newest `seq` in the datastore. The rebuild stops there; anything later is left for the normal runner, which handles it with replies.
-3. Empty `views/`, `memory/` and `sessions/`, and reset `state.json`, keeping `onceDone` and `backfillDone` so one-off tasks and backfills don't run again. A backfill in progress is dropped, because the rebuild covers its view.
+3. Empty `views/`, `memory/` and `sessions/`, and reset `state.json`, keeping `onceDone` and `backfillDone` so one-off tasks and backfills don't run again, and setting `commandSeq` to that `seq` so old commands aren't answered again. A backfill in progress is dropped, because the rebuild covers its view.
 4. Replay the datastore up to that `seq`, silently: nothing goes to the outbox.
 5. Set `cursor` to that `seq`, and commit with the message `lifelog: rebuild`.
 
 **Replayed batches**, here and in backfills (6.11):
-- A batch's items come from one of the owner's days (in `SCOOTER_TZ`), at most 20, and each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`.
+- A batch's items come from one of the owner's days (in `SCOOTER_TZ`), at most 20 and within the prompt's size limit (6.5), and each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`.
 - `Now:` in the prompt is the time of the batch's newest item, not the current time, so "today" and "yesterday" in old messages mean what they meant then.
-- Each batch holds `locks/run.lock` and waits while `locks/backup.lock` exists, like a normal run (6.4), so a backup never sees half a batch.
+- Each batch takes `locks/run.lock` and gives way to `locks/backup.lock`, as a normal run does (6.4), so a backup never sees half a batch.
 
 Rules the owner sent as messages are learned again at the point they were sent. Rules in `/config` apply to all of history.
 
@@ -538,8 +559,10 @@ pi's VMs boot from an image Scooter builds with Gondolin's image builder (13.4).
 - `git config --system --add safe.directory '*'`, so pi can read the mounted repository's history.
 
 How it's built and checked:
-- The build file is `config/image/build.json`, with Alpine's release and pi's version pinned. Alpine's packages still change within a release, so after each build the runner writes the installed versions to `packages.txt` next to the image.
+- The build file is `config/image/build.json`, with Alpine's release and pi's version pinned. Alpine's packages still change within a release, so after each build `build-image` writes the installed versions to `packages.txt` next to the image.
 - `build-image` (8.4) builds it into `/data/runner/image/`. It needs `cpio`, `lz4` and `e2fsprogs`, which the Docker image includes. In the prototype the build took 16 seconds and the image was about 530 MB (13.4).
+- **Who builds it:** Gondolin's builder runs the build's install commands in a chroot, which needs root (13.4). So natively `build-image` runs as root, and hands the finished image to `scooter-runner`. Without root, it uses Gondolin's container build when Docker or Podman is available, and otherwise stops, saying which of the two it needs.
+- **What a native build runs as root:** a chroot doesn't contain root, so the build runs as little as it can there: Gondolin's builder, then Alpine's shell, npm and git inside the image's folder. Gondolin unpacks Alpine's packages itself and runs none of their scripts. pi is installed with `npm install --ignore-scripts`, as Scooter's own packages are (8.3), and the build's commands never run pi or anything else npm installed, so no code from pi's packages runs as root on the host. pi's installed version is read from its `package.json`. The build runs only when the owner starts it, never in a service. If pi turns out not to work without its install scripts (13.2, section 14), stop and ask the owner.
 - At startup the runner refuses to run if the image is missing, or was built for a different pi version than the pinned one. `/status` shows when the image was built.
 
 ### 6.13 The network policy
@@ -667,24 +690,27 @@ The day page template (leave out empty sections):
 ### 8.1 Repository layout (suggested)
 
 ```
-docs/DESIGN.md, docs/DECISIONS.md
+docs/DESIGN.md, docs/ARCHITECTURE.md, docs/DECISIONS.md, docs/plans/
 src/cli.mjs          entry point: bridge, runner, setup, doctor, build-image, pair, email-check, backup-init,
                      snapshots, check, restore, rebuild
 src/common/          settings, limits.mjs (every constant, 8.6), logging, time zones, atomic files, processes,
-                     locks, datastore reader and writer
-src/bridge/          intake, outbox and routing, commands, backups
-src/bridge/channels/ whatsapp.js (wacli client and supervisor), email.js (runs the email reader, reads its spool, sender check)
-src/mail/            the email reader, run as user mail: imapflow, postal-mime, the spool writer
+                     locks, and the formats both services share: datastore lines and their reader, outbox
+                     entries, the network log, state.json and status.json
+src/bridge/          store.mjs (the only datastore writer), intake, outbox and routing, commands,
+                     backup.mjs (the only code that runs restic)
+src/bridge/channels/ whatsapp.mjs (wacli client and supervisor), email.mjs (runs the email reader, reads its spool, sender check)
+src/mail/            the email reader, run as scooter-mail: imapflow, postal-mime, the spool writer
 src/runner/          agents.yaml, state, triggers, batches and prompts, answer parsing, git, notices, rebuild, protocol.md
 src/runner/sandbox/  the VM (gondolin), acceleration, the network policy and its log, the image build
+src/ops/             setup and doctor
 config/              agents.yaml, prompts/lifelog.md, skills/*/SKILL.md, image/build.json
 deploy/systemd/      scooter-bridge.service, scooter-runner.service
-deploy/launchd/      the same two services for macOS
-scripts/backup.sh
-test/                unit and end-to-end tests, stubs for wacli and pi, a fake sandbox that runs the pi stub
-                     locally, sample OpenRouter requests, sample emails, and a fake mailbox for the email reader
+test/                unit and end-to-end tests, stubs for wacli, pi and restic, a fake sandbox that runs the pi
+                     stub locally, sample OpenRouter requests, sample emails, and a fake mailbox for the email reader
 Dockerfile, compose.yaml, bridge.env.example, runner.env.example, README.md
 ```
+
+The bridge and the runner never import each other's code. They share only `src/common/` (`docs/ARCHITECTURE.md`, 4.2).
 
 ### 8.2 Environment
 
@@ -705,15 +731,15 @@ Dockerfile, compose.yaml, bridge.env.example, runner.env.example, README.md
 | `HOME_CURRENCY` | `INR` | runner | ISO currency code |
 | `BATCH_SECONDS` | `8` | runner | How long the owner must be quiet before a batch runs |
 | `SESSION_ROLLOVER_HOUR` | `4` | runner | The local hour when the daily session changes |
-| `AGENT_INTERNET` | `off` | both | `on` lets pi reach public HTTPS websites through the runner's network policy, which logs every request (6.13). The bridge shows it in `/status`. |
-| `AGENT_ACCEL` | `auto` | runner | How pi's VMs run: `auto`, `kvm`, `hvf` or `emulation` (6.6) |
+| `AGENT_INTERNET` | `off` | runner | `on` lets pi reach public HTTPS websites through the runner's network policy, which logs every request (6.13). `/status` shows it, from the runner's `status.json` (6.3). |
+| `AGENT_ACCEL` | `auto` | runner | How pi's VMs run: `auto`, `kvm` or `emulation`. `hvf` is kept for macOS (6.6). |
 | `BACKUP_TIME` | `03:30` | bridge | `HH:MM` in `SCOOTER_TZ`, or `off` |
 | `RESTIC_REPOSITORY`, `RESTIC_PASSWORD` | required for backups | bridge | The restic repository and its password |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | `AWS_DEFAULT_REGION=auto` | bridge | R2 credentials (or `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for B2) |
 | `RESTIC_KEEP_DAILY`, `RESTIC_KEEP_WEEKLY`, `RESTIC_KEEP_MONTHLY` | `7`, `4`, `12` | bridge | Snapshots kept |
 | `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` in Docker; natively set by `setup` (8.5) | both | Roots for all paths; tests override them |
 
-- **Two files, one per service.** The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, so neither sees the other's secrets. Natively they're in `/etc/scooter/`, owned by root and by `runner` respectively, mode 0600; in Docker, `compose.yaml` gives each service its own file. Values already in the environment win over the file.
+- **Two files, one per service.** The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, so neither sees the other's secrets. Natively they're in `/etc/scooter/`, owned by root and by `scooter-runner` respectively, mode 0600; in Docker, `compose.yaml` gives each service its own file. Values already in the environment win over the file.
 - Inside the bridge, wacli gets none of `bridge.env`, and the email reader gets only its own settings (5.6). pi gets only what 6.6 lists.
 - Code never depends on the process's time zone: it stores UTC and converts to `SCOOTER_TZ` explicitly where the owner sees or sets a time. The services run with `TZ=UTC`. Only pi gets `TZ=<SCOOTER_TZ>` (6.6), because it writes what the owner reads.
 - `bridge.env.example` and `runner.env.example` explain every variable and note that values containing `$` need single quotes.
@@ -726,7 +752,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
   - `golang:1.27-trixie` builds wacli from source (13.1).
   - `node:24-trixie-slim` is the runtime. It installs `ca-certificates curl bzip2 git tini tzdata cpio lz4 e2fsprogs` and QEMU for the image's architecture (`qemu-system-x86` or `qemu-system-arm`), plus:
     - restic 0.19.1 from its GitHub release, checked against the release's `SHA256SUMS`;
-    - the users `wacli` (10001), `runner` (10002) and `mail` (10003);
+    - the users `scooter-wacli` (10001), `scooter-runner` (10002) and `scooter-mail` (10003);
     - the app and its dependencies, with `npm ci --omit=dev --ignore-scripts`.
 
     The entrypoint is `tini -- node /app/src/cli.mjs`. pi isn't installed here; it lives in the VM image (6.12).
@@ -735,16 +761,14 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
   - `runner`: `command: ["runner"]`, `env_file: runner.env`, `read_only: true` (a read-only root filesystem) with a `tmpfs` at `/tmp`, and the KVM settings below.
 
   Both have the volumes from section 3.2, `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`.
-- **The VM image:** run `docker compose run --rm runner build-image` after installing and after each upgrade (6.12).
-- **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so a Mac with Apple silicon builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches.
+- **The VM image:** build it after installing and after each upgrade (6.12), with `build-image` in the runner container. The build needs root there, which the service doesn't always have, and may need more privileges than the service gets. So the exact command, such as `docker compose run --rm --user root runner build-image`, is settled when this is first tried (section 14).
+- **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so an arm64 host builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches.
 - **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git.
 
 **KVM in Docker.** pi's VMs only run fast if the runner container can open the host's `/dev/kvm`. `doctor`, run in the runner container, says which case applies (8.4).
-- **Rootful Docker on Linux**, the usual install: give the runner `devices: ["/dev/kvm:/dev/kvm"]`, `user: runner`, and `group_add` with the host's `kvm` group id (`getent group kvm`). Access goes through the group, which Ubuntu's device rules leave alone (13.4).
+- **Rootful Docker on Linux**, the usual install: give the runner `devices: ["/dev/kvm:/dev/kvm"]`, `user: scooter-runner`, and `group_add` with the host's `kvm` group id (`getent group kvm`). Access goes through the group, which Ubuntu's device rules leave alone (13.4).
 - **Rootless Docker on Linux:** the host's `kvm` group never reaches a rootless container (13.4), so the user that runs Docker needs access of its own. A one-off `setfacl` doesn't last, because Ubuntu's device rules reset it whenever a VM starts or stops; the README gives the udev rule that keeps it. Then give the runner `devices: ["/dev/kvm:/dev/kvm"]` and no `user:`, so it runs as the container's root, which is that user on the host.
-- **Docker Desktop on a Mac or Windows, or a host without KVM:** containers can't use the hypervisor, so pi's VMs run under emulation: about 11 seconds more per run, and pi and its tools about ten times slower (13.4). `AGENT_ACCEL=auto` falls back to it with a warning. On a Mac, running Scooter natively (8.5) is the fast option.
-
-**On a Mac** with Docker Desktop, OrbStack or Colima: keep the project folder in your home folder (Colima shares only that), set Docker to start at login so `restart: unless-stopped` brings Scooter back after a restart, and keep the Mac awake (8.5).
+- **A host without KVM, or a container that can't open it:** pi's VMs run under emulation: about 11 seconds more per run, and pi and its tools about ten times slower (13.4). `AGENT_ACCEL=auto` falls back to it with a warning.
 
 ### 8.4 CLI
 
@@ -752,31 +776,30 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 |---|---|---|
 | `bridge` | bridge | Runs the bridge (the service's default command) |
 | `runner` | runner | Runs the runner (the service's default command) |
-| `setup` | the host, as root | Natively: creates the users and folders in 3.2, adds `runner` to the `kvm` group on Linux, writes `bridge.env` and `runner.env` from the examples if they don't exist, and installs the two services (8.5). Safe to repeat. |
+| `setup` | the host, as root | Natively: checks that the service users can run Node and read the code (8.5), creates the users and folders in 3.2, adds `scooter-runner` to the `kvm` group, writes `bridge.env` and `runner.env` from the examples if they don't exist, and installs the two services (8.5). Safe to repeat. |
 | `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; folder owners and modes; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. |
-| `build-image` | runner | Builds the VM image (6.12) |
-| `pair [--phone +91…]` | bridge | Runs `wacli auth` as the wacli user with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
-| `email-check` | bridge | Runs the email reader once, as user `mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. |
-| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run `scripts/backup.sh` |
+| `build-image` | the host, as root; in Docker, the runner container | Builds the VM image (6.12) |
+| `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
+| `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. |
+| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5) |
 | `rebuild <agent>` | runner | Section 6.10 |
 
-Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u runner scooter build-image`. In Docker, run it with `docker compose run --rm <service> <command>`. Sending `SIGUSR1` to the bridge starts a backup immediately.
+Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`. Sending `SIGUSR1` to the bridge starts a backup immediately.
 
 ### 8.5 Running natively
 
-Scooter runs the same natively on Linux and macOS, on amd64 and arm64:
+Scooter runs natively on Linux, on amd64 and arm64:
 
 - **Prerequisites:** Node ≥ 22.19, git, restic 0.19.1, QEMU for the host's architecture, and `cpio`, `lz4` and `e2fsprogs` for `build-image`. wacli: a prebuilt release checked against its sha256 (13.1), or built from source.
-- **Install:** `sudo scooter setup` (8.4). It keeps the data in `/var/lib/scooter` on Linux and `/usr/local/var/scooter` on macOS (`DATA_DIR`), the settings and `config/` in `/etc/scooter/`, and installs two services that start at boot and restart on failure:
-  - **Linux:** `scooter-bridge.service` as root, and `scooter-runner.service` as `runner`, with `SupplementaryGroups=kvm` and `KillMode=control-group` (6.6).
-  - **macOS:** the same two services as launchd daemons. The runner uses Apple's hypervisor (section 14).
+- **The code:** in a folder owned by root that every service user can read, such as `/opt/scooter`, with Node installed system-wide. The service users must be able to run Node and read the code, which they can't inside someone's home folder. `setup` checks both.
+- **Install:** `sudo scooter setup` (8.4). It keeps the data in `/var/lib/scooter` (`DATA_DIR`), the settings and `config/` in `/etc/scooter/`, and installs two systemd services that start at boot and restart on failure:
+  - `scooter-bridge.service`, as root;
+  - `scooter-runner.service`, as `scooter-runner`, with `SupplementaryGroups=kvm` and `KillMode=control-group`, and with its home and temporary folder under the data folder's `runner/` (6.6).
 
-  Then build the VM image with `sudo -u runner scooter build-image`, and check everything with `scooter doctor`.
-- **KVM on Linux:** the runner needs read-write access to `/dev/kvm`. `setup` gives it through the `kvm` group, which Ubuntu's device rules leave alone (13.4).
+  Then build the VM image with `sudo scooter build-image` (6.12), and check everything with `sudo -u scooter-runner scooter doctor`.
+- **KVM:** the runner needs read-write access to `/dev/kvm`. `setup` gives it through the `kvm` group, which Ubuntu's device rules leave alone (13.4).
 - **The config:** before each run, the runner copies the prompt and skills into `run/config/`, so pi only ever sees that run's copy, never `/config` itself.
-- **On a Mac:** Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Messages sent while it slept are picked up by catch-up when it wakes.
 - **Development:** the code and its tests run natively without `setup`, as an ordinary user (section 10).
-- Host scripts, if any, must work with macOS's bash 3.2 and BSD tools as well as on Linux.
 
 ### 8.6 Constants
 
@@ -787,6 +810,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | Name | Value | Used in | What it does |
 |---|---|---|---|
 | `BATCH_MAX_ITEMS` | 20 | 6.5 | The most messages in one batch, retries first |
+| `PROMPT_MAX_BYTES` | 96 KB | 6.5 | The largest prompt. It's one command-line argument, and Linux refuses one over 128 KB |
 | `MAX_ATTEMPTS` | 4 | 6.8 | Attempts before a message moves to `failed` |
 | `RETRY_WAIT` | 1 minute | 6.8 | The wait before a message that failed for its own reasons is tried again |
 | `OUTAGE_RETRY_WAITS` | 1, 5 and 30 minutes, then every 30 | 6.9 | The waits between tries while OpenRouter is down |
@@ -804,7 +828,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `RESTART_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.1, 5.6 | Restart waits for wacli and the email reader |
 | `STOP_GRACE` | 15 seconds | 5.1 | From SIGTERM to SIGKILL when stopping wacli |
 | `AUTH_CHECK_INTERVAL` | 1 minute | 5.1 | How often an unpaired wacli is checked again |
-| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | Added to the agent's timeout while a backup waits for a run to finish |
+| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | How long past the time in `run.lock` a backup still waits for the run to finish |
 | `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
 | `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
 
@@ -817,7 +841,7 @@ The controls, and what each one protects against:
 - **Key theft:** the OpenRouter key exists only in the runner. The WhatsApp session, the mailbox password and the backup credentials exist only in the bridge. pi sees only a placeholder, which is worthless outside the runner.
 - **Third-party code that faces the outside:** wacli and the email reader each run as their own user, with only their own settings in their environment and only their own folder to read and write (3.2). Neither can read the keys, the datastore, the agent's folder (with the views' history in `.git`), the exchange, or the runner's and the bridge's state.
 - **Tampering with the record:** pi's VM sees the datastore read-only, and the agent's folder read-only except `views/`, `memory/` and its session copy. So it can't change the log, the outbox, the locks, `state.json`, the git history, other sessions or `/config`.
-- **Persistence after a malicious document:** every run starts a fresh VM from the same image, so whatever pi leaves inside one is gone when it closes. pi ignores project files (`--no-approve`) and starts with extension, skill, prompt-template and context-file discovery turned off. Skills load only from a copy of `/config` that pi can't write. It gets only a copy of the current session, so it can't plant a session for later. What pi can change, its views and memory, is in git, so the owner can see and revert it, and a run that leaves a file git wouldn't record fails (6.8).
+- **Persistence after a malicious document:** every run starts a fresh VM from the same image, so whatever pi leaves inside one is gone when it closes. pi ignores project files (`--no-approve`) and starts with extension, skill, prompt-template and context-file discovery turned off, and its MCP support too. Skills load only from a copy of `/config` that pi can't write. It gets only a copy of the current session, so it can't plant a session for later. What pi can change, its views and memory, is in git, so the owner can see and revert it, and a run that leaves a file git wouldn't record fails (6.8).
 - **The webhook:** it listens on loopback only, with a new random secret on every start and a constant-time HMAC check.
 - **Logs:** they contain IDs, kinds, sizes and timings, never message text or file contents. The network log also names the hosts and paths the agent reached.
 - **Backups:** restic encrypts everything before upload, so the bucket holds only ciphertext. `bridge.env` and `runner.env` aren't backed up; the owner keeps `RESTIC_PASSWORD` in a password manager.
@@ -828,7 +852,8 @@ Accepted risks:
 - A malicious document can still mislead the agent into misfiling things, editing its memory, or telling the owner something wrong. Git history shows what changed.
 - A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner. There it would reach the OpenRouter key and the agent's folders, but not the bridge's secrets, because the runner is its own unprivileged user, apart from the bridge.
 - Gondolin is pre-1.0 (13.4). Its next version moves the policy hooks into a separate program, so upgrading it means porting the policy and running its tests again.
-- On a native install the bridge runs as root, so that it can start wacli and the email reader as their own users. A flaw in the bridge would then expose the whole machine, not just one container. Running the bridge as its own user, with systemd or launchd starting wacli and the email reader, is a possible later change.
+- On a native install the bridge runs as root, so that it can start wacli and the email reader as their own users. A flaw in the bridge would then expose the whole machine, not just one container. Running the bridge as its own user, with systemd starting wacli and the email reader, is a possible later change.
+- A native build of the VM image also runs as root on the host: Gondolin's builder, then Alpine's shell, npm and git in a chroot, which doesn't contain root (6.12). No code from pi's packages runs there, and the build runs only when the owner starts it.
 - wacli is unofficial, so WhatsApp could ban the bot number. The owner must also open WhatsApp Business at least every two weeks, or the linked device is logged out.
 - The mailbox's provider keeps the emails sent to Scooter. Anyone who controls the owner's email account can give Scooter instructions, as with their WhatsApp.
 - wacli and the email reader can reach the internet. A malicious version of either, or of a library the reader uses, could send out what it holds (the WhatsApp session and the messages it handles, or the mailbox password and the emails), and could hand the bridge fake messages from the owner. If wacli's webhook secret has to stay on its command line (5.1), the email reader could read it and post fake WhatsApp messages too, which is no worse than posting fake emails.
@@ -837,18 +862,22 @@ Accepted risks:
 
 - `npm test` runs everything with `node --test`. Tests use no real credentials and no network. Each test works in its own temporary folder and sets `TMPDIR` inside it, which restic needs.
 - **Stubs and fakes:**
-  - Small Node scripts stand in for `wacli` and `pi`, behind shell wrappers placed first on `PATH`. They record their arguments and environment to a file and answer from fixtures.
+  - Small Node scripts stand in for `wacli` and `pi`, and for `restic` in the backup coordination tests, behind shell wrappers placed first on `PATH`. They record their arguments and environment to a file and answer from fixtures.
   - The pi stub reads the prompt and picks its answer from keywords in the messages. That lets tests drive `DONE`, `FAILED`, unreported items, questions, unexpected files and crashes.
   - The runner runs pi through a sandbox interface. Unit tests use a fake sandbox that runs the pi stub as a local process, in a temporary folder laid out like the VM's mounts. The real Gondolin sandbox has its own tests (below).
   - The network policy is tested by giving its hook sample requests shaped like the pinned pi's (13.2), with a fake upstream.
   - The email reader reaches the mailbox through a small adapter, so its tests use a fake mailbox. The bridge's side is tested by placing folders in the spool.
-- Run the bridge and the runner as real processes, or in-process with an injectable clock and paths, against temporary folders that stand in for the data folders. Behavior that needs root (users, folder modes) or a hypervisor is checked in milestone 5, natively and in Docker; unit tests cover the decisions, such as which mounts and settings are used.
+- Run the bridge and the runner as real processes, or in-process with an injectable clock and paths, against temporary folders that stand in for the data folders. Behavior that needs root (users, folder modes) or a hypervisor is checked in the sandbox and deployment milestone (11.5), natively and in Docker; unit tests cover the decisions, such as which mounts and settings are used.
 
-**On both systems:** the code and the tests must run natively on macOS and Linux (Node ≥ 22.19).
-- Don't depend on Linux-only features: no `/proc`, no `fs.watch` (poll instead), and no GNU-only command flags such as `sed -i`, `date -d`, `stat -c` or `readlink -f`. `scripts/backup.sh` stays compatible with bash 3.2.
-- macOS file systems are usually case-insensitive, so never create two files whose names differ only in case.
+**Where the tests run:** the code and the tests must run natively on Linux (Node ≥ 22.19).
 - Without `setup`, the processes usually run as an ordinary user. Then skip switching users and changing ownership, and log one warning. An installed Scooter, native or in Docker, always has its users, so production behavior is the same. Tests cover both paths where they can.
-- Run the whole suite on both systems. On a Mac, also run it on Linux with Docker: `docker run --rm -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'`. That runs as root, which also exercises the root-only paths. The restic round trip skips itself when restic isn't installed, and the sandbox tests skip themselves when QEMU isn't.
+- Run the whole suite as an ordinary user, and also as root, in Docker: `docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'`. That exercises the root-only paths. The tests that create users run only with `SCOOTER_ROOT_TESTS=1`, so running the suite as root on a real machine creates none. The restic round trip skips itself when restic isn't installed, and the sandbox tests skip themselves when QEMU isn't.
+
+**Keeping macOS cheap to add** (section 12). These rules cost nothing now, so keep them:
+- Don't depend on Linux-only features: no `/proc`, no `fs.watch` (poll instead), and no GNU-only command flags such as `sed -i`, `date -d`, `stat -c` or `readlink -f`.
+- macOS file systems are usually case-insensitive, so never create two files whose names differ only in case.
+
+Passing the suite on a Mac isn't required until macOS is.
 
 Required tests, at least:
 - **Datastore:** `seq` order across days, day folders by UTC date that never go backwards (even when the clock does), recovery from an incomplete last line, duplicates, attachment names, and the index rebuilt on restart.
@@ -858,8 +887,9 @@ Required tests, at least:
   - Filtering of non-owners, `@lid` owners, groups, `FromMe` messages, stickers and empty messages.
   - Media downloads, including failures.
   - Replies, reactions, edits and deletions mapped to `seq` numbers.
+  - The same edit, deletion or reaction delivered twice is stored once.
   - Commands logged.
-  - Catch-up after a gap, without duplicates; no history imported on the first start.
+  - Catch-up after a gap, without duplicates, starting from the newest incoming WhatsApp line even when emails arrived meanwhile; no history imported on the first start.
 - **Email:**
   - The reader against a fake mailbox: headers first, whole messages only from the owner's addresses, the `n:*` quirk, IDLE with the periodic check, errors and backoff.
   - The position: kept across restarts, nothing imported the first time, and a `UIDVALIDITY` change handled without duplicates.
@@ -870,7 +900,7 @@ Required tests, at least:
   - An email is never a command.
 - **Least privilege:** the folders Scooter creates get the owners and modes in 3.2; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
 - **Runner:**
-  - Batching after the quiet period, and the batch limit.
+  - Batching after the quiet period, and the batch's two limits: 20 items, and the prompt's size, with an over-long item shown cut.
   - Cursor, retry and failed transitions with an injected clock (a 1-minute wait between attempts; 4 attempts).
   - `FAILED`.
   - A pi failure discards uncommitted changes and sends one notice. It counts one attempt, unless OpenRouter caused it. A 401, 402, 403 or 404 pauses runs, with a try every 30 minutes and on restart. A 408, 429, 5xx or no answer is retried after 1, 5 and 30 minutes, then every 30. Neither counts attempts, and messages that arrive meanwhile are handled once a run gets through.
@@ -880,17 +910,18 @@ Required tests, at least:
   - Sessions: only the current one is copied into `run/session/`, and only it is copied back: never a symlink, and nothing after a failed run.
   - A symlink, a FIFO, a name starting with `.` (such as `views/.gitignore`) or a file git ignores, in `views/` or `memory/`, fails the run; the clean-up removes it, and pi's session isn't copied back.
   - The sandbox gets the network policy for the configured internet mode, and the prompt shows which mode is on.
-  - Scheduled and `once` tasks, and `/new`.
+  - Scheduled and `once` tasks, and `/new`, which is handled once even when the batch after it fails.
   - Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies. `Now:` is each batch's own time, and batches don't cross the owner's days.
   - Backfills:
     - `until` is the live cursor when the backfill starts, and every message up to it is covered once.
     - Its batches run only when nothing live is waiting, and a message that arrives during one is handled right after it.
     - A batch that changes anything outside its `writes` and the day pages, `memory/` included, fails and is discarded.
     - It sends nothing until its summary, its progress survives a restart, and removing its entry drops it.
-  - No run while a backup holds its lock.
+  - No run while a backup holds its lock; when both locks appear at once, the runner gives way; and `run.lock` records when its run must be over.
+  - `status.json` holds what `/status` shows about the runner's settings. The emulation notice goes out when the accelerator changes to emulation, and not again at the next start.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
-- **Delivery:** order, pacing, chunking, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`.
+- **Delivery:** order, pacing, chunking, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again.
 - **Routing:** `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that can't send stops the bridge at startup.
 - **Network policy:**
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.
@@ -901,18 +932,18 @@ Required tests, at least:
   - The `request` line is written before the request goes out, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
 - **Sandbox** (these need QEMU, and skip themselves without it):
   - A VM boots from the built image and runs `pi --version`.
-  - The mounts: the datastore and the agent's folder are read-only, except `views/`, `memory/` and `run/session/`.
+  - The mounts: the datastore and the agent's folder are read-only, except `views/`, `memory/` and `run/session/`. They sit at the host's paths, also when the data folder is `/data`.
   - Nothing survives between runs: neither files outside the mounts nor background processes.
   - From inside the VM: another host, DNS to an outside resolver, UDP, and private addresses (the host's loopback, `169.254.169.254`, a LAN address) are all refused, and the environment holds only the placeholder.
   - `AGENT_ACCEL`: `auto` picks the fastest available and says which; a forced accelerator that isn't available stops the runner with an error.
   - A timeout closes the VM, and stopping the runner's process group leaves no QEMU behind.
   - A missing image, or one built for another pi version, stops the runner.
-- **Backups:** lock coordination with a stub `backup.sh`. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target.
+- **Backups:** lock coordination with a restic stub: a backup waits for a run to finish, goes ahead once `run.lock` is 2 minutes past its time, and a leftover `backup.lock` is removed at startup. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target.
 - **Config:** each validation error names the field, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, wrong folder modes) with its fix.
 
 ## 11. Development plan
 
-Work through these milestones in order. Each one ends with `npm test` passing and a commit that describes it.
+The implementation plan under `docs/plans/` splits these milestones into smaller ones, and sets their order, files and checks. Where its order differs from this one, follow the plan. Each milestone ends with `npm test` passing and a commit that describes it.
 
 1. **Foundations.** `package.json` (Node ≥ 22.19; `yaml`, `@earendil-works/gondolin`, `imapflow` and `postal-mime` pinned), a `src/cli.mjs` skeleton, settings and their validation (both env files), the constants module (8.6), time-zone helpers, logging, atomic file writes, running processes with timeouts and a uid/gid, locks, and the datastore module (4.3, 4.4).
    *Done when* the datastore tests pass, including recovery from an incomplete last line.
@@ -922,24 +953,28 @@ Work through these milestones in order. Each one ends with `npm test` passing an
    *Done when* the pi stub can take a message from the datastore to a committed view and a correct `state.json`, including retries and failures.
 4. **Delivery and commands.** The outbox writer and processor, routing and `DEFAULT_CHANNEL`, pacing, chunking, quoting, reactions, `out` lines and crash recovery (5.3), notices, and `/status`, `/help`, `/backup` (with a stub) and `/new` (5.4).
    *Done when* an end-to-end test goes from a webhook to a quoted reply sent through the wacli stub and logged as an `out` line, another goes from an email to an unquoted reply on WhatsApp, and `/status` reports the runner's state.
-5. **Sandbox and deployment.** The Gondolin sandbox and acceleration (6.6), the VM image and `build-image` (6.12), the network policy and its log (6.13), `setup` and `doctor` (8.4), the systemd and launchd services (8.5), the `Dockerfile` and `compose.yaml` (8.3), the other CLI commands (8.4), `rebuild` (6.10) and backfills (6.11).
+5. **Sandbox and deployment.** The Gondolin sandbox and acceleration (6.6), the VM image and `build-image` (6.12), the network policy and its log (6.13), `setup` and `doctor` (8.4), the systemd services (8.5), the `Dockerfile` and `compose.yaml` (8.3), the other CLI commands (8.4), `rebuild` (6.10) and backfills (6.11).
    *Done when* the network policy tests pass, and also:
    - where QEMU is available: the sandbox tests pass; with KVM, a VM boots in under 3 seconds; and pi in a VM reaches OpenRouter's chat endpoint with a dummy key (OpenRouter answers 401), while `https://example.com` is refused;
    - natively, after `setup`: the services start, `doctor` passes, and wacli and the email reader run as their own users and can't read the `datastore`, `agents`, `exchange`, `runner` or `bridge` folders;
    - if Docker is available: `docker compose build` succeeds, and the same checks pass in the containers, with KVM where the host allows it (8.3). If Docker can build for other platforms (`docker buildx` with emulation), also build the other architecture.
-6. **Backups.** `scripts/backup.sh`, the schedule, lock coordination, pausing the channels and the outbox, and failure notices (5.5).
+6. **Backups.** The backup module, the schedule, lock coordination, pausing the channels and the outbox, and failure notices (5.5).
    *Done when* the stubbed flow and the real restic round trip pass.
 7. **Agent instructions and docs.** The protocol (7.1), `config/prompts/lifelog.md` (7.2), the six skills (7.3), the default `config/agents.yaml`, `config/image/build.json`, `bridge.env.example`, `runner.env.example`, and a `README.md`. The README covers:
-   - setup natively on Linux and on a Mac (8.5), and in Docker (8.3), including how to enable KVM in each case, the udev rule for rootless Docker, and what emulation costs;
+   - setup natively (8.5) and in Docker (8.3), including how to enable KVM in each case, the udev rule for rootless Docker, and what emulation costs;
    - the bot number, the Scooter mailbox and its app password, Scooter's OpenRouter key and its guardrail (6.13), the env files, `build-image`, `doctor`, `backup-init`, `pair` and `email-check`;
    - daily use (including copying the views out), commands, backups and restore, rebuilds, and development;
    - the security model, including what turning internet access on means, and how to read the network log.
 
    *Done when* the files are complete. If it's feasible, also run the pinned pi for real in the sandbox through one batch end to end, with a dummy key (OpenRouter answers 401, which still exercises the whole path); if it isn't, record why in `docs/DECISIONS.md`.
-8. **Final check.** Re-read this document and tick off every requirement. List anything not done in `docs/DECISIONS.md`. Make sure `npm test` passes from a clean checkout on macOS and on Linux (section 10). Put the checklist from section 14 in the README as "Check on the first real run".
+8. **Final check.** Re-read this document and tick off every requirement. List anything not done in `docs/DECISIONS.md`. Make sure `npm test` passes from a clean checkout on Linux (section 10). Put the checklist from section 14 in the README as "Check on the first real run".
 
 ## 12. Out of scope for v2
 
+- macOS. v2 is built and tested on Linux only. Adding macOS later means launchd daemons for the two services, Apple's hypervisor for pi's VMs (`AGENT_ACCEL=hvf`), a data folder such as `/usr/local/var/scooter`, and the test suite passing on a Mac. Notes for then:
+  - Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Catch-up collects what arrived while it slept.
+  - Docker Desktop gives containers no hypervisor (13.3), so on a Mac the native install is the fast one.
+  - With Docker Desktop, OrbStack or Colima, keep the project folder in the home folder (Colima shares only that), and set Docker to start at login so `restart: unless-stopped` brings Scooter back.
 - More than one agent, and channels other than WhatsApp and the owner's email, such as Telegram or bank alerts.
 - Sending email, and keeping email from anyone but the owner.
 - Approvals for preference changes, notices about them, and an `/undo` command.
@@ -1003,12 +1038,16 @@ Work through these milestones in order. Each one ends with `npm test` passing an
   - On the messages route, every turn used the same 8 top-level fields and the same two `anthropic-beta` values, and each turn included a message with `role: "system"`.
   - Capture the exact lists again with the pinned version, for the network policy (6.13, section 14).
 - **Runtime downloads:** pi downloads ripgrep and fd from GitHub when they aren't installed.
+- **MCP:** pi 1.5.2 depends on `@earendil-works/pi-mcp`, so MCP support is built in. `--no-mcp` is the flag that turns it off.
+- **Install scripts** (pi 1.5.2, from the npm registry on 2026-11-15): pi installs 123 packages, all from the registry, and pins its 22 direct dependencies exactly. Two packages declare install scripts, and pi needs neither: `@google/genai` runs an `echo`, and `protobufjs` prints a warning about how it's depended on. Running pi and its tools after `npm install --ignore-scripts` hasn't been tried yet (section 14).
 
 ### 13.3 Other
 
 - **restic 0.19.1:** download `restic_0.19.1_linux_<arch>.bz2` (`amd64` or `arm64`) from `https://github.com/restic/restic/releases/download/v0.19.1/` and check it against `SHA256SUMS`.
   - R2: `RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/scooter` with `AWS_DEFAULT_REGION=auto`.
   - B2: `b2:<bucket>:scooter`.
+- **Linux command lines:** one argument can be at most 128 KB. On Ubuntu 24.04, an argument of 120,000 bytes worked, and one of 140,000 failed with "Argument list too long".
+- **The `mail` user:** Ubuntu 24.04 has one (uid 8, group `mail`), and `/var/mail` is writable by that group. Debian 12 and Alpine 3.24 images have a `mail` user too. The `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account.
 - **Docker:** its default seccomp profile blocks creating user namespaces, so sandboxes like bubblewrap don't work inside containers. Gondolin's VMs don't need them (13.4). Docker Desktop on macOS gives containers no KVM.
 - **OpenRouter** can fetch from the web on a request's behalf: the server tools `openrouter:web_search` and `openrouter:web_fetch` (which fetches any URL the model picks), the `web` plugin, the `:online` model suffix, and images given by URL. The settings on an account's Plugins tab don't apply to server tools, and its guardrails can limit a key's models and spending but not these tools, so only the runner's network policy can stop them (6.13). A request with a dummy key gets 401; a well-formed but unknown key gets "User not found".
 - **OpenRouter's zero data retention (ZDR)**, from its docs on 2026-11-15:
@@ -1042,9 +1081,13 @@ Checked in a prototype on an Ubuntu 24.04 server on 2026-11-15.
 - **Secrets:** a secret is tied to hosts. The guest sees a placeholder, which the host replaces in request headers (`Authorization`, `x-api-key`) for those hosts only.
 - **Hooks:** an `onRequest` hook sees the method, URL, headers and body, and can refuse the request, rewrite it, or answer it itself. In 0.14.0 an `onResponse` hook makes Gondolin buffer the whole response before the guest gets any of it, which breaks streaming; logging from undici's diagnostics events works instead.
 - **Versions:** Gondolin's documentation site describes a newer, unreleased design in which a separate program runs the hooks; 0.14.0 runs everything in Node.
-- **Crashes:** if the process that started a VM is killed, the VM's QEMU keeps running, cut off from the network.
+- **Crashes:** if the process that started a VM is killed, the VM's QEMU keeps running, cut off from the network. Files are left behind too: Gondolin keeps its certificate authority and session files under `~/.cache/gondolin`, and its disk overlays and sockets in the temporary folder.
 - **Images:** the Alpine builder, run in a rootless Docker container, built Scooter's image (Node, pi 1.5.2, poppler, libheif, git, ripgrep, fd) in 16 seconds; it was 529 MB. Alpine's package versions float within a release.
-- **Mounts:** a host folder mounted read-only, except chosen subfolders, worked for pi's reads and writes.
+  - The builder unpacks Alpine's packages itself and runs none of their scripts.
+  - It runs the build's own commands in a chroot, with the host's `/proc` and `/dev` mounted inside, and refuses to do so unless it's root.
+  - Its container mode runs the whole build as root in a privileged container instead. Under rootless Docker that needed no root on the host.
+  - A native build as root hasn't been run (section 14).
+- **Mounts:** a host folder mounted read-only, except chosen subfolders, worked for pi's reads and writes. By default Gondolin puts its file system at `/data` in the guest, and shows each mount there too; the mount point can be moved (`vfs.fuseMount`).
 - **Docker:** a container with no added capabilities, no `--privileged` and no seccomp changes ran VMs, under emulation, and reached OpenRouter. On Linux:
   - in rootless Docker, the container runtime resets each container's supplementary groups, so the host's `kvm` group never reaches the container;
   - a per-user ACL on `/dev/kvm` let a rootless container's root, which is the host user, open it. But Ubuntu's udev rules (the `uaccess` tag) reset per-user ACLs on `/dev/kvm` whenever any VM is created or destroyed, so the ACL was gone as soon as a VM started;
@@ -1063,8 +1106,9 @@ Check these during implementation where you can, and put the rest in the README 
 - Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13).
 - That ZDR-only routing works for the configured model, and how much latency it adds.
 - KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3).
-- Gondolin natively on a Mac with Apple's hypervisor, and the launchd services (8.5).
-- Building the VM image natively on Linux and macOS, and in the runner container.
+- Building the VM image natively, as root (6.12), and in the runner container, where the build may need more privileges than the service has (8.3).
+- That pi and its tools work when pi was installed with `npm install --ignore-scripts` (6.12, 13.2).
+- That `--no-mcp` works together with `-p` (6.6).
 - The runner container with a read-only root filesystem (8.3).
 - `wacli send react --sender` in a one-to-one chat.
 - How wacli reports edits and deletions (13.1).
@@ -1073,4 +1117,6 @@ Check these during implementation where you can, and put the rest in the README 
 - That mail from the owner's address passes DMARC, which needs its domain to publish a DMARC record.
 - `postal-mime` on real emails from the owner's mail apps, including a forwarded booking and an audio attachment.
 - Whether wacli can take its webhook secret from the environment instead of its command line (5.1).
-- `docker compose build`, the Docker image on both `amd64` and `arm64`, and the stack under Docker Desktop, OrbStack and Colima on macOS, including the `./config` bind mount.
+- `docker compose build`, and the Docker image on both `amd64` and `arm64`.
+
+With macOS, later (section 12): Gondolin natively on a Mac with Apple's hypervisor; the launchd services; building the VM image on a Mac; and the stack under Docker Desktop, OrbStack and Colima, including the `./config` bind mount.
