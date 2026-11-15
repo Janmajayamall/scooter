@@ -565,6 +565,8 @@ Four smaller things were aligned in DESIGN.md at the same time, without changing
 - section 11 points to the plan for the order of work;
 - the command that runs the tests as root sets `SCOOTER_ROOT_TESTS=1`, which the tests that create users wait for, so running the suite as root on a real machine creates none (10).
 
+On 2026-11-16 the owner removed the earlier prototype from the repository and moved the work from the `v2` branch to `main`. The top of DESIGN.md says so.
+
 ## 9. Deferred, and where the design leaves room
 
 **Deferred with macOS:** launchd services, Apple's hypervisor (`AGENT_ACCEL=hvf` stays a known value and fails on Linux, as any unavailable accelerator does), the macOS data paths in `setup`, and running under Docker Desktop, OrbStack or Colima.

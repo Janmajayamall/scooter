@@ -1,8 +1,8 @@
 # Scooter v2: design and development plan
 
-This document is the specification for Scooter v2, written for the agent that will build it. Build everything from scratch on the `v2` branch, following this document.
+This document is the specification for Scooter v2, written for the agent that will build it. Build everything from scratch on the `main` branch, following this document.
 
-The `main` branch holds an earlier prototype. Don't read it, run it or copy from it. Whatever it taught us about the tools is already in section 13.
+An earlier prototype has been removed from the repository. Whatever it taught us about the tools is already in section 13.
 
 When this document doesn't settle a question, pick the simplest option that keeps the principles in section 1, and record the choice in `docs/DECISIONS.md`. Don't change anything in section 2 without asking the owner.
 

@@ -24,7 +24,7 @@ Keep the portability rules in section 10 of DESIGN.md where they cost nothing: p
 
 ## 2. Rules for the work
 
-1. **Branch.** Work on `v2`. Don't read, run or copy from `main` (the top of DESIGN.md).
+1. **Branch.** The work lands on `main`. The earlier prototype is no longer in the repository (the top of DESIGN.md).
 2. **One milestone, one pull request** or one series of commits. It ends with `npm test` passing on Linux and a commit that describes it. Commits and pull requests follow `AGENTS.md`.
 3. **Open questions.** When DESIGN.md and ARCHITECTURE.md don't settle something, pick the simplest option that keeps the principles, and record it in `docs/DECISIONS.md`: the question, the choice and the reason. Don't change anything in section 2 of DESIGN.md without asking the owner.
 4. **Tests** use `node:test`, no real credentials and no network. Each test works in its own temporary folder, with `TMPDIR` inside it. Time comes from an injectable clock, and constants are overridden through `src/common/limits.mjs`.
