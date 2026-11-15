@@ -35,7 +35,7 @@ Keep the portability rules in section 10 of DESIGN.md where they cost nothing: p
    - Every tuning number is in `src/common/limits.mjs`.
    - Logs carry no message text or file contents.
    - The import rules of ARCHITECTURE.md 4.2 hold, and a test checks them.
-6. **Gates.** Some checks need root, the owner's phone or real keys. They're collected in section 6. Don't work around them.
+6. **Gates.** Some checks need root, the owner's phone or real keys. Section 6 says how each is met: root comes from a throwaway VM, and the rest wait for the owner. Don't work around them.
 
 **Every milestone is done when:**
 - `npm test` passes on the Linux machine from a clean checkout (`npm ci`);
@@ -54,15 +54,15 @@ The owner's Linux machine, reached over SSH as the user `agentw`. The owner has 
 | KVM | Usable: `agentw` is in the `kvm` group |
 | Docker | Rootless. Its containers can't open `/dev/kvm` (13.4), so VMs inside them run under emulation |
 | Missing | Go, restic, wacli, `lz4`, `tini`. pi is only needed inside the VM image |
-| Root | None: `sudo` asks for a password |
+| Root | None on the machine itself: `sudo` asks for a password. A VM started there with QEMU gives root inside it, and KVM works in that VM too (section 6) |
 | Cross-building | No arm64 emulation, for Docker or for QEMU |
 
 **What follows:**
 - Everything runs there as `agentw` in development mode (8.5): no user switching, `DATA_DIR` and `CONFIG_DIR` pointing into a work folder. VMs run with KVM.
 - restic and wacli come as release binaries, checked against their checksums, in `~/.local/bin` (milestone 0). Go isn't needed.
 - The VM image is built with Gondolin's container build, which needs no root under rootless Docker.
-- Anything that needs root is a gate (section 6): creating users, installing services, a system-wide Node, `lz4`.
-- Node lives under `agentw`'s home, which other users can't enter. A native install needs a Node the service users can run (gate G1).
+- Anything that needs root happens in a throwaway VM (section 6), never on the machine itself: creating users, installing services, a system-wide Node, `lz4`.
+- Node lives under `agentw`'s home, which other users can't enter. A native install needs a Node the service users can run (gate G1, in the VM).
 
 **Facts found while planning.** Those that changed DESIGN.md are also in its section 13:
 
@@ -86,7 +86,7 @@ The owner's Linux machine, reached over SSH as the user `agentw`. The owner has 
 | Root tests | The same suite as root in a container: `docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'` | Docker. Tests that create users run only with `SCOOTER_ROOT_TESTS=1`, so nobody creates users on a real host by running the suite as root |
 | Sandbox tests | Part of `npm test`; they skip themselves without QEMU or without `SCOOTER_TEST_IMAGE`, a folder holding a built image | QEMU, and KVM for speed |
 | Live checks | Scripts in `test/live/`, run by hand | Network. They reach the real OpenRouter with a dummy key |
-| Gates | Section 6 | The owner |
+| Gates | Section 6 | A root VM for G1 to G3; the owner for G4 |
 
 ## 4. Milestones
 
@@ -104,8 +104,8 @@ The owner's Linux machine, reached over SSH as the user `agentw`. The owner has 
 | 9 | Rebuild and backfill | 11.5 | 4, 5 | yes |
 | 10 | Backups | 11.6 | 5 | yes |
 | 11 | The agent's instructions | 11.7 | 4; its dry run needs 8 | yes |
-| 12 | Native install | 11.5 | 5, 6, 8, 10 | partly: gates G1 and G2 |
-| 13 | Docker | 11.5 | 12 | partly: gate G3 |
+| 12 | Native install | 11.5 | 5, 6, 8, 10 | yes, with gates G1 and G2 in a root VM |
+| 13 | Docker | 11.5 | 12 | yes, with gate G3 in a root VM |
 | 14 | Docs and final check | 11.7, 11.8 | all | partly: gate G4 |
 
 Three tracks can run side by side once milestone 1 is in, as long as no two agents edit the same files: the bridge (2, 6, 10), the runner (3, 4, 9) and the sandbox (7, 8). They meet at 5 and 12.
@@ -396,7 +396,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - Root tests, in a container: `setup` without services creates the users and folders; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file.
 - `systemd-analyze verify` on both units.
 
-**Done when** those pass, and gate G2 passes on a machine with root.
+**Done when** those pass, and gate G2 passes in the root VM (section 6).
 
 ### Milestone 13: Docker
 
@@ -415,9 +415,9 @@ Use the prompt shown in 6.5 as the first expected output.
 - pi in a VM in the runner container reaches OpenRouter with a dummy key, and `https://example.com` is refused;
 - the mounts work with the data under `/data` (row 14).
 
-**Not verifiable there:** KVM inside a container (gate G3), and the arm64 image. Record both in `docs/DECISIONS.md`.
+**Not verifiable there:** KVM inside a container, which gate G3 covers in the root VM; and the arm64 image, which nothing here can cover. Record the arm64 gap in `docs/DECISIONS.md`.
 
-**Done when** the checks above pass.
+**Done when** the checks above pass, and gate G3 passes in the root VM (section 6).
 
 ### Milestone 14: docs and final check
 
@@ -450,27 +450,47 @@ Use the prompt shown in 6.5 as the first expected output.
 | Backups | 10 |
 | Config | 3 for validation; 12 for `doctor` |
 
-## 6. Gates: what needs the owner
+## 6. Gates: what needs root, and what needs the owner
 
-The agent stops at each gate, says what it needs, and carries on with whatever doesn't depend on it. If the owner gives `agentw` root on the Linux machine, the agent runs G1 and G2 itself.
+G1 to G3 need root. G4 needs the owner: the agent stops there, says what it needs, and carries on with whatever doesn't depend on it.
 
-**G1. Prerequisites for a native install** (root; before milestone 12's host check)
+**Root comes from a throwaway VM.** `agentw` has no root on the Linux machine and gets none (decided with the owner on 2026-11-16). For G1 to G3 the agent starts an Ubuntu VM on that machine with QEMU, as `agentw`, and is root inside it.
+
+- Never use `sudo` on the Linux machine itself, and install nothing there outside `agentw`'s home.
+- Use an official Ubuntu 24.04 cloud image, checked against its published `SHA256SUMS`. Keep the VM's files in a scratch folder outside the repository.
+- Run it with KVM and the host's CPU (`-cpu host`), so KVM also works inside it. Start from 4 CPUs, 8 GB of memory and a 40 GB disk; the machine has room for more.
+- Use user-mode networking, with the VM's SSH port forwarded to a port on `127.0.0.1` only.
+- Where a gate says "the host", that is the VM. Get the code into it by cloning the pull request's branch from GitHub.
+- Start each gate from a fresh disk. When the gate is done, shut the VM down, delete its disk, and check that no QEMU process of yours is left.
+- Nothing in the VM is kept. Put what was run, and what happened, in the pull request and in `docs/DECISIONS.md`.
+
+This was tried on 2026-11-16, with 4 CPUs and 4 GB:
+- The image is about 600 MB. The VM booted in about 8 seconds.
+- Its default user, `ubuntu`, has passwordless `sudo`, and systemd reported `running`.
+- `/dev/kvm` worked inside the VM, so Scooter's own VMs can use KVM there. They will be slower than on the machine itself.
+- The cloud-init seed was an ISO made with `xorriso`, labeled `CIDATA`, holding an SSH key for the default user.
+- Ubuntu already has a group called `admin`, and cloud-init failed to create a user of that name.
+- A fresh image has git, and no Node, Docker, QEMU or `lz4`.
+
+The install on the machine Scooter will live on is not part of these gates. It stays with the owner, with G4.
+
+**G1. Prerequisites for a native install** (in the root VM; before milestone 12's check there)
 - A system-wide Node ≥ 22.19.
-- `apt install lz4`. `cpio`, `e2fsprogs` and QEMU are already there.
+- `lz4`, QEMU, `cpio` and `e2fsprogs`, from `apt`.
 - restic 0.19.1 and wacli 0.26.0 in `/usr/local/bin`, checked against their checksums.
 - The code in a root-owned folder, such as `/opt/scooter`, with `npm ci --omit=dev --ignore-scripts`.
 
-**G2. The native install** (root; ends milestone 12)
+**G2. The native install** (in the root VM; ends milestone 12)
 1. `sudo scooter setup`, then fill in the two env files. A dummy OpenRouter key is enough here.
 2. `sudo scooter build-image`. This is the first native build as root (14).
 3. Start both services. `sudo -u scooter-runner scooter doctor` passes.
 4. As `scooter-wacli` and as `scooter-mail`, reading `datastore`, `agents`, `exchange`, `runner` and `bridge` fails.
 5. Kill the runner during a run: no QEMU process is left.
 
-**G3. KVM inside Docker** (root; after milestone 13)
+**G3. KVM inside Docker** (in the root VM; ends milestone 13)
+- Rootful Docker: `devices`, `user` and `group_add`, as in 8.3.
 - Rootless Docker: install the udev rule from the README, then run the runner container with `AGENT_ACCEL=kvm`.
-- Or rootful Docker: `devices`, `user` and `group_add`, as in 8.3.
-- Either way: a VM boots in under 3 seconds in the container.
+- In both cases `doctor` in the runner container reports KVM, and a VM boots there. Record how long it takes. The 3-second mark was measured on the machine itself, and a VM inside a VM is slower, so it isn't a pass mark here.
 
 **G4. The first real run** (the owner's phone, accounts and keys; after milestone 14)
 
@@ -500,7 +520,7 @@ The items of section 14 of DESIGN.md:
 | `--no-mcp` with `-p`; pi installed with `--ignore-scripts` | Milestone 0 (pi 4 and pi 8) |
 | A real batch with the owner's key | G4 |
 | `provider.zdr` on the messages route; ZDR-only routing and its latency | G4 |
-| KVM inside a container, rootful and rootless | G3 |
+| KVM inside a container, rootful and rootless | G3, in the root VM |
 | Gondolin on a Mac; launchd | Deferred with macOS |
 | Building the VM image natively on Linux | G2, as root. Milestone 0 covers the container build |
 | Building the VM image in the runner container | Milestone 13 |
@@ -522,5 +542,6 @@ The items of section 14 of DESIGN.md:
 | wacli's real behavior for edits, deletions and `@lid` is unknown until pairing | Its formats sit in two functions (milestone 2); G4 corrects them |
 | The messages route may refuse the ZDR fields | The per-route switch (milestone 8); the key's guardrail still enforces ZDR |
 | Emulation in a rootless container is slow: about 13 seconds before pi's first request (13.4) | Generous timeouts in milestone 13's checks; KVM at G3 |
-| No root on the Linux machine | The root tests run in a container; G1 and G2 are short and scripted |
+| No root on the Linux machine | The root tests run in a container. G1 to G3 run in a throwaway VM, where the agent is root (section 6) |
+| In the root VM, Scooter starts its own VMs inside a VM | Nested virtualization is on, and KVM answered inside a test VM. Timings there are slower, so time limits are checked on the machine itself |
 | arm64 is never run | Architecture-neutral code; recorded as unverified |
