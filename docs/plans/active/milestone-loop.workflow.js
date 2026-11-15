@@ -31,13 +31,16 @@ export const meta = {
 // The loop stops, and returns why, when an agent has a question for the owner, when a step needs the
 // owner (the plan's gates), when a pull request isn't approved within `maxRounds` reviews, or when a
 // merge fails. To go on, run it again: it skips the milestones whose pull request is already merged.
-// Pass the owner's answer as `answer`; it goes to the implementing agent of the milestone that stopped.
+// Pass the question it stopped on as `question` and the owner's reply as `answer`. Both go to the
+// implementing agent of the milestone that stopped. Every agent is new and remembers nothing, so
+// each one picks the work up from the branch, the pull request's description and its reviews.
 //
 // Args, all optional:
 //   from, to    first and last milestone to run (default 0 and 13; 14 needs the owner, so it isn't run)
 //   maxRounds   reviews per milestone before the loop stops and asks (default 3)
 //   merge       false leaves approved pull requests for the owner to merge (default true)
-//   answer      the owner's answer to the question that stopped the last run
+//   question    the question that stopped the last run, as the loop returned it
+//   answer      the owner's reply to it
 //   coder       options for the implementing agents, such as { model: 'opus' } or { agentType: '...' }
 //   reviewer    the same, for the reviewing agents
 //   dryRun      true starts no agent: it returns the milestones it would run and the prompts it would send
@@ -64,7 +67,7 @@ const LAST = NAMES.length - 1
 const title = n => `Milestone ${n}: ${NAMES[n]}`
 
 const cfg = Object.assign(
-  { from: 0, to: LAST, maxRounds: 3, merge: true, answer: '', coder: {}, reviewer: {}, dryRun: false },
+  { from: 0, to: LAST, maxRounds: 3, merge: true, question: '', answer: '', coder: {}, reviewer: {}, dryRun: false },
   args || {},
 )
 if (!Number.isInteger(cfg.from) || !Number.isInteger(cfg.to) || cfg.from < 0 || cfg.from > cfg.to) {
@@ -85,27 +88,32 @@ const DONE = '"Every milestone is done when" in section 2 of the plan'
 const ASK =
   'If anything is ambiguous, or is an open-ended decision you cannot settle by reasoning from the plan and the other documents, stop and return it as a question. Do not guess.'
 
-const implementPrompt = (n, answer) =>
+const implementPrompt = (n, question, answer) =>
   [
     `Implement milestone ${n} (${NAMES[n]}) of \`${PLAN}\`.`,
     `${READ} Then build what the milestone lists, until it meets ${DONE}.`,
-    `Work on the branch \`milestone-${n}\`, cut from the latest \`origin/${BASE}\`, and open a pull request against \`${BASE}\` titled "${title(n)}". If the branch or the pull request already exists, continue from it.`,
+    `Work on the branch \`milestone-${n}\`, cut from the latest \`origin/${BASE}\`, and open a pull request against \`${BASE}\` titled "${title(n)}". If the branch or the pull request already exists, read the pull request's description and its reviews, and continue from there.`,
+    "In the pull request's description, also say what you decided and why, for the agent that works on it after you.",
     `${ASK} Where the plan says a step needs the owner, finish what doesn't depend on it, push, and return what you need as a question.`,
     answer
-      ? `The owner has answered the question that stopped this milestone earlier. Record the answer in \`docs/DECISIONS.md\` and go on from it:\n${answer}`
+      ? [
+          'This milestone stopped earlier on a question for the owner. Record the question and the answer in `docs/DECISIONS.md`, and go on from the answer.',
+          question ? `The question:\n${question}` : '',
+          `The owner's answer:\n${answer}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : '',
     'Return the pull request number, and in two or three sentences what you did and what you could not verify.',
   ]
     .filter(Boolean)
     .join('\n\n')
 
-const reviewPrompt = (n, pr, round) =>
+const reviewPrompt = (n, pr) =>
   [
-    `Review pull request #${pr}, which implements milestone ${n} (${NAMES[n]}) of \`${PLAN}\`.` +
-      (round > 1
-        ? ` This is review ${round}. The earlier reviews and the replies to them are on the pull request: check that each point was fixed, or answered with a good reason.`
-        : ''),
+    `Review pull request #${pr}, which implements milestone ${n} (${NAMES[n]}) of \`${PLAN}\`.`,
     `${READ} Check the pull request out exactly as pushed, in a clean checkout that you remove afterwards. Run what the milestone says to run, and judge the work against the milestone and ${DONE}. Do not change the code.`,
+    'If the pull request already has reviews, check that each point in them was fixed, or answered with a good reason.',
     'Post the review as one comment on the pull request. List each problem that must be fixed before merging, with its file and line and what would settle it. Note smaller points separately. End with a line that reads `Verdict: approve` or `Verdict: changes requested`. Approve only when nothing must be fixed.',
     ASK,
   ].join('\n\n')
@@ -113,7 +121,7 @@ const reviewPrompt = (n, pr, round) =>
 const fixPrompt = (n, pr) =>
   [
     `Pull request #${pr} implements milestone ${n} (${NAMES[n]}) of \`${PLAN}\`. Its latest review asks for changes.`,
-    `${READ} Read the reviews on the pull request. Fix what is right. Where you disagree, reply on the pull request with your reason instead of changing the code. Push to the same branch, \`milestone-${n}\`, and add a comment that lists what you changed.`,
+    `${READ} Read the pull request's description and its reviews. Fix what is right. Where you disagree, reply on the pull request with your reason instead of changing the code. Push to the same branch, \`milestone-${n}\`, and add a comment that lists what you changed.`,
     ASK,
     'Return in two or three sentences what you changed and what you left.',
   ].join('\n\n')
@@ -161,8 +169,8 @@ if (cfg.dryRun) {
     maxRounds: cfg.maxRounds,
     merge: cfg.merge,
     prompts: {
-      implement: implementPrompt(cfg.from, cfg.answer),
-      review: reviewPrompt(cfg.from, 0, 1),
+      implement: implementPrompt(cfg.from, cfg.question, cfg.answer),
+      review: reviewPrompt(cfg.from, 0),
       fix: fixPrompt(cfg.from, 0),
       merge: mergePrompt(0),
     },
@@ -180,6 +188,7 @@ if (!progress) {
 const merged = new Set(progress.merged)
 
 const finished = []
+let question = cfg.question
 let answer = cfg.answer
 
 for (let n = cfg.from; n <= cfg.to; n++) {
@@ -193,11 +202,12 @@ for (let n = cfg.from; n <= cfg.to; n++) {
     return Object.assign({ status: 'stopped', milestone: n, stage, reason }, more || {}, { finished })
   }
 
-  const work = await agent(implementPrompt(n, answer), {
+  const work = await agent(implementPrompt(n, question, answer), {
     ...cfg.coder,
     label: `m${n} implement`,
     schema: WORK,
   })
+  question = ''
   answer = ''
   if (!work) return stop('implement', 'the agent returned nothing')
   if (work.status === 'question') {
@@ -212,7 +222,7 @@ for (let n = cfg.from; n <= cfg.to; n++) {
   let reviews = 0
   while (reviews < cfg.maxRounds) {
     reviews++
-    const review = await agent(reviewPrompt(n, pr, reviews), {
+    const review = await agent(reviewPrompt(n, pr), {
       ...cfg.reviewer,
       label: `m${n} review ${reviews}`,
       schema: REVIEW,
