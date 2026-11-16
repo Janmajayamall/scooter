@@ -1,0 +1,1212 @@
+{
+  "about": "What pi sends to OpenRouter's messages route during one batch. Written by test/tools/capture-pi-requests.mjs.",
+  "pi": "1.5.2",
+  "model": "anthropic/claude-sonnet-5.5",
+  "thinking": "low",
+  "shapes": [
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        }
+      },
+      "system": [
+        "text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "tool_result: string"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        },
+        "assistant": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "thinking",
+            "tool_use"
+          ]
+        }
+      },
+      "system": [
+        "text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "tool_result: image (base64)",
+            "tool_result: string",
+            "tool_result: text"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        },
+        "assistant": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "thinking",
+            "tool_use"
+          ]
+        }
+      },
+      "system": [
+        "text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "tool_result: image (base64)",
+            "tool_result: string",
+            "tool_result: text"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        },
+        "assistant": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "thinking",
+            "tool_use"
+          ]
+        }
+      },
+      "system": [
+        "text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "tool_result: image (base64)",
+            "tool_result: string",
+            "tool_result: text"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        },
+        "assistant": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "thinking",
+            "tool_use"
+          ]
+        }
+      },
+      "system": [
+        "text"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/messages",
+      "query": "?beta=true",
+      "headers": [
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "anthropic-beta",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "content-length",
+        "content-type",
+        "host",
+        "sec-fetch-mode",
+        "user-agent",
+        "x-api-key",
+        "x-session-id",
+        "x-stainless-arch",
+        "x-stainless-lang",
+        "x-stainless-os",
+        "x-stainless-package-version",
+        "x-stainless-retry-count",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "x-stainless-timeout"
+      ],
+      "beta": [
+        "mid-conversation-output-config-2026-07-01",
+        "thinking-binding-controls-2026-08-01"
+      ],
+      "fields": [
+        "max_tokens",
+        "messages",
+        "model",
+        "output_config",
+        "stream",
+        "system",
+        "thinking",
+        "tools"
+      ],
+      "tools": [
+        "cache_control,description,eager_input_streaming,input_schema,name",
+        "description,eager_input_streaming,input_schema,name"
+      ],
+      "messages": {
+        "user": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "tool_result: image (base64)",
+            "tool_result: string",
+            "tool_result: text"
+          ]
+        },
+        "system": {
+          "fields": [
+            "content",
+            "output_config",
+            "role"
+          ],
+          "content": []
+        },
+        "assistant": {
+          "fields": [
+            "content",
+            "role"
+          ],
+          "content": [
+            "text",
+            "thinking",
+            "tool_use"
+          ]
+        }
+      },
+      "system": [
+        "text"
+      ]
+    }
+  ],
+  "first": {
+    "method": "POST",
+    "host": "openrouter.ai",
+    "path": "/api/v1/messages",
+    "query": "?beta=true",
+    "headers": {
+      "accept": "application/json",
+      "accept-encoding": "br, gzip, deflate, zstd",
+      "accept-language": "*",
+      "anthropic-beta": "mid-conversation-output-config-2026-07-01,thinking-binding-controls-2026-08-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "content-length": "8973",
+      "content-type": "application/json",
+      "host": "openrouter.ai",
+      "sec-fetch-mode": "cors",
+      "user-agent": "pi/1.5.2 (linux; node/v24.22.3; x64)",
+      "x-api-key": "<placeholder>",
+      "x-session-id": "lifelog-2026-11-09",
+      "x-stainless-arch": "x64",
+      "x-stainless-lang": "js",
+      "x-stainless-os": "Linux",
+      "x-stainless-package-version": "0.129.0",
+      "x-stainless-retry-count": "0",
+      "x-stainless-runtime": "node",
+      "x-stainless-runtime-version": "v24.22.3",
+      "x-stainless-timeout": "300"
+    },
+    "body": {
+      "model": "anthropic/claude-sonnet-5.5",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).\n\nNew messages:\n#1050 21:13 text: \"coffee 150\"\n#1051 21:14 photo /data/datastore/2026/11/09/1051.png (image/png), caption: \"the receipt\"",
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        }
+      ],
+      "max_tokens": 128000,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n- grep: Search file contents for patterns (respects .gitignore)\n- find: Find files by glob pattern (respects .gitignore)\n- ls: List directory contents\n\nAdditional tools may be available.\n</tools>\n\n<rules>\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for targeted changes. Batch changes to one file in a single call.\n- Each edits[].oldText must exactly and uniquely match the original file. Keep matches short and non-overlapping; merge nearby changes without including large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)\n- Before implementing harness changes, read the relevant docs and examples in full, following related cross-references.\n</docs>\n\n<addendum>\n# Protocol\n\nEnd every answer with DONE lines.\n\n</addendum>\n\n<skills>\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nResolve relative paths against the skill's directory (parent of SKILL.md). Use absolute paths in tool calls.\n\n<available_skills>\n  <skill>\n    <name>expenses</name>\n    <description>How to file an expense in views/expenses.csv. Use it for receipts and amounts.</description>\n    <location>/data/agents/lifelog/run/config/skills/expenses/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>\n\n<cwd>\n/data/agents/lifelog\n</cwd>",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "tools": [
+        {
+          "name": "read",
+          "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to read (relative or absolute)"
+              },
+              "offset": {
+                "type": "number",
+                "description": "Line number to start reading from (1-indexed)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of lines to read"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "name": "bash",
+          "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Shell command to execute"
+              },
+              "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds (optional, no default timeout)"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        },
+        {
+          "name": "edit",
+          "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to edit (relative or absolute)"
+              },
+              "edits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "oldText",
+                    "newText"
+                  ],
+                  "properties": {
+                    "oldText": {
+                      "type": "string",
+                      "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."
+                    },
+                    "newText": {
+                      "type": "string",
+                      "description": "Replacement text for this targeted edit."
+                    }
+                  }
+                },
+                "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."
+              }
+            },
+            "required": [
+              "path",
+              "edits"
+            ]
+          }
+        },
+        {
+          "name": "write",
+          "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to write (relative or absolute)"
+              },
+              "content": {
+                "type": "string",
+                "description": "Content to write to the file"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 50KB (whichever is hit first). Long lines are truncated to 500 chars.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Search pattern (regex or literal string)"
+              },
+              "path": {
+                "type": "string",
+                "description": "Directory or file to search (default: current directory)"
+              },
+              "glob": {
+                "type": "string",
+                "description": "Filter files by glob pattern, relative to path, e.g. '*.ts', 'src/**/*.ts' or '**/*.spec.ts'. A pattern without '/' matches file names at any depth"
+              },
+              "ignoreCase": {
+                "type": "boolean",
+                "description": "Case-insensitive search (default: false)"
+              },
+              "literal": {
+                "type": "boolean",
+                "description": "Treat pattern as literal string instead of regex (default: false)"
+              },
+              "context": {
+                "type": "number",
+                "description": "Number of lines to show before and after each match (default: 0)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of matches to return (default: 100)"
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "name": "find",
+          "description": "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first).",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"
+              },
+              "path": {
+                "type": "string",
+                "description": "Directory to search in (default: current directory)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of results (default: 1000)"
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "name": "ls",
+          "description": "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Directory to list (default: current directory)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of entries to return (default: 500)"
+              }
+            },
+            "required": []
+          },
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized",
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
+      },
+      "output_config": {
+        "effort": "low"
+      }
+    },
+    "route": "messages"
+  },
+  "last": {
+    "method": "POST",
+    "host": "openrouter.ai",
+    "path": "/api/v1/messages",
+    "query": "?beta=true",
+    "headers": {
+      "accept": "application/json",
+      "accept-encoding": "br, gzip, deflate, zstd",
+      "accept-language": "*",
+      "anthropic-beta": "mid-conversation-output-config-2026-07-01,thinking-binding-controls-2026-08-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+      "anthropic-version": "2023-06-01",
+      "content-length": "11511",
+      "content-type": "application/json",
+      "host": "openrouter.ai",
+      "sec-fetch-mode": "cors",
+      "user-agent": "pi/1.5.2 (linux; node/v24.22.3; x64)",
+      "x-api-key": "<placeholder>",
+      "x-session-id": "lifelog-2026-11-09",
+      "x-stainless-arch": "x64",
+      "x-stainless-lang": "js",
+      "x-stainless-os": "Linux",
+      "x-stainless-package-version": "0.129.0",
+      "x-stainless-retry-count": "0",
+      "x-stainless-runtime": "node",
+      "x-stainless-runtime-version": "v24.22.3",
+      "x-stainless-timeout": "300"
+    },
+    "body": {
+      "model": "anthropic/claude-sonnet-5.5",
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).\n\nNew messages:\n#1050 21:13 text: \"coffee 150\"\n#1051 21:14 photo /data/datastore/2026/11/09/1051.png (image/png), caption: \"the receipt\""
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "The log has the message.",
+              "signature": "ZmFrZS1zaWduYXR1cmUtMA=="
+            },
+            {
+              "type": "text",
+              "text": "Let me look at the message."
+            },
+            {
+              "type": "tool_use",
+              "id": "toolu_fake_0",
+              "name": "read",
+              "input": {
+                "path": "/data/datastore/2026/11/09/log.jsonl"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_fake_0",
+              "content": "{\"seq\":1050,\"kind\":\"message\",\"dir\":\"in\",\"at\":\"2026-11-09T15:43:02Z\",\"source\":\"whatsapp\",\"sourceId\":\"3EB0A1B2C3D4E5F6A7B8\",\"trust\":\"owner\",\"text\":\"coffee 150\"}\n",
+              "is_error": false
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_fake_1",
+              "name": "read",
+              "input": {
+                "path": "/data/datastore/2026/11/09/1051.png"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_fake_1",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Read image file [image/png]"
+                },
+                {
+                  "type": "image",
+                  "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAaUlEQVR4nBWNQREAQQzCkFIpSKmUOEFKpWDlbnlmmEQSIyxWICJOVEjDDB52YMhwQwfJjLFZg4k5UyMts3jZhSXLLV2kJ8APvgUO+ucUJjhsHk640CAdc/jYe+ccd/SQyhSX7VOkXGn5ALozV9GppKhMAAAAAElFTkSuQmCC"
+                  }
+                }
+              ],
+              "is_error": false
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_fake_2",
+              "name": "write",
+              "input": {
+                "path": "/data/agents/lifelog/views/expenses.csv",
+                "content": "date,amount,source\n2026-11-09,150,#1050 #1051\n"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_fake_2",
+              "content": "Successfully wrote to /data/agents/lifelog/views/expenses.csv",
+              "is_error": false
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_fake_3",
+              "name": "edit",
+              "input": {
+                "path": "/data/agents/lifelog/memory/preferences.md",
+                "edits": [
+                  {
+                    "oldText": "Track coffee.",
+                    "newText": "Track coffee and tea."
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_fake_3",
+              "content": "Successfully replaced 1 block(s) in /data/agents/lifelog/memory/preferences.md.",
+              "is_error": false
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_fake_4",
+              "name": "bash",
+              "input": {
+                "command": "echo filed"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "toolu_fake_4",
+              "content": "filed\n",
+              "is_error": false,
+              "cache_control": {
+                "type": "ephemeral"
+              }
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "low"
+          }
+        }
+      ],
+      "max_tokens": 128000,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n- grep: Search file contents for patterns (respects .gitignore)\n- find: Find files by glob pattern (respects .gitignore)\n- ls: List directory contents\n\nAdditional tools may be available.\n</tools>\n\n<rules>\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for targeted changes. Batch changes to one file in a single call.\n- Each edits[].oldText must exactly and uniquely match the original file. Keep matches short and non-overlapping; merge nearby changes without including large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/README.md\n- Additional docs: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/docs\n- Examples: /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)\n- Before implementing harness changes, read the relevant docs and examples in full, following related cross-references.\n</docs>\n\n<addendum>\n# Protocol\n\nEnd every answer with DONE lines.\n\n</addendum>\n\n<skills>\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nResolve relative paths against the skill's directory (parent of SKILL.md). Use absolute paths in tool calls.\n\n<available_skills>\n  <skill>\n    <name>expenses</name>\n    <description>How to file an expense in views/expenses.csv. Use it for receipts and amounts.</description>\n    <location>/data/agents/lifelog/run/config/skills/expenses/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>\n\n<cwd>\n/data/agents/lifelog\n</cwd>",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "tools": [
+        {
+          "name": "read",
+          "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to read (relative or absolute)"
+              },
+              "offset": {
+                "type": "number",
+                "description": "Line number to start reading from (1-indexed)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of lines to read"
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        },
+        {
+          "name": "bash",
+          "description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Shell command to execute"
+              },
+              "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds (optional, no default timeout)"
+              }
+            },
+            "required": [
+              "command"
+            ]
+          }
+        },
+        {
+          "name": "edit",
+          "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to edit (relative or absolute)"
+              },
+              "edits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "oldText",
+                    "newText"
+                  ],
+                  "properties": {
+                    "oldText": {
+                      "type": "string",
+                      "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."
+                    },
+                    "newText": {
+                      "type": "string",
+                      "description": "Replacement text for this targeted edit."
+                    }
+                  }
+                },
+                "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."
+              }
+            },
+            "required": [
+              "path",
+              "edits"
+            ]
+          }
+        },
+        {
+          "name": "write",
+          "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to the file to write (relative or absolute)"
+              },
+              "content": {
+                "type": "string",
+                "description": "Content to write to the file"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to 100 matches or 50KB (whichever is hit first). Long lines are truncated to 500 chars.",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Search pattern (regex or literal string)"
+              },
+              "path": {
+                "type": "string",
+                "description": "Directory or file to search (default: current directory)"
+              },
+              "glob": {
+                "type": "string",
+                "description": "Filter files by glob pattern, relative to path, e.g. '*.ts', 'src/**/*.ts' or '**/*.spec.ts'. A pattern without '/' matches file names at any depth"
+              },
+              "ignoreCase": {
+                "type": "boolean",
+                "description": "Case-insensitive search (default: false)"
+              },
+              "literal": {
+                "type": "boolean",
+                "description": "Treat pattern as literal string instead of regex (default: false)"
+              },
+              "context": {
+                "type": "number",
+                "description": "Number of lines to show before and after each match (default: 0)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of matches to return (default: 100)"
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "name": "find",
+          "description": "Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to 1000 results or 50KB (whichever is hit first).",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string",
+                "description": "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"
+              },
+              "path": {
+                "type": "string",
+                "description": "Directory to search in (default: current directory)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of results (default: 1000)"
+              }
+            },
+            "required": [
+              "pattern"
+            ]
+          }
+        },
+        {
+          "name": "ls",
+          "description": "List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).",
+          "eager_input_streaming": true,
+          "input_schema": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Directory to list (default: current directory)"
+              },
+              "limit": {
+                "type": "number",
+                "description": "Maximum number of entries to return (default: 500)"
+              }
+            },
+            "required": []
+          },
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "summarized",
+        "block_binding": {
+          "prefix_mismatch_behavior": "drop_block"
+        }
+      },
+      "output_config": {
+        "effort": "low"
+      }
+    },
+    "route": "messages"
+  }
+}
