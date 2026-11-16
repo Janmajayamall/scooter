@@ -49,6 +49,9 @@ export const meta = {
 //   reviewer    the same, for the reviewing agents
 //   dryRun      true starts no agent: it returns the milestones it would run and the prompts it would send
 //
+// Which model and effort level to pass as coder and reviewer, and the evidence for the choice, are in
+// docs/plans/active/v2-linux-implementation/model-and-effort.md.
+//
 // It lives here, and not under .claude/workflows/, because this repository's .gitignore leaves .claude/ out.
 
 const NAMES = [
