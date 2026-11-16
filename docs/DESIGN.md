@@ -189,7 +189,7 @@ A **record** is the normalized message of 5.2 step 3 without the fields only Wha
 ### 5.1 wacli
 
 - Every wacli call runs as user `scooter-wacli` with `HOME=/data/wacli`, `WACLI_STORE_DIR=/data/wacli/store`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` under `/data/wacli`, `TZ=UTC`, and nothing else in its environment. It can read and write only `/data/wacli` (3.2). Media downloads go to `/data/wacli/staging`, and the bridge copies them from there.
-- The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line; if wacli can take it from its environment instead, pass it that way (section 14). Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
+- The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line. wacli 0.26.0 takes it no other way: `--webhook-secret` is a plain flag, and no variable of its environment sets it (`docs/DECISIONS.md`, 0.6, wacli 1). So it stays there, the one exception of 3.2. Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
 - Before starting sync, check `wacli --json --read-only auth status`. If it isn't authenticated, log that the owner should run `pair`, and check again every minute.
 - Other calls use `--json` and return the `data` part of the result (13.1). While sync runs, wacli passes these calls to it internally; no special handling is needed.
 - The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, and the last backup (date, snapshot ID, result).
@@ -472,12 +472,12 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
 - **Supervision:** if the runner dies, its VMs must die with it. Gondolin 0.14.0 leaves a VM's QEMU process running when the process that started it is killed (13.4), so the runner always runs under something that stops its whole process group: systemd with `KillMode=control-group` (8.5), or Docker as the container's main process (8.3).
 - **The runner's own folders:** Gondolin keeps the policy's certificate authority and its session files in the home folder of the user it runs as, and its disk overlays and sockets in the temporary folder (13.4). So the runner runs with its home and its temporary folder under `/data/runner`, as `home/` and `tmp/`. It empties `tmp/` at startup, because a runner that was killed leaves files there.
 - Ignore the stderr line "Warning: No project session found…" that pi prints when it creates a session.
-- **Things to check in the pinned pi version:**
-  - Skills passed with `--skill` must still load with `--no-skills`. If they don't, drop `--no-skills`: the VM's home starts empty on every run, so nothing can be planted there.
-  - Which file pi writes for a `--session-id` in `--session-dir`, so the runner copies the right one in and out.
-  - Whether pi's `edit` and `write` tools leave temporary files behind, such as dotfiles next to the file they edit. The check in 6.8 would refuse them and fail every run.
-  - That `--no-mcp` works together with `-p`.
-  - That pi and its tools work when pi was installed with `npm install --ignore-scripts`, as the image build does (6.12).
+- **Checked in the pinned pi version** (`docs/DECISIONS.md`, 0.4, where each check says what was run and found):
+  - Skills passed with `--skill` load with `--no-skills`, which turns off only discovery (pi 1).
+  - For a `--session-id` in `--session-dir`, pi writes one file, `<UTC time>_<session ID>.jsonl`, and finds it again by its first line, so the runner copies that one file in and out (pi 2).
+  - pi's `edit` and `write` tools leave nothing beside the files they change, so the check in 6.8 doesn't fail ordinary runs (pi 3).
+  - `--no-mcp` works together with `-p` (pi 4).
+  - pi and its tools work when pi was installed with `npm install --ignore-scripts`, as the image build does (6.12; pi 8).
 
 ### 6.7 Reading the answer
 
@@ -557,13 +557,14 @@ pi's VMs boot from an image Scooter builds with Gondolin's image builder (13.4).
 - Node.js ≥ 22.19, and pi at its pinned version;
 - `pdftotext` (poppler), `heif-convert` (libheif) and git, for the agent's files;
 - ripgrep and fd, which pi would otherwise download from GitHub while it runs (13.2);
+- `tzdata`, so the zone in pi's `TZ` (6.6) means the same to the image's C library, and the programs pi runs, as it does to Node; and `curl`, which the protocol tells the agent to use when internet access is on (7.1; `docs/DECISIONS.md`, D7);
 - `git config --system --add safe.directory '*'`, so pi can read the mounted repository's history.
 
 How it's built and checked:
 - The build file is `config/image/build.json`, with Alpine's release and pi's version pinned. Alpine's packages still change within a release, so after each build `build-image` writes the installed versions to `packages.txt` next to the image.
 - `build-image` (8.4) builds it into `/data/runner/image/`. It needs `cpio`, `lz4` and `e2fsprogs`, which the Docker image includes. In the prototype the build took 16 seconds and the image was about 530 MB (13.4).
 - **Who builds it:** Gondolin's builder runs the build's install commands in a chroot, which needs root (13.4). So natively `build-image` runs as root, and hands the finished image to `scooter-runner`. Without root, it uses Gondolin's container build when Docker or Podman is available, and otherwise stops, saying which of the two it needs.
-- **What a native build runs as root:** a chroot doesn't contain root, so the build runs as little as it can there: Gondolin's builder, then Alpine's shell, npm and git inside the image's folder. Gondolin unpacks Alpine's packages itself and runs none of their scripts. pi is installed with `npm install --ignore-scripts`, as Scooter's own packages are (8.3), and the build's commands never run pi or anything else npm installed, so no code from pi's packages runs as root on the host. pi's installed version is read from its `package.json`. The build runs only when the owner starts it, never in a service. If pi turns out not to work without its install scripts (13.2, section 14), stop and ask the owner.
+- **What a native build runs as root:** a chroot doesn't contain root, so the build runs as little as it can there: Gondolin's builder, then Alpine's shell, npm and git inside the image's folder. Gondolin unpacks Alpine's packages itself and runs none of their scripts. pi is installed with `npm install --ignore-scripts`, as Scooter's own packages are (8.3), and the build's commands never run pi or anything else npm installed, so no code from pi's packages runs as root on the host. pi's installed version is read from its `package.json`. The build runs only when the owner starts it, never in a service. pi 1.5.2 works without its install scripts (`docs/DECISIONS.md`, 0.4, pi 8). If a later pi doesn't, stop and ask the owner.
 - At startup the runner refuses to run if the image is missing, or was built for a different pi version than the pinned one. `/status` shows when the image was built.
 
 ### 6.13 The network policy
@@ -576,9 +577,9 @@ pi's VM has no network of its own. Gondolin's host side, inside the runner, hand
 The rules:
 - **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS. Plain HTTP is refused.
 - **The key:** Gondolin swaps the placeholder in `OPENROUTER_API_KEY` for the real key only in requests to `openrouter.ai`, in the `Authorization` or `x-api-key` header. Anything else the VM sends carries only the placeholder.
-- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages`, which pi uses for `anthropic/*` models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline, and answers 400, logging the reason but never the body, unless all of these hold:
+- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages`, which pi uses for Anthropic's models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline, and answers 400, logging the reason but never the body, unless all of these hold:
   - `model` is exactly the agent's configured model;
-  - the body has only the top-level fields, and the request only the `anthropic-beta` values, that the pinned pi sends (13.2, section 14);
+  - the body has only the top-level fields, and the request only the `anthropic-beta` values, that the pinned pi sends (13.2; `test/fixtures/pi-requests/`);
   - every tool is one pi runs itself: `type: "function"` on chat completions, and no server-tool `type` (such as `web_search_*`, `web_fetch_*` or `openrouter:*`) on messages;
   - there's no `plugins` or `mcp_servers` field;
   - every image or document is inline: a `data:` URL, or a `base64` source.
@@ -1037,12 +1038,12 @@ The implementation plan under `docs/plans/` splits these milestones into smaller
 - **Sub-agents and skills:** pi ships without sub-agents (an example extension adds them). Skills load on demand, based on their description.
 - **Models:** `pi --list-models` listed the OpenRouter models `anthropic/claude-sonnet-5.5` (accepts images) and `anthropic/claude-haiku-5.5` (cheaper).
 - **OpenRouter routes** (pi 1.5.2, in the prototype):
-  - pi sends `anthropic/*` models to `POST /api/v1/messages?beta=true`, with the key in the `x-api-key` header. Other models go to `POST /api/v1/chat/completions`.
+  - pi sends the `anthropic/claude-…` models, and the `~anthropic/claude-…-latest` aliases, to `POST /api/v1/messages?beta=true`, with the key in the `x-api-key` header. Their `:batch` variants, and every other model, go to `POST /api/v1/chat/completions` (`docs/DECISIONS.md`, 0.4, pi 6).
   - On the messages route, every turn used the same 8 top-level fields and the same two `anthropic-beta` values, and each turn included a message with `role: "system"`.
-  - Capture the exact lists again with the pinned version, for the network policy (6.13, section 14).
+  - Milestone 0 captured the exact lists with pi 1.5.2, for the network policy (6.13): one whole session on each route, and the fields and `anthropic-beta` values of every OpenRouter model in pi's catalog, in `test/fixtures/pi-requests/` (`docs/DECISIONS.md`, 0.4, pi 6). pi asks OpenRouter for nothing else.
 - **Runtime downloads:** pi downloads ripgrep and fd from GitHub when they aren't installed.
 - **MCP:** pi 1.5.2 depends on `@earendil-works/pi-mcp`, so MCP support is built in. `--no-mcp` is the flag that turns it off.
-- **Install scripts** (pi 1.5.2, from the npm registry on 2026-11-15): pi installs 123 packages, all from the registry, and pins its 22 direct dependencies exactly. Two packages declare install scripts, and pi needs neither: `@google/genai` runs an `echo`, and `protobufjs` prints a warning about how it's depended on. Running pi and its tools after `npm install --ignore-scripts` hasn't been tried yet (section 14).
+- **Install scripts** (pi 1.5.2, from the npm registry on 2026-11-15): pi installs 123 packages, all from the registry, and pins its 22 direct dependencies exactly. Two packages declare install scripts, and pi needs neither: `@google/genai` runs an `echo`, and `protobufjs` prints a warning about how it's depended on. pi and all seven of its tools work after `npm install --ignore-scripts` (`docs/DECISIONS.md`, 0.4, pi 8).
 
 ### 13.3 Other
 
@@ -1103,16 +1104,18 @@ Checked in a prototype on an Ubuntu 24.04 server on 2026-11-15.
 
 Check these during implementation where you can, and put the rest in the README as "Check on the first real run":
 
+Milestone 0 settled five of them on the Linux machine, marked "Checked" below: the fields and `anthropic-beta` values pi sends, and that it needs no other path; `--skill` with `--no-skills`; pi installed with `--ignore-scripts`; `--no-mcp` with `-p`; and the webhook secret. `docs/DECISIONS.md`, 0.4 to 0.6, says what was run and what was found.
+
 - The model reads photos through pi's `read` tool (send a receipt, then check `expenses.csv`).
-- The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused.
-- `--skill` together with `--no-skills` in the pinned pi version.
+- The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused. *Checked: captured for every model, and pi needs no other path (pi 6).*
+- `--skill` together with `--no-skills` in the pinned pi version. *Checked: they work together (pi 1).*
 - A real batch end to end, with the owner's key, in the sandbox.
 - Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13).
 - That ZDR-only routing works for the configured model, and how much latency it adds.
 - KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3).
 - Building the VM image natively, as root (6.12), and in the runner container, where the build may need more privileges than the service has (8.3).
-- That pi and its tools work when pi was installed with `npm install --ignore-scripts` (6.12, 13.2).
-- That `--no-mcp` works together with `-p` (6.6).
+- That pi and its tools work when pi was installed with `npm install --ignore-scripts` (6.12, 13.2). *Checked: they do (pi 8).*
+- That `--no-mcp` works together with `-p` (6.6). *Checked: it does (pi 4).*
 - The runner container with a read-only root filesystem (8.3).
 - `wacli send react --sender` in a one-to-one chat.
 - That a text with a link, sent with `wacli send text --no-preview`, arrives without a preview, and that wacli fetches nothing for it (5.3, 13.1).
@@ -1121,7 +1124,7 @@ Check these during implementation where you can, and put the rest in the README 
 - `imapflow` with an app password at the chosen mail provider, IDLE included, and the `Authentication-Results` header the provider adds: its server name (Gmail's should be `mx.google.com`) and its `dmarc=` result.
 - That mail from the owner's address passes DMARC, which needs its domain to publish a DMARC record.
 - `postal-mime` on real emails from the owner's mail apps, including a forwarded booking and an audio attachment.
-- Whether wacli can take its webhook secret from the environment instead of its command line (5.1).
+- Whether wacli can take its webhook secret from the environment instead of its command line (5.1). *Checked: it can't (wacli 1).*
 - `docker compose build`, and the Docker image on both `amd64` and `arm64`.
 
 With macOS, later (section 12): Gondolin natively on a Mac with Apple's hypervisor; the launchd services; building the VM image on a Mac; and the stack under Docker Desktop, OrbStack and Colima, including the `./config` bind mount.

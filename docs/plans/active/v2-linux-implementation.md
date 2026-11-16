@@ -244,6 +244,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - **Locks:** row 7.
+- **Hidden paths.** The sandbox interface's list of mounts says what is hidden inside each mount: `sessions/` in the agent's folder (6.6; `docs/DECISIONS.md`, 0.8). A runner test checks that the sandbox is given it, and the fake sandbox leaves `sessions/` out of its folder, as the VM does.
 - **The first-failure notice** is decided from `lastRun.ok`. Backfill batches don't change `lastRun`.
 - **A failed task.** A scheduled or `once` task that fails on a setup error or an outage stays due, and is the next try. One that fails for another reason isn't retried: a scheduled task runs at its next time; a `once` task is recorded in `onceDone` only after it succeeds, so it runs again at the next startup.
 - **The emulation notice:** row 15.

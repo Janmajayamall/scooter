@@ -340,6 +340,13 @@ test('pi 5: stdout holds the last answer and nothing else, and a refusal ends wi
   assert.equal(down.requests, 4)
   assert.ok(Date.now() - before >= 14_000, 'pi should have waited between its tries')
 
+  // Too many requests is the same: three more tries, then the same end.
+  const limited = await run(MESSAGES_MODEL, [{ status: 429, message: 'Rate limit exceeded' }])
+  assert.equal(limited.exitCode, 1)
+  assert.equal(limited.stdout, '')
+  assert.match(limited.stderr, /^429 /)
+  assert.equal(limited.requests, 4)
+
   // Closing the VM in the middle of a run is the third case: see VM 3 in vm.test.mjs.
 })
 
