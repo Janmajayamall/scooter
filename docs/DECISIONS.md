@@ -333,3 +333,212 @@ Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4
 - Milestone 7 builds it, the way VM 1 shows. What is hidden is part of the list of mounts. So the sandbox interface of milestone 4 carries it, a runner test checks that the sandbox is given it (section 10), and the fake sandbox leaves `sessions/` out of its folder, as the VM does.
 - This milestone's checks now run with the folder hidden (D11), and all of them pass (0.7). pi doesn't need the folder.
 - Only `sessions/` is hidden. `state.json` and `.git` stay in the VM, readable and not changeable, as 6.2 and section 9 have them. The protocol tells the agent it can read history with `git log` (7.1).
+
+## Milestone 1: foundations and the datastore
+
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. DESIGN.md and ARCHITECTURE.md are unchanged.
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `package.json`, `package-lock.json` | `bin`, and the four libraries pinned |
+| `src/cli.mjs` | The command table of 8.4. No command is built yet |
+| `src/common/` | `limits`, `settings`, `paths`, `time`, `log`, `files`, `proc`, `locks`, and `datastore/` with the line format, the reader and the index |
+| `src/bridge/store.mjs` | The datastore's single writer |
+| `bridge.env.example`, `runner.env.example` | Every variable of 8.2, explained |
+| `test/support/` | The fake clock, a log that keeps its entries, the switches for root tests, and the checker for the import rules |
+| `test/*.test.mjs` | One file for each module, and `imports.test.mjs` |
+
+### 1.1 Decisions
+
+**D13. The four libraries, at the versions the documents give.**
+*Question:* section 4.3 of ARCHITECTURE.md says to pin a newer fix release where there is one.
+*Choice:* `@earendil-works/gondolin` 0.14.0, `yaml` 2.9.1, `imapflow` 2.11.0 and `postal-mime` 4.2.1.
+*Reason:* on 2026-11-16 npm had no newer fix release of any of them. `imapflow` has 2.12.0 and 2.12.1, both of 2026-11-15. That is a new minor release, not a fix release of 2.11, so it isn't taken.
+
+**D14. The env file format is the part all three readers share, and anything else is refused.**
+*Question:* the plan wants one format that Scooter's loader, systemd's `EnvironmentFile` and Compose's `env_file` read the same way, and names its parts: `KEY=value`, `#` comments, optional single quotes, no expansion.
+*Choice:* the loader takes exactly that, and treats every other line as an error that names the file, the line and the variable:
+- a comment is a line of its own;
+- a name is letters, digits and `_`, with nothing before it and no space around the `=`;
+- an unquoted value is trimmed, and may not contain `$`, `\`, `#`, `'` or `"`;
+- a quoted value is inside single quotes, on one line, and is taken exactly as written;
+- a name may be set once.
+
+So a value can't contain a single quote at all.
+*Reason:* a line the three read differently would give the service one value under systemd and another under Compose. 1.2 has what each of them does with such lines. The loader is stricter than it has to be in four places, where the three happen to agree: `#` without a space before it, a lone `'`, plain double quotes, and spaces around the `=`. One short rule, "anything unusual goes in single quotes", is easier to follow than the exact edge of each.
+
+**D15. A variable in an env file that isn't one of that service's is an error.**
+*Question:* what to do with a name the service doesn't know.
+*Choice:* in the file, it stops the service, and the message names it. If it is the other service's variable, the message says which file it belongs in. Unknown variables in the environment itself are ignored, as they have to be.
+*Reason:* a misspelled name would otherwise be ignored without a word: `EMAIL_IMAP_HOTS` would leave email off. And the runner's key in `bridge.env` would sit where the bridge can read it, against 3.2. *Cost:* the env files hold Scooter's settings and nothing else. Under Compose there is no file to read, only the environment, so this check does nothing there.
+
+**D16. An empty value means the variable isn't set.**
+*Choice:* empty, or only spaces, takes the default, and for a required variable is the same as leaving it out. A variable set but empty in the environment still wins over the file (8.2).
+*Reason:* Compose passes `KEY=` on as an empty variable, and the example files have such lines. 8.2 already says that an empty `EMAIL_IMAP_HOST` turns email off.
+
+**D17. Each numeric setting has a range. The ranges are in `limits.mjs`, and the defaults are in `settings.mjs`.**
+*Question:* 8.6 says a value becomes a setting only with a valid range and a test, and gives no ranges.
+*Choice:*
+
+| Setting | Range | Default |
+|---|---|---|
+| `BATCH_SECONDS` | 1 to 600 | 8 |
+| `SESSION_ROLLOVER_HOUR` | 0 to 23 | 4 |
+| `EMAIL_IMAP_PORT` | 1 to 65535 | 993 |
+| `EMAIL_CHECK_SECONDS` | 10 to 3600 | 60 |
+| `RESTIC_KEEP_DAILY` | 1 to 3650 | 7 |
+| `RESTIC_KEEP_WEEKLY` | 0 to 520 | 4 |
+| `RESTIC_KEEP_MONTHLY` | 0 to 1200 | 12 |
+
+*Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, from the table in 8.2, so it stays with the setting's check.
+
+**D18. `DEFAULT_CHANNEL` must name a channel. Whether the channel can send is checked later.**
+*Choice:* the settings accept `whatsapp` or `email`, the two sources a line can have. The bridge's startup check, in milestone 5, refuses a channel that can't send, which leaves `whatsapp` (5.3).
+*Reason:* the core is channel-neutral, and "can send" is something a channel module knows. Milestone 5 lists that check and its test.
+
+**D19. Other settings rules.**
+- Loading returns an object and never changes the environment. A program the service starts gets only what it is handed (3.2).
+- Every fault is reported at once, each naming its variable. No message repeats a value, because a value may be a secret.
+- Email is on when `EMAIL_IMAP_HOST` is set, and then the user, the password, the owner's addresses and the server name are required. Off, the other mailbox variables aren't looked at. Backups are the same with `RESTIC_REPOSITORY` and `RESTIC_PASSWORD`.
+- `OWNER_NUMBER` may be written with `+`, spaces, hyphens and brackets, and is kept as digits. The owner's email addresses are kept in lower case, since they are compared without regard to case.
+- `DATA_DIR` and `CONFIG_DIR` default to `/data` and `/config` and must be absolute paths.
+- `AGENT_ACCEL=hvf` passes the settings. The runner refuses it when it picks the accelerator (6.6), in milestone 7.
+- `SCOOTER_ENV_DIR` is read from the environment alone.
+
+**D20. Constants: units, how tests change them, and two additions.**
+*Choice:* durations are in milliseconds and sizes in bytes, under the names 8.6 gives. `limits` is one object that code reads at the moment of use, and `overrideLimits` changes values for a test and returns the function that puts them back. Besides `WEBHOOK_PORT`, which the plan adds, there are two more: `SETTING_RANGES` (D17) and `ATTACHMENT_EXT_MAX_CHARS`, 10, the longest extension an attachment's stored name takes from its original name.
+*Reason:* 8.6 wants every tuning number in the module and tests overriding them through it.
+
+**D21. Daylight saving: a local time means the earliest instant at which the zone's clock shows that time or a later one.**
+*Question:* the plan asks for the next instant of a local `HH:MM`, correct across daylight-saving changes. Two local times are awkward: one that comes twice when clocks go back, and one that is skipped when they go forward.
+*Choice:* one rule for both. A time that comes twice means its first occurrence. A skipped time means the instant of the jump: on a day when 02:00 becomes 03:00, 02:30 comes due at 03:00. Each local date gives a schedule one instant, so a daily task runs once on either kind of day. A date that a zone skips altogether has nothing due on it.
+*Reason:* a daily backup or check-in must neither be skipped nor run twice. Running at the jump is what cron does with a skipped time. The code uses Node's own time zone data, through `Intl.DateTimeFormat`, and no library.
+
+**D22. The clock is two functions.**
+*Choice:* `now()`, in milliseconds, and `sleep(ms, { signal })`, which rejects when the signal aborts. Everything that waits or reads the time takes a clock. `test/support/clock.mjs` is the fake: `advance` wakes sleepers in order, `set` moves the time either way, and `whenSleeping` waits for code under test to reach its next sleep.
+*Reason:* polling loops, backoff and timeouts are all "wait, then look again". One function covers them, and a test can then run through hours in milliseconds.
+
+**D23. Logs go to stderr, and three small things keep content out of them.**
+*Choice:* a line is `at`, `level`, `component`, `event` and the caller's fields. Then:
+- a field named `text`, `subject` or `quoted`, the content fields of a datastore line, is written as `[withheld]`;
+- a field's value is a string, a number, a boolean, null, or a list of those. Anything nested is written as `[object]` or `[array]`;
+- `errorFields(error)` gives an error's name, code and system call, without its message.
+
+*Reason:* stderr leaves stdout to the commands that print results. The rule that logs carry no message text (section 9) is the caller's to keep, and these three make the common slips harmless: logging a whole line, and logging the message of a parsing error, which quotes what was being parsed.
+
+**D24. Sortable IDs, and the folder hand-off.**
+*Choice:* an ID is the UTC time to the millisecond and a four-digit counter that starts at 1 with each millisecond, as in 5.3. IDs from one generator always go up, even when the clock goes back. `handOff` makes `.tmp-<id>`, fills it, syncs it and renames it. If the name is taken, at either step, it takes the next ID. `listHandOffs` gives the finished folders in order.
+*Reason:* the outbox and the mail spool share this (ARCHITECTURE.md, decision 9). The rule about a taken name is milestone 5's, and it lives here because two processes write outbox entries with the same code.
+
+**D25. Running programs.**
+- **Found on Scooter's own `PATH`.** A program's environment is exactly what the caller gives, empty by default, and wacli's has no `PATH` (5.1). So a bare name is looked up on the `PATH` of the process that starts it.
+- **Stopped as a process, not a group.** SIGTERM, then SIGKILL after `STOP_GRACE`, go to the program itself. It stays in Scooter's process group, so whatever stops the service's group stops it too (6.6).
+- **The restart wait goes back to 5 seconds after a run of 5 minutes or more.** 5.1 gives the waits and not when they start again. A program that ran as long as the longest wait was working.
+- **A program that can't be started** is tried again with the same waits.
+- **Users by name.** `lookupUser` asks `id -u` and `id -g`, which every Unix has. Node has no call for it.
+- **Not root.** Switching users is skipped, `lookupUser` returns null, and one warning is logged for the life of the process (section 10). Whoever gets null leaves file owners alone.
+- **Logs name the program,** never its arguments or environment: wacli's command line carries the webhook secret (5.1).
+- `proc.mjs` is the only module that imports `node:child_process`, and it never uses a shell. The import test holds everything else to that.
+
+**D26. Lock files.**
+*Choice:* a lock is one line of JSON: `pid`, `at` and `deadline`, the last two as UTC times to the second, and `deadline` null when there is none. It is written under a temporary name and hard-linked into place.
+*Reason:* a link fails if the name exists, which makes taking the lock exclusive, and the name appears with its contents complete, so the bridge never reads half a `run.lock`. A lock that can't be read still counts as held. How the two locks work together is for milestones 4 and 10 (row 7).
+
+**D27. The line format is checked in both directions.**
+*Question:* 4.2 gives the fields and when each is present. It doesn't say what a reader does with a line that breaks the table.
+*Choice:* `checkLine` is the table as code, and both the store and the reader use it. A field the table doesn't have is refused. So is a field on a kind of line the table doesn't give it to: `text` only on messages, edits and commands; `target` only on edits, deletions and reactions; `emoji` only on reactions; `subject` only on emails; `files`, `media`, `replyTo`, `quoted` and `forwarded` only on messages; `trust` only on `in` lines and `by` only on `out` lines. `replyTo` and `target` must be lower than the line's own `seq`. Lines are written with their fields in one order, the order of the examples in 4.2.
+*Reason:* the datastore is the record, and the line is a contract between the bridge, the runner and pi (ARCHITECTURE.md 3.6). A field in the wrong place is a bug in the writer, and it is cheaper to catch it at the one place lines are written. *Cost:* adding a field means changing `line.mjs` first.
+
+**D28. What the index knows a line by.**
+*Question:* 4.3 has the index map `(source, sourceId)` to `seq`, and an edit carries the ID of the message it changes (13.1).
+*Choice:* messages, commands and reactions are known by their own ID, and the first line with an ID keeps it. Edits and deletions are never looked up by ID. A command whose ID is stored is a duplicate, like a message: 4.4 names messages, edits, deletions and reactions, and a command reaches the bridge the same two ways. The index keeps the current text, the latest edit and the deletion for messages and for commands.
+*Reason:* an edit that took over its message's ID would send replies and reactions to the edit. The bridge and the runner each build the same index from the same lines (`src/common/datastore/index.mjs`).
+
+**D29. The store.**
+- **A damaged datastore stops it.** At startup a complete line that isn't a line, a `seq` that isn't one more than the last, or part of a line in a day that isn't the newest, is an error that names the file and the line and quotes nothing. The store changes nothing in that case. Only part of a line at the very end of the newest log is removed (4.3).
+- **A failed write stops it too.** If a line's `write` or `fsync` fails, the log may end in part of a line. Only a start removes that (the plan's rule for milestone 1), so the store refuses every later append until the bridge restarts.
+- **`seq` and `files` are the store's to set.** The caller gives the line without them, and the attachments as files already downloaded: `{ path, mime, name }`. The store copies them and leaves the originals, which belong to whoever staged them (5.2).
+- **An attachment that can't be copied** stores nothing and uses up no `seq`. Intake then stores the message with a `media` object (5.2), in milestone 2.
+- **Attachment names** (4.4): the extension is the original name's, if it is letters and digits and no longer than `ATTACHMENT_EXT_MAX_CHARS`, in lower case. Otherwise it comes from a table of MIME types in `store.mjs`, and otherwise it is `bin`. A file with no MIME type is recorded as `application/octet-stream`.
+- **Unfinished copies** (`.tmp-…`) in the newest day folder are removed at startup.
+- **What the store leaves to intake:** the 100 MB limit, which applies before a download, and the list of what isn't stored (4.4). Both need to know the channel.
+- **Owners and modes** (3.2): folders 0750 and files 0640, set explicitly, so the umask doesn't matter. The owner is given by whoever opens the store, as `{ uid, gid }`, and is left alone without one.
+- **The store is never told the owner's time zone.** Day folders are UTC dates of its clock.
+
+**D30. The CLI.**
+*Choice:* the table has the twelve commands of 8.4, each with a side: `bridge`, `runner`, or `host` for `setup` and `build-image`, which ARCHITECTURE.md 2.13 lists as root's, on the host. A `bridge` or `runner` command gets its side's settings and the other side's env file is never opened. A `host` command gets none here: what `setup` and `build-image` read is for milestones 12 and 7 to settle. A command's code is imported only when the command runs. No command is built yet, and each says so and exits with 1. Exit codes: 0, 1 when a command fails, and 2 when it can't start because of how it was called or configured, which matches the 2 that 5.5 gives the backup commands.
+
+**D31. What the import test checks, and how.**
+*Question:* some rules of section 4.2 of ARCHITECTURE.md are about what code does, not what it imports.
+*Choice:* `test/support/imports.mjs` reads every file under `src/` and checks:
+- which folders import which, as the diagram of 4.2 draws it, `src/ops` included: it imports only `src/common`;
+- that `src/mail` imports only `files`, `limits` and `log` from `src/common`, and doesn't reach `settings.mjs` through another module either;
+- where each of the four libraries may be imported, and that nothing else is imported that isn't a `node:` module;
+- that `src/cli.mjs` imports a command's code only with `import()`;
+- "only the store appends to the datastore", as two things it can see: only `store.mjs` imports `encodeLine`, and nothing in `src/common/datastore/` calls a function that changes a file;
+- "only one module runs each program", as: only `proc.mjs` imports `node:child_process`; in the bridge only the two channel modules and `backup.mjs` import `proc.mjs`; and the strings `'wacli'`, `'restic'` and `…mail/reader.mjs` appear only in the module that runs that program (`paths.mjs` may name wacli's folder).
+
+It doesn't check rule 5, that every tuning number is in `limits.mjs`. No scan can tell a tuning number from any other number.
+*Reason:* the plan asks for a test that enforces the rules. Where a rule can't be seen in the imports, the test holds to the nearest thing that can.
+
+**D32. Two kinds of root test.**
+*Choice:* tests that need root, to give files away or to run a program as another user, run whenever the suite runs as root, with made-up numeric IDs. Tests that create a user run only with `SCOOTER_ROOT_TESTS=1` as well.
+*Reason:* section 10 keeps user creation behind that variable, so running the suite as root on a real machine creates none. A numeric owner needs no user to exist.
+
+**D33. The reader.**
+*Choice:* a reader starts at the first line of the datastore and keeps its own place: the day folder, and how many bytes of that day's log it has taken. A poll gives all of its new lines or none. When it meets a complete line that isn't a line, it throws, names the file and the line, and stays where it was before the poll. The reader and the store take every path from `paths.mjs`.
+*Reason:* the datastore holds no reader's state (ARCHITECTURE.md 2.4), and both readers want every line anyway, to build the index. A reader that gave half a poll's lines and then failed would have moved past lines nobody received.
+
+### 1.2 Facts found: how systemd and Compose read an env file
+
+Checked by hand on 2026-11-16, with systemd 255 (`systemd-run --user -p EnvironmentFile=…`) and Docker Compose v5.3.1 (`env_file:`), each running a script that prints its environment.
+
+A file in the format of D14 came out the same from both, and the same as from `parseEnvFile`: comments, also indented ones; an empty value; a value with spaces inside; spaces around a value, which both trim; a URL; and single-quoted values holding `$$`, `${HOME}`, `\`, `#`, double quotes and spaces at the ends, all kept as written.
+
+Lines outside the format:
+
+| Line | systemd | Compose |
+|---|---|---|
+| `A=pa$$word` | `pa$$word` | `pa$word` |
+| `B=${HOME}/x` | `${HOME}/x` | the home folder, then `/x` |
+| `C=back\slash` | `backslash` | `back\slash` |
+| `D=value # comment` | `value # comment` | `value` |
+| `M='two' words` | `twowords` | `two` |
+| `export I=1` | nothing set | `I` is `1` |
+| `; L=1` | a comment | the whole file is refused |
+| `H`, a bare name | ignored | taken from Compose's own environment |
+| `E=value#1`, `F="double"`, `G=it's`, `J = 1`, a space before the name | the same in both | the same in both |
+
+*So:* the loader refuses all of these, the last row too (D14).
+
+### 1.3 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-16, on the Linux machine, with Node 22.23.2:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, from a clean clone of the branch | 164 tests: 140 pass, none fail. 24 skip themselves: the 18 pi and VM tests of milestone 0, which need the image, and the 6 that need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 158 pass, none fail, in about a minute and a half. The 6 root tests skip themselves |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1` | On Node 24.22.3: 141 pass, none fail. The 6 root tests run, the two that create a user among them. 23 skip themselves: the 18 that need the image, the 4 that need wacli, and one that only makes sense when not root |
+| `npm test`, 25 times in a row, then 36 times with 12 running at once | No failure. The tests of `proc.mjs` and `locks.mjs` start real processes, and this was to see that none depends on timing |
+| The env file check of 1.2 | The format reads the same in all three |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Test file |
+|---|---|
+| Datastore: `seq` order across days; day folders by UTC date that never go backwards, even when the clock does; recovery from an incomplete last line; duplicates; attachment names; the index rebuilt on restart | `test/datastore.test.mjs` |
+| Time, for storage and conversion: stored times are UTC; a local time and a schedule across daylight-saving changes; nothing depends on the process's time zone, and a restart in another one doesn't reorder the datastore | `test/time.test.mjs`, and one test in `test/datastore.test.mjs` |
+| Settings; each service reads only its own env file | `test/settings.test.mjs`, `test/cli.test.mjs` |
+| Locks | `test/locks.test.mjs` |
+| Least privilege, for folder modes: the datastore's owner, group and modes | `test/datastore.test.mjs`. The modes are checked on every run, and the owner and group as root |
+| The import rules | `test/imports.test.mjs` |
+
+Not verified:
+- **arm64 and macOS.** The machine runs neither. Nothing in this milestone knows the architecture, and the portability rules of section 10 are kept: no `/proc`, no `fs.watch`, and only `id -u` and `id -g` as outside commands.
+- **The env file format against systemd and Compose, in the test suite.** It was compared by hand, once, with the versions in 1.2. `npm test` checks only Scooter's loader.
+- **Durability.** The store syncs each line and each attachment. That a line survives a power cut can't be tested here. A crash is tested by leaving part of a line on disk and starting again.
+- **The pieces at work in a service.** Supervising wacli, the two locks together, and the store under real intake belong to milestones 2, 4, 5 and 10, which test them.
+- **Rule 5 of the import rules** has no test (D31).
