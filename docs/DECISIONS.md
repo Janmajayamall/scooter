@@ -852,7 +852,7 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 *Choice:* a new backfill starts with `until` the live cursor, its own cursor at 0, and empty lists (6.11). One whose entry left the config is dropped at startup. `nextAction` offers a backfill batch when it has work items in `(cursor, until]` or due retries and nothing live waits; and says `backfill-finished` when it has neither work up to `until` nor retries. Building a backfill's batch, and finishing it, are milestone 9's.
 
 **D70. The batch.**
-- **Covered:** a batch covers the lines up to the first work item it leaves for later, or up to the newest line. When the run succeeds the cursor moves there (6.8), past the context, the commands and the lines of sources the agent doesn't read in that stretch.
+- **Covered:** a batch covers the lines up to the first work item it leaves for later, or up to the newest line. When the run succeeds the cursor moves there (6.8), past the context, the commands and the lines of sources the agent doesn't read in that stretch. So it does when the run fails, with the batch's items in `retry` (D78, milestone 4).
 - **Context:** the `out` lines and reactions from the oldest item to the end of what the batch covers. A context line is shown with the message it replies to, as `you sent, in reply to #1047: "…"`.
 - **Newest first:** context lines are listed newest first, as the example of 6.5 shows them, and when the prompt is too long the oldest are left out first.
 - **Who sent it:** `you` for the agent's own lines, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices and replies to `/status`. The protocol explains the last.
@@ -946,3 +946,198 @@ Not verified:
 - **The stop of point 3 above.** Left for milestone 10.
 - **wacli when paired**, for the points of 3.3: gate G4.
 - **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `mkfifo` and git's `-c` options exist on macOS.
+
+## Milestone 4: runner, running
+
+Done on 2026-11-17, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3 (4.4).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/runner/run.mjs` | One run: the locks; pi's command, mounts, environment and network policy; then 6.8 after a success or 6.9 after a failure |
+| `src/runner/answer.mjs` | Reading pi's answer (6.7), and the replies and reactions it asks for |
+| `src/runner/failures.mjs` | The cause, from the network log; pauses; attempts; the state after a run; the notices |
+| `src/runner/git.mjs` | Git named outright as the agent's repository; the unexpected-file check, the commit, and the clean-up |
+| `src/runner/agentdir.mjs` | `git init` whenever there is no commit; `keepSession`, the session copied back |
+| `src/runner/status.mjs` | `status.json` at startup, and the emulation notice |
+| `src/runner/main.mjs` | Startup and the loop: `openRunner`, `startRunner` and `runRunner` |
+| `src/runner/sandbox/index.mjs` | The sandbox interface, and the check of a run's spec |
+| `src/common/netlog.mjs`, `src/common/runnerstatus.mjs` | The network log's format and reader; `status.json`'s format and reader |
+| `src/common/instance.mjs` | `holdInstance`, moved from the bridge, for both services |
+| `src/common/limits.mjs`, `src/common/paths.mjs` | Three constants; `runner/runner.sock` |
+| `test/support/` | The fake sandbox, the pi stub, and a runner for tests |
+| `test/answer`, `failures`, `run`, `runner`, `runnerfiles` | The tests of this milestone, with additions to `agentdir`, `agentstate`, `batch`, `config`, `triggers` and others |
+
+It also settled the smaller points of the review of milestone 3 (4.3).
+
+### 4.1 Decisions
+
+**D78. A run moves the cursor past its batch whether it succeeds or fails.**
+*Question:* 6.8 moves the cursor after a success. 6.4 said a failed batch leaves the cursor where it was, and 6.9 puts the batch's items in `retry`. The planner takes every work item after the cursor as new, so an item waiting in `retry` after the cursor would be given again at once, as attempt 1 (the review of milestone 3, point 1).
+*Choice:* after every run that finishes, the cursor moves to the batch's `covered` (D70), and the items it didn't handle wait in `retry`, which comes first in the next batch (6.5). Only a run cut short, by a crash or by stopping the runner, leaves the cursor and the state as they were. `checkAgentState` refuses a `retry` entry after its lane's cursor, the backfill's included. DESIGN.md 6.4 and 6.9 say so, and D70 points here.
+*Reason:* it is what 6.5 and 6.9 describe ("due retries first, then work items after the cursor"; "those items come first"), and it keeps one meaning for "new".
+
+**D79. The sandbox interface.**
+`src/runner/sandbox/index.mjs` says what a sandbox is: `{ accel, imageBuiltAt, run(spec, { signal }) }`. A spec is `{ argv, cwd, env, mounts, timeoutMs, policy }`:
+- `argv` starts with the program's name, `pi`. Where the image keeps it, and running it through `env -i` (0.5, VM 2), are the sandbox's business.
+- `mounts` lists `{ path, writable, hide }`, each at the host's own path. `hide` names paths inside the mount, from its root: the agent's folder hides `sessions`. A mount inside another takes its place there.
+- `policy` is `{ model, internet, zdr, secrets }`. `secrets` maps `OPENROUTER_API_KEY` to the key and the hosts it may go to, and the sandbox sets the variable to its placeholder. So `env` holds everything 6.6 lists but the key, and `checkRunSpec` refuses a spec whose `env` sets a secret's variable.
+- `run` resolves with `{ code, signal, stdout, stderr, timedOut }`, `code` being null when pi didn't exit by itself: a timeout, an abort, or a VM that was lost. It rejects only when it couldn't run the command at all.
+
+The runner opens its sandbox at startup with `openSandbox({ paths, settings, log, clock })`, after it has read the config and taken the data folder (D90), because milestone 7's sandbox checks the image, picks the accelerator and sweeps `runner/tmp` there.
+*Reason:* the plan's list (an argument list, a folder, an environment, mounts, a timeout and a policy), with the hidden paths of its rule, as data that both sandboxes check the same way.
+
+**D80. The fake sandbox and the pi stub.**
+For each run the fake sandbox makes a folder that stands for the VM's root, and puts each mount at its path there: a link to the host's folder, or, for a mount that hides names, a folder of links to everything but those. So `sessions/` isn't there at all, as in the VM. It doesn't make read-only mounts read-only; milestone 7's tests show that on the VM. It runs `test/support/pi-stub.mjs` with Node, through `proc.run` and the test's clock, with the spec's environment, a placeholder for each secret, and `PI_STUB_*` variables of its own, which the stub leaves out of what it records.
+
+The stub takes pi's command line, finds every path it is given inside the VM's folder, keeps its session as pi 1.5.2 does (0.4, pi 2), writes OpenRouter's answers to the network log in its format, and prints its answer, or fails, as pi does (pi 5). It acts on keywords in each item (`IGNORE`, `FAIL`, `ASK`, `SAY`), and anywhere in the batch or the task (`OPENROUTER=<status>`, `UNREACHABLE`, `NOANSWER`, `CRASH`, `HANG`, `DOTFILE`, `SYMLINK`, `FIFO`, `IGNORED`, `SESSIONLINK`, `NOREPLY`, `MEMORY`, `UNKNOWN`, `REPLYTO=<seq>`). A test can also set the batch-wide ones in `behavior.json`, in the stub's control folder.
+*Reason:* section 10 and the plan have the stub pick its behavior from keywords in the messages. A failure that must stop so that the next try succeeds, such as a key being fixed, can't come from the message, which the next try shows again.
+
+**D81. The network log's format is in `src/common/netlog.mjs` now, with an `error` line.**
+*Question:* the plan writes the format and its reader in milestone 8, and this milestone's failure handling reads the log. 6.13 shows `request`, `response` and `refused` lines, and none for a request that got no answer, which 6.9 counts as an outage ("couldn't be reached").
+*Choice:* the format and the reader are here now, as D61 did for `state.json`. A fourth event, `error`, has the request's `id`, `at`, `ms`, and a `reason` that is a short code from Scooter's own code, such as `ECONNREFUSED`. A `refused` line may also name `method` and `path`. Each line is checked strictly. The reader takes the lines whose `at` falls in a time window, counting its first second whole, across the UTC days the window spans. It skips part of a line at the end of a file and lines that aren't lines of the log, and counts them, so one bad line doesn't hide the rest. Milestone 8 writes the log, and may add to the format; the plan's milestone 8 now says so.
+
+**D82. The cause of a failure.**
+*Choice:* the runner reads the log from the run's start to its end, takes the last `request` to `openrouter.ai`, and looks for what came of it after it:
+- a `response` with 401, 402, 403 or 404: a setup error;
+- a `response` with 408, 429 or a 5xx, an `error` line, or nothing at all, because the run ended while it waited: an outage;
+- another status, or no request at all: a failure of pi's own.
+
+An unexpected file after a run that exited with 0 is pi's own failure, whatever the log says (6.9). A sandbox that couldn't run pi at all, such as a VM that doesn't boot, counts as a setup error, with the reason "the VM couldn't start": it is the machine's fault, and spending every message's four attempts on it wouldn't help.
+
+*The short reason* is OpenRouter's own words when the last line pi printed on stderr is its error for the same status (`401 {…}` or `401: {…}`, pi 5), as `OpenRouter: No endpoints found matching your data policy`. Otherwise it is `OpenRouter answered 429`, `OpenRouter didn't answer`, `timed out`, `pi exited with code 3`, `pi was stopped`, or `unexpected file views/.gitignore`. OpenRouter's words go into the notice and the state, cut to `REASON_MAX_CHARS`, and never into Scooter's logs, which carry the cause and the status.
+
+*Cost:* a run that times out while the model is still streaming its answer counts as an outage if milestone 8 writes the `response` line at the end of the stream. It is then tried every 30 minutes and never ends in `failed`. Writing the line when the status arrives avoids that; milestone 8 chooses.
+*Reason:* 6.9, with what milestone 0 found. The window can't take in another run's lines, because runs are at least `POLL_INTERVAL` apart (D93), so no second holds lines of two runs.
+
+**D83. Pauses.**
+`paused` is `{ since, cause, reason, next, tries }` (D61). A try that fails for the same cause continues the pause: one try more, `since` kept, and the wait that goes with it, `SETUP_RETRY_WAIT` after a setup error, and `OUTAGE_RETRY_WAITS` by the number of tries during an outage, the last repeating. Another cause starts a new pause. Any run that gets through ends it: a success, or a failure of pi's own, which means OpenRouter was answering. A paused batch's items wait in `retry` due at once, their attempts unchanged: the pause holds every run back until its next try, which a restart brings forward to the start (D67), after the usual quiet period (D64). A task that fails this way stays due (the plan's rule; D68).
+*Reason:* due at once needs no second date to keep in step with `paused.next` when a restart brings the try forward.
+
+**D84. What a run does to its items.**
+- `FAILED` wins over `DONE` for the same item: the agent said it couldn't handle it. Its reason is the agent's, cut to one line of `REASON_MAX_CHARS`, or "no reason given".
+- An item not reported, or in a batch that failed for pi's own reasons, has used the attempt this run was. Its `reason` in `retry` is "not reported", or the failure's short reason. After `MAX_ATTEMPTS` it goes to `failed` with "not handled after 4 attempts".
+- `failed` keeps the newest `FAILED_KEEP`, in the order they were added.
+- `lastRun` is `{ at, ok, seqs, durationMs }`, with `at` the run's start. A scheduled or `once` task is a live run too, with no `seqs`, so a failing task can be the first failure of a row, and one that gets through ends the row.
+- A scheduled task that ran, or failed for pi's own reasons, has its date recorded; one that met a setup error or an outage doesn't.
+
+**D85. Reading the answer.**
+- Instruction words are matched exactly: in capitals, with the colon, after trimming. `DONE:` takes numbers separated by spaces or commas, each with or without `#`.
+- A line that begins with an instruction's word but can't be read, such as `DONE: soon` or `FAILED:` with no number, is counted and logged, and never sent: it was meant as an instruction. A `REPLY_TO:` with no number starts a message of its own, sent without a quote.
+- `NO_REPLY` anywhere means no text is sent, `REPLY_TO` texts included: 6.7 has it "send no text". Reactions still go.
+- `REPLY_TO` quotes a message. One that names an edit or a deletion quotes the message it changes. One that names a reaction, a command, or a number that doesn't exist sends its text without a quote, `about` the batch's newest item, like plain text.
+- The texts go to the outbox first, in order, then the reactions, by `seq`. A reaction goes to an item reported `DONE` that is a message, still there, and not answered by a `REPLY_TO`. Reacting to a message the owner has deleted would say nothing.
+- In a scheduled or `once` task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` (5.3).
+
+**D86. Notices.**
+- The first failure of a row: "⚠️ I couldn't process your last messages (<reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it ("run the scheduled task 21:30", "run the task poems") and says when it runs again.
+- Items given up on: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds.
+- Notices are the runner's, `by: "runner"`, and go out also with `can_message: false`, as the reply to `/new` does (D62): that setting is about what the agent sends.
+
+**D87. Sessions after a run.**
+`keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile`: without following a link, and refusing anything but a regular file with one name, and anything over `SESSION_MAX_BYTES`. A refused session is logged, the run still counts as a success, and the session kept before stays. A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
+
+**D88. The file check, the commit and the clean-up.**
+- *Check:* `views/` and `memory/` are walked without following links, in name order. The first dot name, or the first thing that isn't a regular file or a folder, is the unexpected file. Then `git status --ignored=matching` names any file git ignores. The reason is `unexpected file <path>`, and the path is logged: it is a name pi chose, not content.
+- *Commit:* `git add -A -- views memory`, and a commit only if the index then differs from the last one: `lifelog: #1050 #1051 #1053` (every item of the batch), `lifelog: scheduled task 21:30`, or `lifelog: once task poems`.
+- *Clean-up:* first, by hand, what git can't see or won't remove: links, FIFOs and other special files, and every dot name with all it holds, a nested `.git` included. Then `git restore --source=HEAD --staged --worktree` on the folders that have committed files, `git rm --cached` on whatever is staged in the others (a commit that failed leaves that), and `git clean -ffdx` on both. The folders are made again if git removed them: they are the VM's mount points. If a check afterwards still finds something, the runner stops.
+- *The loop sleeps `POLL_INTERVAL` after every round*, a run included, so runs are at least that far apart.
+
+**D89. Startup.**
+In order: the config; the runner's folders, which `setup` makes in an install; one runner per data folder (D90); the sandbox; the agent's folder; the clean-up of D88, which throws away what a run cut short by a crash or a stop left uncommitted; a leftover `run.lock`, removed and logged; `status.json` and the emulation notice (D91, D92); the state (D67, D69); the datastore; the protocol.
+*Cost:* changes the owner makes by hand in `views/` or `memory/` and leaves uncommitted are thrown away at the next start. The README (milestone 14) should say to commit them.
+
+**D90. One runner per data folder.**
+*Question:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts (6.4), so a backup could start during a run.
+*Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket (D48). `holdInstance` moved to `src/common/instance.mjs`, and names the service in its error.
+
+**D91. `status.json`.**
+`{ startedAt, accel, zdr, internet, imageBuiltAt, agents: { <name>: { model, timeoutMinutes, reads } } }`, written atomically, mode 0600, at every start. `accel` is `kvm` or `emulation`. `imageBuiltAt` is null when the sandbox doesn't know it. The model is each agent's, as `agents.yaml` has it. A `status.json` that can't be read is logged and counts as none.
+
+**D92. The emulation notice.**
+It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation, and the `status.json` of the last start doesn't say `emulation`. A first start counts as a change. `AGENT_ACCEL=emulation` sends none: nothing fell back. The notice is written before `status.json`, so a crash between the two sends it twice rather than never. It says: "⚠️ My VMs run under emulation now, because KVM isn't available, so each batch takes much longer. Run `scooter doctor` on the runner to see how to enable KVM."
+
+**D93. The loop.**
+- One thing at a time: a round reads the new lines, asks `nextAction`, does what it says, and sleeps `POLL_INTERVAL`, after a run too. Runs never overlap, and are at least that far apart, which D82 relies on.
+- An error in a round, such as a damaged datastore or a git command that fails, stops the runner with exit code 1, so its service manager starts it again with its own backoff, and the start says what is wrong. A run cut short that way changes nothing, and its batch runs again.
+- Waiting for `backup.lock`, or for a `run.lock` that isn't the runner's own, as a `rebuild` holds it, is logged when it starts, not every second. Commands don't take `run.lock`: they write only an outbox entry and the state.
+- Stopping, on SIGTERM or SIGINT, aborts a run in progress: the sandbox closes the VM, the run's changes are thrown away as after a crash, the state stays as it was, and the lock is let go of.
+- A backfill batch, and finishing a backfill, are milestone 9's. Until then a backfill waits where it is.
+
+**D94. `scooter runner` stays unbuilt in the CLI until milestone 7.**
+*Question:* the plan builds `main.mjs` here, and the VM sandbox in milestone 7.
+*Choice:* `runRunner` exists. It takes `openSandbox`, and exits with 2 for a bad `agents.yaml` and with 1 for any other failure to start or to go on. `src/cli.mjs` keeps `runner` unbuilt until milestone 7 gives it the Gondolin sandbox, and the plan's milestone 7 now says so.
+*Reason:* a command that started and then always stopped for want of a sandbox would be a placeholder in production code.
+
+**D95. Three constants.**
+`SESSION_MAX_BYTES`, 100 MB (D87); `REASON_MAX_CHARS`, 200 (D82, D84); and `NOTICE_QUOTE_CHARS`, 40 (D86).
+
+### 4.2 Facts found
+
+- **git 2.43.0:** `git restore` has no `--ignore-unmatch`, and fails on a path with no committed file. `git add -A -- views memory` works on empty folders, and fails on a missing one. `git clean -fdx -- views` removes the folder `views` itself when nothing in it is committed. `git status` and `git clean` don't see FIFOs. `git clean` leaves a nested repository unless given `-f` twice. `git rev-parse` on an empty `.git` exits with 128, and without `GIT_DIR` git looks for a repository in the folders above.
+
+### 4.3 The review of milestone 3
+
+The pull request was approved with seven smaller points. Each is below, with what became of it. The points earlier milestones left stay as they were: the 2-minute start limit of the VM tests (milestone 0, point 6), zone names wrong in their later letters (milestone 1, point 3, for milestone 7), and what stopping the channels does to wacli's calls in progress (milestone 2, point 3, for milestone 10).
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | The planner takes it that no `retry` item is after the cursor, and nothing says or checks so | Settled (D78). The cursor moves after a failed run too, `checkAgentState` refuses a retry after its lane's cursor, and DESIGN.md 6.4 and 6.9 say so. Tests in `agentstate`, `failures` and `run` |
+| 2 | A prompt or skill inside another skill's folder makes every run fail | Settled: a fault at startup that names the field, either way round. Test in `config` |
+| 3 | Git isn't tied to the agent's folder | Settled: `GIT_DIR` and `GIT_WORK_TREE` on every git command, and `git init` whenever there is no commit. Tests in `agentdir`, with an empty `.git`, and with the data folder inside another repository |
+| 4 | A reply to a command shows the command; a reply to a line the index can't show has no preview | Settled: `↳ reply to a command`, and `↳ reply to #N: "<quoted>"`. Test in `batch` |
+| 5 | 6.4 says "at least `BATCH_SECONDS` old" | Settled: 6.4 of DESIGN.md and 5.1 of ARCHITECTURE.md say the time counts from when the runner saw the line (D64) |
+| 6 | A backfill never runs when the agent has no `on: new-messages` and a message waits | Settled: messages count as live work only with `on: new-messages`. Test in `triggers` |
+| 7 | Smaller still | Two settled, one left. `ack_reaction: k` is refused: the grapheme must hold a pictograph, a flag or a keycap. A `/new` counts for the session of the day it was sent, or of now if its time is later. Both with tests. Left: the search for the largest cut in D72 can cut a text a little more than it needs to, when a text fits whole at the boundary. The prompt always fits, and it happens only to a single item too long for the prompt on its own |
+
+### 4.4 Changes to DESIGN.md
+
+None changes what Scooter does beyond D78, which 6.5 and 6.9 already implied:
+- 6.4, `on: new-messages`: the quiet period counts from when the runner saw the newest incoming line (D64).
+- 6.4, commands: `commandSeq` is there for a run cut short by a crash, which leaves the cursor where it was; a failed batch moves the cursor (D78).
+- 6.9: after every run that finishes, the cursor moves past the batch; only a run cut short leaves it.
+
+ARCHITECTURE.md 5.1 has the quiet period the same way. The plan's milestones 7 and 8 note what this milestone did for them (D81, D94). `runner.env.example` says that `AGENT_ACCEL=auto` tells the owner once when it falls back.
+
+### 4.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-17, on the Linux machine, from clean clones of the branch:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 347 tests: 322 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
+| `npm test` at each of the milestone's two earlier commits | 279 and 282 tests, none fail |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 340 pass, none fail, in 110 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 323 pass, none fail. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
+| This milestone's tests (`run`, `runner`, `agentdir`, `failures`, `answer`), 32 times, 8 at once | No failure |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Cursor, retry and failed transitions with an injected clock: a minute between attempts, 4 attempts | `failures.test.mjs`, as functions; `run.test.mjs`, an item not reported, run four times a minute apart and given up on |
+| `FAILED` | `answer.test.mjs`; `failures.test.mjs`; `run.test.mjs`, with the agent's own text and no notice |
+| A pi failure discards uncommitted changes and sends one notice, and counts one attempt unless OpenRouter caused it | `runner.test.mjs`: a crash after a commit, the second failure in a row, and the next row; a timeout; items given up on in failing runs |
+| A 401, 402, 403 or 404 pauses runs, with a try every 30 minutes and on restart | `runner.test.mjs`, a 404 with OpenRouter's words, commands while paused, and a restart; `failures.test.mjs`, each status |
+| A 408, 429, 5xx or no answer is retried after 1, 5 and 30 minutes, then every 30 | `runner.test.mjs`: a 429, a 503, an unreachable OpenRouter, and a run that timed out waiting; `failures.test.mjs`, each status |
+| Neither counts attempts, and messages that arrive meanwhile are handled once a run gets through | `runner.test.mjs`, in both of the above |
+| `about` on an answer's plain text, the batch's newest item, but not on a scheduled task's | `answer.test.mjs`; `run.test.mjs`; `runner.test.mjs`, the evening check-in |
+| An edit of a message waiting in `retry` or in `failed` brings it into the same batch | `batch.test.mjs` (milestone 3); `run.test.mjs`, which takes it out of `failed` |
+| Sessions: only the current one is copied in, and only it is copied back: never a link, and nothing after a failed run | `run.test.mjs`; `agentdir.test.mjs`, with a hard link and a file too large |
+| A link, a FIFO, a dot name or a file git ignores in `views/` or `memory/` fails the run; the clean-up removes it; the session isn't copied back | `run.test.mjs`, each through the stub; `agentdir.test.mjs`, the clean-up after a commit, with a nested repository and a staged file |
+| The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the internet mode; the prompt shows the mode | `run.test.mjs`: the spec, the environment pi got, what the stub could see, internet on and off; `runnerfiles.test.mjs`, the spec's check |
+| Scheduled and `once` tasks, and `/new`, handled once even when the batch after it fails | `runner.test.mjs` |
+| No run while a backup holds its lock; when both appear at once, the runner gives way; `run.lock` records when its run must be over | `runner.test.mjs` |
+| `status.json` holds what `/status` shows of the runner's settings; the emulation notice goes out when the accelerator changes to emulation, and not again at the next start | `runner.test.mjs`; `runnerfiles.test.mjs`, the format |
+| The commit message, and `can_message: false` | `run.test.mjs` |
+| Answer parsing: every instruction line, text segments, and unknown `seq` numbers | `answer.test.mjs` |
+
+The milestone's "done when", the pi stub taking a message from the datastore to a committed view and a correct `state.json`, is the first test in `run.test.mjs`. The rest of `run.test.mjs` and `runner.test.mjs` take it through retries and failures.
+
+Not verified:
+- **pi in a VM.** Milestone 7 builds the sandbox. The stub acts as pi 1.5.2 did in milestone 0's checks (its output, exit codes, sessions and errors), but it isn't pi, and the prompt and protocol haven't been read by a model.
+- **The network log as the policy writes it.** Milestone 8 writes it. The cause is read from lines the stub writes in the format of D81, and D82's cost depends on when milestone 8 writes a `response` line.
+- **Read-only mounts.** The fake sandbox doesn't enforce them; milestone 7's tests check them on the VM.
+- **`scooter runner` as a process,** under systemd or Docker: the command isn't built (D94). The runner runs in-process in the tests, its loop and its stop included.
+- **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW`, `mkfifo` and the git commands used exist on macOS.

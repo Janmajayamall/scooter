@@ -302,6 +302,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - `src/runner/sandbox/gondolin.mjs`: one VM per run, booted from `runner/image/`; the mounts and the environment of 6.6; the timeout; closing the VM on every path; sweeping the temporary folder at startup.
 - `src/runner/sandbox/accel.mjs`: `AGENT_ACCEL` (6.6).
 - `src/runner/sandbox/image.mjs` and `build-image`: builds from `config/image/build.json`, writes `packages.txt`, records the pi version and the build time, and provides the startup check (6.12).
+- `scooter runner` in `src/cli.mjs`: `runRunner` in `src/runner/main.mjs` with this sandbox as its `openSandbox`. Milestone 4 left the command unbuilt, since nothing could run pi yet (`docs/DECISIONS.md`, milestone 4).
 
 **Rules:**
 - **Building:** row 8. As root, build natively. Otherwise use Gondolin's container build when Docker or Podman is there. Otherwise stop, and say which of the two is needed. Install pi with `--ignore-scripts`. The build's commands never run pi or anything else npm installed, because a native build would run it as root on the host; read pi's installed version from its `package.json`.
@@ -323,7 +324,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Build:**
 - `src/runner/sandbox/policy.mjs`: the hosts; the key swap; the two routes and their checks; re-encoding; ZDR; the internet switch.
-- `src/runner/sandbox/netlog.mjs`: writing the log. `src/common/netlog.mjs`: its format and a reader, shared by the runner's failure handling and the bridge's `/status`.
+- `src/runner/sandbox/netlog.mjs`: writing the log. `src/common/netlog.mjs`: its format and a reader, shared by the runner's failure handling and the bridge's `/status`. Milestone 4 wrote the format and the reader, with an `error` line for a request that got no answer, because its failure handling reads the log (`docs/DECISIONS.md`, milestone 4).
 - The fixtures from milestone 0: the pinned pi's requests on both routes.
 - The real log connected to failure handling and to `/status`.
 - `test/live/`: a script that runs pi in a VM against the real OpenRouter with a dummy key.
