@@ -29,12 +29,15 @@ function clean(name, value) {
   return `[${Array.isArray(value) ? 'array' : typeof value}]`
 }
 
-// What can be said about an error without repeating content: its name, and the system's code and
-// call when it has them. Spread it into a log call's fields.
+// What can be said about an error without repeating content: its name, the system's code and call
+// when it has them, and, for a program that failed, its exit code and whether it timed out. Spread
+// it into a log call's fields.
 export function errorFields(error) {
   const fields = { error: typeof error?.name === 'string' ? error.name : 'Error' }
   if (typeof error?.code === 'string') fields.code = error.code
   if (typeof error?.syscall === 'string') fields.syscall = error.syscall
+  if (Number.isSafeInteger(error?.exitCode)) fields.exitCode = error.exitCode
+  if (error?.timedOut === true) fields.timedOut = true
   return fields
 }
 

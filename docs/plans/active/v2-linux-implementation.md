@@ -237,9 +237,9 @@ Use the prompt shown in 6.5 as the first expected output.
 - `src/runner/answer.mjs`: parsing (6.7).
 - `src/runner/git.mjs`: the unexpected-file check, the commit, and the clean-up limited to `views/` and `memory/` (6.8, 6.9).
 - Sessions: the session ID, copying in and out, and `/new` (6.6, 5.4).
-- `src/common/outbox.mjs`: writing an entry. The runner writes replies, ✅ reactions and notices (5.3, 6.8).
+- `src/common/outbox.mjs`: writing an entry. The runner writes replies, ✅ reactions and notices (5.3, 6.8). Milestone 3 wrote it, for the reply to `/new`.
 - `src/runner/failures.mjs`: the cause, read from the network log; pauses and their schedules; attempts; notices (6.9).
-- `src/runner/status.mjs`: `runner/status.json` (row 6). The formats of `state.json` and `status.json`, and readers for them, go in `src/common/`, because the bridge reads both for `/status`.
+- `src/runner/status.mjs`: `runner/status.json` (row 6). The formats of `state.json` and `status.json`, and readers for them, go in `src/common/`, because the bridge reads both for `/status`. Milestone 3 put `state.json`'s there, in `src/common/agentstate.mjs`.
 - `src/runner/main.mjs`: startup and the loop.
 
 **Rules:**
@@ -507,7 +507,7 @@ Then check, and correct the code where reality differs:
 - a receipt photo ends up in `expenses.csv`, read through pi's `read` tool;
 - a real batch runs end to end in the sandbox;
 - the messages route accepts the `provider` fields; ZDR-only routing works for the model, and how much latency it adds;
-- wacli: how an edit and a deletion arrive; `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID; a text with a link in it, sent with `--no-preview`, arrives without a preview, and wacli fetches nothing for it (`docs/DECISIONS.md`, 0.8, says how to tell);
+- wacli: how an edit and a deletion arrive, `FromMe` and `Chat` included, for the owner's own edit and deletion (`docs/DECISIONS.md`, D42 and 3.3); `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID; a text with a link in it, sent with `--no-preview`, arrives without a preview, and wacli fetches nothing for it (`docs/DECISIONS.md`, 0.8, says how to tell);
 - email: IDLE with the app password; the `Authentication-Results` header and its `dmarc=` result; the owner's own mail passes DMARC; `postal-mime` on a forwarded booking and on an audio attachment;
 - a backup to the real bucket, and a restore into an empty folder.
 

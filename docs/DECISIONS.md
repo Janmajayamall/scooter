@@ -620,8 +620,8 @@ It also settled the smaller points of the reviews of milestones 0 and 1, in code
 **D42. wacli's formats, as its source at v0.26.0 has them.**
 Read on 2026-11-16 from GitHub at the tag, not run: sending and receiving need a paired number (gate G4). Both are in `fromWebhook` and `fromListRow` in `whatsapp.mjs`, and nowhere else (the plan's rule for this milestone).
 - *A webhook payload* (`internal/app/webhook.go`) is wacli's `ParsedMessage` with Go's field names, with `Media` replaced by `{Type, Caption, Filename, MimeType, FileLength}` and `ChatName` added. The signature is `sha256=` and the lowercase hex HMAC-SHA256 of the raw body, as 13.1 says. Messages without an ID aren't posted.
-- *An edit* (`extractProtocolMutation` in `internal/wa/messages.go`) carries the ID of the message it changes, `Edited: true` and the new text; a *deletion* carries the ID and `Revoked: true`, with no text and no media. The time is the edit's or the deletion's. This is what 13.1 guessed from `sync_edits.go`.
-- *A list row* (`internal/store/types.go`) is the stored message, with Go's field names except `quoted_msg_id` and `quoted_sender_jid`. It has no preview of what it quotes and no size for its media. An edit updates the stored message, so an edited row has the current text and `Edited: true`: `fromListRow` returns it as the message and then its edit. Whichever of the two is already stored is skipped. So a message missed while wacli was down and edited since is stored as it is now, and an edit missed is stored as an edit. A deleted row becomes a deletion, skipped when the message isn't stored.
+- *An edit* (`extractProtocolMutation` in `internal/wa/messages.go`) carries the ID of the message it changes, `Edited: true` and the new text; a *deletion* carries the ID and `Revoked: true`, with no text and no media. The time is the edit's or the deletion's. This is what 13.1 guessed from `sync_edits.go`. The same code also sets `Chat` and `FromMe` from the key the sender's phone wrote, from the sender's side, so the owner's own deletion, and an edit that isn't encrypted, probably arrive with `FromMe: true` and the bot's JID as `Chat`, and are dropped as the bot's (added in milestone 3, 3.3, point 1).
+- *A list row* (`internal/store/types.go`) is the stored message, with Go's field names except `quoted_msg_id` and `quoted_sender_jid`. It has no preview of what it quotes and no size for its media. An edit updates the stored message, so an edited row has the current text and `Edited: true`: `fromListRow` returns it as the message and then its edit. Whichever of the two is already stored is skipped. So a message missed while wacli was down and edited since is stored as it is now, and an edit missed is stored as an edit, but only while catch-up reaches the message: wacli keeps a row's time when an edit arrives, and `--after` filters on that time, so a missed edit of a message older than 2 minutes before the newest line isn't listed. A deletion moves the row's time to its own, so it is listed. An edited row listed before a newer edit came by webhook, and handled after it, puts the older text back, within the time one page takes (corrected in milestone 3, 3.3, point 6). A deleted row becomes a deletion, skipped when the message isn't stored.
 - *`messages list --after`* (`ListMessages` in `internal/store/messages.go`) lists rows strictly after the time, compared in whole seconds, oldest first with `--asc`.
 - *`media download --output <file>`* (`cmd/wacli/media_download.go`) saves to the file as given, and answers with its `path`.
 
@@ -741,8 +741,208 @@ The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 The milestone's "done when", signed webhook posts ending up as the right lines and attachments and unsigned ones not, is the first test in `bridge.test.mjs`. It posts through the stub's running sync, and reads `log.jsonl` and the day folder.
 
 Not verified:
-- **wacli when paired** (gate G4). The tests run a stub. How a real edit, deletion, `@lid` sender and list row look is read from wacli's source (D42). So is how `media download` behaves while sync runs, and `messages list --read-only` alongside it. A correction belongs in `fromWebhook` or `fromListRow`.
+- **wacli when paired** (gate G4). The tests run a stub. How a real edit, deletion, `@lid` sender and list row look is read from wacli's source (D42), and so is the likelihood, added in milestone 3, that the owner's own deletion arrives with `FromMe: true` and the bot's JID as `Chat`. So is how `media download` behaves while sync runs, and `messages list --read-only` alongside it. A correction belongs in `fromWebhook` or `fromListRow`.
 - **The real wacli in this milestone's tests.** Milestone 0's checks run the installed wacli, unpaired. Nothing here does.
 - **The webhook against the real wacli's HTTP client.** The stub posts with Node's.
 - **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW` and `mkfifo` exist on macOS.
 - **The bridge under systemd or Compose.** Milestones 12 and 13.
+
+## Milestone 3: runner, planning
+
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in one sentence of 6.3, where it contradicted 5.4 and 6.5 (D65).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/runner/config.mjs` | `agents.yaml` and its validation; the only module that imports `yaml` |
+| `src/runner/agentdir.mjs`, `src/runner/git.mjs` | The agent's folder, git, the `.gitignore` and the first commit; `run/` before each run |
+| `src/runner/state.mjs` | Reading and writing `state.json`; sessions; `/new`; what the runner does to the state when it starts |
+| `src/runner/datastore.mjs` | The runner's view of the datastore: the index, and when it last saw the owner |
+| `src/runner/triggers.mjs` | What the agent does next |
+| `src/runner/batch.mjs`, `src/runner/prompt.mjs` | The batch, its context and its prompt; `run/system.md` |
+| `src/runner/commands.mjs` | Handling the commands: the reply to the outbox, then the state |
+| `src/runner/protocol.md` | The protocol of 7.1 |
+| `src/common/agentstate.mjs` | The format of `state.json`, its check and its reader, for the runner and for `/status` |
+| `src/common/outbox.mjs` | The format of an outbox entry, and writing one |
+| `src/common/time.mjs`, `src/common/datastore/index.mjs`, `src/common/limits.mjs` | `previousLocalTime`, `isDate`, `shiftDate`; each line's number in its log, and the commands; three constants |
+| `test/support/runner.mjs` | Fixtures: a datastore written from lines, a config folder, and the example of 6.5 as data |
+| `test/config.test.mjs`, `agentstate`, `triggers`, `batch`, `agentdir`, `outbox`, `planning` | The tests of this milestone |
+
+It also settled the smaller points of the review of milestone 2 (3.3).
+
+### 3.1 Decisions
+
+**D54. `agents.yaml`: every field is required except `thinking`, and a key the format doesn't have is a fault.**
+*Question:* 6.1 marks `thinking` as optional and says nothing of the others, nor of keys it doesn't list.
+*Choice:* the others are required. An unknown key, at any level, is a fault that names it, as an unknown variable in an env file is (D15). The file is read as YAML 1.2 with the core schema, so `on:` is a key and not `true`, and `21:30` unquoted is a time and not 1,290 minutes, as YAML 1.1 would have them. Duplicate keys, and the warnings of the parser, such as a tag it doesn't know, are faults too. Every fault is reported at once, each as `agents.yaml, line 14: agents.lifelog.run[1].at must be …`: the file, the line, and the field's path, with lists counted from 0.
+*Reason:* 6.1 lists no defaults, and a default the owner didn't write is a setting they can't see. A misspelled `reply_mod` would otherwise leave the default in force without a word.
+
+**D55. A model is an OpenRouter ID, and not an `:online` one.**
+*Choice:* `model` matches `~?provider/name[:variant]` in lowercase letters, digits, `.`, `_`, `-` and `:`, which all 403 models of pi's catalog do (pi 6). One that ends in `:online` is refused at startup, with the reason.
+*Reason:* the network policy refuses such a model (6.13, section 10), so every run would fail. Saying so at startup is cheaper.
+
+**D56. Paths in the config, and what a skill is.**
+- A path is relative to the config folder, cleaned (`./`, `//` and a trailing `/` don't matter), and must name something inside the folder after links are followed. A link out of it is a fault.
+- A skill's name is its folder's name, and two skills can't share one: a backfill names its skill that way, and the name is a folder in `run/config/`.
+- A skill's folder holds only files and folders, and a `SKILL.md`. A link inside one is a fault at startup, and if one appears later, `prepareRun` refuses to copy it. pi sees only `run/config/` (8.5), and a copy that followed the link would show it whatever the link leads to.
+
+**D57. `ack_reaction` is one emoji, or "".**
+*Choice:* one grapheme, such as `✅`, `👍🏽` or `❤️`, with no space or control character in it.
+*Reason:* a WhatsApp reaction is one emoji. A word would fail on every quiet run.
+
+**D58. `timeout_minutes` from 1 to 120.**
+*Choice:* a new constant, `CONFIG_RANGES`, as `SETTING_RANGES` is for the env files (D17).
+*Reason:* 8.6 wants a range for a number the owner sets. The low end keeps a run from being cut off before pi starts; the high end is a slip of the hand, and also how long a backup can wait (5.5).
+
+**D59. The entries of `run`.**
+- Each entry has exactly one of `on`, `at`, `once` and `backfill`, and only the keys that go with it.
+- `on: new-messages` is the only `on`, and is given at most once. Without it, messages wait.
+- `at` values are unique, as the plan's rule says: they are the keys of `scheduled`.
+- `once` and `backfill` IDs are lowercase letters, digits and hyphens, and unique within their kind. They go into session names and commit messages (6.10, 6.11).
+- `run` may be empty: an agent that runs on nothing is the owner's to configure.
+
+**D60. What a backfill may change.**
+*Choice:* `writes` is a list of at least one path, each `views/<…>` with at least one part after `views/`: a file, or a folder ending in `/`. Refused: `views/` itself, `views/days` and anything in it, `..`, `.`, empty parts, and names starting with a dot. A backfill's `skill` is one of the agent's skills, by name, other than `day-pages`.
+*Reason:* 6.1 and 6.11, and names the file check would refuse anyway (6.8).
+
+**D61. `state.json`'s format is in `src/common/agentstate.mjs` now.**
+*Question:* the plan puts the formats the bridge reads in `src/common/` in milestone 4.
+*Choice:* this milestone needs the format, so it is there from the start. The check is strict: every field 6.3 lists, of its type, and no other. Its additions to 6.3:
+- An agent that has never run has `cursor` and `commandSeq` 0, empty lists, `scheduled` `{}`, and `session` and `lastRun` null.
+- `paused` is `{ since, cause, reason, next, tries }`. `cause` is `setup` or `outage`, and `tries` counts the failed tries in a row, which the outage waits of 6.9 need. Milestone 4 fills it in.
+- `retry` entries may have 0 `attempts`: after a setup error or an outage, a new item waits in `retry` with its count unchanged (6.9).
+- The file is indented, for the owner who reads it, and written atomically with mode 0600.
+
+**D62. Sessions.**
+- The session's day is the owner's local date, or the day before while the local clock is before `SESSION_ROLLOVER_HOUR`. It goes by the clock, not by hours since midnight, so on a day the clocks change it still changes at 04:00.
+- `session` holds the day of the newest `/new` and how many there were that day. On another day there were none. The ID is `<agent>-<day>`, and `-<n>` after the nth `/new`.
+- The reply to `/new` is `by: "runner"`, `about` the command, and is sent also with `can_message: false`: the agent says nothing then, but the reply is the runner's.
+
+**D63. Commands are handled as soon as they are seen.**
+*Question:* 6.4 says commands are handled before a batch is built, and still work while paused.
+*Choice:* commands newer than `commandSeq` come before anything else, on every poll, also while paused and without waiting for the quiet period. The runner writes the replies, then saves the state (row 11). The index keeps the `seq` of each command, so they are found without reading every line again.
+*Reason:* a lone `/new` would otherwise wait for the next message. And handled at once, `/new` applies to all work not yet given to the agent wherever it sits among the waiting messages, as 6.4 asks.
+
+**D64. The quiet period counts from when the runner saw the newest incoming line.**
+*Question:* 6.4 says the batch waits until "the newest incoming line is at least `BATCH_SECONDS` old".
+*Choice:* old since the runner saw it arrive, not since its `at`. Any `in` line counts, of any kind and any source. Lines already there when the runner starts count as seen then, so a start waits `BATCH_SECONDS`.
+*Reason:* `at` is when the message was sent, by the channel's clock. A message caught up after downtime has an old one, and a batch would start while catch-up is still storing lines. An email's comes from its `Date` header, which can lie in the future, and the batch would wait until then.
+
+**D65. Commands are never shown to the agent.**
+*Question:* 6.3 said commands are context that "the agent is shown"; 5.4 says commands are "never given to the agent", and 6.5's context is the `out` lines and reactions.
+*Choice:* 5.4 and 6.5. The cursor moves past a command, and the prompt never shows one. 6.3 of DESIGN.md now says so.
+
+**D66. What comes first.**
+*Choice:* commands; then nothing while paused; then `once` tasks; then new messages, once the owner is quiet; then a due scheduled task; then a backfill batch. A scheduled task waits for messages that are ready, and doesn't wait for messages still in their quiet period.
+*Reason:* 6.4 runs `once` tasks at startup. Messages first, because the evening check-in reports what was filed. The backfill comes last by 6.11.
+
+**D67. Scheduled tasks.**
+*Choice:* `scheduled[at]` is the owner's date of the last occurrence that has been dealt with.
+- **At startup**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, worked out in the zone the runner starts with. So a runner that starts after the time waits until the next day (6.4), and a changed `SCOOTER_TZ` takes effect at once. Entries for `at` values no longer in the config are dropped.
+- **While running**, a task is due when its last occurrence has a later date than `scheduled[at]`. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once.
+- The runner records the date once the task has run (milestone 4). A task that fails on a setup error or an outage keeps its old date, so it stays due (the plan's rule for milestone 4).
+- `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` (D21): a time skipped by the clocks comes due at the jump, and a time that comes twice at its first.
+*Reason:* a date per task is what 6.3 stores, and comparing dates of the owner's day keeps one run a day across clock changes. Overwriting at startup instead of keeping the larger date lets a changed zone start from where it is: a date from a zone far ahead would otherwise hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all.
+
+**D68. `once` tasks.**
+*Choice:* the runner keeps in memory which `once` tasks it has tried since it started, and `nextAction` takes that set. A task is offered when it is in neither `onceDone` nor that set. Milestone 4 adds a task to `onceDone` after it succeeds, and leaves it out of the set after a setup error or an outage, so it is the next try.
+
+**D69. Backfills at startup, and when one is done.**
+*Choice:* a new backfill starts with `until` the live cursor, its own cursor at 0, and empty lists (6.11). One whose entry left the config is dropped at startup. `nextAction` offers a backfill batch when it has work items in `(cursor, until]` or due retries and nothing live waits; and says `backfill-finished` when it has neither work up to `until` nor retries. Building a backfill's batch, and finishing it, are milestone 9's.
+
+**D70. The batch.**
+- **Covered:** a batch covers the lines up to the first work item it leaves for later, or up to the newest line. When the run succeeds the cursor moves there (6.8), past the context, the commands and the lines of sources the agent doesn't read in that stretch.
+- **Context:** the `out` lines and reactions from the oldest item to the end of what the batch covers. A context line is shown with the message it replies to, as `you sent, in reply to #1047: "…"`.
+- **Newest first:** context lines are listed newest first, as the example of 6.5 shows them, and when the prompt is too long the oldest are left out first.
+- **Who sent it:** `you` for the agent's own lines, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices and replies to `/status`. The protocol explains the last.
+- A retry entry whose line isn't a work item of the agent, which only a changed `reads` or a damaged state gives, is never due, and starts no batch.
+- `newest`, the item an answer's plain text is `about` (6.7), is the item with the highest `seq`.
+
+**D71. How the prompt shows a line.**
+- Every text the owner or the agent wrote is a JSON string, so a line break or a quote in it can't pass for the prompt's own lines. The example of 6.5 reads the same either way.
+- A file's kind comes from its MIME type: `photo`, `video`, `audio` or `document`. Further files of a message are `attachment` lines under it.
+- An edit is `edit of #1051, now: "<its own text>"`, and a deletion `deletion of #1051`. A deleted message is `(deleted in #1055)` in place of its content.
+- A time is `HH:MM` on the owner's day of `now`, `Sun 8 Nov 20:02` on another day, and `Sat 8 Nov 2025 20:02` in another year.
+- A reply to a message Scooter doesn't have is `↳ reply to an earlier message: "<the quoted preview>"`. One to a photo shows the photo's path.
+- Media that couldn't be stored is `photo, not stored (download failed)`, with the caption if there is one.
+- An email is as 6.5 shows it; one that couldn't be read adds the line `email not stored (could not be parsed)`, from its `media`.
+
+**D72. Keeping the prompt within `PROMPT_MAX_BYTES`.**
+*Choice:* the batch grows one item at a time, with what each brings in, and stops before the prompt would pass the limit. When even the first item is too long:
+1. if it fits on its own, the oldest context lines are left out, and a line says how many;
+2. otherwise its texts are cut, as little as will do, keeping all the context if that then fits, and none if not. A cut text is followed by `(cut; the whole text is line 3 of /data/datastore/2026/11/09/log.jsonl)`, the line its current text is in, or `(cut; the whole email is …/1071.eml)`;
+3. if even that is too long, as an email with hundreds of attachments could be, the prompt is cut at the limit, and says so.
+*Reason:* 6.5 and row 12. The context's texts are never cut, since each is a sent chunk or a reaction; the item's are, and so are the quoted messages under it. The index now keeps each line's number in its day's log, so the prompt can say where the whole text is.
+
+**D73. The memory in the system prompt.**
+*Choice:* `memory/preferences.md` and `memory/needs-review.md` are opened without following a link, and only a regular file is read, at most `MEMORY_MAX_BYTES` (64 KB) of each, a new constant. Otherwise the section says the file wasn't read, or was cut and should be shortened.
+*Reason:* pi writes the memory folder. A run that leaves a link there fails and is cleaned up (6.8), but a runner stopped before the clean-up would read the link at its next run, and a link to `runner.env` would put the OpenRouter key into the prompt. A file that grew without bound would make every request too large, and no run could then shorten it.
+
+**D74. `run/`.**
+*Choice:* `prepareRun` empties `run/` and makes `config/` (the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses` as 6.6 has it), `session/`, and `system.md`. A file that can be run keeps that. The session is kept as `sessions/<session ID>.jsonl` and copied in under that name, if it is a regular file (pi 2). A backfill passes only its skills. Copying the session back is milestone 4's.
+
+**D75. The agent's folder and git.**
+- Each step is safe to repeat, and a start finishes what a crash left: the folders, `git init`, the `.gitignore`, and the first commit, `lifelog: initial commit`, holding the `.gitignore` alone, on the branch `main`.
+- Git runs from an argument list with an environment of its own: no system or user config, no hooks, no signing, `Scooter <scooter@localhost>` as author and committer, and the time from the runner's clock. A new constant, `GIT_CALL_TIMEOUT`, one minute, bounds each command.
+
+**D76. The outbox entry's format, and its writer, are in `src/common/outbox.mjs` now.**
+*Question:* the plan builds the writer in milestone 4, and this milestone's rule writes the reply to `/new` to the outbox.
+*Choice:* `checkOutboxEntry` is 5.3's format as code, as `checkLine` is for lines (D27), and `writeOutboxEntry` writes one through `handOff`. The outbox folder is made 0700 when missing, as in development; `setup` makes it in an install (milestone 12).
+
+**D77. The protocol says a little more than 7.1.**
+*Choice:* besides each point of 7.1, `protocol.md` says how the prompt shows things (the three sections, `(edited in …)`, `(deleted in …)`, JSON strings, cut texts, who `Scooter` is), that a scheduled task has no items to report on, and that the agent writes no links and no dotfiles. Milestone 11 checks it against the parser.
+
+### 3.2 Facts found
+
+- **YAML.** `yaml` 2.9.1 with `version: '1.2'` and `schema: 'core'` reads `09:05` as a string, `on` as a key, and `010` as 10. A duplicate key is an error, and an unknown tag a warning that the config turns into a fault.
+- **A schedule's last occurrence** agrees with the next: for six zones (Kolkata, New York, London, Lord Howe, Apia and St John's), six schedules and 20 days around each of three dates with clock changes, nothing comes due between `previousLocalTime(now)` and `now`. A test holds it.
+
+### 3.3 The review of milestone 2
+
+The pull request was approved with seven smaller points. Each is below, with what became of it. The points of the reviews of milestones 0 and 1 that milestone 2 left (2.2) stay as they were: the 2-minute start limit of the VM tests, and zone names wrong in their later letters, for milestone 7.
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | By wacli's source, the owner's own deletion arrives with `FromMe: true` and the bot's JID as `Chat`, and is dropped | Settled by recording it, as the review proposed. D42 and the list of what wasn't verified (2.4) say it, gate G4 in the plan now checks `FromMe` and `Chat` on a real edit and deletion, and a comment at `fromWebhook` says where the correction goes. The code is unchanged: the behavior is read from source, and the plan leaves wacli's formats to G4 |
+| 2 | The stub's helper reads a status file the stub writes in place | Settled. The stub writes it under another name and renames it |
+| 3 | Stopping the bridge waits for the wacli calls in progress, up to `WACLI_CALL_TIMEOUT` for each of three tries | Left for milestone 10, recorded here. A stop waits for every wacli call in progress, and the channel's `stop()` returns while intake may still hold records. Milestone 10, which stops the channels before each backup, must await `intake.idle()` after stopping them, and should pass a stop signal to wacli's calls (`proc.run` takes one), dropping a record whose download a stop cut short so that catch-up brings it back, instead of storing it as `download failed`. It is left because it changes what a stop does to a record, which is the backup's question, and nothing stops the channels before milestone 10 but a shutdown, which systemd ends after 90 seconds and the store survives |
+| 4 | Catch-up doesn't end if wacli answers a full page that isn't after `--after` | Settled. A full page whose last row isn't after the time asked for ends the catch-up, with a warning. A test has the stub answer the same page whatever it is asked |
+| 5 | wacli's staging folder is never emptied, and a folder in a download's place isn't removed | Settled. The channel empties `wacli/staging/` when it starts, folders included, and removes whatever is at a download's path. A test leaves a file, a folder and a link there |
+| 6 | D42 says more than catch-up can do for a missed edit | Settled. D42 now says that a missed edit is listed only while catch-up reaches its message, and that an older row handled after a newer edit puts the older text back |
+| 7 | Smaller still: a test counts any connection error as a 413; a test compares the port with itself; failed wacli calls log no reason; `bridge.first_start` logs `at`, a reserved name | All settled. The test accepts a 413 or a reset connection, and checks the log's two refusals. `whatsapp.started` logs the address the server listens on, and the test checks it is `127.0.0.1`. `errorFields` adds a program's exit code and whether it timed out, so `whatsapp.catchup_failed` and `intake.download_failed` say why; a test checks one. `bridge.first_start` logs `firstStart` |
+
+### 3.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-16, on the Linux machine, from clean clones of the branch:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 277 tests: 252 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 270 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 253 pass, none fail. All 7 root tests run. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
+| The `intake`, `whatsapp`, `bridge` and `proc` tests, 64 times, 8 at once | No failure. The review of milestone 2 saw one in 64 before the stub's fix (3.3, point 2) |
+| This milestone's tests, with `time` and `datastore`, 32 times, 8 at once | No failure |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Runner: batching after the quiet period | `triggers.test.mjs`; `planning.test.mjs`, from files |
+| Runner: the batch's two limits, 20 items and the prompt's size, with an over-long item shown cut | `batch.test.mjs`: 20 items with retries first; six of ten 15 KB messages; one item cut, pointing at its line or its `.eml`; the oldest context left out; 40 random batches within a small limit; the last resort |
+| Runner: context lines and reply labels | `batch.test.mjs`: you, the owner and Scooter; a reply to a photo, to a deleted message, and to a message Scooter doesn't have; forwarded; reactions and a removed one; commands not shown |
+| Runner: emails in the prompt | `batch.test.mjs`: the email of 4.2 as 6.5 shows it, one that couldn't be read |
+| Runner: an edit or deletion bringing in its message from `retry` or `failed`, shown as last edited | `batch.test.mjs`, also past 20 items |
+| Runner: `/new`, handled once | `agentstate.test.mjs`; `planning.test.mjs`, with the reply in the outbox and the state saved before the batch. That it stays handled when the batch after it fails is milestone 4's to show, with a run |
+| Runner: scheduled and `once` tasks | `triggers.test.mjs`; `planning.test.mjs` |
+| Time: scheduled tasks at the right local time across a daylight-saving change | `triggers.test.mjs`: New York in autumn, London in spring and autumn, a weekly task; `time.test.mjs` for `previousLocalTime` |
+| Time: a changed `SCOOTER_TZ` between restarts | `triggers.test.mjs`: Kolkata to New York, back, and a date from a zone far ahead |
+| Config: each validation error names the field | `config.test.mjs`: over 50 faults, each with its field and line |
+| The prompt of 6.5 as the first expected output | `batch.test.mjs` and `planning.test.mjs`, byte for byte |
+
+Not verified:
+- **pi reading these prompts.** Nothing runs pi in this milestone. The prompt and the protocol are text the model hasn't seen yet: milestone 4 runs a stub of pi, and milestones 7 and 11 the real one.
+- **The runner as a service.** There is no `scooter runner` yet; milestone 4 builds its loop. This milestone's parts are tested as functions, and end to end from files.
+- **The stop of point 3 above.** Left for milestone 10.
+- **wacli when paired**, for the points of 3.3: gate G4.
+- **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `mkfifo` and git's `-c` options exist on macOS.

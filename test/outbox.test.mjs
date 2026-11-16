@@ -1,0 +1,70 @@
+// Outbox entries (5.3 of DESIGN.md): their format, and writing one as a folder handed over whole.
+
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import test from 'node:test'
+import { createIds } from '../src/common/files.mjs'
+import { checkOutboxEntry, writeOutboxEntry } from '../src/common/outbox.mjs'
+import { makePaths } from '../src/common/paths.mjs'
+import { createFakeClock } from './support/clock.mjs'
+import { makeTestDir } from './support/tmp.mjs'
+
+// The four examples of 5.3.
+const EXAMPLES = [
+  { type: 'text', by: 'lifelog', text: 'Blue Tokai, ₹450 at 12:40: work or personal?', replyTo: 1042 },
+  { type: 'text', by: 'lifelog', text: 'Logged the run and the coffee.', about: 1061 },
+  { type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (timeout). I'll try again." },
+  { type: 'react', by: 'lifelog', target: 1044, emoji: '✅' },
+]
+
+const modeOf = file => fs.statSync(file).mode & 0o7777
+
+test('outbox: the examples of 5.3 are entries', () => {
+  for (const entry of EXAMPLES) assert.deepEqual(checkOutboxEntry(entry), [], JSON.stringify(entry))
+})
+
+test('outbox: what isn\'t an entry, by field', () => {
+  const cases = [
+    [null, 'not an object'],
+    [{ type: 'file', by: 'lifelog' }, 'type must be one of text, react'],
+    [{ type: 'text', text: 'x' }, 'by is missing'],
+    [{ type: 'text', by: 'lifelog', text: ' \n' }, "text must be a string that isn't empty"],
+    [{ type: 'text', by: 'lifelog', text: 'x', replyTo: 0 }, 'replyTo must be a seq'],
+    [{ type: 'text', by: 'lifelog', text: 'x', replyTo: 1, about: 2 }, "replyTo and about can't both be given"],
+    [{ type: 'text', by: 'lifelog', text: 'x', to: 'someone' }, "to doesn't belong on a text entry"],
+    [{ type: 'react', by: 'lifelog', target: 1044 }, 'emoji is missing'],
+    [{ type: 'react', by: 'lifelog', target: 1044, emoji: '✅', text: 'x' }, "text doesn't belong on a react entry"],
+  ]
+  for (const [entry, problem] of cases) assert.ok(checkOutboxEntry(entry).includes(problem), `${problem}: ${JSON.stringify(checkOutboxEntry(entry))}`)
+})
+
+test('outbox: an entry is a folder with entry.json, renamed into place, its IDs in the order they were made', async t => {
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
+  const clock = createFakeClock('2026-11-09T15:50:15.123Z')
+  const ids = createIds(clock)
+  const written = []
+  for (const entry of EXAMPLES) written.push(await writeOutboxEntry({ paths, ids, entry: { ...entry } }))
+  assert.deepEqual(written, ['20261109T155015123-0001', '20261109T155015123-0002', '20261109T155015123-0003', '20261109T155015123-0004'])
+  assert.deepEqual(fs.readdirSync(paths.outbox).sort(), written)
+  assert.equal(modeOf(paths.outbox), 0o700)
+  const file = path.join(paths.outbox, written[0], 'entry.json')
+  assert.equal(modeOf(path.dirname(file)), 0o700)
+  assert.equal(modeOf(file), 0o600)
+  // Written with its fields in order, whatever order they were given in.
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"type":"text","by":"lifelog","text":"Blue Tokai, ₹450 at 12:40: work or personal?","replyTo":1042}\n')
+  const reversed = Object.fromEntries(Object.entries(EXAMPLES[3]).reverse())
+  const id = await writeOutboxEntry({ paths, ids, entry: reversed })
+  assert.equal(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8'), '{"type":"react","by":"lifelog","target":1044,"emoji":"✅"}\n')
+
+  // A name the other writer took is passed over.
+  clock.set('2026-11-09T15:50:16.000Z')
+  fs.mkdirSync(path.join(paths.outbox, '20261109T155016000-0001'))
+  fs.writeFileSync(path.join(paths.outbox, '20261109T155016000-0001', 'entry.json'), '{}')
+  assert.equal(await writeOutboxEntry({ paths, ids, entry: EXAMPLES[2] }), '20261109T155016000-0002')
+
+  // An entry that isn't one is never written.
+  await assert.rejects(writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'lifelog', text: '' } }), /not an outbox entry: text must be a string/)
+  assert.ok(fs.readdirSync(paths.outbox).every(name => !name.startsWith('.')))
+})

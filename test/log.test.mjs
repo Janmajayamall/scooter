@@ -95,6 +95,13 @@ test('log: an error is described without its message', () => {
   const missing = Object.assign(new Error("ENOENT: no such file or directory, open '/data/x'"), { code: 'ENOENT', syscall: 'open' })
   assert.deepEqual(errorFields(missing), { error: 'Error', code: 'ENOENT', syscall: 'open' })
   assert.deepEqual(errorFields('just a string'), { error: 'Error' })
+  // A program that failed: its exit code and whether it timed out say why, and repeat nothing it
+  // printed.
+  const failed = Object.assign(new Error('wacli media download: exit code 1'), { code: 'EWACLI', exitCode: 1, timedOut: false })
+  assert.deepEqual(errorFields(failed), { error: 'Error', code: 'EWACLI', exitCode: 1 })
+  const timedOut = Object.assign(new Error('wacli messages list: timed out'), { code: 'EWACLI', exitCode: null, timedOut: true })
+  assert.deepEqual(errorFields(timedOut), { error: 'Error', code: 'EWACLI', timedOut: true })
+  assert.deepEqual(errorFields(Object.assign(new Error('x'), { exitCode: '1', timedOut: 'yes' })), { error: 'Error' })
 
   const { log, lines } = capture()
   log.error('intake.failed', { seq: 7, ...errorFields(parsing) })

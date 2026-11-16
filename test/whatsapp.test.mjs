@@ -333,12 +333,18 @@ test('whatsapp: the webhook takes only POST /wacli, up to 2 MB', async t => {
   assert.equal(await send('POST', '/wacli/'), 404)
   assert.equal(await send('POST', '/wacli?x=1'), 404)
   assert.equal(await send('POST', '/wacli', '{}'), 401)
-  // Too large, by what it says and by what it sends.
+  // Too large, by what it says and by what it sends. The server answers 413 and closes the
+  // connection, which a client still sending may see as the connection reset instead. Either way
+  // the log says why it was refused.
   const big = Buffer.alloc(limits.WEBHOOK_MAX_BYTES + 1, 0x20)
-  assert.equal(await send('POST', '/wacli', '', { 'content-length': String(big.length) }).catch(() => 413), 413)
-  assert.equal(await send('POST', '/wacli', big, { 'transfer-encoding': 'chunked' }).catch(() => 413), 413)
+  const refused = request => request.catch(error => (['ECONNRESET', 'EPIPE'].includes(error.code) ? 'reset' : Promise.reject(error)))
+  const tooLarge = () => context.entries.filter(entry => entry.event === 'whatsapp.webhook_refused' && entry.reason === 'too large').length
+  assert.equal(await refused(send('POST', '/wacli', '', { 'content-length': String(big.length) })), 413)
+  assert.equal(tooLarge(), 1)
+  assert.ok([413, 'reset'].includes(await refused(send('POST', '/wacli', big, { 'transfer-encoding': 'chunked' }))))
+  await waitFor(() => tooLarge() === 2, 'the second refusal')
   // It listens on loopback only.
-  assert.equal(context.entries.find(entry => entry.event === 'whatsapp.started').port, port)
+  assert.equal(context.entries.find(entry => entry.event === 'whatsapp.started').address, '127.0.0.1')
   assert.equal(whatsapp.status(), 'WhatsApp: not linked; run `scooter pair`')
 })
 
@@ -416,6 +422,32 @@ test('whatsapp: a download wacli fails, or leaves as a link or elsewhere, is not
   // Nothing of the link's target was copied, and the staging folder was emptied.
   assert.deepEqual(fs.readdirSync(path.join(paths.datastore, '2026/11/09')).sort(), ['1.jpg', 'log.jsonl'])
   assert.deepEqual(fs.readdirSync(paths.wacliStaging).filter(name => !name.endsWith('-elsewhere')), [])
+})
+
+test('whatsapp: wacli\'s staging folder is emptied at the start, and of a folder left in a download\'s place', async t => {
+  const context = await setup(t, {
+    fixtures: { paired: true, leftDir: ['D1'] },
+    limits: { MEDIA_DOWNLOAD_RETRIES: 0 },
+    // What a bridge killed during downloads left there.
+    seed: paths => {
+      fs.mkdirSync(path.join(paths.wacliStaging, 'half', 'deeper'), { recursive: true })
+      fs.writeFileSync(path.join(paths.wacliStaging, 'half-done.jpg'), 'part')
+      fs.symlinkSync('/etc/hostname', path.join(paths.wacliStaging, 'a-link'))
+    },
+  })
+  const { lines, synced, paths, entries } = context
+  await synced()
+  assert.deepEqual(fs.readdirSync(paths.wacliStaging), [])
+  // Removing the link removed the link only.
+  assert.ok(fs.existsSync('/etc/hostname'))
+
+  await post(context, webhookPayload({ ID: 'D1', Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 0 } }))
+  assert.equal(lines()[0].media.error, 'download failed')
+  assert.deepEqual(fs.readdirSync(paths.wacliStaging), [])
+  // The log says why the download failed: wacli's exit code, and none of what it wrote.
+  const failed = entries.find(entry => entry.event === 'intake.download_failed')
+  assert.deepEqual([failed.code, failed.exitCode, failed.timedOut], ['EWACLI', 1, undefined])
+  assert.ok(!JSON.stringify(entries).includes('interrupted'))
 })
 
 test('whatsapp: a wacli call that hangs is stopped after WACLI_CALL_TIMEOUT', async t => {
@@ -583,6 +615,19 @@ test('whatsapp: a full page of catch-up goes on from the last row\'s time, withi
     stub.callsOf('messages list').map(call => call.args[7]),
     ['2026-11-09T10:00:00Z', '2026-11-09T10:00:02Z', '2026-11-09T10:00:03Z'],
   )
+})
+
+test('whatsapp: catch-up stops at a full page that ends before the time it asked for', async t => {
+  // A broken wacli answers the same full page, of rows long before `--after`, whatever it is asked.
+  const rows = ['10:00:01', '10:00:02', '10:00:03'].map((time, n) => listRow({ MsgID: `B${n + 1}`, Timestamp: `2026-11-09T${time}Z`, Text: `row ${n + 1}` }))
+  const seed = seedLines([incoming('2026-11-09T11:58:00Z', 'W1', 'newest')])
+  const context = await setup(t, { fixtures: { paired: true, messages: rows, ignoreAfter: true }, seed, limits: { CATCHUP_LIMIT: 3 } })
+  const { stub, lines, caughtUp, events } = context
+  await caughtUp()
+  // One page, handed over once, and no going further back.
+  assert.deepEqual(stub.callsOf('messages list').map(call => call.args[7]), ['2026-11-09T11:56:00Z'])
+  assert.deepEqual(lines().map(line => line.sourceId), ['W1', 'B1', 'B2', 'B3'])
+  assert.ok(events().includes('whatsapp.catchup_stopped'))
 })
 
 test('whatsapp: catch-up turns an edited row into its message, or its edit, and a deleted row into a deletion', async t => {

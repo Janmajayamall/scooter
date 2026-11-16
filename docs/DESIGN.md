@@ -379,7 +379,7 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - `backfill` exists only while a backfill is in progress (6.11). `backfillDone` lists the finished ones.
 - `paused` exists only while a setup error or an outage holds runs back (6.9): since when, the reason, and the next try.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day in `SCOOTER_TZ`, because the session and the schedule follow that day.
-- **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) is context: the cursor moves past it, and the agent is shown it but doesn't report on it.
+- **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context (6.5); commands never are (5.4).
 
 **`status.json`.** The bridge reads neither `/config` nor `runner.env`, so the runner tells it what `/status` needs from them (5.4). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, and each agent's `timeout_minutes` and `reads`.
 

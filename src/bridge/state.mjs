@@ -42,7 +42,7 @@ export function openBridgeState({ paths, clock = systemClock, log }) {
   if (state === undefined) {
     state = { firstStart: isoSeconds(clock.now()), ownerChat: null, lastBackup: null }
     writeFileAtomic(file, `${JSON.stringify(state)}\n`, { mode: 0o600 })
-    log.info('bridge.first_start', { at: state.firstStart })
+    log.info('bridge.first_start', { firstStart: state.firstStart })
   }
   const problem = problemsOf(state)
   if (problem) throw new Error(`${file}: ${problem}`)
