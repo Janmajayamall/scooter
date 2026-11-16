@@ -9,7 +9,8 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { holdInstance, startBridge } from '../src/bridge/main.mjs'
+import { startBridge } from '../src/bridge/main.mjs'
+import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
@@ -164,6 +165,7 @@ test('bridge: a socket left by a bridge that was killed is replaced', async t =>
   assert.ok(fs.existsSync(socket))
   const instance = await holdInstance(socket)
   await assert.rejects(holdInstance(socket), /another bridge is running/)
+  await assert.rejects(holdInstance(socket, 'runner'), /another runner is running/)
   await instance.close()
   assert.equal(fs.existsSync(socket), false)
 })

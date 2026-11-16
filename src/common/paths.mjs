@@ -46,9 +46,11 @@ export function makePaths({ dataDir, configDir }) {
     runLock: data('exchange', 'locks', 'run.lock'),
     backupLock: data('exchange', 'locks', 'backup.lock'),
 
-    // The runner's own folder (6.3, 6.6, 6.12, 6.13). `date` is a UTC date, `2026-11-09`.
+    // The runner's own folder (6.3, 6.6, 6.12, 6.13), and the socket that keeps a second runner
+    // from starting on the same data. `date` is a UTC date, `2026-11-09`.
     runner: data('runner'),
     runnerStatus: data('runner', 'status.json'),
+    runnerSocket: data('runner', 'runner.sock'),
     runnerImage: data('runner', 'image'),
     runnerHome: data('runner', 'home'),
     runnerTmp: data('runner', 'tmp'),

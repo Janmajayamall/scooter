@@ -6,8 +6,8 @@
 // At startup, in order:
 // 1. It looks up its users: wacli runs as `scooter-wacli`, and the datastore belongs to root with
 //    the group `scooter-runner` (3.2). Not root, it is neither, and switching is skipped (10).
-// 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each
-//    give out the same `seq`, and the datastore would need repairing by hand (D29).
+// 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each give
+//    out the same `seq`, and the datastore would need repairing by hand (D29).
 // 3. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
 // 4. It starts the channels.
 //
@@ -15,8 +15,8 @@
 // and removing a leftover `backup.lock` (10).
 
 import fs from 'node:fs'
-import net from 'node:net'
 import { ensureDir } from '../common/files.mjs'
+import { holdInstance } from '../common/instance.mjs'
 import { createLog, errorFields } from '../common/log.mjs'
 import { makePaths } from '../common/paths.mjs'
 import { createProc } from '../common/proc.mjs'
@@ -25,43 +25,6 @@ import { createWhatsApp } from './channels/whatsapp.mjs'
 import { createIntake } from './intake.mjs'
 import { openBridgeState } from './state.mjs'
 import { openStore } from './store.mjs'
-
-// Makes sure only one bridge runs on a data folder: it listens on a Unix socket in the bridge's
-// folder. A second bridge finds the socket answering and refuses to start. A socket left by a
-// bridge that was killed doesn't answer, and is replaced. Unlike a lock file holding a pid, this
-// can't mistake an unrelated process that was given the same pid for a bridge, and it works across
-// containers that share the folder. Returns `{ close }`.
-export async function holdInstance(file) {
-  const server = net.createServer(socket => socket.destroy())
-  const listen = () =>
-    new Promise((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(file, () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-  const answers = () =>
-    new Promise(resolve => {
-      const socket = net.connect(file)
-      socket.once('connect', () => {
-        socket.destroy()
-        resolve(true)
-      })
-      socket.once('error', () => resolve(false))
-    })
-
-  try {
-    await listen()
-  } catch (error) {
-    if (error.code !== 'EADDRINUSE') throw error
-    if (await answers()) throw new Error(`another bridge is running on this data folder: ${file} answers`)
-    fs.rmSync(file, { force: true })
-    await listen()
-  }
-  // Node removes the socket when it stops listening.
-  return { close: () => new Promise(resolve => server.close(() => resolve())) }
-}
 
 // Starts the bridge. Returns `{ paths, store, state, intake, channels, fatal, stop }`, where
 // `fatal` resolves with an error if the bridge can't go on, and `stop()` stops it. `proc` is what
@@ -78,7 +41,7 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   // development.
   ensureDir(paths.dataDir, { mode: 0o755 })
   ensureDir(paths.bridge, { mode: 0o700 })
-  const instance = await holdInstance(paths.bridgeSocket)
+  const instance = await holdInstance(paths.bridgeSocket, 'bridge')
   try {
     // Attachments that waited for the store when the bridge last stopped. Their messages weren't
     // stored, and catch-up or the mail spool hands them over again.

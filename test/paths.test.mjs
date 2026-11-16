@@ -32,6 +32,7 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
     backupLock: '/data/exchange/locks/backup.lock',
     runner: '/data/runner',
     runnerStatus: '/data/runner/status.json',
+    runnerSocket: '/data/runner/runner.sock',
     runnerImage: '/data/runner/image',
     runnerHome: '/data/runner/home',
     runnerTmp: '/data/runner/tmp',

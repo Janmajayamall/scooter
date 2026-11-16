@@ -78,6 +78,15 @@ const values = {
   MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped (6.2, 6.8).
   GIT_CALL_TIMEOUT: 1 * MINUTE,
+  // The largest session file copied back from a run. pi wrote it, and the whole session goes to
+  // the model on every request, so a larger one couldn't be sent anyway (6.6, 6.13).
+  SESSION_MAX_BYTES: 100 * MB,
+  // The longest reason kept in `state.json` or quoted in a notice, in characters: the agent's own
+  // reason on a `FAILED` line, or OpenRouter's error (6.8, 6.9). Both come from outside the
+  // runner's code.
+  REASON_MAX_CHARS: 200,
+  // How much of a message's text a notice quotes to name it, in characters (6.9).
+  NOTICE_QUOTE_CHARS: 40,
   // The values a number in `agents.yaml` may take, lowest and highest (6.1). A run can't be given
   // less than a minute, and a slip of the hand can't keep a backup waiting for hours (5.5).
   CONFIG_RANGES: {
