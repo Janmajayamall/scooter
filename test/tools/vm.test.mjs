@@ -29,6 +29,7 @@ import {
 
 const options = { skip: vmSkipReason(), timeout: 300_000 }
 const READ_ONLY = /Read-only file system/
+const NOT_THERE = /No such file or directory/
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -107,18 +108,26 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
   fs.writeFileSync(`${agent}/sessions/lifelog-2026-11-08.jsonl`, '{"type":"session"}\n')
   const vm = await startVm(t, { mounts: designMounts(data) })
 
-  // Reading works everywhere under the two mounts, at the same paths as on the host.
+  // Reading works under the two mounts, at the same paths as on the host.
   for (const file of [`${agent}/memory/preferences.md`, `${datastore}/2026/11/09/log.jsonl`, `${data.skill}/SKILL.md`]) {
     assert.equal((await sh(vm, `cat ${file}`)).stdout, fs.readFileSync(file, 'utf8'))
   }
 
-  // That goes for all of the agent's folder: its state and its older sessions too.
+  // That goes for the runner's state too. Of the agent's folder only `sessions/` is missing: the
+  // mounts hide it, and the next test says how well.
   assert.equal((await sh(vm, `cat ${agent}/state.json`)).stdout, '{"cursor":1049}\n')
-  assert.equal((await sh(vm, `cat ${agent}/sessions/lifelog-2026-11-08.jsonl`)).stdout, '{"type":"session"}\n')
+  assert.equal((await sh(vm, `ls ${agent}`)).stdout, 'memory\nrun\nstate.json\nviews\n')
 
-  // Nothing else from the host is there.
+  // Nothing else from the host is there, and a link made in a writable folder doesn't bring it in:
+  // the VM follows links itself, inside its own file system.
   assert.equal((await sh(vm, `ls ${dir}/data`)).stdout, 'agents\ndatastore\n')
   assert.equal((await sh(vm, `ls ${dir}`)).stdout, 'data\n')
+  const linked = await sh(vm, `ln -s ${dir}/outside.txt ${agent}/views/outside && cat ${agent}/views/outside`)
+  assert.notEqual(linked.exitCode, 0)
+  assert.equal(linked.stdout, '')
+  assert.match(linked.stderr, NOT_THERE)
+  assert.equal(fs.readlinkSync(`${agent}/views/outside`), `${dir}/outside.txt`)
+  fs.unlinkSync(`${agent}/views/outside`)
 
   // The agent's folder and the datastore refuse every kind of change.
   for (const command of [
@@ -127,7 +136,6 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
     `echo x > ${agent}/run/new.txt`,
     `echo x > ${agent}/run/system.md`,
     `echo x > ${agent}/run/config/skills/expenses/SKILL.md`,
-    `echo x > ${agent}/sessions/lifelog-2026-11-10.jsonl`,
     `rm ${agent}/state.json`,
     `mkdir ${agent}/new`,
     `chmod 777 ${agent}/state.json`,
@@ -166,26 +174,55 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
   assert.notEqual((await sh(vm, 'ls /data')).exitCode, 0)
 })
 
-test('VM 1: a folder inside a mount can be hidden from the VM', options, async t => {
+test('VM 1: sessions/ is hidden from the VM, which could read it otherwise', options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
   const { agent } = data
-  fs.writeFileSync(`${agent}/sessions/lifelog-2026-11-08.jsonl`, '{"type":"session"}\n')
-  const mounts = designMounts(data)
-  mounts[agent].hide = ['/sessions']
-  const vm = await startVm(t, { mounts })
+  // An older session, kept by the runner.
+  const name = 'lifelog-2026-11-08.jsonl'
+  fs.writeFileSync(`${agent}/sessions/${name}`, '{"type":"session"}\n')
 
-  // The folder is not there, at either of the two paths the mount has, and the rest is.
+  // A read-only mount of the agent's folder shows all of it, the older sessions included. That is
+  // why the mounts of 6.6 hide the folder.
+  const unhidden = designMounts(data)
+  unhidden[agent] = { host: agent }
+  const open = await startVm(t, { mounts: unhidden })
+  assert.equal((await sh(open, `ls ${agent}`)).stdout, 'memory\nrun\nsessions\nstate.json\nviews\n')
+  assert.equal((await sh(open, `cat ${agent}/sessions/${name}`)).stdout, '{"type":"session"}\n')
+  assert.match((await sh(open, `echo x > ${agent}/sessions/lifelog-2026-11-10.jsonl`)).stderr, READ_ONLY)
+  await open.close()
+
+  // With the mounts of 6.6 the folder is not there, at either of the two paths the mount has, and
+  // the rest is.
+  const vm = await startVm(t, { mounts: designMounts(data) })
   assert.equal((await sh(vm, `ls ${agent}`)).stdout, 'memory\nrun\nstate.json\nviews\n')
+  assert.equal((await sh(vm, `find ${agent} -name '*.jsonl'`)).stdout, '')
   for (const root of [agent, `${FUSE_MOUNT}${agent}`]) {
-    const read = await sh(vm, `cat ${root}/sessions/lifelog-2026-11-08.jsonl`)
+    const read = await sh(vm, `cat ${root}/sessions/${name}`)
     assert.notEqual(read.exitCode, 0)
-    assert.match(read.stderr, /No such file or directory/)
+    assert.match(read.stderr, NOT_THERE)
   }
-  assert.equal((await sh(vm, `cat ${agent}/views/../sessions/lifelog-2026-11-08.jsonl`)).stdout, '')
-  // It can't be made anew either, to stand in for the hidden one.
+
+  // No way round leads to it either. The VM follows a link itself, so a link made in a writable
+  // folder ends at the same missing path, whether it names the folder from beside it or in full.
+  for (const command of [
+    `cat ${agent}/views/../sessions/${name}`,
+    `ln -s ../sessions ${agent}/views/beside && cat ${agent}/views/beside/${name}`,
+    `ln -s ${agent}/sessions ${agent}/memory/in-full && cat ${agent}/memory/in-full/${name}`,
+    `ln -s ../../sessions/${name} ${agent}/run/session/one-file && cat ${agent}/run/session/one-file`,
+    `ln ${agent}/sessions/${name} ${agent}/views/hard-link`,
+  ]) {
+    const result = await sh(vm, command)
+    assert.notEqual(result.exitCode, 0, command)
+    assert.equal(result.stdout, '', command)
+    assert.match(result.stderr, NOT_THERE, command)
+  }
+
+  // It can't be made anew, to stand in for the hidden one, and nothing can be put into it.
   assert.match((await sh(vm, `mkdir ${agent}/sessions`)).stderr, READ_ONLY)
-  assert.deepEqual(fs.readdirSync(`${agent}/sessions`), ['lifelog-2026-11-08.jsonl'])
+  assert.notEqual((await sh(vm, `echo x > ${agent}/sessions/lifelog-2026-11-10.jsonl`)).exitCode, 0)
+  assert.deepEqual(fs.readdirSync(`${agent}/sessions`), [name])
+  assert.equal(fs.readFileSync(`${agent}/sessions/${name}`, 'utf8'), '{"type":"session"}\n')
 })
 
 test('VM 1: the same mounts work under /data, as in Docker, once the mount point is moved', options, async t => {
@@ -195,6 +232,7 @@ test('VM 1: the same mounts work under /data, as in Docker, once the mount point
   const vm = await startVm(t, { mounts: designMounts(data, guest) })
 
   assert.equal((await sh(vm, 'ls /data')).stdout, 'agents\ndatastore\n')
+  assert.equal((await sh(vm, 'ls /data/agents/lifelog')).stdout, 'memory\nrun\nstate.json\nviews\n')
   const log = fs.readFileSync(`${data.day}/log.jsonl`, 'utf8')
   assert.equal((await sh(vm, 'cat /data/datastore/2026/11/09/log.jsonl')).stdout, log)
   assert.match((await sh(vm, 'echo x > /data/agents/lifelog/state.json')).stderr, READ_ONLY)

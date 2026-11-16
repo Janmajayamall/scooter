@@ -122,7 +122,7 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
     [['auth', 'status'], []],
     [['messages', 'list'], ['chat', 'after', 'asc', 'limit']],
     [['media', 'download'], ['chat', 'id', 'output']],
-    [['send', 'text'], ['to', 'message', 'reply-to', 'reply-to-sender']],
+    [['send', 'text'], ['to', 'message', 'reply-to', 'reply-to-sender', 'no-preview']],
     [['send', 'file'], ['to', 'file', 'caption', 'reply-to']],
     [['send', 'react'], ['to', 'id', 'reaction', 'sender']],
   ]
@@ -136,10 +136,9 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
   assert.match(sync.help, /--max-reconnect duration .*\(default 5m0s\)/)
   assert.match(sync.help, /--webhook-events string .*message, receipt, chat_presence \(default "message"\)/)
 
-  // Not in 13.1, and needed: unless told otherwise, `send text` fetches the first URL in the text
-  // to build a link preview. This flag turns that off.
+  // Unless told otherwise, `send text` fetches the first URL in the text to build a link preview.
+  // The bridge passes this flag with every text, so that it never does (section 5.3).
   const text = await flagsOf(dir, ['send', 'text'])
-  assert.ok(text.flags.includes('no-preview'))
   assert.match(text.help, /--no-preview\s+disable automatic link previews for the first URL in text/)
 
   // Listing shows the envelope the rows come in. It needs a store: read-only commands don't make
@@ -156,4 +155,27 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
   assert.equal(answer.success, true)
   assert.equal(answer.data.messages, null)
   assert.deepEqual(answer.data.page, { has_more: false, next_cursor: null })
+
+  // The send commands of section 5.3, as the bridge will run them. Unpaired, each one gets as far
+  // as the check for a session, so wacli took every flag. A flag it doesn't know stops it before
+  // that, and a text that looks like a flag is taken as the text.
+  const chat = '911234567890@s.whatsapp.net'
+  const id = '3EB0A1B2C3D4E5F6A7B8'
+  const unpaired = 'not authenticated; run `wacli auth`'
+  for (const [args, error] of [
+    [['send', 'text', '--to', chat, '--message', 'see https://example.invalid/a?b=c', '--no-preview'], unpaired],
+    [['send', 'text', '--to', chat, '--message', 'a reply', '--no-preview', '--reply-to', id], unpaired],
+    [['send', 'text', '--to', chat, '--message', '--no-such-flag', '--no-preview'], unpaired],
+    [['send', 'react', '--to', chat, '--id', id, '--sender', chat, '--reaction', '✅'], unpaired],
+    [['send', 'text', '--to', chat, '--message', 'a reply', '--no-such-flag'], 'unknown flag: --no-such-flag'],
+  ]) {
+    const sent = await wacli(dir, ['--json', ...args])
+    assert.equal(sent.exitCode, 1, args.join(' '))
+    assert.equal(sent.stdout, '', args.join(' '))
+    assert.equal(JSON.parse(sent.stderr).error, error, args.join(' '))
+  }
+
+  // While sync runs, wacli hands a send to it, and it is the sync process that would fetch the
+  // link. The request it hands over has a field for the flag.
+  assert.ok(fs.readFileSync(WACLI, 'latin1').includes('json:"no_preview,omitempty"'))
 })

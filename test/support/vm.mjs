@@ -156,11 +156,11 @@ export function makeDataDir(dir) {
 }
 
 // The mounts of section 6.6: the agent's folder read-only, except `views/`, `memory/` and
-// `run/session/`, and the datastore read-only. `guest` gives the paths in the VM when they differ
-// from the host's.
+// `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore
+// read-only. `guest` gives the paths in the VM when they differ from the host's.
 export function designMounts(data, guest = data) {
   return {
-    [guest.agent]: { host: data.agent },
+    [guest.agent]: { host: data.agent, hide: ['/sessions'] },
     [`${guest.agent}/views`]: { host: path.join(data.agent, 'views'), writable: true },
     [`${guest.agent}/memory`]: { host: path.join(data.agent, 'memory'), writable: true },
     [`${guest.agent}/run/session`]: { host: path.join(data.agent, 'run', 'session'), writable: true },
