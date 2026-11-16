@@ -1,0 +1,14 @@
+{
+  "name": "scooter",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@earendil-works/gondolin": "0.14.0"
+  }
+}
