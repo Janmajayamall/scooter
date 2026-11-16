@@ -55,14 +55,20 @@ export function makePaths({ dataDir, configDir }) {
     networkLogDir: data('runner', 'log'),
     networkLog: date => data('runner', 'log', `${date}.jsonl`),
 
-    // The bridge's own state (5.1).
+    // The bridge's own folder (5.1): its state; the socket that keeps a second bridge from
+    // starting on the same data; and where attachments wait between their channel and the store.
     bridge: data('bridge'),
     bridgeState: data('bridge', 'state.json'),
+    bridgeSocket: data('bridge', 'bridge.sock'),
+    bridgeIncoming: data('bridge', 'incoming'),
 
-    // wacli's folder (5.1, 5.5).
+    // wacli's folder (5.1, 5.5): its home, its store, where it downloads media for the bridge, and
+    // the XDG folders it is given.
     wacli: data('wacli'),
     wacliStore: data('wacli', 'store'),
     wacliStaging: data('wacli', 'staging'),
+    wacliConfig: data('wacli', 'config'),
+    wacliState: data('wacli', 'state'),
     wacliCache: data('wacli', 'cache'),
 
     // The email reader's folder (5.6).

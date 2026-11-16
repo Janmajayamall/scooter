@@ -63,6 +63,9 @@ const EXTENSIONS = {
 
 const UNKNOWN_MIME = 'application/octet-stream'
 
+// An attachment's stored name, `<seq>.<ext>` or `<seq>-<n>.<ext>` (4.1), with the `seq` it holds.
+const ATTACHMENT = /^(\d+)(?:-\d+)?\.[a-z0-9]+$/
+
 // The extension of an attachment's stored name: from the original file name if there is one,
 // else from the MIME type, else `bin` (4.4). Only letters and digits, in lower case, so the
 // stored name is always plain, whatever the original was called.
@@ -109,7 +112,13 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
 
   const index = createIndex()
   const reader = createReader(paths)
-  for (const { line, day } of reader.poll()) index.add(line, day)
+  for (const { line, day, number } of reader.poll()) {
+    try {
+      index.add(line, day)
+    } catch (error) {
+      throw new DatastoreError(`${paths.dayLog(day)}, line ${number}: ${error.message}`)
+    }
+  }
 
   // Part of a line at the very end is what a crash in the middle of a write leaves. The line was
   // never complete, so its `seq` was never given out, and the part goes. This is the only place
@@ -124,10 +133,19 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
   // The newest day folder there is, with or without a log in it: folder dates never go backwards.
   let newestDay = listDays(dir).at(-1) ?? null
   if (newestDay !== null) {
-    // Copies of attachments that a crash left unfinished.
+    // What a crash can leave in the folder it was writing to: copies of attachments that were
+    // never finished, and attachments whose line was never written. The second kind would sit
+    // under the number of the next line, which may have no attachment of its own, where pi could
+    // read it. Attachments are only ever written to the newest day folder.
+    let removed = 0
     for (const name of fs.readdirSync(paths.dayDir(newestDay))) {
-      if (name.startsWith(TMP_PREFIX)) fs.rmSync(path.join(paths.dayDir(newestDay), name), { force: true })
+      const seq = Number(ATTACHMENT.exec(name)?.[1])
+      if (name.startsWith(TMP_PREFIX) || seq > index.lastSeq) {
+        fs.rmSync(path.join(paths.dayDir(newestDay), name), { force: true })
+        removed += 1
+      }
     }
+    if (removed > 0) log.warn('store.leftovers_removed', { day: newestDay, files: removed })
   }
   log.info('store.opened', { lines: index.lastSeq, newestDay })
 
@@ -200,6 +218,12 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     if (attachments.length > 0 && draft.kind !== 'message') {
       throw new DatastoreError('only a message has attachments')
     }
+    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too
+    // (4.2). Intake skips the ones whose target it doesn't know, so one that reaches the store
+    // pointing anywhere else is a bug in its writer.
+    if (['edit', 'delete', 'reaction'].includes(draft.kind) && index.current(draft.target) === undefined) {
+      throw new DatastoreError(`a ${draft.kind} must point at a message or a command, and seq ${draft.target} is neither`)
+    }
     if (isDuplicate(draft)) return { stored: false, reason: 'duplicate' }
 
     const day = dayForNow()
@@ -269,6 +293,11 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
 
     // Resolves when every append asked for so far has finished.
     idle: () => queue,
+
+    // True once a write has failed. The store then takes no more lines until it is opened again.
+    get broken() {
+      return broken
+    },
 
     // The index, for looking things up. Only the store adds to it.
     index: {

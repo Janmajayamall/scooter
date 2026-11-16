@@ -41,8 +41,15 @@ const values = {
   CATCHUP_INTERVAL: 10 * MINUTE,
   CATCHUP_OVERLAP: 2 * MINUTE,
   CATCHUP_LIMIT: 500,
-  // Retries for a failed media download (5.2).
+  // Retries for a failed media download, and the wait before each. A download that fails for good
+  // leaves the message without its attachment, so the retries are spaced out enough for a
+  // reconnecting wacli to come back (5.2).
   MEDIA_DOWNLOAD_RETRIES: 2,
+  MEDIA_DOWNLOAD_RETRY_WAIT: 10 * SECOND,
+  // The longest a wacli call other than `sync` may take before the bridge stops it. wacli stops
+  // its own commands after 5 minutes (its `--timeout`); this bounds a call that doesn't, so one
+  // stuck download can't hold up every message after it (5.1, 5.2).
+  WACLI_CALL_TIMEOUT: 6 * MINUTE,
   // The largest attachment, or email, that's stored (4.4, 5.6).
   ATTACHMENT_MAX_BYTES: 100 * MB,
   // The longest extension an attachment's stored name takes from its original name, in

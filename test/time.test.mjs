@@ -215,6 +215,15 @@ test('time: a zone that skips a date has nothing due on it', () => {
 test('time: which names are time zones', () => {
   for (const zone of ['Asia/Kolkata', 'America/New_York', 'UTC', 'Europe/London']) assert.equal(isTimeZone(zone), true, zone)
   for (const zone of ['Mars/Olympus', 'IST ', '', null, undefined, 330]) assert.equal(isTimeZone(zone), false, String(zone))
+  // Node reads these, but they aren't names in the tz database, where pi's TZ is looked up (6.6).
+  for (const zone of ['asia/kolkata', 'Asia/kolkata', 'utc', '+05:30', '-08:00', 'Asia/Kolkata/']) {
+    assert.equal(isTimeZone(zone), false, zone)
+  }
+  // Every zone Node lists is written the tz database's way, and so is every zone file of this machine.
+  for (const zone of Intl.supportedValuesOf('timeZone')) assert.equal(isTimeZone(zone), true, zone)
+  for (const zone of ['America/Port-au-Prince', 'Etc/GMT+5', 'Etc/GMT-14', 'America/North_Dakota/New_Salem', 'EST5EDT']) {
+    assert.equal(isTimeZone(zone), true, zone)
+  }
 })
 
 test('time: nothing depends on the time zone of the process', () => {

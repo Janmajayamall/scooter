@@ -70,9 +70,10 @@ function readFrom(file, offset) {
 // Returns a reader that starts at the first line of the datastore. `paths` is what `makePaths`
 // returns (`src/common/paths.mjs`).
 //
-// - `poll()` returns the lines that are new, in order, each as `{ line, day }`, where `day` is the
-//   line's day folder. It throws a `DatastoreError` if a complete line isn't a well-formed line,
-//   or if a day that isn't the newest ends in part of a line.
+// - `poll()` returns the lines that are new, in order, each as `{ line, day, number }`, where
+//   `day` is the line's day folder and `number` its line number in that day's log, counting from
+//   1. It throws a `DatastoreError` if a complete line isn't a well-formed line, or if a day that
+//   isn't the newest ends in part of a line.
 // - `position` is where the reader is: `{ day, offset, lineNumber }`, the day folder it's in (null
 //   before there is one), the bytes of that day's log it has taken, and the lines.
 // - `pending()` returns what is left unread at the end of the newest day's log, the part of a
@@ -94,10 +95,11 @@ export function createReader(paths) {
     let start = 0
     while (start < end) {
       const stop = fresh.indexOf(NEWLINE, start)
+      const number = lineNumber + lines.length + 1
       try {
-        lines.push({ line: decodeLine(fresh.toString('utf8', start, stop)), day })
+        lines.push({ line: decodeLine(fresh.toString('utf8', start, stop)), day, number })
       } catch (error) {
-        throw new DatastoreError(`${file}, line ${lineNumber + lines.length + 1}: ${error.message}`)
+        throw new DatastoreError(`${file}, line ${number}: ${error.message}`)
       }
       start = stop + 1
     }

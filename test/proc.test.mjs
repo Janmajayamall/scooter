@@ -147,6 +147,30 @@ test('proc: a program that ignores SIGTERM gets SIGKILL after the grace period',
   assert.equal(result.timedOut, true)
 })
 
+test('proc: a stopped program is waited for until it exits, even when what it started holds its output', async t => {
+  const { proc, clock } = setup()
+  const dir = makeTestDir(t)
+  const ready = path.join(dir, 'ready')
+  // A wrapper that starts its real program without `exec`: the program outlives it, with the
+  // wrapper's stdout and stderr, and ignores SIGTERM besides.
+  const inner = `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000)`
+  const wrapper = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(inner)}], { stdio: 'inherit' }); setInterval(() => {}, 1000)`
+  const running = proc.run(NODE, ['-e', wrapper], { timeout: 1000 })
+  await fileAppears(ready)
+  const innerPid = Number(fs.readFileSync(ready, 'utf8'))
+  atEnd(t, () => {
+    if (pidIsAlive(innerPid)) process.kill(innerPid, 'SIGKILL')
+  })
+
+  await clock.advance(1000)
+  const result = await running
+  assert.equal(result.signal, 'SIGTERM')
+  assert.equal(result.timedOut, true)
+  assert.deepEqual(clock.sleeping(), [])
+  // What it left behind is still running. The signals go to the program alone (D25).
+  assert.ok(pidIsAlive(innerPid))
+})
+
 test('proc: a program that ends in time is not disturbed, and leaves no timer', async () => {
   const { proc, clock } = setup()
   const result = await proc.run(NODE, ['-e', 'console.log("quick")'], { timeout: 60_000 })
@@ -348,6 +372,66 @@ test('proc: stopping a supervised program sends SIGTERM, then SIGKILL, and resta
   await failing.stop()
   assert.deepEqual(clock.sleeping(), [])
   await failing.done
+})
+
+test('proc: a supervised program starts only once the check before each start lets it', async t => {
+  const { proc, clock } = setup()
+  const dir = makeTestDir(t)
+  const ready = path.join(dir, 'ready')
+  const checks = []
+  let allow = false
+  const exits = []
+  const supervisor = proc.supervise(NODE, ['-e', `require('fs').writeFileSync(${JSON.stringify(ready)}, ''); process.exit(3)`], {
+    // Checks once a minute until it is allowed, as the WhatsApp module waits for pairing.
+    async before({ signal }) {
+      for (;;) {
+        checks.push(clock.now())
+        if (allow) return
+        await clock.sleep(60_000, { signal })
+      }
+    },
+    onExit: exit => exits.push(exit),
+  })
+
+  await clock.whenSleeping()
+  await clock.advance(60_000)
+  await clock.whenSleeping()
+  assert.equal(checks.length, 2)
+  assert.equal(fs.existsSync(ready), false)
+
+  allow = true
+  await clock.advance(60_000)
+  await clock.whenSleeping()
+  assert.equal(fs.existsSync(ready), true)
+  // The time spent waiting isn't part of the run, and the restart waits as usual, then checks again.
+  assert.equal(exits.length, 1)
+  assert.ok(exits[0].ms < 60_000)
+  assert.deepEqual(clock.sleeping(), [5000])
+  await clock.advance(5000)
+  await clock.whenSleeping()
+  assert.equal(checks.length, 4)
+
+  // Stopping while the check waits ends it.
+  allow = false
+  fs.rmSync(ready)
+  await clock.advance(10_000)
+  await clock.whenSleeping()
+  assert.equal(checks.length, 5)
+  assert.deepEqual(clock.sleeping(), [60_000])
+  await supervisor.stop()
+  assert.deepEqual(clock.sleeping(), [])
+  assert.equal(fs.existsSync(ready), false)
+
+  // A check that fails counts as a start that failed.
+  const failing = proc.supervise(NODE, ['-e', ''], {
+    before: async () => {
+      throw new Error('no')
+    },
+    onExit: exit => exits.push(exit),
+  })
+  await clock.whenSleeping()
+  await failing.stop()
+  assert.deepEqual(exits.at(-1), { code: null, signal: null, ms: 0, restartIn: 5000 })
 })
 
 test('proc: a supervised program that can\'t be started is tried again, with the same waits', async () => {

@@ -8,7 +8,7 @@ const SECOND = 1000
 const MINUTE = 60 * SECOND
 const MB = 1024 * 1024
 
-test('limits: the values of 8.6, and the webhook port', () => {
+test('limits: the values of 8.6, the webhook port, and the two of milestone 2', () => {
   const expected = {
     BATCH_MAX_ITEMS: 20,
     PROMPT_MAX_BYTES: 96 * 1024,
@@ -26,6 +26,9 @@ test('limits: the values of 8.6, and the webhook port', () => {
     CATCHUP_OVERLAP: 2 * MINUTE,
     CATCHUP_LIMIT: 500,
     MEDIA_DOWNLOAD_RETRIES: 2,
+    // Not in 8.6: docs/DECISIONS.md, milestone 2.
+    MEDIA_DOWNLOAD_RETRY_WAIT: 10 * SECOND,
+    WACLI_CALL_TIMEOUT: 6 * MINUTE,
     ATTACHMENT_MAX_BYTES: 100 * MB,
     EMAIL_TEXT_MAX_CHARS: 20000,
     MODEL_REQUEST_MAX_BYTES: 50 * MB,

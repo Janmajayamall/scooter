@@ -284,7 +284,7 @@ test('settings: each fault in the bridge\'s settings names its variable', () => 
     OWNER_NUMBER: ['55501', '0917700900123', 'my number', '+91 77009 00123 90123 456'],
     OWNER_JIDS: ['5550100', 'a@b@c', '77@lid; 88@lid'],
     DEFAULT_CHANNEL: ['telegram', 'WhatsApp', 'sms'],
-    SCOOTER_TZ: ['India', 'IST+5:30', 'Asia/Calcutta '],
+    SCOOTER_TZ: ['India', 'IST+5:30', 'Asia/Calcutta ', 'asia/kolkata', '+05:30'],
     BACKUP_TIME: ['7:15', '25:00', 'Sun 04:45', 'never', 'OFF'],
     DATA_DIR: ['data', './data', '~/scooter'],
     CONFIG_DIR: ['config'],

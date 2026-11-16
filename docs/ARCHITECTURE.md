@@ -166,7 +166,7 @@ pi can't reach the exchange: it isn't mounted into the VM.
 
 ### 2.7 The sandbox
 
-Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter builds: Alpine with Node, the pinned pi, `pdftotext`, `heif-convert`, git, ripgrep and fd (6.6, 6.12).
+Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter builds: Alpine with Node, the pinned pi, `pdftotext`, `heif-convert`, git, ripgrep, fd, `tzdata` and `curl` (6.6, 6.12).
 
 - **Mounts**, at the same paths as on the host: the agent's folder read-only, except `views/`, `memory/` and `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore read-only. Nothing else from the host is visible.
 - **Environment:** a short fixed list, with a placeholder where the key would be.
@@ -305,13 +305,13 @@ Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
 | Secret | Kept in | Reaches |
 |---|---|---|
 | WhatsApp session | `wacli/` | wacli |
-| Webhook secret | the bridge's memory; new on every start | wacli's command line, or its environment if wacli allows |
+| Webhook secret | the bridge's memory; new on every start | wacli's command line, which is the only way wacli 0.26.0 takes it (`docs/DECISIONS.md`, 0.6) |
 | Mailbox password | `bridge.env` | the email reader's environment |
 | Backup password and bucket keys | `bridge.env` | restic's environment |
 | OpenRouter key | `runner.env` | Gondolin's secret table in the runner; requests to `openrouter.ai` |
 | The policy's certificate authority key | the runner's home, under `runner/` | the runner |
 
-pi sees a placeholder. No secret goes on a command line, except the webhook secret if wacli can't take it another way.
+pi sees a placeholder. No secret goes on a command line, except the webhook secret, which wacli takes no other way.
 
 ### 3.6 Contracts
 

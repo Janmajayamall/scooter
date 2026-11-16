@@ -180,6 +180,7 @@ const STORE = 'src/bridge/store.mjs'
 const WHATSAPP = 'src/bridge/channels/whatsapp.mjs'
 const EMAIL = 'src/bridge/channels/email.mjs'
 const BACKUP = 'src/bridge/backup.mjs'
+const BRIDGE_MAIN = 'src/bridge/main.mjs'
 const PROC = 'src/common/proc.mjs'
 const PATHS = 'src/common/paths.mjs'
 const SETTINGS = 'src/common/settings.mjs'
@@ -268,7 +269,8 @@ export function checkImportRules(files) {
       if (names.includes('encodeLine') && file !== STORE) {
         violations.push(`${file}: only ${STORE} writes datastore lines, so only it imports encodeLine`)
       }
-      if (target === PROC && area === 'bridge' && ![WHATSAPP, EMAIL, BACKUP].includes(file)) {
+      // `main.mjs` makes the one `proc` the bridge shares, and looks up its users with it.
+      if (target === PROC && area === 'bridge' && ![WHATSAPP, EMAIL, BACKUP, BRIDGE_MAIN].includes(file)) {
         violations.push(`${file}: in the bridge, only the two channels and the backup module run programs`)
       }
     }

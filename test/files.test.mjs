@@ -1,11 +1,13 @@
-// Atomic file writes, the folder hand-off that the outbox and the mail spool share, and sortable
-// IDs (5.3, 5.6 and 6.3 of DESIGN.md).
+// Atomic file writes, the folder hand-off that the outbox and the mail spool share, sortable IDs,
+// and copying a file out of a folder another program controls (5.2, 5.3, 5.6 and 6.3 of
+// DESIGN.md).
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { createIds, ensureDir, handOff, listHandOffs, readJsonFile, writeFileAtomic } from '../src/common/files.mjs'
+import { copyUntrustedFile, createIds, ensureDir, handOff, listHandOffs, readJsonFile, writeFileAtomic } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
@@ -193,4 +195,61 @@ test('files: an owner is given to what is created', { skip: skipUnlessRoot }, t 
   }
   // What was already there keeps its owner.
   assert.equal(fs.statSync(dir).uid, 0)
+})
+
+test('files: a file another program wrote is copied out of its folder whole, with the mode asked for', async t => {
+  const dir = makeTestDir(t)
+  const theirs = path.join(dir, 'theirs')
+  const ours = path.join(dir, 'ours')
+  fs.mkdirSync(theirs)
+  fs.mkdirSync(ours)
+  fs.writeFileSync(path.join(theirs, 'download'), 'a photo')
+  const bytes = await copyUntrustedFile(path.join(theirs, 'download'), path.join(ours, 'copy'), { maxBytes: 100, mode: 0o640 })
+  assert.equal(bytes, 7)
+  assert.equal(fs.readFileSync(path.join(ours, 'copy'), 'utf8'), 'a photo')
+  assert.equal(modeOf(path.join(ours, 'copy')), 0o640)
+  // The original stays where it was, and nothing else is left beside the copy.
+  assert.deepEqual(fs.readdirSync(ours), ['copy'])
+  assert.ok(fs.existsSync(path.join(theirs, 'download')))
+  // As large as the limit is fine.
+  fs.writeFileSync(path.join(theirs, 'exact'), 'x'.repeat(100))
+  assert.equal(await copyUntrustedFile(path.join(theirs, 'exact'), path.join(ours, 'exact'), { maxBytes: 100 }), 100)
+})
+
+test('files: what another program could put in a file\'s place is refused, and nothing is copied', async t => {
+  const dir = makeTestDir(t)
+  const theirs = path.join(dir, 'theirs')
+  const ours = path.join(dir, 'ours')
+  fs.mkdirSync(theirs)
+  fs.mkdirSync(ours)
+  const secret = path.join(dir, 'secret')
+  fs.writeFileSync(secret, 'not for them')
+  const copy = name => copyUntrustedFile(path.join(theirs, name), path.join(ours, name), { maxBytes: 100 })
+
+  // A link to a file the program can't read itself, but root can.
+  fs.symlinkSync(secret, path.join(theirs, 'symlink'))
+  await assert.rejects(copy('symlink'), { code: 'EUNTRUSTED', message: 'not copied: a symbolic link' })
+  // A hard link to it: the file has two names.
+  fs.linkSync(secret, path.join(theirs, 'hardlink'))
+  await assert.rejects(copy('hardlink'), { code: 'EUNTRUSTED', message: 'not copied: a file with more than one name' })
+  // A folder, and a FIFO, which opening must not wait on.
+  fs.mkdirSync(path.join(theirs, 'folder'))
+  await assert.rejects(copy('folder'), { code: 'EUNTRUSTED' })
+  execFileSync('mkfifo', [path.join(theirs, 'fifo')])
+  await assert.rejects(copy('fifo'), { code: 'EUNTRUSTED', message: 'not copied: not a regular file' })
+  // Too large.
+  fs.writeFileSync(path.join(theirs, 'large'), 'x'.repeat(101))
+  await assert.rejects(copy('large'), { code: 'EFBIG' })
+  // Someone else's file, when the program's user is known.
+  fs.writeFileSync(path.join(theirs, 'mine'), 'a photo')
+  const someoneElse = { uid: process.getuid() + 1, gid: process.getgid() }
+  await assert.rejects(copyUntrustedFile(path.join(theirs, 'mine'), path.join(ours, 'mine'), { owner: someoneElse, maxBytes: 100 }), {
+    code: 'EUNTRUSTED',
+    message: 'not copied: a file of another user',
+  })
+  // And no file at all.
+  await assert.rejects(copy('missing'), { code: 'ENOENT' })
+
+  assert.deepEqual(fs.readdirSync(ours), [])
+  assert.equal(fs.readFileSync(secret, 'utf8'), 'not for them')
 })

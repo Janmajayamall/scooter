@@ -414,9 +414,12 @@ test("VM 4: killing the starting process's group leaves no QEMU; killing the pro
     await group.exited
     await waitFor(() => !isAlive(group.qemu), `QEMU to exit after ${signal} to the group`, 15_000)
 
-    // Either way the VM's files stay behind in the temporary folder, for the next start to sweep.
+    // Either way the VM's files stay behind in the temporary folder, and its entry in Gondolin's
+    // list of running VMs under the cache folder, for the next start to sweep.
     for (const { tmp } of [alone, group]) {
       assert.ok(hasDiskOverlay(tmp), 'the disk overlay should be left behind')
+      const sessions = path.join(`${tmp}-cache`, 'gondolin', 'sessions')
+      assert.ok(fs.readdirSync(sessions).length > 0, "the VM's entry in Gondolin's list should be left behind")
     }
   }
 })

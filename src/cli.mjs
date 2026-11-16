@@ -20,7 +20,13 @@ import { SettingsError, loadSettings } from './common/settings.mjs'
 // The function gets `{ args, settings, env, stdout, stderr }` and returns the exit code, or
 // nothing for 0. `settings` is null for a `host` command.
 export const COMMANDS = {
-  bridge: { side: 'bridge', usage: 'bridge', where: 'bridge', summary: 'Run the bridge' },
+  bridge: {
+    side: 'bridge',
+    usage: 'bridge',
+    where: 'bridge',
+    summary: 'Run the bridge',
+    load: async () => (await import('./bridge/main.mjs')).runBridge,
+  },
   runner: { side: 'runner', usage: 'runner', where: 'runner', summary: 'Run the runner' },
   setup: {
     side: 'host',
