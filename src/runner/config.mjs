@@ -223,6 +223,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
     }
 
     agent.skills = []
+    const positions = new Map()
     if (raw.skills !== undefined) {
       if (!Array.isArray(raw.skills)) fault(at('skills'), 'must be a list of skill folders, such as [skills/expenses]')
       else {
@@ -237,8 +238,21 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
           }
           names.set(skillName, n)
           agent.skills.push({ name: skillName, path: found.path, dir: found.real })
+          positions.set(found.path, n)
         })
       }
+    }
+
+    // Each is copied into `run/config/` at its own path (8.5), so none may lie inside a skill's
+    // folder: the copies would overlap, and every run would fail.
+    const within = (folder, inner) => inner.startsWith(`${folder}/`)
+    for (const skill of agent.skills) {
+      const outer = agent.skills.find(other => other !== skill && within(other.path, skill.path))
+      if (outer) fault(at('skills', positions.get(skill.path)), `names ${skill.path}, which is inside the skill ${outer.path}: skills can't hold each other`)
+    }
+    if (agent.prompt) {
+      const outer = agent.skills.find(skill => within(skill.path, agent.prompt.path))
+      if (outer) fault(at('prompt'), `names ${agent.prompt.path}, which is inside the skill ${outer.path}: the prompt is a file of its own`)
     }
 
     if (raw.reads !== undefined) {
@@ -251,10 +265,12 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
     if (raw.reply_mode !== undefined) agent.replyMode = oneOf(at('reply_mode'), raw.reply_mode, REPLY_MODES)
 
     if (raw.ack_reaction !== undefined) {
-      // One emoji, as WhatsApp takes a reaction, or "" for none.
+      // One emoji, as WhatsApp takes a reaction, or "" for none: one grapheme, holding a pictograph
+      // (`✅`, `👍🏽`, `❤️`), a flag's two regional indicators, or a keycap (`1️⃣`).
       const value = raw.ack_reaction
       const graphemes = typeof value === 'string' ? [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(value)].length : -1
-      if (value !== '' && (graphemes !== 1 || /[\s\p{Cc}]/u.test(value))) {
+      const emoji = /\p{Extended_Pictographic}|\p{Regional_Indicator}|^[#*0-9]️?⃣$/u
+      if (value !== '' && (graphemes !== 1 || /[\s\p{Cc}]/u.test(value) || !emoji.test(value))) {
         fault(at('ack_reaction'), 'must be one emoji, such as "✅", or "" for none')
       }
       agent.ackReaction = value

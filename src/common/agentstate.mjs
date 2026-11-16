@@ -18,7 +18,8 @@
 //   it. 0 before anything has been.
 // - `commandSeq`: the `seq` of the newest command line the runner has handled, 0 before any.
 // - `retry`: items given to the agent and not handled yet. `attempts` is how many runs they have
-//   been in that counted, and `due` when they are next tried.
+//   been in that counted, and `due` when they are next tried. Each is at or before the cursor: a
+//   run moves the cursor past its batch, whether it succeeds or fails.
 // - `failed`: items given up on, the newest `FAILED_KEEP`.
 // - `session`: the owner's day of the newest `/new`, and how many there were that day. Null before
 //   the first `/new`: a day without one has the session `<agent>-<day>`.
@@ -121,9 +122,22 @@ export function checkAgentState(state) {
     if (state[name] === undefined && !['backfill', 'paused'].includes(name)) problems.push(`${name} is missing`)
   }
 
+  // Every item waiting in a retry list has been given to the agent, so it is at or before its
+  // lane's cursor: a run moves the cursor past its batch whether it succeeds or fails, and the
+  // planner takes everything after the cursor as new.
+  function behindCursor(field, value, cursor) {
+    if (!Array.isArray(value) || !isCount(cursor)) return
+    value.forEach((item, n) => {
+      if (isSeq(item?.seq) && item.seq > cursor) problems.push(`${field}[${n}].seq is after the cursor`)
+    })
+  }
+
   if (state.cursor !== undefined && !isCount(state.cursor)) fault('cursor', 'a whole number, 0 or more')
   if (state.commandSeq !== undefined && !isCount(state.commandSeq)) fault('commandSeq', 'a whole number, 0 or more')
-  if (state.retry !== undefined) retries('retry', state.retry)
+  if (state.retry !== undefined) {
+    retries('retry', state.retry)
+    behindCursor('retry', state.retry, state.cursor)
+  }
   if (state.failed !== undefined) {
     list('failed', state.failed, (name, item) =>
       shape(name, item, { seq: [isSeq, 'a seq'], at: [isTime, 'a UTC time to the second'], reason: [isText, "a string that isn't empty"] }),
@@ -142,7 +156,10 @@ export function checkAgentState(state) {
       retry: [Array.isArray, 'a list'],
       skipped: [Array.isArray, 'a list'],
     })
-    if (Array.isArray(state.backfill?.retry)) retries('backfill.retry', state.backfill.retry)
+    if (Array.isArray(state.backfill?.retry)) {
+      retries('backfill.retry', state.backfill.retry)
+      behindCursor('backfill.retry', state.backfill.retry, state.backfill.cursor)
+    }
     if (Array.isArray(state.backfill?.skipped)) seqs('backfill.skipped', state.backfill.skipped)
   }
   if (state.scheduled !== undefined) {

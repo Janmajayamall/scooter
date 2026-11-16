@@ -241,4 +241,10 @@ test('triggers: a backfill batch runs only when nothing live is waiting, and fin
   assert.deepEqual(ask({ agent, state: waiting, lines, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill', id: 'people-1' })
   // One whose entry left the config is left alone until the next start drops it.
   assert.deepEqual(ask({ agent: agentWith(), state: { ...state, cursor: 5 }, lines }), { kind: 'idle', reason: 'nothing' })
+
+  // An agent that doesn't run on new messages leaves them waiting for good, and they don't hold
+  // its backfill back.
+  const noMessages = agentWith({ newMessages: false, backfill: ['people-1'] })
+  assert.deepEqual(ask({ agent: noMessages, state, lines }), { kind: 'backfill', id: 'people-1' })
+  assert.deepEqual(ask({ agent: noMessages, state: { ...state, cursor: 5, retry }, lines }), { kind: 'backfill', id: 'people-1' })
 })

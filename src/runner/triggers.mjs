@@ -13,7 +13,9 @@
 // 5. **Scheduled tasks** whose time has come since they were last dealt with. One that comes due
 //    during a run or a pause waits, and runs afterwards.
 // 6. **A backfill batch**, only when nothing live is waiting: no work items after the cursor, quiet
-//    or not, and no due retries (6.11). When its work is done, the backfill finishes.
+//    or not, and no due retries (6.11). Messages are live work only with `on: new-messages`;
+//    without it they wait for good, and don't hold a backfill back. When its work is done, the
+//    backfill finishes.
 // 7. Otherwise, nothing.
 
 import { previousLocalTime, localDate, parseIsoSeconds } from '../common/time.mjs'
@@ -101,18 +103,19 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
   const once = agent.run.once.find(task => !state.onceDone.includes(task.id) && !onceTried.has(task.id))
   if (once) return { kind: 'once', id: once.id, task: once.task }
 
-  const workWaiting = hasWorkAfter(index, agent.reads, state.cursor)
-  const retriesDue = dueRetries(state.retry, index, agent.reads, now).length > 0
+  // Messages are live work only for an agent that runs on them. Without `on: new-messages` they
+  // wait for good (D59), and must not hold a backfill back.
+  const live = agent.run.newMessages && (hasWorkAfter(index, agent.reads, state.cursor) || dueRetries(state.retry, index, agent.reads, now).length > 0)
   const quiet = incomingSeenAt === null || now - incomingSeenAt >= batchSeconds * 1000
-  if (agent.run.newMessages && (workWaiting || retriesDue) && quiet) return { kind: 'messages' }
+  if (live && quiet) return { kind: 'messages' }
 
   const scheduled = dueScheduled(agent, state, { now, timeZone })
   if (scheduled) return { kind: 'scheduled', ...scheduled }
 
-  if (agent.run.newMessages && (workWaiting || retriesDue)) return { kind: 'idle', reason: 'quiet' }
+  if (live) return { kind: 'idle', reason: 'quiet' }
 
   const backfill = state.backfill
-  if (backfill && agent.run.backfill.some(entry => entry.id === backfill.id) && !workWaiting && !retriesDue) {
+  if (backfill && agent.run.backfill.some(entry => entry.id === backfill.id)) {
     const upTo = Math.min(backfill.until, index.lastSeq)
     if (hasWorkAfter(index, agent.reads, backfill.cursor, upTo) || dueRetries(backfill.retry, index, agent.reads, now).length > 0) {
       return { kind: 'backfill', id: backfill.id }

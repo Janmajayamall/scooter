@@ -222,9 +222,14 @@ test('batch: context lines and reply labels', () => {
     line.sent(17, '2026-11-09T15:09:00Z', 'Noted:\n"two lines"', { replyTo: 13 }),
     line.command(18, '2026-11-09T15:10:00Z', '/new'),
     line.text(19, '2026-11-09T15:11:00Z', 'after the command'),
+    // A command is never shown, not even as what a reply quotes. A reply to a line that isn't a
+    // message, which only a damaged datastore has, shows the channel's preview if it has one.
+    line.text(20, '2026-11-09T15:12:00Z', 'that one', { replyTo: 18, quoted: '/new' }),
+    line.text(21, '2026-11-09T15:13:00Z', 'odd', { replyTo: 14, quoted: 'a heart' }),
+    line.text(22, '2026-11-09T15:14:00Z', 'odder', { replyTo: 15 }),
   ].map(entry => JSON.parse(JSON.stringify(entry)))
   const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 7 } })
-  assert.deepEqual(seqsOf(batch), [8, 9, 10, 11, 12, 13, 19])
+  assert.deepEqual(seqsOf(batch), [8, 9, 10, 11, 12, 13, 19, 20, 21, 22])
   assert.equal(
     body(prompt),
     `New messages:
@@ -240,6 +245,12 @@ test('batch: context lines and reply labels', () => {
       ↳ reply to an earlier message: "from before Scooter"
 #13 20:35 forwarded text: "read this"
 #19 20:41 text: "after the command"
+#20 20:42 text: "that one"
+      ↳ reply to a command
+#21 20:43 text: "odd"
+      ↳ reply to #14: "a heart"
+#22 20:44 text: "odder"
+      ↳ reply to #15
 
 For context only (no action, no DONE):
 #17 20:39 you sent, in reply to #13: "Noted:\\n\\"two lines\\""

@@ -403,7 +403,7 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 
 ### 5.1 A run
 
-1. **Trigger.** There are work items after the cursor, or retries that are due, and the newest incoming line is at least 8 seconds old. Runs aren't paused.
+1. **Trigger.** There are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least 8 seconds ago. Runs aren't paused.
 2. **Commands.** The runner handles command lines it hasn't handled yet. `/new` bumps the session.
 3. **Batch.** Due retries first, then new work items, oldest first, up to 20 and up to the prompt's size limit. An edit or deletion brings in the message it changes.
 4. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`. If a backup holds it, release `run.lock` and wait.
