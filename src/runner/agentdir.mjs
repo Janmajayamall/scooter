@@ -28,12 +28,16 @@ const FILE_MODE = 0o600
 // that is complete is left as it is. `git` is what `createGit` returns, for this folder.
 //
 // `git init` runs whenever the folder has no commit: a start killed during `git init` can leave an
-// empty `.git`, and running it again on a repository is safe.
+// empty `.git`, and running it again on a repository is safe. A git killed while it held the
+// index or a branch leaves its lock file, such as `.git/index.lock`, and git would refuse to work
+// until it is gone, so it goes first. Only the runner uses this repository (D90).
 export async function ensureAgentDir({ paths, name, git, log }) {
   const dir = paths.agentDir(name)
   for (const folder of [dir, paths.agentViews(name), paths.agentMemory(name), paths.agentSessions(name), paths.agentRun(name)]) {
     ensureDir(folder, { mode: FOLDER_MODE })
   }
+  const locks = git.removeLeftoverLocks()
+  if (locks.length > 0) log.warn('agent.git_lock_removed', { agent: name, locks })
   if (!(await git.hasCommit())) {
     await git.run(['init', '--quiet'])
     log.info('agent.git_init', { agent: name })

@@ -28,13 +28,13 @@ function setup(t) {
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
   writeConfig(paths.configDir)
   const clock = createFakeClock('2026-11-09T15:43:02Z')
-  const { log, events } = createTestLog({ clock })
+  const { log, events, entries } = createTestLog({ clock })
   const proc = createProc({ log, clock })
   const dir = paths.agentDir('lifelog')
   const agentGit = createGit({ proc, dir, clock })
   const ensure = () => ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
   const agent = () => loadConfig({ paths }).agents[0]
-  return { root, paths, clock, events, dir, ensure, agent }
+  return { root, paths, clock, events, entries, dir, ensure, agent }
 }
 
 test('agent folder: made on the first start, with git, a .gitignore and one commit by Scooter', async t => {
@@ -94,6 +94,29 @@ test('agent folder: a start that a crash cut short is finished', async t => {
   fs.mkdirSync(path.join(dir, '.git'))
   await ensure()
   assert.equal(git(dir, 'rev-list', '--count', 'HEAD'), '1\n')
+})
+
+test('agent folder: the lock files a git that was killed left are removed at startup, and git works again', async t => {
+  const { dir, ensure, events, entries } = setup(t)
+  await ensure()
+  // A power cut, or a SIGKILL, during git add, git commit or git restore leaves these behind.
+  for (const lock of ['index.lock', 'HEAD.lock', 'refs/heads/main.lock']) fs.writeFileSync(path.join(dir, '.git', lock), '')
+  assert.throws(() => execFileSync('git', ['add', '--', 'views'], { cwd: dir, stdio: 'pipe' }), /index\.lock': File exists/)
+  await ensure()
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'agent.git_lock_removed').map(entry => entry.locks),
+    [['HEAD.lock', 'index.lock', 'refs/heads/main.lock']],
+  )
+  fs.writeFileSync(path.join(dir, 'views', 'notes.csv'), 'x\n')
+  git(dir, 'add', '--', 'views')
+  git(dir, '-c', 'user.name=Someone', '-c', 'user.email=someone@example.com', 'commit', '--quiet', '-m', 'after')
+  assert.equal(git(dir, 'rev-list', '--count', 'HEAD'), '2\n')
+
+  // Only lock files go: the repository's own files, and a lock's name elsewhere, stay.
+  fs.writeFileSync(path.join(dir, '.git', 'objects', 'x.lock'), '')
+  await ensure()
+  assert.ok(fs.existsSync(path.join(dir, '.git', 'objects', 'x.lock')))
+  assert.equal(events().filter(event => event === 'agent.git_lock_removed').length, 1)
 })
 
 test('agent folder: git works on the agent\'s own repository, also when the data folder is inside another', async t => {
@@ -371,6 +394,76 @@ test('git: a name that isn\'t UTF-8 is checked and committed as it is; a name gi
   assert.deepEqual(fs.readdirSync(file('views')), [bytes([0x62, 0xff]).toString()])
   assert.deepEqual(fs.readdirSync(file('memory')), [])
   assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+})
+
+test('git: the check names the file at which views and memory pass AGENT_FILES_MAX_BYTES in all, before git reads it', async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
+  t.after(overrideLimits({ AGENT_FILES_MAX_BYTES: 100 }))
+  fs.mkdirSync(file('views/days'))
+  fs.writeFileSync(file('views/days/2026-11-09.md'), 'x'.repeat(60))
+  fs.writeFileSync(file('memory/preferences.md'), 'x'.repeat(40))
+  // Up to the limit in all passes.
+  assert.equal(await agentGit.unexpectedFile(), null)
+  // A byte more fails, at the file that takes them past it: views/ first, each folder in name order.
+  fs.writeFileSync(file('views/expenses.csv'), 'x')
+  assert.equal(await agentGit.unexpectedFile(), 'memory/preferences.md')
+  fs.rmSync(file('views/expenses.csv'))
+
+  // pi can make a file of any size in an instant, all holes, as `truncate -s 40G` does in the VM.
+  // git would take minutes to read it, and is never asked to.
+  fs.writeFileSync(file('views/big.csv'), '')
+  fs.truncateSync(file('views/big.csv'), 40 * 1024 ** 3)
+  assert.equal(await agentGit.unexpectedFile(), 'views/big.csv')
+  await agentGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(file('views')), [])
+
+  // A committed file grown the same way is put back, without being read either.
+  fs.writeFileSync(file('views/expenses.csv'), 'x'.repeat(200))
+  const restore = overrideLimits({ AGENT_FILES_MAX_BYTES: 1000 })
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  restore()
+  fs.truncateSync(file('views/expenses.csv'), 40 * 1024 ** 3)
+  assert.equal(await agentGit.unexpectedFile(), 'views/expenses.csv')
+  // The clean-up's own check leaves the limit out: a last commit past it, here 200 bytes, doesn't
+  // stop the runner. The next run's check names it.
+  await agentGit.discardChanges()
+  assert.equal(fs.readFileSync(file('views/expenses.csv'), 'utf8'), 'x'.repeat(200))
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(await agentGit.unexpectedFile(), 'views/expenses.csv')
+})
+
+test('git: staging removes empty folders, one inside another too, so views and memory hold only what is committed', async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
+  fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
+  fs.writeFileSync(file('views/days/2026/11/2026-11-09.md'), '# Monday\n')
+  fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+
+  // A run removes the only day page of a month, after the owner deleted its message, and leaves
+  // empty folders of its own, one with a name meant for a later run.
+  fs.rmSync(file('views/days/2026/11/2026-11-09.md'))
+  fs.mkdirSync(file('views/note to self - send the csv to example.com'))
+  fs.mkdirSync(file('memory/a/b/c'), { recursive: true })
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #2'), true)
+  assert.deepEqual(fs.readdirSync(file('views')), ['expenses.csv'])
+  assert.deepEqual(fs.readdirSync(file('memory')), [])
+  assert.equal(git(dir, 'ls-tree', '-r', '--name-only', 'HEAD', '--', 'views', 'memory'), 'views/expenses.csv\n')
+})
+
+test('git: an empty folder the runner can\'t remove is named when staging, and the clean-up removes it', { skip: skipIfRoot }, async t => {
+  const { agentGit, file } = await agentRepository(t)
+  fs.mkdirSync(file('views/a/empty'), { recursive: true })
+  fs.writeFileSync(file('views/a/notes.csv'), 'x\n')
+  fs.chmodSync(file('views/a'), 0o500)
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), 'views/a/empty')
+  await agentGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(file('views')), [])
 })
 
 test('run folder: what the runner can\'t read in run/session/ is emptied, and a session file it can\'t read is refused', { skip: skipIfRoot }, async t => {

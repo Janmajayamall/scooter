@@ -78,6 +78,12 @@ const values = {
   MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped (6.2, 6.8).
   GIT_CALL_TIMEOUT: 1 * MINUTE,
+  // The most `views/` and `memory/` may hold together after a run, in bytes. pi can make a file of
+  // any size in an instant, all holes, and git reads every byte of a file to add it, so a run that
+  // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`
+  // (6.8). On the plan's Linux machine git adds this much in about 2 seconds, and the views of a
+  // year of daily use take about 1 MB.
+  AGENT_FILES_MAX_BYTES: 100 * MB,
   // The largest session file copied back from a run. pi wrote it, and the whole session goes to
   // the model on every request, so a larger one couldn't be sent anyway (6.6, 6.13).
   SESSION_MAX_BYTES: 100 * MB,

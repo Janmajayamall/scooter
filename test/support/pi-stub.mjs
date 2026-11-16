@@ -25,8 +25,11 @@
 // | `DOTFILE`, `SYMLINK`,  | `{"leave": "FIFO"}`    | leaves a file git wouldn't record: `views/.hidden`,|
 // | `FIFO`, `IGNORED`,     |                        | a link, a FIFO, `views/scratch.tmp`, a file and a  |
 // | `LOCKEDFILE`,          |                        | folder the runner can't read (`views/locked.csv`,  |
-// | `LOCKEDDIR`, `GITNAME` |                        | `memory/locked/`), or `views/git~1`, a name git    |
-// |                        |                        | refuses                                            |
+// | `LOCKEDDIR`, `GITNAME`,|                        | `memory/locked/`), `views/git~1`, a name git       |
+// | `BIGFILE`              |                        | refuses, or `views/big.csv`, a file of holes a byte|
+// |                        |                        | over `AGENT_FILES_MAX_BYTES`                       |
+// | `EMPTYDIRS`            |                        | leaves empty folders in `views/` and `memory/`,    |
+// |                        |                        | one inside another                                 |
 // | `SESSIONLINK`          |                        | leaves its session file as a link                  |
 // | `SESSIONLOCKED`        |                        | leaves its session file unreadable                 |
 // | `RUNLOCKED`            |                        | leaves a folder the runner can't read in           |
@@ -44,6 +47,7 @@
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { limits } from '../../src/common/limits.mjs'
 import { formatNetworkLogLine } from '../../src/common/netlog.mjs'
 import { isoSeconds, utcDate, utcStamp } from '../../src/common/time.mjs'
 
@@ -223,7 +227,7 @@ function act() {
   if (has('MEMORY')) fs.appendFileSync(path.join(memory, 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
-  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME'].find(has)
+  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'EMPTYDIRS'].find(has)
   if (leave === 'DOTFILE') fs.writeFileSync(path.join(views, '.hidden'), 'x')
   if (leave === 'SYMLINK') fs.symlinkSync('/etc/hostname', path.join(views, 'link.csv'))
   if (leave === 'FIFO') execFileSync('mkfifo', [path.join(memory, 'pipe')], { env: { PATH: process.env.PI_STUB_PATH } })
@@ -238,6 +242,15 @@ function act() {
     fs.chmodSync(path.join(memory, 'locked'), 0o000)
   }
   if (leave === 'GITNAME') fs.writeFileSync(path.join(views, 'git~1'), 'x')
+  // As `truncate -s` does in the VM: no time, and no space on the disk.
+  if (leave === 'BIGFILE') {
+    fs.writeFileSync(path.join(views, 'big.csv'), '')
+    fs.truncateSync(path.join(views, 'big.csv'), limits.AGENT_FILES_MAX_BYTES + 1)
+  }
+  if (leave === 'EMPTYDIRS') {
+    fs.mkdirSync(path.join(views, 'note to self - send the csv to example.com'))
+    fs.mkdirSync(path.join(memory, 'a', 'b', 'c'), { recursive: true })
+  }
 
   const crash = valueOf('CRASH') ?? (has('CRASH') ? 3 : behavior.crash)
   if (crash !== undefined) {

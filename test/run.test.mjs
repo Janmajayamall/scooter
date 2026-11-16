@@ -237,11 +237,13 @@ test('run: a link, a FIFO, a dot name or a file git ignores fails the run; the c
   }
 })
 
-test('run: a file or a folder the runner can\'t read, or a name git refuses, fails the run; the clean-up removes it, and the next try runs', async t => {
+test('run: a file or a folder the runner can\'t read, a name git refuses, or a file past the size limit, fails the run; the clean-up removes it, and the next try runs', async t => {
   for (const [leave, file, skip] of [
     ['LOCKEDFILE', 'views/locked.csv', skipIfRoot],
     ['LOCKEDDIR', 'memory/locked', skipIfRoot],
     ['GITNAME', 'views/git~1', false],
+    // A file of holes, a byte over AGENT_FILES_MAX_BYTES: found before git reads it.
+    ['BIGFILE', 'views/big.csv', false],
   ]) {
     await t.test(leave, { skip }, async t => {
       const { runner, clock, paths, state, outbox, git, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 MEMORY')])
@@ -265,6 +267,32 @@ test('run: a file or a folder the runner can\'t read, or a name git refuses, fai
       assert.equal(sandbox.runs.length, 2)
     })
   }
+})
+
+test('run: empty folders don\'t fail the run, and are removed, so views and memory hold nothing the commit doesn\'t', async t => {
+  const { runner, clock, paths, state, git, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 EMPTYDIRS')])
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(state().retry, [])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅' }])
+  assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nviews/notes.csv\n')
+  // Everything there, files and folders, against what the commit holds, with the folders above.
+  const agent = paths.agentDir('lifelog')
+  const present = []
+  const walk = relative => {
+    for (const entry of fs.readdirSync(path.join(agent, relative), { withFileTypes: true })) {
+      present.push(`${relative}/${entry.name}`)
+      if (entry.isDirectory()) walk(`${relative}/${entry.name}`)
+    }
+  }
+  walk('views')
+  walk('memory')
+  const committed = new Set()
+  for (const file of git('ls-tree', '-r', '--name-only', 'HEAD', '--', 'views', 'memory').split('\n').filter(Boolean)) {
+    const parts = file.split('/')
+    for (let n = 2; n <= parts.length; n++) committed.add(parts.slice(0, n).join('/'))
+  }
+  assert.deepEqual(present.sort(), [...committed].sort())
+  assert.deepEqual(present, ['views/notes.csv'])
 })
 
 test('run: a folder the runner can\'t read in run/session/ is passed over, a session file it can\'t read isn\'t kept, and the next runs start', { skip: skipIfRoot }, async t => {

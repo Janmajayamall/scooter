@@ -437,11 +437,21 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   fs.writeFileSync(path.join(locked, 'deep', 'notes.csv'), 'x\n')
   fs.chmodSync(path.join(locked, 'deep'), 0o000)
   fs.chmodSync(locked, 0o000)
-  await startTestRunner(t, prepared)
+  // And a git killed while it held the index and the branch, by a power cut or a SIGKILL.
+  const gitDir = path.join(prepared.paths.agentDir('lifelog'), '.git')
+  fs.writeFileSync(path.join(gitDir, 'index.lock'), '')
+  fs.writeFileSync(path.join(gitDir, 'refs', 'heads', 'main.lock'), '')
+  const second = await startTestRunner(t, prepared)
   assert.equal(fs.existsSync(prepared.paths.runLock), false)
   assert.deepEqual(fs.readdirSync(prepared.paths.agentViews('lifelog')), [])
   assert.deepEqual(fs.readdirSync(prepared.paths.agentMemory('lifelog')), [])
   assert.ok(prepared.events().includes('runner.lock_removed'))
+  assert.ok(prepared.events().includes('agent.git_lock_removed'))
+
+  // The next run commits.
+  second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
+  assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
+  assert.equal(second.git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
 })
 
 test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {

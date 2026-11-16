@@ -46,6 +46,7 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     SESSION_MAX_BYTES: 100 * MB,
     REASON_MAX_CHARS: 200,
     NOTICE_QUOTE_CHARS: 40,
+    AGENT_FILES_MAX_BYTES: 100 * MB,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
