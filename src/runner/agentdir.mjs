@@ -12,7 +12,8 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { ensureDir } from '../common/files.mjs'
+import { copyUntrustedFile, ensureDir } from '../common/files.mjs'
+import { limits } from '../common/limits.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside `views/`
@@ -25,12 +26,15 @@ const FILE_MODE = 0o600
 // Creates the agent's folder the first time, and finishes what a crash left half done: the
 // folders, `git init`, the `.gitignore`, and a first commit with the `.gitignore` alone. A folder
 // that is complete is left as it is. `git` is what `createGit` returns, for this folder.
+//
+// `git init` runs whenever the folder has no commit: a start killed during `git init` can leave an
+// empty `.git`, and running it again on a repository is safe.
 export async function ensureAgentDir({ paths, name, git, log }) {
   const dir = paths.agentDir(name)
   for (const folder of [dir, paths.agentViews(name), paths.agentMemory(name), paths.agentSessions(name), paths.agentRun(name)]) {
     ensureDir(folder, { mode: FOLDER_MODE })
   }
-  if (!fs.existsSync(path.join(dir, '.git'))) {
+  if (!(await git.hasCommit())) {
     await git.run(['init', '--quiet'])
     log.info('agent.git_init', { agent: name })
   }
@@ -107,4 +111,40 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
   })
   fs.writeFileSync(systemFile, system, { mode: FILE_MODE })
   return { systemFile, skillDirs, sessionDir, sessionFile }
+}
+
+// After a successful run, keeps the session pi wrote as `sessions/<sessionId>.jsonl` (6.6). Returns
+// `kept`, `none` when pi left no session file, or `refused` when the file isn't one to keep: a link,
+// anything but a regular file, a file with more than one name, or one over `SESSION_MAX_BYTES`.
+//
+// pi finds a session by the first line of its file, not by its name (`docs/DECISIONS.md`, 0.4,
+// pi 2). It continues the copy `prepareRun` made, under that copy's name. A session it starts
+// afresh, which happens on the first run of a session and when the agent's folder has moved, goes
+// into a new file it names `<UTC time>_<sessionId>.jsonl`, and that is the one to take. Anything
+// else in `run/session/` is ignored, so a run can only extend its own session.
+//
+// The file is copied without following a link, and checked on what was opened (`copyUntrustedFile`).
+export async function keepSession({ paths, agent, sessionId }) {
+  const sessionDir = paths.agentRunSession(agent.name)
+  let names
+  try {
+    names = fs.readdirSync(sessionDir)
+  } catch (error) {
+    if (error.code === 'ENOENT') return 'none'
+    throw error
+  }
+  const fresh = names.filter(name => name.endsWith(`_${sessionId}.jsonl`)).sort()
+  const name = fresh.at(-1) ?? (names.includes(`${sessionId}.jsonl`) ? `${sessionId}.jsonl` : null)
+  if (name === null) return 'none'
+  ensureDir(paths.agentSessions(agent.name), { mode: FOLDER_MODE })
+  try {
+    await copyUntrustedFile(path.join(sessionDir, name), path.join(paths.agentSessions(agent.name), `${sessionId}.jsonl`), {
+      maxBytes: limits.SESSION_MAX_BYTES,
+      mode: FILE_MODE,
+    })
+  } catch (error) {
+    if (error.code === 'EUNTRUSTED' || error.code === 'EFBIG') return 'refused'
+    throw error
+  }
+  return 'kept'
 }

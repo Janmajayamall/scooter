@@ -1,0 +1,259 @@
+// The runner's service, `scooter runner` (section 6 of DESIGN.md; ARCHITECTURE.md 4.4).
+//
+// At startup, in order:
+// 1. It reads `agents.yaml`, and stops on any fault, naming the field (6.1).
+// 2. It makes sure it is the only runner on this data folder (`holdInstance`).
+// 3. It opens the sandbox, which checks the VM image and picks the accelerator (6.6, 6.12).
+// 4. It creates the agent's folder if it is new (6.2), and throws away the changes of a run that a
+//    crash or a stop cut short, so the next run starts from the last commit (6.9).
+// 5. It removes a leftover `run.lock` (6.4).
+// 6. It writes `status.json`, and tells the owner if its VMs have just fallen back to emulation
+//    (6.3, 6.6; rows 6 and 15).
+// 7. It brings the state up to date: scheduled tasks already past, a pause tried again at once, and
+//    backfills started or dropped (6.4, 6.9, 6.11).
+// 8. It reads the datastore.
+//
+// Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, asks the planner what
+// is next (`nextAction`), and does it. One thing at a time, so runs never overlap.
+
+import { createIds, ensureDir } from '../common/files.mjs'
+import { holdInstance } from '../common/instance.mjs'
+import { limits } from '../common/limits.mjs'
+import { lockExists, releaseLock } from '../common/locks.mjs'
+import { createLog, errorFields } from '../common/log.mjs'
+import { writeOutboxEntry } from '../common/outbox.mjs'
+import { makePaths } from '../common/paths.mjs'
+import { createProc } from '../common/proc.mjs'
+import { RunnerStatusError, readRunnerStatus } from '../common/runnerstatus.mjs'
+import { systemClock } from '../common/time.mjs'
+import { ensureAgentDir } from './agentdir.mjs'
+import { buildBatch, buildTaskPrompt } from './batch.mjs'
+import { handleCommands } from './commands.mjs'
+import { ConfigError, loadConfig } from './config.mjs'
+import { openDatastore } from './datastore.mjs'
+import { createGit } from './git.mjs'
+import { loadProtocol } from './prompt.mjs'
+import { performRun } from './run.mjs'
+import { loadState, saveState, startupState } from './state.mjs'
+import { emulationNotice, runnerStatus, writeRunnerStatus } from './status.mjs'
+import { nextAction } from './triggers.mjs'
+
+// Starts the runner, without its loop: everything up to the loop. Returns the runner, whose
+// `tick()` does one round of the loop. Throws a `ConfigError` for a bad `agents.yaml`, and anything
+// else that stops a start.
+//
+// - `settings`: the runner's, from `loadSettings('runner')`.
+// - `openSandbox({ paths, settings, log, clock })`: opens the sandbox runs go through (`sandbox/`),
+//   checking what it needs.
+// - `clock`, `log`, `proc`: tests give their own.
+export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }) }) {
+  const paths = makePaths(settings)
+  const { agents } = loadConfig({ paths })
+  // There is exactly one agent in v2 (6.1).
+  const [agent] = agents
+
+  // The data folder holds the folders of 3.2. `setup` makes them natively (8.4); this is for
+  // development.
+  ensureDir(paths.dataDir, { mode: 0o755 })
+  for (const folder of [paths.runner, paths.agents, paths.exchange, paths.locks]) ensureDir(folder, { mode: 0o700 })
+  const instance = await holdInstance(paths.runnerSocket, 'runner')
+  try {
+    const sandbox = await openSandbox({ paths, settings, log, clock })
+    const git = createGit({ proc, dir: paths.agentDir(agent.name), clock })
+    await ensureAgentDir({ paths, name: agent.name, git, log })
+    await git.discardChanges()
+
+    if (lockExists(paths.runLock)) {
+      releaseLock(paths.runLock)
+      log.warn('runner.lock_removed', { lock: 'run.lock' })
+    }
+
+    const ids = createIds(clock)
+    let previous = null
+    try {
+      previous = readRunnerStatus(paths.runnerStatus)
+    } catch (error) {
+      if (!(error instanceof RunnerStatusError)) throw error
+      log.warn('runner.status_unreadable', errorFields(error))
+    }
+    const status = runnerStatus({ settings, agents, sandbox, now: clock.now() })
+    const notice = emulationNotice({ previous, status, accelSetting: settings.agentAccel })
+    if (notice) await writeOutboxEntry({ paths, ids, entry: notice })
+    writeRunnerStatus(paths, status)
+    log.info('runner.accelerator', { accel: sandbox.accel, setting: settings.agentAccel, noticed: notice !== null })
+
+    const stateFile = paths.agentState(agent.name)
+    const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: settings.timeZone })
+    let state = started.state
+    saveState(stateFile, state)
+    if (started.dropped) log.info('runner.backfill_dropped', { agent: agent.name, backfill: started.dropped })
+    if (started.started) log.info('runner.backfill_started', { agent: agent.name, backfill: started.started, until: state.backfill.until })
+
+    const datastore = openDatastore({ paths, clock })
+    datastore.poll()
+    const protocol = loadProtocol()
+    // The `once` tasks run since this start, whatever came of them (D68).
+    const onceTried = new Set()
+    let waitingFor = null
+
+    async function run(job, signal) {
+      const done = await performRun({ agent, settings, paths, sandbox, git, protocol, ids, log, clock, index: datastore.index, state, stateFile, job, signal })
+      state = done.state
+      if (done.outcome === 'waiting') {
+        if (waitingFor !== done.why) log.info('runner.waiting', { agent: agent.name, for: done.why })
+        waitingFor = done.why
+      } else {
+        waitingFor = null
+      }
+      return done
+    }
+
+    // One round of the loop: reads the new lines, and does what comes next. Returns
+    // `{ action, outcome }`: what `nextAction` said, and for a run, what came of it (`performRun`).
+    async function tick({ signal } = {}) {
+      datastore.poll()
+      const now = clock.now()
+      const action = nextAction({
+        agent,
+        state,
+        index: datastore.index,
+        now,
+        timeZone: settings.timeZone,
+        batchSeconds: settings.batchSeconds,
+        incomingSeenAt: datastore.incomingSeenAt,
+        onceTried,
+      })
+      const prompts = { agent, paths, now, timeZone: settings.timeZone, homeCurrency: settings.homeCurrency, internet: settings.agentInternet }
+
+      if (action.kind === 'commands') {
+        state = await handleCommands({
+          agent,
+          state,
+          lines: action.lines,
+          stateFile,
+          paths,
+          ids,
+          log,
+          now,
+          timeZone: settings.timeZone,
+          rolloverHour: settings.sessionRolloverHour,
+        })
+        return { action }
+      }
+      if (action.kind === 'messages') {
+        const built = buildBatch({ agent, state, index: datastore.index, ...prompts })
+        if (!built) return { action }
+        const { outcome } = await run({ kind: 'messages', batch: built.batch, prompt: built.prompt }, signal)
+        return { action, outcome }
+      }
+      if (action.kind === 'scheduled') {
+        const prompt = buildTaskPrompt({ task: action.task, ...prompts })
+        const { outcome } = await run({ kind: 'scheduled', at: action.at, date: action.date, task: action.task, prompt }, signal)
+        return { action, outcome }
+      }
+      if (action.kind === 'once') {
+        onceTried.add(action.id)
+        const prompt = buildTaskPrompt({ task: action.task, ...prompts })
+        const { outcome } = await run({ kind: 'once', id: action.id, task: action.task, prompt }, signal)
+        // Tried again as the next try after a setup error or an outage, or whenever it didn't run.
+        if (typeof outcome === 'string' || outcome.cause === 'setup' || outcome.cause === 'outage') onceTried.delete(action.id)
+        return { action, outcome }
+      }
+      // Backfill batches, and finishing a backfill, are milestone 9's (6.11). Until then a backfill
+      // waits where it is.
+      return { action }
+    }
+
+    return {
+      paths,
+      agent,
+      sandbox,
+      datastore,
+      tick,
+      get state() {
+        return state
+      },
+      close: () => instance.close(),
+    }
+  } catch (error) {
+    await instance.close()
+    throw error
+  }
+}
+
+// Starts the runner and its loop. Returns the runner, with `fatal`, which resolves with an error
+// when the runner can't go on, and `stop()`, which stops it: a run in progress is cut short and
+// thrown away, as after a crash, and the lock is let go of.
+export async function startRunner(options) {
+  const { clock = systemClock } = options
+  const log = options.log ?? createLog({ component: 'runner', clock })
+  const runner = await openRunner({ ...options, clock, log })
+  const stopping = new AbortController()
+  let reportFatal
+  const fatal = new Promise(resolve => (reportFatal = resolve))
+
+  const loop = (async () => {
+    while (!stopping.signal.aborted) {
+      try {
+        await runner.tick({ signal: stopping.signal })
+      } catch (error) {
+        log.error('runner.failed', errorFields(error))
+        reportFatal(error)
+        return
+      }
+      try {
+        await clock.sleep(limits.POLL_INTERVAL, { signal: stopping.signal })
+      } catch {
+        return
+      }
+    }
+  })()
+  log.info('runner.started', { agent: runner.agent.name, accel: runner.sandbox.accel })
+
+  let stopped = null
+  return {
+    ...runner,
+    get state() {
+      return runner.state
+    },
+    fatal,
+    stop: () =>
+      (stopped ??= (async () => {
+        stopping.abort()
+        await loop
+        await runner.close()
+        log.info('runner.stopped')
+      })()),
+  }
+}
+
+// `scooter runner`: runs the runner until SIGTERM or SIGINT. Exits with 2 for a bad `agents.yaml`,
+// and with 1 if it can't start or can't go on. `openSandbox` opens the sandbox its runs go through.
+export async function runRunner({ settings, stderr, openSandbox, clock = systemClock }) {
+  const log = createLog({ component: 'runner', clock })
+  let runner
+  try {
+    runner = await startRunner({ settings, openSandbox, clock, log })
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      for (const problem of error.problems) stderr.write(`scooter runner: ${problem.message}\n`)
+      return 2
+    }
+    log.error('runner.start_failed', errorFields(error))
+    // For the person starting it. What can fail here names a path, a file and a line, or a field.
+    stderr.write(`scooter runner: ${error.message}\n`)
+    return 1
+  }
+  const handlers = new Map()
+  const outcome = await new Promise(resolve => {
+    for (const signal of ['SIGTERM', 'SIGINT']) {
+      handlers.set(signal, () => resolve(signal))
+      process.once(signal, handlers.get(signal))
+    }
+    runner.fatal.then(() => resolve('fatal'))
+  })
+  for (const [signal, handler] of handlers) process.off(signal, handler)
+  log.info('runner.stopping', { reason: outcome })
+  await runner.stop()
+  return outcome === 'fatal' ? 1 : 0
+}

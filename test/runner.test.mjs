@@ -1,0 +1,485 @@
+// The runner as a whole (6.3, 6.4, 6.6, 6.9 of DESIGN.md; section 10, "Runner"), with the fake
+// sandbox: failures and their notices, pauses and outages, the locks, scheduled and `once` tasks,
+// `/new`, `status.json` and the emulation notice, startup, and the loop.
+
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import test from 'node:test'
+import { readLock, takeLock } from '../src/common/locks.mjs'
+import { readRunnerStatus } from '../src/common/runnerstatus.mjs'
+import { openRunner, runRunner, startRunner } from '../src/runner/main.mjs'
+import { acquireRunLock } from '../src/runner/run.mjs'
+import { EMULATION_NOTICE } from '../src/runner/status.mjs'
+import { createFakeSandbox } from './support/fake-sandbox.mjs'
+import { exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
+import { MINUTE, SECOND, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
+import { atEnd } from './support/tmp.mjs'
+
+// 21:20 in Asia/Kolkata on Monday 9 November 2026.
+const START = '2026-11-09T15:50:30Z'
+const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, onceDone: [], backfillDone: [], scheduled: {}, lastRun: null }
+
+function openWith(t, lines, options = {}) {
+  return openTestRunner(t, { lines: [...fillerLines(1041), ...lines], state: HANDLED, start: START, ...options })
+}
+
+// Lets the runner see what was added, waits out the quiet period, and runs what comes next.
+async function runNext(runner, clock) {
+  await runner.tick()
+  await clock.advance(8 * SECOND)
+  return runner.tick()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Failures
+
+test('failures: a crash discards the run\'s changes, counts an attempt, and sends one notice for the first failure in a row', async t => {
+  const { runner, clock, state, outbox, git, views, add, paths, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+  await runNext(runner, clock)
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  outbox({ take: true })
+
+  // pi files #1043 and changes the view, then crashes: the view is as it was committed.
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'lunch 300 MEMORY'))
+  sandbox.behave({ crash: 3 })
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
+  assert.deepEqual(state().retry, [{ seq: 1043, attempts: 1, due: '2026-11-09T15:51:46Z', reason: 'pi exited with code 3' }])
+  assert.equal(state().cursor, 1043)
+  assert.deepEqual(state().lastRun, { at: '2026-11-09T15:50:46Z', ok: false, seqs: [1043], durationMs: 0 })
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (pi exited with code 3). I'll try again." }])
+
+  // The second failure in a row sends nothing.
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
+  assert.equal(state().retry[0].attempts, 2)
+  assert.deepEqual(outbox({ take: true }), [])
+
+  // A run that gets through ends the row; the next failure is the first of another.
+  sandbox.behave(null)
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+  assert.deepEqual(state().retry, [])
+  outbox({ take: true })
+  add(line.text(1044, '2026-11-09T15:53:00Z', 'tea CRASH'))
+  await runNext(runner, clock)
+  assert.equal(outbox({ take: true }).length, 1)
+})
+
+test('failures: a timeout closes the run, which counts an attempt; run.lock records when the run must be over', async t => {
+  const { runner, clock, state, outbox, sandbox, paths, views } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee HANG')])
+  await runner.tick()
+  await clock.advance(8 * SECOND)
+  const running = runner.tick()
+  await sandbox.whenHung()
+  // The lock says when this run must be over: its start plus the agent's timeout.
+  const lock = readLock(paths.runLock)
+  assert.equal(lock.deadline, Date.parse('2026-11-09T15:50:38Z') + 10 * MINUTE)
+  assert.equal(lock.pid, process.pid)
+  assert.ok(fs.existsSync(path.join(paths.agentViews('lifelog'), 'notes.csv')))
+
+  await clock.advance(10 * MINUTE)
+  assert.deepEqual((await running).outcome, { ok: false, cause: 'other' })
+  assert.equal(readLock(paths.runLock), null)
+  assert.throws(() => views('notes.csv'), /ENOENT/)
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T16:01:38Z', reason: 'timed out' }])
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (timed out). I'll try again." }])
+})
+
+test('failures: a 401, 402, 403 or 404 pauses runs, counts no attempt, and is tried every 30 minutes and at a restart', async t => {
+  const prepared = prepareTestRunner(t, { lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')], state: HANDLED, start: START })
+  const { runner, clock, state, outbox, sandbox, add } = await startTestRunner(t, prepared)
+  sandbox.behave({ openrouter: 404, message: 'No endpoints found matching your data policy' })
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'setup' })
+  const reason = 'OpenRouter: No endpoints found matching your data policy'
+  assert.deepEqual(state().paused, { since: '2026-11-09T15:50:38Z', cause: 'setup', reason, next: '2026-11-09T16:20:38Z', tries: 1 })
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 0, due: '2026-11-09T15:50:38Z', reason }])
+  assert.deepEqual(outbox({ take: true }), [
+    { type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (${reason}). Runs are paused until this is fixed. I'll try again every 30 minutes.` },
+  ])
+
+  // Nothing runs while paused; messages that arrive wait, and commands still work.
+  add(line.text(1043, '2026-11-09T15:55:00Z', 'lunch 300'), line.command(1044, '2026-11-09T15:55:01Z', '/new'))
+  assert.equal((await runner.tick()).action.kind, 'commands')
+  await clock.advance(29 * MINUTE)
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'paused' })
+  assert.equal(sandbox.runs.length, 1)
+
+  // The next try, in 30 minutes, fails the same way: one try more, and no notice.
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'setup' })
+  assert.deepEqual(state().paused.tries, 2)
+  assert.deepEqual(
+    state().retry.map(entry => [entry.seq, entry.attempts]),
+    [
+      [1042, 0],
+      [1043, 0],
+    ],
+  )
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1044 }])
+
+  // A restart tries again at once, once the owner has been quiet. The key has been fixed: the
+  // whole batch is handled.
+  runner.close()
+  sandbox.behave(null)
+  await clock.advance(MINUTE)
+  const restarted = await startTestRunner(t, prepared)
+  assert.equal(restarted.state().paused.next, '2026-11-09T16:21:38Z')
+  assert.deepEqual((await runNext(restarted.runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(state().lastRun.seqs, [1042, 1043])
+  assert.equal(state().paused, undefined)
+  assert.deepEqual(state().retry, [])
+  assert.deepEqual(state().failed, [])
+})
+
+test('failures: a 408, 429, 5xx or no answer is tried after 1, 5 and 30 minutes, then every 30, without counting attempts', async t => {
+  for (const [behavior, reason] of [
+    [{ openrouter: 429 }, 'OpenRouter: stub error 429'],
+    [{ openrouter: 503 }, 'OpenRouter: stub error 503'],
+    [{ unreachable: true }, "OpenRouter didn't answer"],
+  ]) {
+    await t.test(JSON.stringify(behavior), async t => {
+      const { runner, clock, state, outbox, sandbox, add } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+      sandbox.behave(behavior)
+      assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'outage' })
+      assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (${reason}). I'll try again.` }])
+      const waits = []
+      for (let n = 0; n < 4; n++) {
+        const { since, next } = state().paused
+        assert.equal(since, '2026-11-09T15:50:38Z')
+        waits.push((Date.parse(next) - clock.now()) / MINUTE)
+        await clock.advance(Date.parse(next) - clock.now() - SECOND)
+        assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'paused' })
+        await clock.advance(SECOND)
+        assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'outage' })
+      }
+      waits.push((Date.parse(state().paused.next) - clock.now()) / MINUTE)
+      assert.deepEqual(waits, [1, 5, 30, 30, 30])
+      assert.deepEqual(state().retry.map(entry => entry.attempts), [0])
+      assert.deepEqual(outbox(), [])
+
+      // A message that arrived meanwhile goes in the same batch once OpenRouter is back.
+      add(line.text(1043, '2026-11-09T17:00:00Z', 'lunch 300'))
+      sandbox.behave(null)
+      await runner.tick()
+      await clock.advance(30 * MINUTE)
+      assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+      assert.deepEqual(state().lastRun.seqs, [1042, 1043])
+      assert.deepEqual(state().retry, [])
+      assert.equal(state().paused, undefined)
+    })
+  }
+})
+
+test('failures: a run that times out waiting for OpenRouter is an outage', async t => {
+  const { runner, clock, state, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee NOANSWER')])
+  await runner.tick()
+  await clock.advance(8 * SECOND)
+  const running = runner.tick()
+  await sandbox.whenHung()
+  await clock.advance(10 * MINUTE)
+  assert.deepEqual((await running).outcome, { ok: false, cause: 'outage' })
+  assert.equal(state().paused.reason, "OpenRouter didn't answer")
+  assert.equal(state().retry[0].attempts, 0)
+})
+
+test('failures: a sandbox that can\'t run pi pauses runs as a setup error', async t => {
+  const { runner, clock, state, sandbox, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee')])
+  sandbox.run = async () => {
+    throw Object.assign(new Error('qemu-system-x86_64: not found'), { code: 'ENOENT' })
+  }
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'setup' })
+  assert.equal(state().paused.reason, "the VM couldn't start")
+  assert.equal(state().retry[0].attempts, 0)
+  assert.equal(outbox().length, 1)
+})
+
+test('failures: items that run out of attempts in failing runs are given up on, with one notice', async t => {
+  const { runner, clock, state, outbox, sandbox } = await openWith(t, [
+    line.text(1042, '2026-11-09T15:50:00Z', 'coffee 120'),
+    line.text(1043, '2026-11-09T15:50:01Z', '', { files: [{ path: '1043.jpg', mime: 'image/jpeg', bytes: 10 }] }),
+  ])
+  sandbox.behave({ crash: 1 })
+  await runNext(runner, clock)
+  for (let n = 0; n < 3; n++) {
+    await clock.advance(MINUTE)
+    await runner.tick()
+  }
+  assert.deepEqual(state().retry, [])
+  assert.deepEqual(
+    state().failed.map(entry => [entry.seq, entry.reason]),
+    [
+      [1042, 'not handled after 4 attempts'],
+      [1043, 'not handled after 4 attempts'],
+    ],
+  )
+  assert.deepEqual(outbox(), [
+    { type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (pi exited with code 1). I'll try again." },
+    { type: 'text', by: 'runner', text: '⚠️ I gave up on #1042 ("coffee 120") and #1043 (a photo) after 4 attempts. Send them again if they matter.' },
+  ])
+})
+
+// ---------------------------------------------------------------------------------------------
+// Locks
+
+test('locks: no run while a backup holds its lock, and runs go on once it is gone', async t => {
+  const { runner, clock, paths, sandbox, state, entries } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee')])
+  fs.writeFileSync(paths.backupLock, '{"pid":1,"at":"2026-11-09T15:50:00Z","deadline":null}\n')
+  assert.deepEqual((await runNext(runner, clock)).outcome, 'waiting')
+  await clock.advance(SECOND)
+  assert.deepEqual((await runner.tick()).outcome, 'waiting')
+  assert.equal(sandbox.runs.length, 0)
+  assert.equal(fs.existsSync(paths.runLock), false)
+  assert.equal(state().cursor, 1041)
+  // Said once, not every second.
+  assert.equal(entries.filter(entry => entry.event === 'runner.waiting').length, 1)
+
+  fs.rmSync(paths.backupLock)
+  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+  assert.equal(state().cursor, 1042)
+})
+
+test('locks: the runner takes its own lock before it looks for the backup\'s, and gives way when both are there', async t => {
+  const { paths, clock } = await openWith(t, [])
+  const deadline = clock.now() + 10 * MINUTE
+  assert.equal(acquireRunLock({ paths, deadline, clock }), 'taken')
+  assert.equal(readLock(paths.runLock).deadline, Math.floor(deadline / 1000) * 1000)
+  // A second run, or a rebuild, can't take it.
+  assert.equal(acquireRunLock({ paths, deadline, clock }), 'busy')
+  fs.rmSync(paths.runLock)
+
+  // A backup that took its lock first: the runner gives way, and lets go of its own, so the backup,
+  // which then looks for run.lock, finds none.
+  assert.equal(takeLock(paths.backupLock, { clock }), true)
+  assert.equal(acquireRunLock({ paths, deadline, clock }), 'backup')
+  assert.equal(fs.existsSync(paths.runLock), false)
+})
+
+// ---------------------------------------------------------------------------------------------
+// Tasks and commands
+
+const TASK_YAML = `${exampleYaml()}      - once: poems\n        task: Write poems.\n`
+
+test('tasks: the evening check-in runs at 21:30 with its task, sends its text on its own, and is done for the day', async t => {
+  const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
+  await clock.advance(10 * MINUTE - 30 * SECOND)
+  const { action, outcome } = await runner.tick()
+  assert.equal(action.kind, 'scheduled')
+  assert.deepEqual(outcome, { ok: true, cause: null })
+  assert.match(sandbox.runs[0].spec.argv.at(-1), /\n\nScheduled task \(from your configuration, not a message from the owner\):\nEvening check-in\./)
+  // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL.
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.' }])
+  assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
+  assert.deepEqual(state().lastRun.seqs, [])
+  assert.equal(state().cursor, 1041)
+  // Nothing changed, so nothing was committed.
+  assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
+})
+
+test('tasks: a scheduled task that fails for its own reasons waits for its next time; after an outage it is the next try', async t => {
+  // A runner that starts at 21:30 or later leaves the day's check-in for the next day.
+  const after = await openWith(t, [], { start: '2026-11-09T16:00:00Z' })
+  assert.deepEqual(after.state().scheduled, { '21:30': '2026-11-09' })
+  assert.deepEqual((await after.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
+
+  const late = await openWith(t, [], { start: '2026-11-09T15:59:59Z' })
+  late.sandbox.behave({ crash: 2 })
+  await late.clock.advance(SECOND)
+  assert.deepEqual((await late.runner.tick()).outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(late.state().scheduled, { '21:30': '2026-11-09' })
+  assert.equal(late.sandbox.runs.length, 1)
+  assert.deepEqual(late.outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the scheduled task 21:30 (pi exited with code 2). It runs again at its next time." }])
+
+  const outage = await openWith(t, [], { start: '2026-11-09T15:59:59Z' })
+  outage.sandbox.behave({ openrouter: 502 })
+  await outage.clock.advance(SECOND)
+  assert.deepEqual((await outage.runner.tick()).outcome, { ok: false, cause: 'outage' })
+  assert.deepEqual(outage.state().scheduled, { '21:30': '2026-11-08' })
+  outage.sandbox.behave(null)
+  await outage.clock.advance(MINUTE)
+  const retried = await outage.runner.tick()
+  assert.equal(retried.action.kind, 'scheduled')
+  assert.deepEqual(retried.outcome, { ok: true, cause: null })
+  assert.deepEqual(outage.state().scheduled, { '21:30': '2026-11-09' })
+})
+
+test('tasks: a once task runs at startup, and is recorded only after it succeeds', async t => {
+  const prepared = prepareTestRunner(t, { yaml: TASK_YAML, lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  prepared.sandbox.behave({ crash: 4 })
+  const { action, outcome } = await first.runner.tick()
+  assert.deepEqual(action, { kind: 'once', id: 'poems', task: 'Write poems.' })
+  assert.deepEqual(outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(first.state().onceDone, [])
+  assert.deepEqual(first.outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the task poems (pi exited with code 4). I'll try it again when I next start." }])
+  // Not again until the runner starts again.
+  await first.clock.advance(MINUTE)
+  assert.deepEqual((await first.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
+
+  first.runner.close()
+  prepared.sandbox.behave({ openrouter: 500 })
+  const second = await startTestRunner(t, prepared)
+  assert.deepEqual((await second.runner.tick()).outcome, { ok: false, cause: 'outage' })
+  // After an outage it is the next try.
+  prepared.sandbox.behave(null)
+  await second.clock.advance(MINUTE)
+  assert.deepEqual((await second.runner.tick()).outcome, { ok: true, cause: null })
+  assert.deepEqual(second.state().onceDone, ['poems'])
+  assert.match(prepared.sandbox.runs.at(-1).spec.argv.at(-1), /Scheduled task \(from your configuration, not a message from the owner\):\nWrite poems\.$/)
+  await second.clock.advance(MINUTE)
+  assert.deepEqual((await second.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
+})
+
+test('commands: /new is handled once, even when the batch after it fails', async t => {
+  const { runner, clock, state, outbox, sandbox } = await openWith(t, [line.command(1042, '2026-11-09T15:50:00Z', '/new'), line.text(1043, '2026-11-09T15:50:01Z', 'start again')])
+  sandbox.behave({ crash: 1 })
+  assert.equal((await runner.tick()).action.kind, 'commands')
+  await clock.advance(8 * SECOND)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
+  sandbox.behave(null)
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+  assert.equal(state().commandSeq, 1042)
+  assert.deepEqual(state().session, { day: '2026-11-09', bump: 1 })
+  assert.deepEqual(
+    outbox().filter(entry => entry.by === 'runner' && entry.about === 1042),
+    [{ type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1042 }],
+  )
+  // Both runs went into the new session.
+  assert.deepEqual(
+    sandbox.runs.map(({ spec }) => spec.argv[spec.argv.indexOf('--session-id') + 1]),
+    ['lifelog-2026-11-09-1', 'lifelog-2026-11-09-1'],
+  )
+})
+
+// ---------------------------------------------------------------------------------------------
+// Startup, status.json and the emulation notice
+
+test('status: status.json holds what /status shows of the runner\'s settings', async t => {
+  const { paths } = await openWith(t, [], { settings: { agentInternet: true, zdr: false } })
+  assert.deepEqual(readRunnerStatus(paths.runnerStatus), {
+    startedAt: '2026-11-09T15:50:30Z',
+    accel: 'kvm',
+    zdr: false,
+    internet: true,
+    imageBuiltAt: '2026-11-09T10:00:00Z',
+    agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, reads: ['whatsapp', 'email'] } },
+  })
+  assert.equal(fs.statSync(paths.runnerStatus).mode & 0o777, 0o600)
+})
+
+test('status: the emulation notice goes out when the accelerator changes to emulation, and not again at the next start', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START, accel: 'emulation' })
+  const notices = () => outboxOf(prepared.paths, { take: true }).map(entry => entry.text)
+  const start = async ({ accel, setting = 'auto' }) => {
+    const sandbox = createFakeSandbox({ root: path.join(prepared.root, `sandbox-${accel}`), paths: prepared.paths, proc: prepared.proc, clock: prepared.clock, accel })
+    const runner = await openRunner({ ...prepared, settings: { ...prepared.settings, agentAccel: setting }, openSandbox: async () => sandbox })
+    await runner.close()
+    return readRunnerStatus(prepared.paths.runnerStatus).accel
+  }
+
+  // The first start falls back to emulation: one notice.
+  assert.equal(await start({ accel: 'emulation' }), 'emulation')
+  assert.deepEqual(notices(), [EMULATION_NOTICE])
+  // A restart, still under emulation: none.
+  await start({ accel: 'emulation' })
+  assert.deepEqual(notices(), [])
+  // KVM comes back, then goes again: another.
+  await start({ accel: 'kvm' })
+  assert.deepEqual(notices(), [])
+  await start({ accel: 'emulation' })
+  assert.deepEqual(notices(), [EMULATION_NOTICE])
+  // Emulation asked for, after KVM, hasn't fallen back: none.
+  await start({ accel: 'kvm' })
+  await start({ accel: 'emulation', setting: 'emulation' })
+  assert.deepEqual(notices(), [])
+  assert.match(EMULATION_NOTICE, /^⚠️ My VMs run under emulation now/)
+})
+
+test('startup: a leftover run.lock is removed, and changes a run left uncommitted are thrown away', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  first.runner.close()
+  // A runner killed during a run leaves its lock and pi's changes.
+  fs.writeFileSync(prepared.paths.runLock, '{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}\n')
+  fs.writeFileSync(path.join(prepared.paths.agentViews('lifelog'), 'half.csv'), 'x\n')
+  fs.symlinkSync('/etc/hostname', path.join(prepared.paths.agentMemory('lifelog'), 'link.md'))
+  await startTestRunner(t, prepared)
+  assert.equal(fs.existsSync(prepared.paths.runLock), false)
+  assert.deepEqual(fs.readdirSync(prepared.paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(prepared.paths.agentMemory('lifelog')), [])
+  assert.ok(prepared.events().includes('runner.lock_removed'))
+})
+
+test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(3), start: START })
+  await startTestRunner(t, prepared)
+  await assert.rejects(openRunner({ ...prepared, openSandbox: async () => prepared.sandbox }), /another runner is running on this data folder/)
+
+  fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('reply_mode: quiet', 'reply_mode: chatty'))
+  let err = ''
+  const code = await runRunner({ settings: { ...prepared.settings, dataDir: path.join(prepared.root, 'other') }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock })
+  assert.equal(code, 2)
+  assert.match(err, /^scooter runner: .*agents\.yaml, line \d+: agents\.lifelog\.reply_mode must be quiet or confirm\n$/)
+})
+
+// ---------------------------------------------------------------------------------------------
+// The loop
+
+test('loop: the runner polls once a second, runs a batch when the owner is quiet, and stops in the middle of a run', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const { clock, paths, sandbox } = prepared
+  const runner = await startRunner({ ...prepared, openSandbox: async () => sandbox })
+  atEnd(t, () => runner.stop())
+  const state = () => JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
+  const seconds = async count => {
+    for (let n = 0; n < count; n++) {
+      await clock.whenSleeping()
+      await clock.advance(SECOND)
+    }
+  }
+
+  // The bridge stores a message; the runner sees it within a second, and runs after 8 quiet ones.
+  await seconds(1)
+  writeDatastore(paths, [line.text(1042, '2026-11-09T15:50:31Z', 'coffee')])
+  await seconds(8)
+  assert.equal(sandbox.runs.length, 0)
+  await seconds(1)
+  await waitFor(() => state().cursor === 1042)
+  assert.equal(sandbox.runs.length, 1)
+
+  // A run in progress when the runner stops is thrown away, as after a crash, and its lock let go.
+  writeDatastore(paths, [line.text(1043, '2026-11-09T15:51:00Z', 'tea HANG')])
+  await seconds(10)
+  await sandbox.whenHung()
+  assert.ok(fs.existsSync(paths.runLock))
+  await runner.stop()
+  assert.equal(state().cursor, 1042)
+  assert.equal(fs.existsSync(paths.runLock), false)
+  assert.equal(fs.readFileSync(path.join(paths.agentViews('lifelog'), 'notes.csv'), 'utf8').split('\n').length, 3)
+  assert.ok(prepared.events().includes('runner.run_stopped'))
+  assert.ok(prepared.events().includes('runner.stopped'))
+})
+
+test('loop: a damaged datastore stops the runner', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(3), start: START })
+  const runner = await startRunner({ ...prepared, openSandbox: async () => prepared.sandbox })
+  atEnd(t, () => runner.stop())
+  await prepared.clock.whenSleeping()
+  fs.appendFileSync(prepared.paths.dayLog('2026/11/08'), `${JSON.stringify(line.text(9, '2026-11-08T11:00:00Z', 'skips a seq'))}\n`)
+  await prepared.clock.advance(SECOND)
+  const error = await runner.fatal
+  assert.equal(error.name, 'DatastoreError')
+  assert.ok(prepared.events().includes('runner.failed'))
+})
+
+async function waitFor(condition) {
+  for (let n = 0; n < 500 && !condition(); n++) await new Promise(resolve => setTimeout(resolve, 10))
+  assert.ok(condition())
+}

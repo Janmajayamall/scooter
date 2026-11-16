@@ -9,7 +9,8 @@ import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
-import { GITIGNORE, ensureAgentDir, prepareRun } from '../src/runner/agentdir.mjs'
+import { overrideLimits } from '../src/common/limits.mjs'
+import { GITIGNORE, ensureAgentDir, keepSession, prepareRun } from '../src/runner/agentdir.mjs'
 import { loadConfig } from '../src/runner/config.mjs'
 import { createGit } from '../src/runner/git.mjs'
 import { loadProtocol, readMemoryFile, renderSystemPrompt } from '../src/runner/prompt.mjs'
@@ -86,6 +87,24 @@ test('agent folder: a start that a crash cut short is finished', async t => {
   await ensure()
   assert.equal(git(dir, 'rev-list', '--count', 'HEAD'), '1\n')
   assert.equal(git(dir, 'ls-files'), '.gitignore\n')
+
+  // An empty .git, as a start killed during git init can leave.
+  fs.rmSync(path.join(dir, '.git'), { recursive: true })
+  fs.mkdirSync(path.join(dir, '.git'))
+  await ensure()
+  assert.equal(git(dir, 'rev-list', '--count', 'HEAD'), '1\n')
+})
+
+test('agent folder: git works on the agent\'s own repository, also when the data folder is inside another', async t => {
+  const { root, dir, ensure } = setup(t)
+  // The test's folder holds the data folder, as a developer's checkout can.
+  git(root, 'init', '--quiet')
+  git(root, '-c', 'user.name=Someone', '-c', 'user.email=someone@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'outer')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.mkdirSync(path.join(dir, '.git'))
+  await ensure()
+  assert.equal(git(dir, 'log', '--format=%s'), 'lifelog: initial commit\n')
+  assert.equal(git(root, 'log', '--format=%s'), 'outer\n')
 })
 
 test('run folder: a fresh copy of the prompt and skills, the session, and system.md', async t => {
@@ -164,6 +183,107 @@ test('run folder: something in the config that isn\'t a file or a folder stops t
   fs.writeFileSync(path.join(root, 'secret'), 'key')
   fs.symlinkSync(path.join(root, 'secret'), path.join(paths.configDir, 'skills', 'people', 'notes.md'))
   assert.throws(() => prepareRun({ paths, agent: config, protocol: '' }), error => error.code === 'ECONFIG')
+})
+
+test('session: the file pi wrote is kept, never a link, a file with two names, or one too large', async t => {
+  const { root, paths, dir, ensure, agent } = setup(t)
+  await ensure()
+  const config = agent()
+  const id = 'lifelog-2026-11-09'
+  const sessionDir = path.join(dir, 'run', 'session')
+  const kept = path.join(dir, 'sessions', `${id}.jsonl`)
+  const keep = () => keepSession({ paths, agent: config, sessionId: id })
+  const fresh = () => prepareRun({ paths, agent: config, protocol: '', sessionId: id })
+
+  // Nothing written: nothing kept.
+  fresh()
+  assert.equal(await keep(), 'none')
+
+  // A session pi started is in a file it named; another session's file beside it is ignored.
+  fresh()
+  fs.writeFileSync(path.join(sessionDir, `2026-11-09T15-50-38-000Z_${id}.jsonl`), 'first\n')
+  fs.writeFileSync(path.join(sessionDir, '2026-11-09T15-50-38-000Z_lifelog-2026-11-08.jsonl'), 'planted\n')
+  assert.equal(await keep(), 'kept')
+  assert.equal(fs.readFileSync(kept, 'utf8'), 'first\n')
+  assert.equal(modeOf(kept), 0o600)
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'sessions')), [`${id}.jsonl`])
+
+  // One it continued is the copy, under the copy's name.
+  fresh()
+  fs.appendFileSync(path.join(sessionDir, `${id}.jsonl`), 'second\n')
+  assert.equal(await keep(), 'kept')
+  assert.equal(fs.readFileSync(kept, 'utf8'), 'first\nsecond\n')
+
+  // When pi started afresh beside the copy, as after the folder moved, its own file is the one.
+  fresh()
+  fs.writeFileSync(path.join(sessionDir, `2026-11-09T16-00-00-000Z_${id}.jsonl`), 'moved\n')
+  assert.equal(await keep(), 'kept')
+  assert.equal(fs.readFileSync(kept, 'utf8'), 'moved\n')
+
+  // A link, a hard link or a file over SESSION_MAX_BYTES is refused, and the kept one stays.
+  for (const make of [
+    file => fs.symlinkSync(path.join(root, 'secret'), file),
+    file => fs.linkSync(path.join(root, 'secret'), file),
+    file => fs.writeFileSync(file, 'x'.repeat(1025)),
+  ]) {
+    fs.writeFileSync(path.join(root, 'secret'), 'key')
+    fresh()
+    fs.rmSync(path.join(sessionDir, `${id}.jsonl`))
+    make(path.join(sessionDir, `2026-11-09T17-00-00-000Z_${id}.jsonl`))
+    const restore = overrideLimits({ SESSION_MAX_BYTES: 1024 })
+    try {
+      assert.equal(await keep(), 'refused')
+    } finally {
+      restore()
+    }
+    assert.equal(fs.readFileSync(kept, 'utf8'), 'moved\n')
+    fs.rmSync(path.join(root, 'secret'))
+  }
+})
+
+test('git: the clean-up puts views and memory back as they were committed, whatever pi left', async t => {
+  const { dir, ensure } = setup(t)
+  await ensure()
+  const clock = createFakeClock('2026-11-09T15:43:02Z')
+  const { log } = createTestLog({ clock })
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, clock })
+  const file = name => path.join(dir, name)
+  fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
+  fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
+  fs.writeFileSync(file('views/days/2026/11/2026-11-09.md'), '# Monday\n')
+  assert.equal(await agentGit.commitChanges('lifelog: #1'), true)
+  assert.equal(await agentGit.commitChanges('lifelog: #2'), false)
+  assert.equal(git(dir, 'log', '--format=%s'), 'lifelog: #1\nlifelog: initial commit\n')
+
+  // What a run might leave: a changed file, a committed file turned into a link, a new folder,
+  // a FIFO deep in a committed folder, a nested repository, a dotfile, and in memory/, which
+  // has nothing committed, a staged file, as a commit that failed leaves.
+  fs.writeFileSync(file('views/expenses.csv'), 'changed\n')
+  fs.rmSync(file('views/days/2026/11/2026-11-09.md'))
+  fs.symlinkSync('/etc/hostname', file('views/days/2026/11/2026-11-09.md'))
+  fs.mkdirSync(file('views/new/deep'), { recursive: true })
+  fs.writeFileSync(file('views/new/deep/x.csv'), 'x')
+  execFileSync('mkfifo', [file('views/days/2026/pipe')])
+  fs.mkdirSync(file('views/nested'))
+  git(path.join(dir, 'views', 'nested'), 'init', '--quiet')
+  fs.writeFileSync(file('memory/.secret'), 'x')
+  fs.writeFileSync(file('memory/preferences.md'), '- staged\n')
+  git(dir, 'add', 'memory/preferences.md')
+  // The first in name order, views/ before memory/.
+  assert.equal(await agentGit.unexpectedFile(), 'views/days/2026/11/2026-11-09.md')
+
+  await agentGit.discardChanges()
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(fs.readFileSync(file('views/expenses.csv'), 'utf8'), 'date,amount\n')
+  assert.equal(fs.readFileSync(file('views/days/2026/11/2026-11-09.md'), 'utf8'), '# Monday\n')
+  assert.deepEqual(fs.readdirSync(file('views')).sort(), ['days', 'expenses.csv'])
+  assert.deepEqual(fs.readdirSync(file('views/days/2026')), ['11'])
+  assert.deepEqual(fs.readdirSync(file('memory')), [])
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  // The folders stay, as the VM's mount points.
+  fs.rmSync(file('memory'), { recursive: true })
+  await agentGit.discardChanges()
+  assert.equal(modeOf(file('memory')), 0o700)
 })
 
 test('memory: read without following a link, only from a regular file, and at most MEMORY_MAX_BYTES', t => {
