@@ -107,7 +107,7 @@ wacli is a third-party, unofficial program. It runs as `scooter-wacli` with a mi
 - catches up at startup and every 10 minutes by listing the owner's chat, so nothing depends on the webhook, which is best-effort;
 - sends text and reactions, and downloads media through `wacli/staging`.
 
-**Boundaries.** Everything wacli says is input to check. wacli never touches the datastore. Non-owner traffic stops in this module and never reaches the core.
+**Boundaries.** Everything wacli says is input to check. wacli never touches the datastore. Non-owner traffic stops in this module and never reaches the core. Every text is sent with wacli's link previews off, so a link in a reply, which the agent wrote, makes wacli fetch nothing (5.3).
 
 ### 2.3 The email channel and the email reader
 
@@ -168,7 +168,7 @@ pi can't reach the exchange: it isn't mounted into the VM.
 
 Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter builds: Alpine with Node, the pinned pi, `pdftotext`, `heif-convert`, git, ripgrep and fd (6.6, 6.12).
 
-- **Mounts**, at the same paths as on the host: the agent's folder read-only, except `views/`, `memory/` and `run/session/`; and the datastore read-only. Nothing else from the host is visible.
+- **Mounts**, at the same paths as on the host: the agent's folder read-only, except `views/`, `memory/` and `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore read-only. Nothing else from the host is visible.
 - **Environment:** a short fixed list, with a placeholder where the key would be.
 - **Acceleration:** KVM when the runner can open `/dev/kvm`, otherwise emulation, which is announced. A forced accelerator that can't be used stops the runner.
 - **Lifetime:** the runner closes the VM when pi exits or the timeout passes. Nothing inside it survives.
@@ -202,7 +202,7 @@ It is given:
 
 It produces changes to `views/` and `memory/`, and a final answer that ends with protocol lines (`DONE`, `FAILED`, `REPLY_TO`, `NO_REPLY`).
 
-**Boundaries.** pi holds no secret, has no network of its own, and can write only `views/`, `memory/` and its session copy. It can't change its config, the state, the git history, the datastore, the outbox or any other session.
+**Boundaries.** pi holds no secret, has no network of its own, and can write only `views/`, `memory/` and its session copy. It can't change its config, the state, the git history, the datastore, the outbox or any other session. It can't read the other sessions either: `sessions/` is hidden from the VM.
 
 ### 2.10 The agent's folder
 
@@ -212,7 +212,7 @@ It produces changes to `views/` and `memory/`, and a final answer that ends with
 |---|---|---|
 | `views/` | The CSVs and the day pages | yes |
 | `memory/` | `preferences.md` and `needs-review.md` | yes |
-| `sessions/` | pi's sessions; pi only ever gets a copy of the current one | no |
+| `sessions/` | pi's sessions, hidden from the VM; pi only ever gets a copy of the current one | no |
 | `run/` | Rebuilt before each run: `system.md`, `config/`, `session/` | no |
 | `state.json` | The runner's bookkeeping | no |
 
@@ -280,7 +280,7 @@ Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
 | Folder | Owner and mode | Bridge | Runner | pi | wacli | Email reader |
 |---|---|---|---|---|---|---|
 | `datastore` | root, group `scooter-runner`; 0750 and 0640 | writes | reads | reads | no | no |
-| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | reads; writes `views/`, `memory/`, `run/session/` | no | no |
+| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | reads, except `sessions/`; writes `views/`, `memory/`, `run/session/` | no | no |
 | `exchange` | `scooter-runner`, 0700 | takes entries; writes its own entries and `backup.lock` | writes entries and `run.lock` | no | no | no |
 | `runner` | `scooter-runner`, 0700 | reads the log and `status.json` | writes | no | no | no |
 | `bridge` | root, 0700 | writes | no | no | no | no |
@@ -292,7 +292,7 @@ Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
 
 | From | To | Notes |
 |---|---|---|
-| wacli | WhatsApp | outbound |
+| wacli | WhatsApp | outbound. Texts go out with link previews off, so wacli fetches no link (5.3) |
 | Email reader | the mailbox's IMAP server, port 993 | outbound, TLS |
 | restic | the backup bucket | outbound, HTTPS |
 | wacli | the bridge, `127.0.0.1:8787` | loopback only, signed |
@@ -428,7 +428,7 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 1. The bridge takes outbox entries in order, one message every 1.5 seconds.
 2. It finds the channel from the line the entry points at. A reply goes to that line's channel if it can send; everything else goes to `DEFAULT_CHANNEL`.
-3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks.
+3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks. Every text goes out with wacli's link previews off.
 4. After a crash, an entry still marked as sending is sent again, from the first chunk not recorded as sent.
 
 ### 5.4 A backup
@@ -502,7 +502,7 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 27. **The cause of a failure comes from the network log.** OpenRouter's last response during the run decides between a pause, a backoff and a counted attempt. *So:* an outage or a revoked key never uses up a message's four attempts. (6.9)
 28. **A batch is what arrived before a quiet moment:** 8 seconds without a new message, retries first, at most 20 items and at most the prompt's size limit. An edit or deletion brings in the message it changes, so the two are never handled out of order. (6.4, 6.5; section 8, row 12)
 29. **Views and memory are in git, and the runner is the only committer.** A run that leaves anything git wouldn't record (a symlink, a dotfile, an ignored file) fails and is cleaned up. *So:* everything a run changes is visible and revertible, and nothing hidden carries over. (6.2, 6.8)
-30. **Sessions belong to the runner.** pi gets a copy of the current day's session, and only that one file is copied back, after a successful run. *So:* a run can extend its own session but can't touch another or plant one for later. (6.6)
+30. **Sessions belong to the runner.** `sessions/` is hidden from the VM. pi gets a copy of the current day's session, and only that one file is copied back, after a successful run. *So:* a run can extend its own session but can't read or touch another, or plant one for later. (6.6)
 31. **The configuration belongs to the owner.** `config/` is read-only to the runner and invisible to pi, which sees a copy made for that run. (1, 8.5)
 32. **Preferences need no approval.** Settled. Standing instructions the owner gives by message go into `memory/preferences.md`; git history is the audit trail. The runner doesn't check them. (2, 7.4)
 33. **One agent, in a format that allows more.** Settled. `agents.yaml` is a map of agents, and v2 refuses more than one. (2, 6.1)
@@ -566,6 +566,10 @@ Four smaller things were aligned in DESIGN.md at the same time, without changing
 - the command that runs the tests as root sets `SCOOTER_ROOT_TESTS=1`, which the tests that create users wait for, so running the suite as root on a real machine creates none (10).
 
 On 2026-11-16 the owner removed the earlier prototype from the repository and moved the work from the `v2` branch to `main`. The top of DESIGN.md says so.
+
+Changes made to DESIGN.md after planning, while building, are recorded in `docs/DECISIONS.md`, each with the question behind it and the owner's answer. The first two came from milestone 0's checks of the tools, and the owner decided both on 2026-11-16 (section 0.8 there). This document includes them:
+- The bridge sends every WhatsApp text with `--no-preview`. Otherwise wacli fetches the first link in the text, which the agent wrote, to build a link preview (5.3; sections 2.2, 3.4 and 5.3 here).
+- The VM's mount of the agent's folder hides `sessions/`. A read-only mount alone let pi read every earlier session, where 6.6 said it never sees them (6.6; sections 2.7, 2.9, 2.10 and 3.3 here, and decision 30).
 
 ## 9. Deferred, and where the design leaves room
 

@@ -1,10 +1,10 @@
 # Decisions
 
-This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (6.6), are sections of DESIGN.md. "Row 8" is row 8 of the table in section 8 of ARCHITECTURE.md. "The plan" is `docs/plans/active/v2-linux-implementation.md`.
+This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. It also records the changes made to DESIGN.md while building, each with the question put to the owner and the answer. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (6.6), are sections of DESIGN.md. "Row 8" is row 8 of the table in section 8 of ARCHITECTURE.md. "The plan" is `docs/plans/active/v2-linux-implementation.md`.
 
 ## Milestone 0: check the tools
 
-Done on 2026-11-16, on the Linux machine of section 3 of the plan. No product code was written. What the milestone left in the repository:
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. No product code was written. Two outcomes went to the owner as questions, and 0.8 has the answers. What the milestone left in the repository:
 
 | Path | What |
 |---|---|
@@ -26,7 +26,7 @@ SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image npm test
 
 - The pi and VM checks boot real VMs from an image built from `config/image/build.json`, and run the real pi in them with the command line and the environment of 6.6. The scripted fake model in `test/support/fake-model.mjs` answers pi's requests from inside Gondolin's request hook, so the tests use no network and no key. Without QEMU or `SCOOTER_TEST_IMAGE` they skip themselves.
 - The wacli checks run the installed wacli against an empty store, and skip themselves when wacli isn't installed.
-- The fixtures of pi 6 are written by a script, run by hand: `SCOOTER_TEST_IMAGE=… node test/tools/capture-pi-requests.mjs`. Running it again changed nothing in them.
+- The fixtures of pi 6 are written by a script, run by hand: `SCOOTER_TEST_IMAGE=… node test/tools/capture-pi-requests.mjs`. Running it again changed nothing in them, and neither did running it with `sessions/` hidden (D11).
 - **KVM on this machine.** `agentw` is in the `kvm` group, but processes started from a session that began before the group was added don't have it, and for them `/dev/kvm` can't be opened. `sg kvm -c 'npm test'` runs the suite with the group. Without it Gondolin falls back to emulation and the same tests pass, more slowly. The results were the same both ways (0.7).
 - The versions under test: Gondolin 0.14.0, QEMU 8.2.2, Node 22.23.2 on the host; in the image, Alpine 3.23.8 with kernel 6.18.63, Node 24.22.3, pi 1.5.2, git 2.52.1, ripgrep 15.1.0, fd 10.2.0, poppler 25.12.0, libheif 1.23.0, curl 8.23.0 and bash 5.3.3. wacli is 0.26.0 and restic 0.19.1.
 
@@ -112,6 +112,16 @@ install -m 0755 wacli-extract/wacli ~/.local/bin/wacli
 *Question:* the policy allows only the fields and `anthropic-beta` values the pinned pi sends (6.13), and what pi sends depends on the model.
 *Choice:* besides one whole session on each route, `test/fixtures/pi-requests/catalog.json` records one request for each of the 403 OpenRouter models in pi's catalog, at three thinking levels.
 *Reason:* the model is the owner's to change (6.1). With the whole catalog recorded, milestone 8 can decide between allowing what the configured model sends and allowing what any model sends, and can test either.
+
+**D11. The checks run with the mounts as 6.6 lists them now.**
+*Question:* since the owner's answer (0.8, question 2), 6.6 lists `sessions/` as hidden. The checks had run with the mounts as 6.6 first listed them.
+*Choice:* `designMounts` in `test/support/vm.mjs` hides `sessions/`, so every pi and VM check runs that way. One test also mounts the agent's folder without the hiding, to show what the hiding is for.
+*Reason:* the checks are there to show that the tools do what the design relies on, and the design now relies on this. Milestones 7 and 8 use the same helper.
+
+**D12. Changes to DESIGN.md made while building are recorded in this file.**
+*Question:* section 8 of ARCHITECTURE.md is the record of the changes made to DESIGN.md while planning, and the plan refers to its rows by number. The owner's two answers (0.8) changed DESIGN.md again.
+*Choice:* the record of such a change is its entry here, with the question and the answer. The table in ARCHITECTURE.md keeps its 17 rows, and a paragraph below it points here. So does the top of DESIGN.md.
+*Reason:* rule 3 of section 2 of the plan puts what is decided while building in this file. The table's own introduction says its rows are the changes of 2026-11-15, made while planning.
 
 ### 0.4 The checks: pi
 
@@ -201,19 +211,22 @@ Each entry says what was run, what happened and what follows. The tests are in `
 The tests are in `test/tools/vm.test.mjs`.
 
 **VM 1. Mounts at the host's own paths.**
-*Ran:* the mounts of 6.6 at the paths the folders have on the host, with Gondolin's mount point moved to `/run/gondolin-vfs`: the agent's folder read-only, `views/`, `memory/` and `run/session/` writable, the datastore read-only. Then the same with the folders under `/data`, as in Docker. Then under `/data` with Gondolin's default mount point. Then with `sessions/` hidden by Gondolin's `ShadowProvider`.
+*Ran:* the mounts as 6.6 first listed them, at the paths the folders have on the host, with Gondolin's mount point moved to `/run/gondolin-vfs`: the agent's folder read-only, `views/`, `memory/` and `run/session/` writable, the datastore read-only. Then the same with the folders under `/data`, as in Docker. Then under `/data` with Gondolin's default mount point. Then with `sessions/` hidden by Gondolin's `ShadowProvider`. Since the owner's answer (0.8), that last one is how 6.6 lists the mounts, and how every check runs (D11).
 *Found:*
-- Reading works everywhere under the two mounts. Every change to the agent's folder or the datastore fails with "Read-only file system": creating, overwriting, appending, deleting, `mkdir`, `chmod`.
+- Reading works under the two mounts, at the same paths as on the host. Every change to the agent's folder or the datastore fails with "Read-only file system": creating, overwriting, appending, deleting, `mkdir`, `chmod`.
 - The three writable folders take files, and the host sees them at once. `run/session/`, two levels down inside the read-only `run/`, works like the other two.
 - Nothing else from the host is in the VM. The folders above the mounts hold only what leads to them.
 - Gondolin shows every mount a second time under its own mount point, with the same protection.
 - With the default mount point, `/data`, and mounts under `/data`, the VM doesn't start. `start()` fails after Gondolin's 2-minute limit.
-- The whole agent's folder is readable in the VM, `sessions/`, `state.json` and `.git` included.
-- `ShadowProvider` hides a path inside a mount. With `/sessions` hidden, the folder isn't there for the VM, under Gondolin's own mount point either, and can't be made anew.
+- Mounted read-only and nothing more, the whole agent's folder is readable in the VM, `sessions/`, `state.json` and `.git` included.
+- `ShadowProvider` hides a path inside a mount. With `/sessions` hidden, the folder isn't there for the VM, under Gondolin's own mount point either. It can't be made anew, and nothing can be written into it.
+- No way round the hiding was found. The VM follows links itself, inside its own file system. So a link made in `views/`, `memory/` or `run/session/` that names `sessions/`, from beside it or by its full path, ends at the same missing path, and a link to a file of the host outside the mounts finds nothing. A hard link to a hidden file fails too.
+- With `sessions/` hidden, pi and git work as before. pi's `ls` tool lists the agent's folder without it (pi 8), and `git status` and `git log` run (VM 5).
 
 *So:*
 - 6.6 and row 14 stand: the runner always moves Gondolin's mount point. `/run/gondolin-vfs` works. `/run` is a temporary file system that Gondolin's own boot sets up.
-- 6.6 also says pi never sees `sessions/`. With the mounts as 6.6 lists them, pi can read it. See 0.8, question 2.
+- 6.6 said pi never sees `sessions/`, while the mounts it listed let pi read it. The owner decided to hide the folder (0.8, question 2), and 6.6 now lists it as hidden.
+- For milestone 7: the mount of the agent's folder is `new ReadonlyProvider(new ShadowProvider(new RealFSProvider(<the agent's folder>), { shouldShadow: createShadowPathPredicate(['/sessions']) }))`. The hidden path is given from the mount's own root. `startVm` in `test/support/vm.mjs` builds it this way.
 
 **VM 2. Running a command from an argument list.**
 *Ran:* `vm.exec([program, ...arguments], { cwd, env })` with fourteen awkward arguments: empty, with spaces, quotes, line breaks, `$(…)`, backticks, a leading dash, and non-ASCII text.
@@ -266,17 +279,21 @@ The tests are in `test/tools/wacli.test.mjs`. They run wacli with the environmen
 *So:* the pairing check of 5.1 reads `data.authenticated`. The exit code doesn't tell paired from unpaired.
 
 **wacli 3. The commands and flags of 13.1.**
-*Ran:* `--help` for `sync`, `auth`, `auth status`, `messages list`, `media download`, `send text`, `send file` and `send react`, and `messages list` against an empty store.
+*Ran:* `--help` for `sync`, `auth`, `auth status`, `messages list`, `media download`, `send text`, `send file` and `send react`, and `messages list` against an empty store. After the owner's answer (0.8): the two send commands of 5.3 as the bridge will run them, `--no-preview` included, against a store that isn't paired.
 *Found:* every command and flag of 13.1 exists as written, with the defaults it gives. Three more things matter to later milestones:
-- **`send text` fetches the first URL in the text,** to send a link preview with it, unless `--no-preview` is given. wacli's `docs/send.md` says so, its source does it (`fetchLinkPreview` in `cmd/wacli/send.go`), and the flag is in the help. This wasn't run: sending needs a paired number. See 0.8, question 1.
+- **`send text` fetches the first URL in the text,** to send a link preview with it, unless `--no-preview` is given. wacli's `docs/send.md` says so, its source does it (`fetchLinkPreview` in `cmd/wacli/send.go`), and the flag is in the help. See 0.8, question 1. More from the same documentation and source, at the release's tag:
+  - It takes the first `http://` or `https://` URL, fetches that page, and then the image the page names. It refuses private and local addresses, follows up to 3 redirects, and gives up after 10 seconds. When the fetch fails, the text goes out without a preview, and wacli prints a line on stderr that starts `warning: link preview skipped for`.
+  - While `sync --follow` runs, a send is handed to the sync process, and that process does the fetching. The flag goes with the send: the request has a `no_preview` field (`cmd/wacli/send_ipc.go`), and the installed program holds that field's name.
+  - With the flag, `fetchLinkPreview` returns before it looks for a URL.
+  - None of this was run: sending needs a paired number. Not paired, `send text` with `--no-preview`, with and without `--reply-to`, and `send react` each stop at `not authenticated`, so wacli took every flag of 5.3. A flag it doesn't know stops it before that, with `unknown flag`. A text that begins with `--` is taken as the text.
 - `messages list --json` answers `{"messages": …, "page": {"has_more": …, "next_cursor": …}, …}` inside `data`, and `messages` is `null`, not an empty list, when there are none. With `--read-only` it fails when the store doesn't exist yet.
 - By its source, wacli prints a warning on stderr when two sends are less than 5 seconds apart, and still succeeds. `SEND_INTERVAL` is 1.5 seconds, so the bridge will see that warning often. This wasn't run: sending needs a paired number.
 
-*So:* milestones 2 and 5 can use the commands of 13.1 as they stand, with `--no-preview` if the owner agrees (0.8), and must treat a `null` list as empty.
+*So:* milestones 2 and 5 can use the commands of 13.1 as they stand, with `--no-preview` on every `send text` (0.8, question 1), and must treat a `null` list as empty.
 
 ### 0.7 What was run to verify the milestone, and what wasn't verified
 
-Run on 2026-11-16, from a clean checkout of the branch after `npm ci`:
+Run on 2026-11-16, from a clean checkout of the branch after `npm ci`. Run again the same day after the owner's answers (0.8), with `sessions/` hidden in the checks' mounts (D11), and the results were the same:
 
 | Command | Result |
 |---|---|
@@ -288,15 +305,31 @@ Run on 2026-11-16, from a clean checkout of the branch after `npm ci`:
 Not verified:
 - **arm64.** The machine can't run it. The build file names no architecture, and the helpers take the machine's own.
 - **The real OpenRouter.** The tests send it nothing. Two requests were made by hand on 2026-11-16, with a dummy key, to see its 401 answers, and the fake model's 401 answers are copies of those. The fake's answers to other statuses, and the streams it sends, follow the formats pi accepts, not a recording.
-- **wacli when paired.** Sending, receiving, and the shape of a list row need the bot number (gate G4).
+- **wacli when paired.** Sending, receiving, and the shape of a list row need the bot number (gate G4). That goes for `--no-preview` too: that wacli fetches nothing when given the flag is read from its documentation and source, not seen (0.6, 0.8).
 - **A native image build as root** (gate G2). Only the container build was run.
 
-### 0.8 Questions for the owner
+### 0.8 Questions for the owner, and the answers
 
-Two outcomes don't fit DESIGN.md as it stands. Neither stops milestones 1 to 4.
+Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4. Both went to the owner on 2026-11-16, each with a proposal, through the milestone workflow (`docs/plans/active/milestone-loop.workflow.js`). The owner was asked "Accept both proposals for milestone 0's two questions?" and answered "Yes, both", having been told that DESIGN.md would then be changed to match.
 
-**1. wacli's link previews (5.3; before milestone 5).** DESIGN.md gives the send command as `wacli send text --to <owner chat> --message <chunk>`. By wacli's documentation and its source (0.6), run like that it fetches the first URL in the text, from any public host, to build a link preview. The text is the agent's. So a misled agent could make the bridge's side fetch a URL of its choosing, with data in it, while internet access is off, and the request would be in no log. That goes against 3.1, which lists the bridge's only outbound connections, and against principles 2 and 4.
-*Proposed:* the bridge always passes `--no-preview`. The owner then sees links as plain text.
+**1. wacli's link previews (5.3; before milestone 5).**
+*The question, as asked:*
+> DESIGN.md sends replies with `wacli send text --to <owner chat> --message <chunk>`. By wacli 0.26.0's documentation (`docs/send.md`) and source (`fetchLinkPreview` in `cmd/wacli/send.go`), that command fetches the first URL in the text, from any public host, to build a link preview, unless `--no-preview` is given. The text is the agent's. So a misled agent could make the bridge's side fetch a URL of its choosing, with data in it, while internet access is off, and the request would be in no log. That goes against 3.1 (the bridge's only outbound connections) and principles 2 and 4. Proposed: the bridge always passes `--no-preview`, so links arrive as plain text. Do you agree?
 
-**2. Whether pi may read `sessions/` (6.6; before milestone 7).** 6.6 says "pi never sees `sessions/`", and 6.2 that pi only gets a copy of the current session. The mounts 6.6 lists make the whole agent's folder readable in the VM, `sessions/` included. pi can't change it either way.
-*Proposed:* hide `sessions/` from the VM with Gondolin's `ShadowProvider`, which works (VM 1). The other choice is to leave it readable and correct the sentence: the old sessions hold nothing the datastore and the views don't.
+*The answer:* yes. The bridge always passes `--no-preview` to `wacli send text`.
+*What follows:*
+- DESIGN.md gives the command with the flag, and the reason, in 5.3. It says the same in 3.1, the table of section 5, the controls of section 9, the delivery tests of section 10 and wacli's facts in 13.1. ARCHITECTURE.md says it in 2.2, 3.4 and 5.3, and the plan in a rule of milestone 5.
+- Milestone 5 builds it. Its delivery tests check that the flag is on every text's command line (section 10).
+- Not verified: that a paired wacli, given the flag, fetches nothing (0.6). That is now an item of section 14 of DESIGN.md, and gate G4 checks it. A way to tell, there: send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`. Without the flag, wacli should print its `link preview skipped` warning. With the flag it should print none, and the message should arrive without a preview.
+- Nothing else Scooter sends through wacli carries the agent's words. A reaction carries the emoji from the config, and v2 sends no files.
+
+**2. Whether pi may read `sessions/` (6.6; before milestone 7).**
+*The question, as asked:*
+> 6.6 says "pi never sees `sessions/`", but the mounts 6.6 lists make the whole agent folder readable in the VM, `sessions/` included (a test shows it; pi can't change it either way). Proposed: milestone 7 hides `sessions/` from the VM with Gondolin's ShadowProvider, which a test shows to work. The other choice is to leave it readable and correct that sentence in DESIGN.md. Which do you want?
+
+*The answer:* hide it from the VM with Gondolin's `ShadowProvider`, in milestone 7. pi does not see `sessions/`.
+*What follows:*
+- DESIGN.md lists `sessions/` as hidden in the mounts of 6.6. It says the same in 6.2, the controls of section 9, the runner and sandbox tests of section 10 and Gondolin's facts in 13.4. ARCHITECTURE.md says it in 2.7, 2.9, 2.10, 3.3 and decision 30, and the plan in a rule of milestone 7.
+- Milestone 7 builds it, the way VM 1 shows. What is hidden is part of the list of mounts. So the sandbox interface of milestone 4 carries it, a runner test checks that the sandbox is given it (section 10), and the fake sandbox leaves `sessions/` out of its folder, as the VM does.
+- This milestone's checks now run with the folder hidden (D11), and all of them pass (0.7). pi doesn't need the folder.
+- Only `sessions/` is hidden. `state.json` and `.git` stay in the VM, readable and not changeable, as 6.2 and section 9 have them. The protocol tells the agent it can read history with `git log` (7.1).
