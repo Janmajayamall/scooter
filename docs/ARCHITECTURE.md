@@ -426,7 +426,7 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 ### 5.3 Delivery
 
-1. The bridge takes outbox entries in order, one message every 1.5 seconds.
+1. The bridge takes outbox entries in order, one message every 5 seconds.
 2. It finds the channel from the line the entry points at. A reply goes to that line's channel if it can send; everything else goes to `DEFAULT_CHANNEL`.
 3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks. Every text goes out with wacli's link previews off.
 4. After a crash, an entry still marked as sending is sent again, from the first chunk not recorded as sent.
@@ -491,7 +491,7 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 19. **Commands are not messages.** They come only from WhatsApp, are logged as `command` lines and are never shown to the agent as work. The bridge answers three; `/new` reaches the runner through the datastore, like everything else. (5.4)
 20. **Delivery is at-least-once.** `sending.json` marks an entry in flight and records how many chunks went out. After a crash the bridge sends the rest again; the worst case is one repeated message. Decided with the owner on 2026-11-15, in place of searching wacli's store for what was sent. (5.3; section 8, row 3)
 21. **A reply follows the message it answers; everything else goes to `DEFAULT_CHANNEL`.** Settled. The bridge reads the channel from the line an entry points at. In v2 only WhatsApp can send, so replies about emails arrive there, unquoted. (5.3)
-22. **Sending is paced:** one message every 1.5 seconds and chunks of at most 3,500 characters, so the bot number doesn't look like spam. (5.3, 8.6)
+22. **Sending is paced:** one message every 5 seconds and chunks of at most 3,500 characters, so the bot number doesn't look like spam. (5.3, 8.6)
 
 ### 7.4 The runner and the agent
 

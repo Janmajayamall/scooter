@@ -287,7 +287,7 @@ The tests are in `test/tools/wacli.test.mjs`. They run wacli with the environmen
   - With the flag, `fetchLinkPreview` returns before it looks for a URL.
   - None of this was run: sending needs a paired number. Not paired, `send text` with `--no-preview`, with and without `--reply-to`, and `send react` each stop at `not authenticated`, so wacli took every flag of 5.3. A flag it doesn't know stops it before that, with `unknown flag`. A text that begins with `--` is taken as the text.
 - `messages list --json` answers `{"messages": …, "page": {"has_more": …, "next_cursor": …}, …}` inside `data`, and `messages` is `null`, not an empty list, when there are none. With `--read-only` it fails when the store doesn't exist yet.
-- By its source, wacli prints a warning on stderr when two sends are less than 5 seconds apart, and still succeeds. `SEND_INTERVAL` is 1.5 seconds, so the bridge will see that warning often. This wasn't run: sending needs a paired number.
+- By its source, wacli prints a warning on stderr when two sends are less than 5 seconds apart, and still succeeds. `SEND_INTERVAL` was 1.5 seconds when this was found, so the bridge would have seen that warning often. The owner has since raised it to 5 seconds (see "Between milestones 1 and 2: the send interval"). This wasn't run: sending needs a paired number.
 
 *So:* milestones 2 and 5 can use the commands of 13.1 as they stand, with `--no-preview` on every `send text` (0.8, question 1), and must treat a `null` list as empty.
 
@@ -542,3 +542,23 @@ Not verified:
 - **Durability.** The store syncs each line and each attachment. That a line survives a power cut can't be tested here. A crash is tested by leaving part of a line on disk and starting again.
 - **The pieces at work in a service.** Supervising wacli, the two locks together, and the store under real intake belong to milestones 2, 4, 5 and 10, which test them.
 - **Rule 5 of the import rules** has no test (D31).
+
+## Between milestones 1 and 2: the send interval
+
+One point from the review of milestone 0's pull request went to the owner on 2026-11-16, after milestone 1 was merged: how often the bridge sends (5.3, 8.6; before milestone 5). No milestone's agent made this change. It was committed straight to `main`.
+
+*The question, as asked:*
+> wacli prints a warning when two sends are less than 5 seconds apart, saying rapid automated sends may trigger WhatsApp rate limits or account restrictions. DESIGN.md sets `SEND_INTERVAL` to 1.5 seconds. […] On the send interval, I would raise it to 5 seconds: a reply in three parts then takes 10 seconds instead of 3, and replies to your own chat aren't urgent. wacli also has its own pacing option (`sync --send-spacing`, with a random gap).
+
+*The answer:* "yes to all", to a message that held this proposal and two changes to the milestone workflow. `SEND_INTERVAL` is 5 seconds.
+
+*What follows:*
+- DESIGN.md has 5 seconds in 5.3 and 8.6, and wacli's check in 13.1. ARCHITECTURE.md has it in 5.3 and in decision 22. `src/common/limits.mjs` and `test/limits.test.mjs` have the value. Nothing reads the constant yet: milestone 5 builds the outbox processor.
+- The interval is between any two sends, reactions included, as 5.3 has it. So in quiet mode the ✅ reactions to a batch of handled messages go out 5 seconds apart: a full batch of 20 takes 95 seconds, where it took about 29. The question put to the owner gave only the three-part reply as an example. This was reported to the owner with the change.
+- How wacli checks, from its source at v0.26.0 (`warnRapidSendIfNeeded` in `cmd/wacli/send_helpers.go`, called from `send.go` and `send_ipc.go`):
+  - Before it sends, it writes the time of the attempt to `.last-send-at` in its store folder. It warns when the next attempt comes less than 5 seconds after that time.
+  - It does this for a text sent directly, and for every kind of send handed to the sync process: text, file, sticker, edit and reaction.
+  - The time is taken when the send reaches the check, after wacli has resolved the recipient, not when the command starts. While `sync --follow` runs, sends are handed to the sync process (0.6), so the check runs there, and the warning is on that process's stderr, not the send command's.
+  - So at exactly 5 seconds a warning can still appear now and then, when a send reaches the check sooner after its start than the one before it did. The send goes out all the same. Milestone 5 must not count the warning as a failure.
+- Not used: `wacli sync --send-spacing`, which makes the sync process wait between the sends handed to it. The bridge paces its own sends (5.3), and one place is enough.
+- Not verified: any of this with a paired number, and whether 5 seconds is slow enough for WhatsApp. WhatsApp doesn't publish its limits. 5 seconds is the threshold that wacli's authors chose for their warning.

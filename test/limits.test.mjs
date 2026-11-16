@@ -18,7 +18,7 @@ test('limits: the values of 8.6, and the webhook port', () => {
     SETUP_RETRY_WAIT: 30 * MINUTE,
     FAILED_KEEP: 100,
     POLL_INTERVAL: SECOND,
-    SEND_INTERVAL: 1500,
+    SEND_INTERVAL: 5 * SECOND,
     CHUNK_CHARS: 3500,
     WEBHOOK_PORT: 8787,
     WEBHOOK_MAX_BYTES: 2 * MB,

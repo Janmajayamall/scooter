@@ -232,7 +232,7 @@ The runner asks for messages to be sent by writing entries to `/data/exchange/ou
   - A `text` with neither `replyTo` nor `about` goes to `DEFAULT_CHANNEL`: scheduled tasks, notices, the backfill summary and the bridge's backup messages.
 
   `DEFAULT_CHANNEL` (8.2) must be a channel that can send, so in v2 it can only be `whatsapp`; the bridge refuses to start with anything else.
-- **Processing:** the bridge checks the folder every second and handles entries in order, sending at most one message every 1.5 seconds.
+- **Processing:** the bridge checks the folder every second and handles entries in order, sending at most one message every 5 seconds.
   - `text`: split the text into chunks of at most 3,500 characters at paragraph or line breaks, and send each with the channel's `sendText`, quoting only with the first. WhatsApp: `wacli send text --to <owner chat> --message <chunk> --no-preview`, and on the first chunk `--reply-to <sourceId of replyTo>`.
   - Every text is sent with `--no-preview`. Without it, wacli fetches the first URL in the text to build a link preview (13.1). Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request (3.1, 6.13). So links reach the owner as plain text.
   - `react`: the channel's `react`. WhatsApp: `wacli send react --to <owner chat> --id <sourceId of target> --sender <owner JID> --reaction <emoji>`.
@@ -818,7 +818,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `SETUP_RETRY_WAIT` | 30 minutes | 6.9 | The wait between tries after a setup error |
 | `FAILED_KEEP` | 100 | 6.8 | How many entries `failed` keeps |
 | `POLL_INTERVAL` | 1 second | 5.3, 5.6, 6.4 | How often the runner looks for new lines, and the bridge checks the outbox and the email spool |
-| `SEND_INTERVAL` | 1.5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam |
+| `SEND_INTERVAL` | 5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam. wacli warns about sends closer together than 5 seconds (13.1) |
 | `CHUNK_CHARS` | 3,500 | 5.3 | The longest piece of a reply, under WhatsApp's limit |
 | `WEBHOOK_MAX_BYTES` | 2 MB | 5.2 | The largest webhook body accepted from wacli |
 | `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back, how many rows |
@@ -1016,6 +1016,7 @@ The implementation plan under `docs/plans/` splits these milestones into smaller
   - `wacli send text --to <jid> --message <text> [--no-preview] [--reply-to <message ID>] [--reply-to-sender <jid>]` returns `data: {sent, to, id}`. `--reply-to` quotes a message, which must be in wacli's local store (incoming or sent).
   - Link previews: unless `--no-preview` is given, `send text` fetches the first `http://` or `https://` URL in the text, and the image that page names, to send a preview with the message. The fetch refuses private and local addresses, follows up to 3 redirects, and gives up after 10 seconds. While `sync` runs, it is the sync process that fetches, and the flag travels with the send. This is from wacli's `docs/send.md` and its source (`fetchLinkPreview` in `cmd/wacli/send.go`), read on 2026-11-16. Sending needs a paired number, so it hasn't been run (section 14).
   - `send file --to --file [--caption] [--reply-to]` and `send react --to --id --reaction [--sender]` also return the sent message's `id`.
+  - Pace: wacli notes the time of each send it attempts, and prints a warning on stderr when the next one comes less than 5 seconds later. The send still goes out. It does this for a text sent directly, and for every kind of send handed to the sync process, reactions included. While `sync` runs, it is the sync process that checks and warns. This is from wacli's source (`warnRapidSendIfNeeded` in `cmd/wacli/send_helpers.go`), read on 2026-11-16, and it hasn't been run.
   - wacli keeps the messages it sends in its store.
 - **Phone:** the bot number must be registered in WhatsApp Business on a phone that's opened at least every two weeks.
 

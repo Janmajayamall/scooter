@@ -28,8 +28,9 @@ const values = {
   // How often the runner looks for new lines, and the bridge checks the outbox and the email
   // spool (5.3, 5.6, 6.4).
   POLL_INTERVAL: 1 * SECOND,
-  // At most one WhatsApp message this often, so the bot number doesn't look like spam (5.3).
-  SEND_INTERVAL: 1.5 * SECOND,
+  // At most one WhatsApp message this often, so the bot number doesn't look like spam. wacli warns
+  // about sends closer together than 5 seconds (5.3, 13.1).
+  SEND_INTERVAL: 5 * SECOND,
   // The longest piece of a reply, in characters, under WhatsApp's limit (5.3).
   CHUNK_CHARS: 3500,
   // Where wacli posts its webhooks, on loopback (5.1, 5.2).
