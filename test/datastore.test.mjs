@@ -360,7 +360,7 @@ test('datastore: nothing is truncated when the last line is complete', async t =
 })
 
 test('datastore: the index is rebuilt on restart', async t => {
-  const { open, clock } = setup(t)
+  const { open, clock, logFile } = setup(t)
   let store = open()
   await store.append(incoming('coffee 150', { sourceId: 'MSG-1' }))
   await store.append({ kind: 'message', dir: 'out', at: '2026-11-09T15:44:00Z', source: 'whatsapp', sourceId: 'OUT-1', by: 'lifelog', replyTo: 1, text: 'Work or personal?' })
@@ -394,6 +394,11 @@ test('datastore: the index is rebuilt on restart', async t => {
     assert.deepEqual(index.current(5), { text: 'attached', editedIn: null, deletedIn: 7 })
     assert.equal(index.current(4), undefined)
     assert.equal(index.current(99), undefined)
+    // Each line's number in its day's log, which the runner's prompt points at.
+    assert.deepEqual([...index.entries()].map(entry => `${entry.day}:${entry.number}`), ['2026/11/09:1', '2026/11/09:2', '2026/11/10:1', '2026/11/10:2', '2026/11/10:3', '2026/11/10:4', '2026/11/10:5'])
+    for (const { day, number, line } of index.entries()) {
+      assert.equal(JSON.parse(fs.readFileSync(logFile(day), 'utf8').split('\n')[number - 1]).seq, line.seq)
+    }
   }
   check(store.index)
   store = open()
@@ -413,6 +418,18 @@ test('datastore: the index refuses lines out of order', () => {
   assert.equal(index.lastSeq, 2)
   assert.equal(index.newestDay, '2026/11/10')
   assert.throws(() => createIndex().add(line(2), '2026/11/09'), /seq 2 follows seq 0/)
+})
+
+test('datastore: the index lists the commands after a seq, for the runner', () => {
+  const index = createIndex()
+  const base = { dir: 'in', at: '2026-11-09T15:43:02Z', source: 'whatsapp', trust: 'owner' }
+  const texts = ['coffee', '/new', 'lunch', '/status', '/help']
+  texts.forEach((text, n) => index.add({ ...base, seq: n + 1, kind: text.startsWith('/') ? 'command' : 'message', text }, '2026/11/09'))
+  assert.deepEqual(index.commandsAfter(0), [2, 4, 5])
+  assert.deepEqual(index.commandsAfter(2), [4, 5])
+  assert.deepEqual(index.commandsAfter(3), [4, 5])
+  assert.deepEqual(index.commandsAfter(5), [])
+  assert.deepEqual(createIndex().commandsAfter(0), [])
 })
 
 test('datastore: a damaged datastore stops the store, and the error says where', async t => {

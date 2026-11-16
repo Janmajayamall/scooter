@@ -8,7 +8,7 @@ const SECOND = 1000
 const MINUTE = 60 * SECOND
 const MB = 1024 * 1024
 
-test('limits: the values of 8.6, the webhook port, and the two of milestone 2', () => {
+test('limits: the values of 8.6, the webhook port, and those of milestones 2 and 3', () => {
   const expected = {
     BATCH_MAX_ITEMS: 20,
     PROMPT_MAX_BYTES: 96 * 1024,
@@ -38,6 +38,10 @@ test('limits: the values of 8.6, the webhook port, and the two of milestone 2', 
     BACKUP_LOCK_EXTRA: 2 * MINUTE,
     RESTIC_CHECK_WEEKDAY: 7,
     STATUS_WINDOW: 24 * 60 * MINUTE,
+    // Not in 8.6: docs/DECISIONS.md, milestone 3.
+    MEMORY_MAX_BYTES: 64 * 1024,
+    GIT_CALL_TIMEOUT: MINUTE,
+    CONFIG_RANGES: { timeout_minutes: [1, 120] },
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)

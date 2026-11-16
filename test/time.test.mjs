@@ -8,12 +8,15 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
   fromLocal,
+  isDate,
   isTimeZone,
   isoSeconds,
   localDate,
   nextLocalTime,
   parseIsoSeconds,
   parseLocalTime,
+  previousLocalTime,
+  shiftDate,
   systemClock,
   toLocal,
   utcDate,
@@ -210,6 +213,40 @@ test('time: a zone that skips a date has nothing due on it', () => {
     nextLocalTime(parseLocalTime('Fri 10:00'), 'Pacific/Apia', at('2011-12-29T00:00:00Z')),
     at('2012-01-05T20:00:00Z'),
   )
+})
+
+test('time: the last time a schedule came due is the one before its next', () => {
+  const zones = ['Asia/Kolkata', 'America/New_York', 'Europe/London', 'Australia/Lord_Howe', 'Pacific/Apia', 'America/St_Johns']
+  const schedules = ['00:00', '01:30', '02:30', '21:30', 'Sun 01:30', 'Fri 10:00'].map(parseLocalTime)
+  // Every few hours across 2011 to 2012 and 2026, which hold daylight-saving changes in each zone
+  // and Samoa's skipped date.
+  const starts = [at('2011-12-20T00:00:00Z'), at('2026-03-01T00:00:00Z'), at('2026-10-20T00:00:00Z')]
+  for (const timeZone of zones) {
+    for (const schedule of schedules) {
+      for (const start of starts) {
+        for (let now = start; now < start + 20 * 24 * HOUR; now += 7 * HOUR + 13 * 60 * 1000) {
+          const previous = previousLocalTime(schedule, timeZone, now)
+          assert.ok(previous <= now)
+          // Nothing comes due between the previous time and now, and the next after it is after now.
+          assert.ok(nextLocalTime(schedule, timeZone, previous) > now, `${timeZone} ${JSON.stringify(schedule)} ${isoSeconds(now)}`)
+        }
+      }
+    }
+  }
+  // At the instant itself, that instant.
+  assert.equal(previousLocalTime(parseLocalTime('21:30'), 'Asia/Kolkata', at('2026-11-09T16:00:00Z')), at('2026-11-09T16:00:00Z'))
+  assert.equal(previousLocalTime(parseLocalTime('21:30'), 'Asia/Kolkata', at('2026-11-09T15:59:59Z')), at('2026-11-08T16:00:00Z'))
+})
+
+test('time: dates, and days added to them', () => {
+  assert.equal(isDate('2026-11-09'), true)
+  assert.equal(isDate('2028-02-29'), true)
+  for (const text of ['2026-02-29', '2026-13-01', '2026-11-9', '2026/11/09', 20261109, null]) assert.equal(isDate(text), false, String(text))
+  assert.equal(shiftDate('2026-11-01', -1), '2026-10-31')
+  assert.equal(shiftDate('2026-12-31', 1), '2027-01-01')
+  assert.equal(shiftDate('2028-03-01', -1), '2028-02-29')
+  assert.equal(shiftDate('2026-11-09', 0), '2026-11-09')
+  assert.throws(() => shiftDate('2026-02-30', 1), /not a date/)
 })
 
 test('time: which names are time zones', () => {

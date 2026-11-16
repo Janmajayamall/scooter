@@ -72,6 +72,17 @@ const values = {
   RESTIC_CHECK_WEEKDAY: 7,
   // The period `/status` counts over (5.4, 6.13).
   STATUS_WINDOW: 24 * HOUR,
+  // The most of each memory file, `preferences.md` and `needs-review.md`, that goes into the
+  // agent's system prompt. pi writes them, and one that grew without bound would make every run's
+  // request too large, with no run left that could shorten it (6.5).
+  MEMORY_MAX_BYTES: 64 * KB,
+  // The longest a git command of the runner may take before it is stopped (6.2, 6.8).
+  GIT_CALL_TIMEOUT: 1 * MINUTE,
+  // The values a number in `agents.yaml` may take, lowest and highest (6.1). A run can't be given
+  // less than a minute, and a slip of the hand can't keep a backup waiting for hours (5.5).
+  CONFIG_RANGES: {
+    timeout_minutes: [1, 120],
+  },
   // The values a numeric setting may take, lowest and highest (8.2). A setting outside its range
   // stops the service at startup, so a bad value can't make Scooter run batches in a tight loop,
   // hammer the mailbox, or keep no backups (8.6).

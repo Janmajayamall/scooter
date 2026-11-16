@@ -178,6 +178,24 @@ export function localDate(ms, timeZone) {
   return toLocal(ms, timeZone).date
 }
 
+const DATE = /^(\d{4})-(\d{2})-(\d{2})$/
+
+// Whether `text` is a calendar date written as `2026-11-09`, one that exists.
+export function isDate(text) {
+  const match = typeof text === 'string' ? DATE.exec(text) : null
+  if (!match) return false
+  const [year, month, day] = match.slice(1).map(Number)
+  return partsOfWall(wallFromParts({ year, month, day })).date === text
+}
+
+// The date `days` after a date, or before it when `days` is negative: `shiftDate('2026-11-01',
+// -1)` is `2026-10-31`. Calendar arithmetic, with no time zone involved.
+export function shiftDate(date, days) {
+  if (!isDate(date)) throw new RangeError('not a date')
+  const [year, month, day] = date.split('-').map(Number)
+  return partsOfWall(wallFromParts({ year, month, day: day + days })).date
+}
+
 function wallFromParts({ year, month, day, hour = 0, minute = 0, second = 0 }) {
   const wall = new Date(0)
   wall.setUTCFullYear(year, month - 1, day)
@@ -251,4 +269,24 @@ export function nextLocalTime(schedule, timeZone, after) {
     return instant
   }
   throw new Error(`no next time found for the schedule in ${timeZone}`)
+}
+
+// The last instant at or before `atOrBefore` at which a schedule came due in the zone, by the same
+// rule as `nextLocalTime`: one instant for each local date, and none on a date the zone skips.
+export function previousLocalTime(schedule, timeZone, atOrBefore) {
+  const { weekday, hour, minute } = schedule
+  const start = toLocal(atOrBefore, timeZone)
+  const firstDay = wallFromParts({ year: start.year, month: start.month, day: start.day })
+  // A schedule's instants go up with their dates, so the first one found going back is the last.
+  // One day ahead, because the zone's date can run behind the instant's, and far enough back to
+  // reach the same weekday again past a date the zone's calendar skips.
+  for (let n = 1; n >= -15; n--) {
+    const day = partsOfWall(firstDay + n * DAY)
+    if (weekday !== null && day.weekday !== weekday) continue
+    const instant = fromLocal({ year: day.year, month: day.month, day: day.day, hour, minute }, timeZone)
+    if (instant > atOrBefore) continue
+    if (localDate(instant, timeZone) !== day.date) continue
+    return instant
+  }
+  throw new Error(`no earlier time found for the schedule in ${timeZone}`)
 }
