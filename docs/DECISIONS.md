@@ -262,6 +262,7 @@ The tests are in `test/tools/vm.test.mjs`.
 - It works when installed with `--ignore-scripts` (D3).
 - Its builder unpacks Alpine's packages without recording them, so `apk info` in the image lists only the 16 packages of Alpine's base. `packages.txt` (6.12) can't come from there.
 - The image's `manifest.json` holds the build config, pi's install command included, and the build time.
+- With an `onRequest` hook that answers requests itself, requests to hosts outside `allowedHosts` still reach the hook: `curl` in the VM to `https://example.com`, `https://github.com` and `http://example.org` each reached the scripted fake model and got its 404. That is what makes "no request to any other path or host" in pi 6 a checked statement, and milestone 8's hook must refuse other hosts itself. A hook that passes such a request on wasn't tried. This was found by the review of milestone 0's pull request, and recorded in milestone 2 (2.2).
 - In the VM, `/root` and `/tmp` are temporary file systems made at boot, each up to half the VM's memory. The root disk has about 96 MB free.
 
 ### 0.6 The checks: wacli
@@ -562,3 +563,186 @@ One point from the review of milestone 0's pull request went to the owner on 202
   - So at exactly 5 seconds a warning can still appear now and then, when a send reaches the check sooner after its start than the one before it did. The send goes out all the same. Milestone 5 must not count the warning as a failure.
 - Not used: `wacli sync --send-spacing`, which makes the sync process wait between the sends handed to it. The bridge paces its own sends (5.3), and one place is enough.
 - Not verified: any of this with a paired number, and whether 5 seconds is slow enough for WhatsApp. WhatsApp doesn't publish its limits. 5 seconds is the threshold that wacli's authors chose for their warning.
+
+## Milestone 2: bridge intake, WhatsApp
+
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md and ARCHITECTURE.md changed only where they still listed as open what milestone 0 had settled (2.3).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/bridge/channels/index.mjs` | What the core asks of a channel, and the record, with its check |
+| `src/bridge/channels/whatsapp.mjs` | The WhatsApp channel: wacli's environment, the pairing check, sync's supervision, the webhook, wacli's two formats, the filters and owner matching, catch-up, downloads |
+| `src/bridge/intake.mjs` | Records to datastore lines, with their attachments |
+| `src/bridge/state.mjs` | `bridge/state.json` |
+| `src/bridge/main.mjs` | `scooter bridge`: one bridge per data folder, the store, the state, the channel and intake |
+| `src/common/files.mjs` | `copyUntrustedFile` |
+| `test/support/` | A fake channel; the wacli stub and its helper, with samples of wacli's two formats |
+| `test/intake.test.mjs`, `test/whatsapp.test.mjs`, `test/bridge.test.mjs` | The tests of this milestone |
+
+It also settled the smaller points of the reviews of milestones 0 and 1, in code, tests and documents (2.2).
+
+### 2.1 Decisions
+
+**D34. A record has a list of attachments, and an attachment can say why it isn't to be downloaded.**
+*Question:* 5 defines a record as the normalized message without what only WhatsApp needs, and `download(record, n, path)` takes the number of an attachment.
+*Choice:* `src/bridge/channels/index.mjs` gives the fields: `source`, `id`, `at` (a UTC time to the second, or null when the channel doesn't know, and then the time of arrival), `text`, `subject` on email only, `attachments`, `replyToId`, `replyToPreview`, `reactionToId`, `reactionEmoji` ("" for a removed reaction, null when it isn't one), `edited`, `revoked` and `forwarded`. Each attachment is `{ type, mime, name, bytes, error }`; `error` says why the core mustn't try to download it, as for a location (D40). `checkRecord` is the shape in code. Intake refuses, and logs, a record that fails it.
+*Reason:* email (milestone 6) has several attachments and can have an `.eml` that couldn't be parsed. One shape covers both, and the core needs no channel's details.
+
+**D35. A download is copied out of wacli's folder with care, into one of the bridge's own.**
+*Question:* 5.2 step 6 downloads into `wacli/staging/` and copies the file into the day folder. wacli owns that folder and runs third-party code; the bridge is root.
+*Choice:* the core picks the `path` of `download`, in `bridge/incoming/`, which only root can write. The WhatsApp module runs `wacli media download --chat <chat> --id <id> --output <staging>/<a name of its own>`, checks that wacli says it saved the file there, and copies it to `path` with `copyUntrustedFile`, which opens it without following a link, and refuses anything but a regular file with one name, owned by `scooter-wacli`, and no larger than `ATTACHMENT_MAX_BYTES`. The staged file is removed either way. The store copies `path` into the day folder, and intake removes it. `bridge/incoming/` is emptied at startup.
+*Reason:* a link, or a hard link, left in the staging folder in place of the download would make root copy a file wacli can't read, such as a key, into the datastore, where the runner and pi read it. *Cost:* each attachment is copied twice. The mail spool (milestone 6) needs the same copy, so it is in `src/common/files.mjs`.
+*Also:* a record carries no chat (5), and `download` needs one. The module keeps the chat of each record it hands over in a `WeakMap` keyed by the record.
+
+**D36. A failed download is tried again after 10 seconds, twice.**
+*Choice:* a new constant, `MEDIA_DOWNLOAD_RETRY_WAIT`, 10 seconds, before each of the `MEDIA_DOWNLOAD_RETRIES`. A download refused as too large (`EFBIG`) isn't retried. An attachment whose size the channel gives as over `ATTACHMENT_MAX_BYTES` isn't downloaded, and a downloaded file over it is thrown away. Either way the line gets `media` with `too large, not downloaded`; after three failures, `download failed`; and when the store couldn't copy the file, `could not be stored`, with the message stored without its files (D29).
+*Reason:* a download that fails for good leaves the message without its attachment for ever, and an immediate retry would meet the same reconnecting wacli. Records wait in one queue meanwhile, so the wait is short: 20 seconds at most for one failing attachment.
+
+**D37. Every wacli call except sync has a timeout of 6 minutes.**
+*Choice:* a new constant, `WACLI_CALL_TIMEOUT`. wacli stops its own commands after 5 minutes (its `--timeout`), and this bounds a call that doesn't, so one stuck download can't hold up every message after it.
+
+**D38. Intake takes one record at a time, from the webhook and catch-up alike.**
+*Choice:* one queue in `intake.mjs`. A message whose ID is stored is skipped before its attachments are downloaded again: catch-up lists the last two minutes again every time. A reaction, an edit or a deletion whose target isn't a message or a command is skipped as having an unknown target, and the store refuses one that gets there (2.2, the review of milestone 1, point 5). A failed store stops intake and the bridge, which exits with 1 so its service manager starts it again (D29).
+
+**D39. A command is a text alone, trimmed.**
+*Choice:* a record is a command when its channel takes commands, it has no attachments, and its trimmed text is one of the four exactly. The line's text is the trimmed command. A command that quotes a message is still a command, and its line has no `replyTo`, which only messages have (4.2). A forwarded `/new` is a command too: the plan's rule has no exception, and the owner forwarded it. `COMMANDS` is in `line.mjs`, and `checkLine` holds a command line's text to it, so the runner can match it exactly.
+
+**D40. A location is stored as media that isn't a file.**
+*Question:* wacli gives a location, and a live location, a `Media` of its own type, with the place's name as the caption and no file. 4.2 has no field for coordinates.
+*Choice:* the line has the caption as its text, and `media: { type: "location", error: "not a file, so not stored" }`. Any other media type without a file is treated the same. Stickers are dropped (5.2 step 4).
+*Reason:* the line format is a contract (D27), and a list row has no coordinates at all, so writing the webhook's into the text would store the same message two ways depending on which delivered it. *Cost:* the coordinates are lost. If the owner wants them, a field for them is a change to 4.2.
+
+**D41. A media message's text is its caption.**
+*Choice:* `Media.Caption`, or `MediaCaption` in a list row, not `Text`. wacli puts the caption in `Text` too, but also writes `[Audio]` there for audio without one, which the owner never wrote.
+
+**D42. wacli's formats, as its source at v0.26.0 has them.**
+Read on 2026-11-16 from GitHub at the tag, not run: sending and receiving need a paired number (gate G4). Both are in `fromWebhook` and `fromListRow` in `whatsapp.mjs`, and nowhere else (the plan's rule for this milestone).
+- *A webhook payload* (`internal/app/webhook.go`) is wacli's `ParsedMessage` with Go's field names, with `Media` replaced by `{Type, Caption, Filename, MimeType, FileLength}` and `ChatName` added. The signature is `sha256=` and the lowercase hex HMAC-SHA256 of the raw body, as 13.1 says. Messages without an ID aren't posted.
+- *An edit* (`extractProtocolMutation` in `internal/wa/messages.go`) carries the ID of the message it changes, `Edited: true` and the new text; a *deletion* carries the ID and `Revoked: true`, with no text and no media. The time is the edit's or the deletion's. This is what 13.1 guessed from `sync_edits.go`.
+- *A list row* (`internal/store/types.go`) is the stored message, with Go's field names except `quoted_msg_id` and `quoted_sender_jid`. It has no preview of what it quotes and no size for its media. An edit updates the stored message, so an edited row has the current text and `Edited: true`: `fromListRow` returns it as the message and then its edit. Whichever of the two is already stored is skipped. So a message missed while wacli was down and edited since is stored as it is now, and an edit missed is stored as an edit. A deleted row becomes a deletion, skipped when the message isn't stored.
+- *`messages list --after`* (`ListMessages` in `internal/store/messages.go`) lists rows strictly after the time, compared in whole seconds, oldest first with `--asc`.
+- *`media download --output <file>`* (`cmd/wacli/media_download.go`) saves to the file as given, and answers with its `path`.
+
+**D43. Catch-up.**
+- *Where it starts:* "the newest incoming WhatsApp line" is the one with the highest `seq`, and its `at` is used. Intake knows it: from the datastore at startup, then from each line it stores. A catch-up that stores an older message moves the start back, which only lists more.
+- *A full page* goes on from a second before the last row's time, because `--after` is strict to the second and other rows may share it. If the whole page fell within one second, it goes on from that second, and the rest of it is skipped. 500 messages in one second don't come from one person.
+- *The chat* is the owner's chat at the start of the catch-up, for all its pages.
+- It runs at startup, at once, alongside the pairing check, and then every `CATCHUP_INTERVAL`. While wacli is known to be unpaired it doesn't run: there is nothing to list, and the store wacli would read may not exist. One that fails is logged, and the next comes at the usual time. It stops between rows when the channel stops.
+
+**D44. Owner matching, and the owner's chat.**
+- A JID is compared in lower case, without the `:device` suffix and without the `.agent` part whatsmeow writes before it. User parts are digits, so nothing else is lost.
+- `bridge/state.json` keeps `ownerChat` as `{ jid, at }`: the chat of the owner's newest message, and its time. It moves only to a message at least as new, so catch-up delivering older rows doesn't move it back. If it can't be written, that is logged and the message goes on.
+- `firstStart` is written on the very first start and never changed. A state file that isn't one stops the bridge, naming the file: it is written atomically, so a crash doesn't leave one.
+
+**D45. The pairing check runs before every start of sync.**
+*Choice:* `proc.supervise` takes a `before` hook, awaited before each start, restarts included. The WhatsApp module's hook asks `auth status` and, until wacli is paired, asks again every `AUTH_CHECK_INTERVAL`. "Not paired, run `scooter pair`" is logged when that becomes so, not every minute. The webhook secret is new each time the channel starts, at the bridge's start and, from milestone 10, after each backup. A restart of sync keeps it: the webhook server, which checks it, keeps running.
+*Reason:* a session logged out from the phone makes sync fail at once on every restart. Checking first turns that into one log line and a check a minute.
+*Also:* `status()` says `linked`, `not linked; run scooter pair`, `starting`, `stopped`, or that wacli stopped and starts again shortly.
+
+**D46. The webhook server's answers.**
+404 for any path but `/wacli`, query strings included; 405 for any method but POST; 413 when the body is over `WEBHOOK_MAX_BYTES`, by its `content-length` or by what arrives, and the connection is then closed; 401 for a missing or wrong signature; 200 for a signed body, before it is handled. A signed body that isn't JSON, or is a message without an ID, is logged by its size only. One with an `EventType` is ignored (5.2 step 2). It listens on `127.0.0.1` only. Tests set `WEBHOOK_PORT` to 0, and the URL given to sync names the port the server got.
+
+**D47. What the WhatsApp module logs.**
+Drops are logged from webhooks only, by message ID and reason: catch-up lists the bot's own replies again every ten minutes. A sender who isn't the owner is logged by JID, with the hint of 5.2 step 4. Nothing wacli writes is logged: its errors can name chats and files. Each catch-up logs how many rows it read, delivered and dropped.
+
+**D48. One bridge per data folder.**
+*Question:* two bridges on one datastore would give out the same `seq`, and then neither starts until the log is repaired by hand (the review of milestone 1, point 8).
+*Choice:* the bridge listens on a Unix socket, `bridge/bridge.sock`, before it opens the store. A second bridge finds it answering and refuses to start. One left by a bridge that was killed doesn't answer, and is replaced.
+*Reason:* a lock file holding a pid can mistake an unrelated process that got the same pid for a bridge, as happens in a container started afresh, and then the bridge never starts. A socket answers only while its bridge runs, and works across containers that share the folder. *Cost:* two bridges starting at the same instant over a dead socket could both replace it. Starting the bridge is the service manager's job, so that is accepted.
+
+**D49. The bridge's startup.**
+In order: it looks up `scooter-wacli` and `scooter-runner`; makes the data folder 0755 if it is missing, since every service user passes through it to reach its own, and its own folder 0700; takes the socket; empties `bridge/incoming/`; opens the store, owned by root with the runner's group (`{ uid: 0, gid: <scooter-runner's gid> }`, 3.2); opens the state; starts the channel. wacli's folders are made 0700 for `scooter-wacli` if they are missing, which in production `setup` does (milestone 12). A startup error is printed and the command exits with 1. On SIGTERM or SIGINT the channel stops, intake finishes what it was handed, and the command exits with 0. Milestones 5, 6 and 10 add the outbox, email and the leftover `backup.lock`.
+
+**D50. `src/bridge/main.mjs` may import `proc.mjs`.**
+*Question:* D31 holds that in the bridge only the two channels and `backup.mjs` import `proc.mjs`. The bridge looks up its users by name, which runs `id`.
+*Choice:* `main.mjs` is allowed too: it makes the one `proc` the bridge shares, hands it to the channels, and uses its `lookupUser`. The test that names programs still holds `wacli`, `restic` and the email reader to their modules.
+
+**D51. A stopped program is waited for until it exits.**
+*Question:* the review of milestone 1 (point 1) found that a timeout didn't bound `run` when what the program started kept its output open.
+*Choice:* once a program that was stopped has exited, `run` closes its pipes from its own side and returns. A program that ends by itself is still waited for until its output closes, so all of it is collected. This adds to D25: a stop takes at most `STOP_GRACE`, whatever the program left behind.
+
+**D52. The wacli stub.**
+*Choice:* the wrapper first on `PATH` is a Node file whose `#!` line names this Node's own path, and it imports `test/support/wacli-stub.mjs`. Its control folder is beside it. The stub records every call (arguments, environment, user, group, pid), answers from fixtures read afresh at each call, and, running as `sync --follow`, posts the files the test puts in its `webhooks/` folder, signed with the secret on its command line.
+*Reason:* 10 says shell wrappers. wacli's environment has no `PATH` to find `node` on, and `dash` adds `PWD` to the environment the stub would record, so the least-privilege test couldn't check that wacli gets exactly its six variables.
+*Also:* the tests run the bridge in-process with a fake clock, and once as a real process, `scooter bridge` on the real port, which skips itself when the port is in use. As root, the tests give no users, so wacli runs as root, except one test that runs it as made-up IDs and checks the owners and modes (D32). The tests move the clock ten minutes at a time, so they give wacli calls a timeout far beyond that, except the test of the timeout.
+
+**D53. Where the VM tests keep Gondolin's cache folder.**
+*Question:* `test/support/vm.mjs` makes Gondolin's cache folder in the real temporary folder when the module loads, in every process that imports it, whether or not a VM test runs (the review of milestone 0, point 5).
+*Choice:* kept as milestone 0 made it. Gondolin fixes the folder for its list of running VMs when its module loads (0.5), before any test has a folder of its own, and the folder is removed when the process exits.
+*Cost:* a process that is killed leaves `scooter-vm-*` in the temporary folder. Rule 4 of section 2 of the plan has each test work in its own folder; this is one folder per test process instead.
+
+### 2.2 The reviews of milestones 0 and 1
+
+Both pull requests were approved with smaller points listed. Each is below, with what became of it.
+
+The review of milestone 0 (pull request 1):
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | DESIGN.md still lists as open what milestone 0 settled, and says `anthropic/*` models go to the messages route | Settled. 5.1, 6.6, 6.12, 6.13, 13.2 and 14 of DESIGN.md, and 3.5 of ARCHITECTURE.md, now say what milestone 0 found (2.3) |
+| 2 | The image's contents leave out `tzdata` and `curl` | Settled. Both documents list them, with the reason (D7) |
+| 3 | wacli warns about sends closer than 5 seconds | Settled by the owner before this milestone ("Between milestones 1 and 2"). The related fact: `send text` and `send react` have `--post-send-wait`, default 2 seconds, which keeps wacli's connection open after a send, seen in the installed binary's help on 2026-11-16. Milestone 5's pacing will meet it; not run, since sending needs a paired number |
+| 4 | A fact about Gondolin that pi 6 rests on isn't written down | Settled. In 0.5, "Also found about Gondolin 0.14.0", as the review found it. Not run again |
+| 5 | `test/support/vm.mjs` makes a folder outside the test's own | Settled by recording the choice (D53) |
+| 6 | Three findings seen by hand and held by no test | Two settled: pi 5 asserts a 429, and VM 4 that a killed VM's entry in Gondolin's list stays behind. Both pass with KVM. Left: the 2-minute default start limit, which would add 2 minutes to every run of the VM tests |
+| 7 | Milestone 4 doesn't say the sandbox's mounts carry what is hidden | Settled. A rule under milestone 4 in the plan |
+
+The review of milestone 1 (pull request 2):
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A timeout doesn't bound `run` when a descendant keeps the output open | Settled (D51), with a test |
+| 2 | The advice on the store's owner is easy to follow wrongly | Settled. `main.mjs` gives the store `{ uid: 0, gid: <scooter-runner's gid> }` (D49), and this milestone's pull request says so |
+| 3 | `SCOOTER_TZ` accepts names pi's VM may not resolve | Settled another way. The review's suggestion, `resolvedOptions().timeZone`, turns `Asia/Kolkata` into `Asia/Calcutta` in Node 22: ICU's own name, which Ubuntu's zone files lack without `tzdata-legacy`, and which the owner would then see in prompts. Instead a zone must be written as the tz database writes it, each part beginning with a capital letter: every zone Node lists, and every zone file on the Linux machine, passes, and lowercase slips and offsets such as `+05:30` don't. Left: a name wrong in its later letters, such as `Asia/KOLKATA`, still passes; milestone 7 can look the zone up in the VM's image |
+| 4 | D29 says a `seq` out of order names the file and the line, and it didn't | Settled. The reader gives each line's number, and the store's error names the file and the line |
+| 5 | An edit or deletion can point at a line that isn't a message | Settled in both places: the store refuses it, and intake skips it first (D38) |
+| 6 | `subject` is optional on an email's line | Settled. `checkLine` requires it on an email's message |
+| 7 | An attachment left by a crash can stay beside a line it doesn't belong to | Settled. At startup the store removes, from the newest day folder, attachments whose `seq` is past the last line's |
+| 8 | Nothing stops a second writer | Settled (D48) |
+| — | An empty, untracked folder named `2026-11-09T20:30:00Z` in the working copy on the Linux machine | Removed. No test makes it: fresh clones stayed clean after every run. It was made during milestone 1's work, before its commits; the name is a time from the test of the process's time zone in `datastore.test.mjs` |
+
+### 2.3 Changes to DESIGN.md
+
+None changes what Scooter does. Each brings a statement up to date with what milestone 0 found:
+- 5.1: wacli 0.26.0 takes the webhook secret only on its command line (0.6, wacli 1).
+- 6.6: the list of "things to check in the pinned pi version" is now what was found, each with its check.
+- 6.12: the image's contents include `tzdata` and `curl` (D7), and pi works without its install scripts (pi 8).
+- 6.13 and 13.2: pi sends Anthropic's models to the messages route, except their `:batch` variants, and the exact fields are in `test/fixtures/pi-requests/` (pi 6).
+- 14: a line names the five items milestone 0 settled, and each is marked "Checked".
+
+ARCHITECTURE.md has the same in 2.7 and 3.5, and the plan has a new rule under milestone 4.
+
+### 2.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-16, on the Linux machine, from a clean clone of the branch:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 219 tests: 194 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 212 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second fresh clone | Node 24.22.3: 195 pass, none fail. All 7 root tests run, among them the one where wacli runs as another user. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
+| `intake`, `whatsapp`, `bridge` and `proc` tests, 16 times, 8 at once | No failure. The test of `scooter bridge` as a process skipped itself when another copy held the port |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Signatures accepted and rejected | `whatsapp.test.mjs`: the function, and the webhook through the stub; `bridge.test.mjs` end to end |
+| Filtering of non-owners, `@lid` owners, groups, `FromMe` messages, stickers and empty messages | `whatsapp.test.mjs`: the function, and through the webhook |
+| Media downloads, including failures | `intake.test.mjs` with the fake channel: retries, the size limit, media without a file, a copy that fails; `whatsapp.test.mjs` with the stub: the command, failures, a link, a file saved elsewhere, a call that hangs |
+| Replies, reactions, edits and deletions mapped to `seq` numbers | `intake.test.mjs`; `bridge.test.mjs` end to end |
+| The same edit, deletion or reaction delivered twice is stored once | `intake.test.mjs`; `bridge.test.mjs`; catch-up in `whatsapp.test.mjs` |
+| Commands logged | `intake.test.mjs`; `bridge.test.mjs` |
+| Catch-up after a gap, without duplicates, from the newest incoming WhatsApp line even when emails arrived; no history on the first start | `whatsapp.test.mjs` |
+| Least privilege, for wacli's environment and command line | `whatsapp.test.mjs`: exactly six variables on every call, no setting's secret anywhere, the webhook's secret on sync's command line alone; as root, every call as wacli's user, and its folders its own |
+
+The milestone's "done when", signed webhook posts ending up as the right lines and attachments and unsigned ones not, is the first test in `bridge.test.mjs`. It posts through the stub's running sync, and reads `log.jsonl` and the day folder.
+
+Not verified:
+- **wacli when paired** (gate G4). The tests run a stub. How a real edit, deletion, `@lid` sender and list row look is read from wacli's source (D42). So is how `media download` behaves while sync runs, and `messages list --read-only` alongside it. A correction belongs in `fromWebhook` or `fromListRow`.
+- **The real wacli in this milestone's tests.** Milestone 0's checks run the installed wacli, unpaired. Nothing here does.
+- **The webhook against the real wacli's HTTP client.** The stub posts with Node's.
+- **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW` and `mkfifo` exist on macOS.
+- **The bridge under systemd or Compose.** Milestones 12 and 13.
