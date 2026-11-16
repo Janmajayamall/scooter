@@ -15,6 +15,9 @@
 //
 // Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, asks the planner what
 // is next (`nextAction`), and does it. One thing at a time, so runs never overlap.
+//
+// `src/cli.mjs` runs `runRunner` once there is a sandbox to give it: the Gondolin VM, in milestone
+// 7 (D94 of `docs/DECISIONS.md`). The tests give the fake one.
 
 import { createIds, ensureDir } from '../common/files.mjs'
 import { holdInstance } from '../common/instance.mjs'
