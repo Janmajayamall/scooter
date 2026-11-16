@@ -949,9 +949,9 @@ Not verified:
 
 ## Milestone 4: runner, running
 
-Done on 2026-11-17, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3, and in 6.8, 6.9 and section 10, for the review of this milestone (4.4).
+Done on 2026-11-17, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3, and in 6.8, 6.9 and section 10, for the reviews of this milestone (4.4).
 
-The pull request's first review asked for one change: a file or folder pi makes unreadable stopped the runner. That, and its smaller points, are in 4.6.
+The pull request's first review asked for one change: a file or folder pi makes unreadable stopped the runner. Its second asked for two: a file too large for git to add in time stopped the runner, and an empty folder stayed outside git after a successful run. Those, and the smaller points of both, are in 4.6.
 
 What the milestone left in the repository:
 
@@ -967,7 +967,7 @@ What the milestone left in the repository:
 | `src/runner/sandbox/index.mjs` | The sandbox interface, and the check of a run's spec |
 | `src/common/netlog.mjs`, `src/common/runnerstatus.mjs` | The network log's format and reader; `status.json`'s format and reader |
 | `src/common/instance.mjs` | `holdInstance`, moved from the bridge, for both services |
-| `src/common/limits.mjs`, `src/common/paths.mjs` | Three constants; `runner/runner.sock` |
+| `src/common/limits.mjs`, `src/common/paths.mjs` | Four constants; `runner/runner.sock` |
 | `test/support/` | The fake sandbox, the pi stub, and a runner for tests |
 | `test/answer`, `failures`, `run`, `runner`, `runnerfiles` | The tests of this milestone, with additions to `agentdir`, `agentstate`, `batch`, `config`, `triggers` and others |
 
@@ -1043,8 +1043,10 @@ A start during a pause keeps the scheduled tasks' dates as they are, instead of 
 `keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile`: without following a link, and refusing anything but a regular file with one name, and anything over `SESSION_MAX_BYTES`. It also refuses a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, or a socket, and a `run/session/` it can't list. A refused session is logged, the run still counts as a success, and the session kept before stays. `prepareRun` takes back the runner's access to everything in `run/` before it empties it (D88), so nothing pi leaves in `run/session/` can stop the next run. A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
 
 **D88. The file check, the commit and the clean-up.**
-pi runs as root in its VM, and what it writes in the writable folders belongs to the runner on the host, so it chooses every name and every mode there. Nothing it leaves may stop the runner, at the end of the run or at the next start (the review of this milestone, 4.6). So the runner walks those folders by the bytes of their names, which reaches a name that isn't UTF-8 as it is on disk, and never follows a link.
-- *Check:* `views/` and `memory/` are walked in name order. The first dot name, the first thing that isn't a regular file or a folder, the first file the runner can't read, or the first folder it can't read and search, is the unexpected file. Then `git status --ignored=matching` names any file git ignores. Last, `git add -A --ignore-errors -- views memory` stages everything, and a path git refused, such as `git~1`, or a file it couldn't read, is left unstaged and named by `git status` (4.2). The reason is `unexpected file <path>`, and the path is logged: it is a name pi chose, not content. Staging is part of the check because only git knows every name it refuses, and so it comes before the session is copied back; a run that fails there keeps no session. A `git add` that fails with everything staged isn't pi's doing, and stops the runner (D93).
+pi runs as root in its VM, and what it writes in the writable folders belongs to the runner on the host, so it chooses every name, every mode and every size there. Nothing it leaves may stop the runner, at the end of the run or at the next start (the reviews of this milestone, 4.6). So the runner walks those folders by the bytes of their names, which reaches a name that isn't UTF-8 as it is on disk, never follows a link, and weighs what they hold before git reads any of it.
+- *Check:* `views/` and `memory/` are walked in name order. The first dot name, the first thing that isn't a regular file or a folder, the first file the runner can't read, the first folder it can't read and search, or the file at which the sizes of the files so far pass `AGENT_FILES_MAX_BYTES`, is the unexpected file. Then `git status --ignored=matching` names any file git ignores. Then the empty folders are removed (below). Last, `git add -A --ignore-errors -- views memory` stages everything, and a path git refused, such as `git~1`, or a file it couldn't read, is left unstaged and named by `git status` (4.2). The reason is `unexpected file <path>`, and the path is logged: it is a name pi chose, not content. Staging is part of the check because only git knows every name it refuses, and so it comes before the session is copied back; a run that fails there keeps no session. A `git add` that fails with everything staged isn't pi's doing, and stops the runner (D93).
+- *Size:* git reads every byte of a file to add it, holes included, and a file of holes costs pi nothing: in the VM, `truncate -s 40G` took 9 ms (the second review, 4.6). git adds a file of holes at about 250 MB a second (4.2), so one past about 15 GB ran `git add` past `GIT_CALL_TIMEOUT`, and the runner stopped, and ran pi on the same batch again at every start. So the walk adds up the sizes of the files, as the file system gives them, and the file at which `views/` and `memory/` pass `AGENT_FILES_MAX_BYTES` together, 100 MB, is unexpected: the run fails before git reads anything, counts an attempt, and the clean-up removes the file. The limit is on the two folders together, not on each file, because many files each under a limit would take git as long as one large one. git adds 100 MB in about 2 seconds, and a year of views takes about 1 MB. The clean-up's own check leaves the limit out: what it leaves was committed, and it can't make that smaller. *Cost:* a last commit past the limit, which only a commit by hand or a lower limit could make, fails every run until it is smaller. *Left:* the number of files isn't limited. git adds 300,000 small files in 7 seconds (the second review); pi would have to make millions in one run to reach `GIT_CALL_TIMEOUT`.
+- *Empty folders:* git doesn't record a folder with no file in it, so one pi left stayed outside git after a successful run, and later runs saw it, with a name of pi's choosing (the second review). Staging first removes every empty folder in `views/` and `memory/`, the deepest first, so a folder that held only empty folders goes too. The run doesn't fail for it: an ordinary run can leave one, such as a month's folder once its only day page is gone (7.2), and failing that run would cost its items an attempt. An empty folder the runner can't remove, because pi took its write access away from the folder that holds it, is named like a path git refuses. So after a successful run `views/` and `memory/` hold nothing the commit doesn't, apart from the modes git doesn't record and the files' times.
 - *Commit:* after the session, a commit only if the index differs from the last commit: `lifelog: #1050 #1051 #1053` (every item of the batch), `lifelog: scheduled task 21:30`, or `lifelog: once task poems`.
 - *Clean-up:* first the runner takes back its access to everything in the folder (`restoreAccess` in `src/common/files.mjs`): read, write and search on every folder, read and write on every file, by path, without following links, once pi has stopped. Then, by hand, what git can't see or won't remove: links, FIFOs and other special files, and every dot name with all it holds, a nested `.git` included. Then `git restore --source=HEAD --staged --worktree` on the folders that have committed files, `git rm --cached` on whatever is staged in the others (a check or a commit that failed leaves that), and `git clean -ffdx` on both. The folders are made again if git removed them: they are the VM's mount points. If a check afterwards still finds something, the runner stops. `prepareRun` takes back access to `run/` the same way before it empties it.
 - *Root* reads every file, so as root an unreadable file passes the check and is committed; the tests of it skip themselves as root.
@@ -1052,6 +1054,7 @@ pi runs as root in its VM, and what it writes in the writable folders belongs to
 
 **D89. Startup.**
 In order: the config; the runner's folders, which `setup` makes in an install; one runner per data folder (D90); the sandbox; the agent's folder; the clean-up of D88, which throws away what a run cut short by a crash or a stop left uncommitted; a leftover `run.lock`, removed and logged; `status.json` and the emulation notice (D91, D92); the state (D67, D69); the datastore; the protocol.
+*Git's lock files:* a git killed while it holds the index or a branch, by a power cut or a `SIGKILL`, leaves `index.lock`, `HEAD.lock` or `refs/heads/main.lock` in `.git`, and git then refuses to add, restore, remove or commit until it is gone (4.2), so the runner couldn't start again (the second review, 4.6). With the agent's folder, the runner removes and logs every `*.lock` file at the top of `.git` and under `.git/refs/`, before it uses git. It holds `runner/runner.sock` (D90), so no git of its own can be running then. A `rebuild` that uses git needs the same socket (the plan's milestone 9).
 *Cost:* changes the owner makes by hand in `views/` or `memory/` and leaves uncommitted are thrown away at the next start. The README (milestone 14) should say to commit them.
 
 **D90. One runner per data folder.**
@@ -1076,13 +1079,14 @@ It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation
 *Choice:* `runRunner` exists. It takes `openSandbox`, and exits with 2 for a bad `agents.yaml` and with 1 for any other failure to start or to go on. `src/cli.mjs` keeps `runner` unbuilt until milestone 7 gives it the Gondolin sandbox, and the plan's milestone 7 now says so.
 *Reason:* a command that started and then always stopped for want of a sandbox would be a placeholder in production code.
 
-**D95. Three constants.**
-`SESSION_MAX_BYTES`, 100 MB (D87); `REASON_MAX_CHARS`, 200 (D82, D84); and `NOTICE_QUOTE_CHARS`, 40 (D86).
+**D95. Four constants.**
+`SESSION_MAX_BYTES`, 100 MB (D87); `REASON_MAX_CHARS`, 200 (D82, D84); `NOTICE_QUOTE_CHARS`, 40 (D86); and `AGENT_FILES_MAX_BYTES`, 100 MB (D88).
 
 ### 4.2 Facts found
 
 - **git 2.43.0:** `git restore` has no `--ignore-unmatch`, and fails on a path with no committed file. `git add -A -- views memory` works on empty folders, and fails on a missing one. `git clean -fdx -- views` removes the folder `views` itself when nothing in it is committed. `git status` and `git clean` don't see FIFOs. `git clean` leaves a nested repository unless given `-f` twice. `git rev-parse` on an empty `.git` exits with 128, and without `GIT_DIR` git looks for a repository in the folders above.
 - **More of git 2.43.0** (the review of this milestone): `git add -A` exits with 128 and stages nothing for a file it can't read, and for a file or folder named `git~1` in any case (`core.protectNTFS` is on by default, on Linux too). For a folder it can't read it only warns, and passes over what is inside. With `--ignore-errors` it stages the rest, exits with 1, and leaves those paths unstaged, where `git status` names them. It adds a name that isn't UTF-8 as it is.
+- **And more** (the second review of this milestone), on the Linux machine: `git add` reads every byte of a file, holes included. It took 0.4 seconds for a file of 100 MB of holes, 4.0 seconds for 1 GB of holes, and 1.85 seconds for 100 MB of random bytes; the review measured 32 seconds for 8 GB of zeros. `truncate -s 40G` makes a file of 0 blocks at once. A leftover `index.lock` makes `git add`, `git restore`, `git rm` and `git commit` exit with 128, and a leftover `HEAD.lock` or `refs/heads/main.lock` makes `git commit` do so; `git status`, `git clean`, `git diff --cached` and `git ls-tree` work with any of them. `git status` says nothing of an empty folder, and `git add -A` doesn't record one.
 - **Node 22:** `readdir` gives a name that isn't UTF-8 with `�` in place of its bytes, and that string names nothing on disk (`ENOENT`). With `encoding: 'buffer'` it gives the bytes, which every `fs` call takes as a path. `fs.rmSync` with `recursive` can't remove a folder whose mode is 000.
 
 ### 4.3 The review of milestone 3
@@ -1111,7 +1115,11 @@ For the review of this milestone (4.6, D88):
 - 6.9: the clean-up gives the runner back its access to everything in `views/` and `memory/` first.
 - Section 10, Runner: the unexpected files to test include a file or folder the runner can't read, and a name git refuses.
 
-ARCHITECTURE.md 5.1 has the quiet period the same way. The plan's milestones 7 and 8 note what this milestone did for them (D81, D94), and its milestones 8, 9 and 12 what the review of this milestone left for them (4.6). `runner.env.example` says that `AGENT_ACCEL=auto` tells the owner once when it falls back.
+For the second review of this milestone (4.6, D88):
+- 6.8, step 1: the file that takes what `views/` and `memory/` hold past 100 MB in all is an unexpected file too, and the runner removes the empty folders there just before staging, without failing the run.
+- Section 10, Runner: a file past the size limit fails the run; an empty folder doesn't, and is removed, so after a successful run the two folders hold nothing the commit doesn't.
+
+ARCHITECTURE.md 5.1 has the quiet period the same way. The plan's milestones 7 and 8 note what this milestone did for them (D81, D94), and its milestones 8, 9 and 12 what the reviews of this milestone left for them (4.6). `runner.env.example` says that `AGENT_ACCEL=auto` tells the owner once when it falls back.
 
 ### 4.5 What was run to verify the milestone, and what wasn't verified
 
@@ -1135,6 +1143,18 @@ After the fixes for the review of this milestone (4.6), at `4d02a8a`, on 2026-11
 | The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 328 pass, none fail. 29 skip themselves: 18 need the image, 4 need wacli, `scooter bridge` as a process, and 6 are about a file root can read anyway, the 5 new ones among them. The test of `git~1` runs as root, and passes |
 | `run`, `runner`, `agentdir`, `failures`, `answer` and `agentstate` tests, 32 times, 8 at once | No failure, and no test folder left behind |
 
+After the fixes for the second review (4.6), at `6022b96`, on 2026-11-17, from clean clones of the branch:
+
+| Command | Result |
+|---|---|
+| The new tests, against the code of `9992813` | All fail as the review says. With only the new constant added, the run that leaves a file of holes a byte over the limit gets through and commits it, and the check names nothing for 40 GB of holes |
+| `npm ci && npm test`, Node 22.23.2 | 363 tests: 338 pass, none fail. 25 skip themselves: 18 need the image and 7 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 356 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 333 pass, none fail. 30 skip themselves: 18 need the image, 4 need wacli, `scooter bridge` as a process, and 7 are about a file or folder root can read or write anyway, the empty folder the runner can't remove among them. The file of holes and the empty folders run as root, and pass |
+| `run`, `runner`, `agentdir`, `failures`, `answer` and `agentstate` tests, 32 times, 8 at once | No failure, and no test folder left behind |
+
+Not verified: a file of holes or an empty folder made by pi in a real VM against this code. The review's Gondolin 0.14.0 checks showed that both reach the host as they are, and the fake sandbox makes them the same way, with the same user.
+
 The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 
 | Required | Where |
@@ -1148,7 +1168,7 @@ The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 | `about` on an answer's plain text, the batch's newest item, but not on a scheduled task's | `answer.test.mjs`; `run.test.mjs`; `runner.test.mjs`, the evening check-in |
 | An edit of a message waiting in `retry` or in `failed` brings it into the same batch | `batch.test.mjs` (milestone 3); `run.test.mjs`, which takes it out of `failed` |
 | Sessions: only the current one is copied in, and only it is copied back: never a link, and nothing after a failed run | `run.test.mjs`, with a session file and a folder in `run/session/` the runner can't read; `agentdir.test.mjs`, with a hard link, a file too large, and a file and a folder the runner can't read |
-| A link, a FIFO, a dot name, a file git ignores, a file or folder the runner can't read, or a name git refuses, in `views/` or `memory/`, fails the run; the clean-up removes it; the session isn't copied back | `run.test.mjs`, each through the stub, and the next try after the last three; `agentdir.test.mjs`, the clean-up after a commit, with a nested repository and a staged file, every mode that hides a file or a folder, and names that aren't UTF-8; `runner.test.mjs`, a folder of mode 000 at startup |
+| A link, a FIFO, a dot name, a file git ignores, a file or folder the runner can't read, a name git refuses, or a file past the size limit, in `views/` or `memory/`, fails the run; the clean-up removes it; the session isn't copied back. An empty folder doesn't fail the run, and is removed | `run.test.mjs`, each through the stub, and the next try after the last four, one of them a file of holes a byte over the limit; empty folders, one inside another, after which the two folders hold only what the commit does; `agentdir.test.mjs`, the clean-up after a commit, with a nested repository and a staged file, every mode that hides a file or a folder, names that aren't UTF-8, the limit in all with a 40 GB file of holes, a month's folder emptied by a run, and an empty folder the runner can't remove; `runner.test.mjs`, a folder of mode 000 and git's lock files at startup |
 | The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the internet mode; the prompt shows the mode | `run.test.mjs`: the spec, the environment pi got, what the stub could see, internet on and off; `runnerfiles.test.mjs`, the spec's check |
 | Scheduled and `once` tasks, and `/new`, handled once even when the batch after it fails | `runner.test.mjs` |
 | No run while a backup holds its lock; when both appear at once, the runner gives way; `run.lock` records when its run must be over | `runner.test.mjs` |
@@ -1165,7 +1185,7 @@ Not verified:
 - **`scooter runner` as a process,** under systemd or Docker: the command isn't built (D94). The runner runs in-process in the tests, its loop and its stop included.
 - **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW`, `mkfifo` and the git commands used exist on macOS.
 
-### 4.6 The review of this milestone
+### 4.6 The reviews of this milestone
 
 The first review of the pull request, at `bd6622d`, asked for one change and noted six smaller points. Each is below, with what became of it.
 
@@ -1178,3 +1198,11 @@ The first review of the pull request, at `bd6622d`, asked for one change and not
 | 4 | For milestone 12: D93 leans on the service manager's backoff, and systemd's default start limit never applies to a runner that waits out the quiet period at every start | Left for milestone 12. The plan's milestone 12 now says the unit needs a `RestartSec`, or growing steps, chosen with that in mind |
 | 5 | For milestone 9: a runner started during a `rebuild` removes its `run.lock` and throws away its uncommitted changes | Left for milestone 9. The plan's milestone 9 now says so, with the review's way out: `rebuild` holds `runner/runner.sock` (D90) |
 | 6 | For milestone 8: a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure | Left for milestone 8. The plan's milestone 8 now says so, with D82's cost |
+
+The second review, at `9992813`, found every point of the first settled, asked for two changes, and noted one smaller point. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must 1 | A file too large for `git add` to finish within `GIT_CALL_TIMEOUT` stops the runner, and every restart runs pi on the same batch again, with no attempt counted. pi can make one at no cost, a file of holes, and nothing limits a smaller one | Fixed (D88, D95). The check weighs the files in its walk, before git reads any, and the file at which `views/` and `memory/` pass `AGENT_FILES_MAX_BYTES` together, 100 MB, is unexpected: the run fails, counts an attempt, sends the notice, keeps no session, and the clean-up removes the file. The limit is on the two folders together rather than on each file, so that many files under it can't add up to the same wait. The number of files isn't limited (D88). Tests in `run`, through the stub, with a file of holes a byte over the limit, and the next try; and in `agentdir`, with 40 GB of holes |
+| Must 2 | An empty folder stays in `views/` or `memory/` after a successful run, outside git, and later runs see it | Fixed (D88), the second way the review gave: staging first removes the empty folders, the deepest first, and the run doesn't fail for them. An empty folder the runner can't remove is named like a path git refuses. Tests in `run`, through the stub, with an empty folder and empty folders inside each other, after which the two folders hold only what the commit does; and in `agentdir`, with a month's folder a run emptied, and an empty folder in a folder of mode 500 |
+| 1 | A leftover `.git/index.lock` keeps the runner from starting | Fixed (D89): at startup, with the agent's folder, the runner removes and logs every lock file at the top of `.git` and under `.git/refs/`, since a leftover `HEAD.lock` or `refs/heads/main.lock` would stop every commit the same way (4.2). Tests in `agentdir`, and in `runner`, a start over `index.lock` and `refs/heads/main.lock` followed by a run that commits. The plan's milestone 9 now says a runner started during a rebuild removes these too |

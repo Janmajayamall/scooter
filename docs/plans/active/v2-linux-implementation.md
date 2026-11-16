@@ -348,7 +348,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - `rebuild` refuses to start while `run.lock` exists. It can't tell whether an idle runner is up, so the README says to stop the runner first.
-- A runner started during a rebuild removes the rebuild's `run.lock` and throws away its uncommitted changes (`docs/DECISIONS.md`, D89 and 4.6). If `rebuild` holds `runner/runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up.
+- A runner started during a rebuild removes the rebuild's `run.lock` and git's lock files, and throws away its uncommitted changes (`docs/DECISIONS.md`, D89 and 4.6). If `rebuild` holds `runner/runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up.
 - A rebuild sets `commandSeq` to the `seq` it stops at (6.10; row 11), so old commands aren't answered again.
 
 **Tests** (10, under Runner): Rebuilds; Backfills.
