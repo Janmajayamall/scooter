@@ -841,7 +841,7 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 *Choice:* `scheduled[at]` is the owner's date of the last occurrence that has been dealt with.
 - **At startup**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, worked out in the zone the runner starts with. So a runner that starts after the time waits until the next day (6.4), and a changed `SCOOTER_TZ` takes effect at once. Entries for `at` values no longer in the config are dropped.
 - **While running**, a task is due when its last occurrence has a later date than `scheduled[at]`. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once.
-- The runner records the date once the task has run (milestone 4). A task that fails on a setup error or an outage keeps its old date, so it stays due (the plan's rule for milestone 4).
+- The runner records the date once the task has run (milestone 4). A task that fails on a setup error or an outage keeps its old date, so it stays due (the plan's rule for milestone 4). A start during a pause keeps every date as it is, so that task stays due across the start too (D83).
 - `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` (D21): a time skipped by the clocks comes due at the jump, and a time that comes twice at its first.
 *Reason:* a date per task is what 6.3 stores, and comparing dates of the owner's day keeps one run a day across clock changes. Overwriting at startup instead of keeping the larger date lets a changed zone start from where it is: a date from a zone far ahead would otherwise hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all.
 
@@ -949,7 +949,9 @@ Not verified:
 
 ## Milestone 4: runner, running
 
-Done on 2026-11-17, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3 (4.4).
+Done on 2026-11-17, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3, and in 6.8, 6.9 and section 10, for the review of this milestone (4.4).
+
+The pull request's first review asked for one change: a file or folder pi makes unreadable stopped the runner. That, and its smaller points, are in 4.6.
 
 What the milestone left in the repository:
 
@@ -1006,14 +1008,16 @@ The stub takes pi's command line, finds every path it is given inside the VM's f
 
 An unexpected file after a run that exited with 0 is pi's own failure, whatever the log says (6.9). A sandbox that couldn't run pi at all, such as a VM that doesn't boot, counts as a setup error, with the reason "the VM couldn't start": it is the machine's fault, and spending every message's four attempts on it wouldn't help.
 
-*The short reason* is OpenRouter's own words when the last line pi printed on stderr is its error for the same status (`401 {…}` or `401: {…}`, pi 5), as `OpenRouter: No endpoints found matching your data policy`. Otherwise it is `OpenRouter answered 429`, `OpenRouter didn't answer`, `timed out`, `pi exited with code 3`, `pi was stopped`, or `unexpected file views/.gitignore`. OpenRouter's words go into the notice and the state, cut to `REASON_MAX_CHARS`, and never into Scooter's logs, which carry the cause and the status.
+*The short reason* is OpenRouter's error whenever its last answer was one, a status of 400 or more, whatever the cause: also a 400 or a 413, for a prompt or an image too large, which is pi's own failure (the review of this milestone, 4.6). It is OpenRouter's own words when the last line pi printed on stderr is its error for the same status (`401 {…}` or `401: {…}`, pi 5), as `OpenRouter: No endpoints found matching your data policy`, and otherwise `OpenRouter answered 429`. Without an error from OpenRouter it is `OpenRouter didn't answer`, `timed out`, `pi exited with code 3`, `pi was stopped`, or `unexpected file views/.gitignore`. OpenRouter's words go into the notice and the state, cut to `REASON_MAX_CHARS`, and never into Scooter's logs, which carry the cause and the status.
 
 *Cost:* a run that times out while the model is still streaming its answer counts as an outage if milestone 8 writes the `response` line at the end of the stream. It is then tried every 30 minutes and never ends in `failed`. Writing the line when the status arrives avoids that; milestone 8 chooses.
 *Reason:* 6.9, with what milestone 0 found. The window can't take in another run's lines, because runs are at least `POLL_INTERVAL` apart (D93), so no second holds lines of two runs.
 
 **D83. Pauses.**
 `paused` is `{ since, cause, reason, next, tries }` (D61). A try that fails for the same cause continues the pause: one try more, `since` kept, and the wait that goes with it, `SETUP_RETRY_WAIT` after a setup error, and `OUTAGE_RETRY_WAITS` by the number of tries during an outage, the last repeating. Another cause starts a new pause. Any run that gets through ends it: a success, or a failure of pi's own, which means OpenRouter was answering. A paused batch's items wait in `retry` due at once, their attempts unchanged: the pause holds every run back until its next try, which a restart brings forward to the start (D67), after the usual quiet period (D64). A task that fails this way stays due (the plan's rule; D68).
-*Reason:* due at once needs no second date to keep in step with `paused.next` when a restart brings the try forward.
+
+A start during a pause keeps the scheduled tasks' dates as they are, instead of counting every occurrence up to now as dealt with (D67). So a scheduled task that a setup error or an outage holds back is still due after a restart, and is the try the restart brings forward; one that came due during the pause, the runner down or not, runs once the pause is over. A task new in the config starts from now, as at any start.
+*Reason:* due at once needs no second date to keep in step with `paused.next` when a restart brings the try forward. Keeping the dates follows the plan's rules: a failed task "stays due, and is the next try", and one that "comes due during a run or a pause waits, and runs afterwards". Otherwise a pause that only a task held would be left with nothing to try, `next` in the past, until a message came (the review of this milestone, 4.6). *Cost:* a `SCOOTER_TZ` changed during a pause takes effect for the dates only at the first start after it.
 
 **D84. What a run does to its items.**
 - `FAILED` wins over `DONE` for the same item: the agent said it couldn't handle it. Its reason is the agent's, cut to one line of `REASON_MAX_CHARS`, or "no reason given".
@@ -1036,12 +1040,14 @@ An unexpected file after a run that exited with 0 is pi's own failure, whatever 
 - Notices are the runner's, `by: "runner"`, and go out also with `can_message: false`, as the reply to `/new` does (D62): that setting is about what the agent sends.
 
 **D87. Sessions after a run.**
-`keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile`: without following a link, and refusing anything but a regular file with one name, and anything over `SESSION_MAX_BYTES`. A refused session is logged, the run still counts as a success, and the session kept before stays. A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
+`keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile`: without following a link, and refusing anything but a regular file with one name, and anything over `SESSION_MAX_BYTES`. It also refuses a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, or a socket, and a `run/session/` it can't list. A refused session is logged, the run still counts as a success, and the session kept before stays. `prepareRun` takes back the runner's access to everything in `run/` before it empties it (D88), so nothing pi leaves in `run/session/` can stop the next run. A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
 
 **D88. The file check, the commit and the clean-up.**
-- *Check:* `views/` and `memory/` are walked without following links, in name order. The first dot name, or the first thing that isn't a regular file or a folder, is the unexpected file. Then `git status --ignored=matching` names any file git ignores. The reason is `unexpected file <path>`, and the path is logged: it is a name pi chose, not content.
-- *Commit:* `git add -A -- views memory`, and a commit only if the index then differs from the last one: `lifelog: #1050 #1051 #1053` (every item of the batch), `lifelog: scheduled task 21:30`, or `lifelog: once task poems`.
-- *Clean-up:* first, by hand, what git can't see or won't remove: links, FIFOs and other special files, and every dot name with all it holds, a nested `.git` included. Then `git restore --source=HEAD --staged --worktree` on the folders that have committed files, `git rm --cached` on whatever is staged in the others (a commit that failed leaves that), and `git clean -ffdx` on both. The folders are made again if git removed them: they are the VM's mount points. If a check afterwards still finds something, the runner stops.
+pi runs as root in its VM, and what it writes in the writable folders belongs to the runner on the host, so it chooses every name and every mode there. Nothing it leaves may stop the runner, at the end of the run or at the next start (the review of this milestone, 4.6). So the runner walks those folders by the bytes of their names, which reaches a name that isn't UTF-8 as it is on disk, and never follows a link.
+- *Check:* `views/` and `memory/` are walked in name order. The first dot name, the first thing that isn't a regular file or a folder, the first file the runner can't read, or the first folder it can't read and search, is the unexpected file. Then `git status --ignored=matching` names any file git ignores. Last, `git add -A --ignore-errors -- views memory` stages everything, and a path git refused, such as `git~1`, or a file it couldn't read, is left unstaged and named by `git status` (4.2). The reason is `unexpected file <path>`, and the path is logged: it is a name pi chose, not content. Staging is part of the check because only git knows every name it refuses, and so it comes before the session is copied back; a run that fails there keeps no session. A `git add` that fails with everything staged isn't pi's doing, and stops the runner (D93).
+- *Commit:* after the session, a commit only if the index differs from the last commit: `lifelog: #1050 #1051 #1053` (every item of the batch), `lifelog: scheduled task 21:30`, or `lifelog: once task poems`.
+- *Clean-up:* first the runner takes back its access to everything in the folder (`restoreAccess` in `src/common/files.mjs`): read, write and search on every folder, read and write on every file, by path, without following links, once pi has stopped. Then, by hand, what git can't see or won't remove: links, FIFOs and other special files, and every dot name with all it holds, a nested `.git` included. Then `git restore --source=HEAD --staged --worktree` on the folders that have committed files, `git rm --cached` on whatever is staged in the others (a check or a commit that failed leaves that), and `git clean -ffdx` on both. The folders are made again if git removed them: they are the VM's mount points. If a check afterwards still finds something, the runner stops. `prepareRun` takes back access to `run/` the same way before it empties it.
+- *Root* reads every file, so as root an unreadable file passes the check and is committed; the tests of it skip themselves as root.
 - *The loop sleeps `POLL_INTERVAL` after every round*, a run included, so runs are at least that far apart.
 
 **D89. Startup.**
@@ -1076,6 +1082,8 @@ It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation
 ### 4.2 Facts found
 
 - **git 2.43.0:** `git restore` has no `--ignore-unmatch`, and fails on a path with no committed file. `git add -A -- views memory` works on empty folders, and fails on a missing one. `git clean -fdx -- views` removes the folder `views` itself when nothing in it is committed. `git status` and `git clean` don't see FIFOs. `git clean` leaves a nested repository unless given `-f` twice. `git rev-parse` on an empty `.git` exits with 128, and without `GIT_DIR` git looks for a repository in the folders above.
+- **More of git 2.43.0** (the review of this milestone): `git add -A` exits with 128 and stages nothing for a file it can't read, and for a file or folder named `git~1` in any case (`core.protectNTFS` is on by default, on Linux too). For a folder it can't read it only warns, and passes over what is inside. With `--ignore-errors` it stages the rest, exits with 1, and leaves those paths unstaged, where `git status` names them. It adds a name that isn't UTF-8 as it is.
+- **Node 22:** `readdir` gives a name that isn't UTF-8 with `�` in place of its bytes, and that string names nothing on disk (`ENOENT`). With `encoding: 'buffer'` it gives the bytes, which every `fs` call takes as a path. `fs.rmSync` with `recursive` can't remove a folder whose mode is 000.
 
 ### 4.3 The review of milestone 3
 
@@ -1093,12 +1101,17 @@ The pull request was approved with seven smaller points. Each is below, with wha
 
 ### 4.4 Changes to DESIGN.md
 
-None changes what Scooter does beyond D78, which 6.5 and 6.9 already implied:
+For the review of milestone 3, none changes what Scooter does beyond D78, which 6.5 and 6.9 already implied:
 - 6.4, `on: new-messages`: the quiet period counts from when the runner saw the newest incoming line (D64).
 - 6.4, commands: `commandSeq` is there for a run cut short by a crash, which leaves the cursor where it was; a failed batch moves the cursor (D78).
 - 6.9: after every run that finishes, the cursor moves past the batch; only a run cut short leaves it.
 
-ARCHITECTURE.md 5.1 has the quiet period the same way. The plan's milestones 7 and 8 note what this milestone did for them (D81, D94). `runner.env.example` says that `AGENT_ACCEL=auto` tells the owner once when it falls back.
+For the review of this milestone (4.6, D88):
+- 6.8, step 1: a file the runner can't read, a folder it can't open, and a path `git add` refuses, such as `git~1`, are unexpected files too. Staging is the check's last step, so step 3 commits what was staged.
+- 6.9: the clean-up gives the runner back its access to everything in `views/` and `memory/` first.
+- Section 10, Runner: the unexpected files to test include a file or folder the runner can't read, and a name git refuses.
+
+ARCHITECTURE.md 5.1 has the quiet period the same way. The plan's milestones 7 and 8 note what this milestone did for them (D81, D94), and its milestones 8, 9 and 12 what the review of this milestone left for them (4.6). `runner.env.example` says that `AGENT_ACCEL=auto` tells the owner once when it falls back.
 
 ### 4.5 What was run to verify the milestone, and what wasn't verified
 
@@ -1112,6 +1125,16 @@ Run on 2026-11-17, on the Linux machine, from clean clones of the branch:
 | The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 323 pass, none fail. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
 | This milestone's tests (`run`, `runner`, `agentdir`, `failures`, `answer`), 32 times, 8 at once | No failure |
 
+After the fixes for the review of this milestone (4.6), at `4d02a8a`, on 2026-11-17, from clean clones of the branch:
+
+| Command | Result |
+|---|---|
+| The new tests, before the fixes, at `bd6622d` | All 12 fail as the review says: `EACCES` from the check and the clean-up, `EGIT` from `git add`, and the scheduled task not due after a restart. The folder whose name isn't UTF-8 fails with `ENOENT` |
+| `npm ci && npm test`, Node 22.23.2 | 357 tests: 332 pass, none fail. 25 skip themselves: 18 need the image and 7 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 350 pass, none fail, in 109 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 328 pass, none fail. 29 skip themselves: 18 need the image, 4 need wacli, `scooter bridge` as a process, and 6 are about a file root can read anyway, the 5 new ones among them. The test of `git~1` runs as root, and passes |
+| `run`, `runner`, `agentdir`, `failures`, `answer` and `agentstate` tests, 32 times, 8 at once | No failure, and no test folder left behind |
+
 The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 
 | Required | Where |
@@ -1119,13 +1142,13 @@ The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 | Cursor, retry and failed transitions with an injected clock: a minute between attempts, 4 attempts | `failures.test.mjs`, as functions; `run.test.mjs`, an item not reported, run four times a minute apart and given up on |
 | `FAILED` | `answer.test.mjs`; `failures.test.mjs`; `run.test.mjs`, with the agent's own text and no notice |
 | A pi failure discards uncommitted changes and sends one notice, and counts one attempt unless OpenRouter caused it | `runner.test.mjs`: a crash after a commit, the second failure in a row, and the next row; a timeout; items given up on in failing runs |
-| A 401, 402, 403 or 404 pauses runs, with a try every 30 minutes and on restart | `runner.test.mjs`, a 404 with OpenRouter's words, commands while paused, and a restart; `failures.test.mjs`, each status |
+| A 401, 402, 403 or 404 pauses runs, with a try every 30 minutes and on restart | `runner.test.mjs`, a 404 with OpenRouter's words, commands while paused, and a restart, and a scheduled task held back across a restart; `failures.test.mjs`, each status; `agentstate.test.mjs`, the dates kept at a start during a pause |
 | A 408, 429, 5xx or no answer is retried after 1, 5 and 30 minutes, then every 30 | `runner.test.mjs`: a 429, a 503, an unreachable OpenRouter, and a run that timed out waiting; `failures.test.mjs`, each status |
 | Neither counts attempts, and messages that arrive meanwhile are handled once a run gets through | `runner.test.mjs`, in both of the above |
 | `about` on an answer's plain text, the batch's newest item, but not on a scheduled task's | `answer.test.mjs`; `run.test.mjs`; `runner.test.mjs`, the evening check-in |
 | An edit of a message waiting in `retry` or in `failed` brings it into the same batch | `batch.test.mjs` (milestone 3); `run.test.mjs`, which takes it out of `failed` |
-| Sessions: only the current one is copied in, and only it is copied back: never a link, and nothing after a failed run | `run.test.mjs`; `agentdir.test.mjs`, with a hard link and a file too large |
-| A link, a FIFO, a dot name or a file git ignores in `views/` or `memory/` fails the run; the clean-up removes it; the session isn't copied back | `run.test.mjs`, each through the stub; `agentdir.test.mjs`, the clean-up after a commit, with a nested repository and a staged file |
+| Sessions: only the current one is copied in, and only it is copied back: never a link, and nothing after a failed run | `run.test.mjs`, with a session file and a folder in `run/session/` the runner can't read; `agentdir.test.mjs`, with a hard link, a file too large, and a file and a folder the runner can't read |
+| A link, a FIFO, a dot name, a file git ignores, a file or folder the runner can't read, or a name git refuses, in `views/` or `memory/`, fails the run; the clean-up removes it; the session isn't copied back | `run.test.mjs`, each through the stub, and the next try after the last three; `agentdir.test.mjs`, the clean-up after a commit, with a nested repository and a staged file, every mode that hides a file or a folder, and names that aren't UTF-8; `runner.test.mjs`, a folder of mode 000 at startup |
 | The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the internet mode; the prompt shows the mode | `run.test.mjs`: the spec, the environment pi got, what the stub could see, internet on and off; `runnerfiles.test.mjs`, the spec's check |
 | Scheduled and `once` tasks, and `/new`, handled once even when the batch after it fails | `runner.test.mjs` |
 | No run while a backup holds its lock; when both appear at once, the runner gives way; `run.lock` records when its run must be over | `runner.test.mjs` |
@@ -1141,3 +1164,17 @@ Not verified:
 - **Read-only mounts.** The fake sandbox doesn't enforce them; milestone 7's tests check them on the VM.
 - **`scooter runner` as a process,** under systemd or Docker: the command isn't built (D94). The runner runs in-process in the tests, its loop and its stop included.
 - **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW`, `mkfifo` and the git commands used exist on macOS.
+
+### 4.6 The review of this milestone
+
+The first review of the pull request, at `bd6622d`, asked for one change and noted six smaller points. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must | A file or folder pi makes unreadable stops the runner. In `views/` or `memory/`: at the check, the commit or the clean-up, and a folder again at every start; a file restarts the runner on the same batch without end, with no attempt counted. In `run/session/`: every later run. A session file pi made unreadable: the same as a file | Fixed (D87, D88). The check names a file the runner can't read and a folder it can't read and search, and ends by staging, so a name git refuses, such as `git~1`, fails the run too, before the session is kept. The clean-up and `prepareRun` take back the runner's access first. A session file the runner can't open is refused, as is a `run/session/` it can't list. The walks go by the bytes of names, because a folder whose name isn't UTF-8 stopped the runner the same way (4.2). Tests in `run`, `agentdir` and `runner`; those that need a file root can't read skip themselves as root |
+| 1 | A pause can be left with nothing to try: a scheduled task that failed on a setup error isn't due after a restart, and `paused` stays with `next` in the past | Fixed (D83, D67): a start during a pause keeps the tasks' dates, so the task is the try the restart brings forward. Tests in `agentstate` and `runner` |
+| 2 | A run that ends on a 400 or a 413 tells the owner "pi exited with code 1", though pi printed OpenRouter's reason | Fixed (D82): OpenRouter's error is the reason for any status of 400 or more. Tests in `failures` |
+| 3 | A comment in `commands.mjs` says a failed batch leaves the cursor where it was | Fixed |
+| 4 | For milestone 12: D93 leans on the service manager's backoff, and systemd's default start limit never applies to a runner that waits out the quiet period at every start | Left for milestone 12. The plan's milestone 12 now says the unit needs a `RestartSec`, or growing steps, chosen with that in mind |
+| 5 | For milestone 9: a runner started during a `rebuild` removes its `run.lock` and throws away its uncommitted changes | Left for milestone 9. The plan's milestone 9 now says so, with the review's way out: `rebuild` holds `runner/runner.sock` (D90) |
+| 6 | For milestone 8: a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure | Left for milestone 8. The plan's milestone 8 now says so, with D82's cost |

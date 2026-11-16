@@ -497,9 +497,9 @@ The runner parses pi's final answer (stdout) line by line. These lines, after tr
 ### 6.8 After a successful run
 
 In this order:
-1. **Files:** if `views/` or `memory/` holds anything git wouldn't record, the run counts as failed (6.9), with the reason "unexpected file <path>". That means anything that isn't a regular file or a folder (a symlink, for example), any name starting with `.` (such as `.gitignore` or a nested `.git`), and any file `git status --ignored` reports as ignored. So everything a run leaves there ends up in git, where the owner can see it, and nothing hidden carries over to later runs.
+1. **Files:** if `views/` or `memory/` holds anything git wouldn't record, the run counts as failed (6.9), with the reason "unexpected file <path>". That means anything that isn't a regular file or a folder (a symlink, for example), any name starting with `.` (such as `.gitignore` or a nested `.git`), any file the runner can't read or folder it can't open (pi runs as root in its VM, so it can take the runner's access away from what it writes), any file `git status --ignored` reports as ignored, and any path that `git add -A -- views memory`, the check's last step, refuses, such as `git~1`. So everything a run leaves there ends up in git, where the owner can see it, and nothing hidden carries over to later runs.
 2. **Session:** copy pi's session back (6.6).
-3. **Git:** `git add -A -- views memory`. If anything changed, commit as `Scooter <scooter@localhost>`, without signing, with the message `lifelog: #1050 #1051 #1053` (the batch's numbers) or `lifelog: scheduled task 21:30`.
+3. **Git:** if what was staged changed anything, commit it as `Scooter <scooter@localhost>`, without signing, with the message `lifelog: #1050 #1051 #1053` (the batch's numbers) or `lifelog: scheduled task 21:30`.
 4. **Outbox:** write the reply messages in order. In quiet mode, also write a `react` entry with `ack_reaction` for each item reported `DONE` that is a `message`, except items a `REPLY_TO` points at: those got a reply instead.
 5. **State:**
    - Remove items reported `DONE` from `retry`.
@@ -512,7 +512,7 @@ With this order, a crash part-way through only means the batch is retried. The a
 
 ### 6.9 Failures and notices
 
-- **pi fails** (non-zero exit or timeout), or leaves an unexpected file (6.8): throw away the run's uncommitted changes in `views/` and `memory/` (`git restore` and `git clean -fdx`, both limited to those two folders; `-x` also removes files git ignores), and its session changes (6.6), so the next try starts from the last good state. What happens next depends on the cause. The runner reads it from OpenRouter's last response during the run, in its own network log (6.13):
+- **pi fails** (non-zero exit or timeout), or leaves an unexpected file (6.8): throw away the run's uncommitted changes in `views/` and `memory/` (`git restore` and `git clean -fdx`, both limited to those two folders; `-x` also removes files git ignores), after giving the runner back its access to everything there, and its session changes (6.6), so the next try starts from the last good state. What happens next depends on the cause. The runner reads it from OpenRouter's last response during the run, in its own network log (6.13):
   - **Setup error:** OpenRouter answered 401, 402, 403 or 404. For example, a revoked key, no credit left, a model the key's guardrail doesn't allow, a model that's gone, or no endpoint meeting ZDR. No item counts an attempt. Runs pause: the runner starts nothing until the next try, every 30 minutes and whenever it restarts, until a run gets through.
   - **Outage:** OpenRouter answered 408, 429 or a 5xx, or couldn't be reached. No item counts an attempt, and the runner tries again after 1, 5 and 30 minutes, then every 30 minutes.
   - **Anything else:** pi crashed or timed out while OpenRouter was answering normally, or it left an unexpected file. Every item in the batch counts one attempt, and is due again a minute later (6.8).
@@ -912,7 +912,7 @@ Required tests, at least:
   - Emails in the prompt, and `about` on an answer's plain text (the batch's newest item), but not on a scheduled task's.
   - An edit or deletion of a message waiting in `retry`, or in `failed`, brings that message into the same batch, shown as last edited.
   - Sessions: only the current one is copied into `run/session/`, and only it is copied back: never a symlink, and nothing after a failed run.
-  - A symlink, a FIFO, a name starting with `.` (such as `views/.gitignore`) or a file git ignores, in `views/` or `memory/`, fails the run; the clean-up removes it, and pi's session isn't copied back.
+  - A symlink, a FIFO, a name starting with `.` (such as `views/.gitignore`), a file git ignores, a file or folder the runner can't read, or a name git refuses, in `views/` or `memory/`, fails the run; the clean-up removes it, and pi's session isn't copied back.
   - The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the configured internet mode. The prompt shows which mode is on.
   - Scheduled and `once` tasks, and `/new`, which is handled once even when the batch after it fails.
   - Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies. `Now:` is each batch's own time, and batches don't cross the owner's days.

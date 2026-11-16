@@ -331,6 +331,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - **ZDR is a switch per route** in the code. If the messages route turns out to refuse the `provider` fields (14), they're left out on that route, and the key's guardrail enforces ZDR alone.
+- **What failure handling reads** (`docs/DECISIONS.md`, D82 and 4.6). A `response` line written only at the end of a stream makes a run that times out mid-stream an outage, tried every 30 minutes for good; writing it when the status arrives avoids that. And a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure, and uses the items' attempts. When the refused request is the pinned pi's own, no longer matching the allowlist, that is nearer a setup error: settle how the log tells the runner which it was.
 
 **Tests** (10): Network policy, all of it, with a fake upstream.
 
@@ -347,6 +348,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - `rebuild` refuses to start while `run.lock` exists. It can't tell whether an idle runner is up, so the README says to stop the runner first.
+- A runner started during a rebuild removes the rebuild's `run.lock` and throws away its uncommitted changes (`docs/DECISIONS.md`, D89 and 4.6). If `rebuild` holds `runner/runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up.
 - A rebuild sets `commandSeq` to the `seq` it stops at (6.10; row 11), so old commands aren't answered again.
 
 **Tests** (10, under Runner): Rebuilds; Backfills.
@@ -392,6 +394,7 @@ Use the prompt shown in 6.5 as the first expected output.
   5. **Command:** `/usr/local/bin/scooter`, a wrapper that runs `src/cli.mjs`.
   6. **Services:** the two units installed and enabled. `setup` prints what to do next and doesn't start them, since the env files may still be empty. `--no-services` skips this step, for containers and tests, where systemd isn't running.
 - `deploy/systemd/scooter-bridge.service`: root. `scooter-runner.service`: `User=scooter-runner`, `SupplementaryGroups=kvm`, its home and temporary folder under `runner/`. Both: `KillMode=control-group`, restart on failure, `TZ=UTC`.
+  - The runner stops on an error and leans on the service manager's backoff (`docs/DECISIONS.md`, D93). A fault that stays, such as a full disk at the commit, runs pi again at every start, and each start waits out the quiet period, so systemd's default start limit (5 starts in 10 seconds) never applies. Give `scooter-runner.service` a `RestartSec`, or steps that grow, chosen with that in mind (4.6).
 - `src/ops/doctor.mjs` (8.4).
 - `pair`, and anything in 8.4 not built yet.
 
