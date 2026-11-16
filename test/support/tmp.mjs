@@ -7,6 +7,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { restoreAccess } from '../../src/common/files.mjs'
 
 // A Unix socket's path can be at most 107 bytes, and the programs under test put sockets in
 // `TMPDIR`. Gondolin's longest socket name is 37 bytes, so the folder must leave room for it.
@@ -51,6 +52,8 @@ export function makeTestDir(t) {
   atEnd(t, () => {
     if (before === undefined) delete process.env.TMPDIR
     else process.env.TMPDIR = before
+    // A test can leave files and folders their owner can't read, as pi can (milestone 4).
+    restoreAccess(dir)
     fs.rmSync(dir, { recursive: true, force: true })
   })
   return dir

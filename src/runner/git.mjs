@@ -10,10 +10,14 @@
 //
 // After each run the runner checks what pi left in `views/` and `memory/`, commits it, or throws
 // it away. Those are the only folders pi can write, apart from its session copy (6.6).
+//
+// pi chose every name and mode there, so the folders are walked by the bytes of their names,
+// without following links, and the runner takes its access back before it empties them: nothing
+// pi leaves can stop the runner, at the end of a run or at its next start.
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { ensureDir } from '../common/files.mjs'
+import { childPath, ensureDir, restoreAccess } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { systemClock } from '../common/time.mjs'
 
@@ -67,6 +71,21 @@ export function createGit({ proc, dir, clock = systemClock }) {
     return folders.filter(folder => names.some(name => name.startsWith(`${folder}/`)))
   }
 
+  // The first path in `folders` with a change that isn't staged, or null.
+  async function firstUnstaged(folders) {
+    const { stdout } = await run(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...folders])
+    // Each entry is `XY <path>`: X for the index, Y for the work tree.
+    const fields = stdout.split('\0')
+    for (let n = 0; n < fields.length; n++) {
+      const entry = fields[n]
+      if (entry === '') continue
+      // A staged rename or copy is followed by the path it came from.
+      if (entry[0] === 'R' || entry[0] === 'C') n++
+      if (entry[1] !== ' ') return entry.slice(3)
+    }
+    return null
+  }
+
   return {
     run,
 
@@ -83,8 +102,9 @@ export function createGit({ proc, dir, clock = systemClock }) {
 
     // The first thing in `folders` that git wouldn't record, as a path from the agent's folder, or
     // null when there is none (6.8): anything that isn't a regular file or a folder, such as a
-    // link or a FIFO; any name starting with `.`, such as a `.gitignore` or a nested `.git`; and
-    // any file git ignores.
+    // link or a FIFO; any name starting with `.`, such as a `.gitignore` or a nested `.git`; a
+    // file the runner can't read, or a folder it can't read and search, which git would pass
+    // over or fail on; and any file git ignores.
     async unexpectedFile(folders = AGENT_FOLDERS) {
       const found = findUnexpected(dir, folders)
       if (found !== null) return found
@@ -93,11 +113,23 @@ export function createGit({ proc, dir, clock = systemClock }) {
       return ignored === undefined ? null : ignored.slice(3)
     },
 
-    // Stages everything in `folders` and commits it with `message`, if anything changed. Returns
-    // whether there was a commit.
-    async commitChanges(message, folders = AGENT_FOLDERS) {
+    // Stages everything in `folders` (`git add -A`), and returns null, or the first path git
+    // wouldn't add: a name it refuses, such as `git~1`, or a file it couldn't read. Such a path is
+    // something git wouldn't record, so this is the last step of the check in 6.8, after
+    // `unexpectedFile`. git goes on past it (`--ignore-errors`) and leaves it unstaged, which is
+    // how it is found. A failure that leaves nothing unstaged isn't pi's, and throws.
+    async stage(folders = AGENT_FOLDERS) {
       for (const folder of folders) ensureDir(path.join(dir, folder), { mode: 0o700 })
-      await run(['add', '-A', '--', ...folders])
+      const { code } = await run(['add', '-A', '--ignore-errors', '--', ...folders], { codes: [0, 1] })
+      if (code === 0) return null
+      const left = await firstUnstaged(folders)
+      if (left === null) throw Object.assign(new Error('git add: exit code 1, with everything staged'), { code: 'EGIT', exitCode: 1, timedOut: false })
+      return left
+    },
+
+    // Commits what `stage` staged in `folders` with `message`, if it differs from the last
+    // commit. Returns whether there was a commit.
+    async commitStaged(message, folders = AGENT_FOLDERS) {
       const { code } = await run(['diff', '--cached', '--quiet', '--', ...folders], { codes: [0, 1] })
       if (code === 0) return false
       await this.commit(message)
@@ -106,14 +138,20 @@ export function createGit({ proc, dir, clock = systemClock }) {
 
     // Throws away every change in `folders` since the last commit, so the next run starts from the
     // last good state (6.9): `git restore` and `git clean -fdx`, both limited to those folders.
-    // What git can't see, such as a FIFO, and what it won't remove, such as a nested repository,
-    // goes first, by hand. The folders are there, and empty if nothing of them was committed,
-    // when this returns.
+    // First the runner takes back its access to everything there (`restoreAccess`), so that it can
+    // read and remove whatever pi left. Then what git can't see, such as a FIFO, and what it won't
+    // remove, such as a nested repository, goes by hand. The folders are there, and empty if
+    // nothing of them was committed, when this returns.
     async discardChanges(folders = AGENT_FOLDERS) {
-      for (const folder of folders) sweep(dir, folder)
+      for (const folder of folders) {
+        const full = Buffer.from(path.join(dir, folder))
+        restoreAccess(full)
+        sweep(full)
+      }
       const kept = await tracked(folders)
       if (kept.length > 0) await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...kept])
-      // Files staged in a folder the last commit doesn't have, which a commit that failed leaves.
+      // Files staged in a folder the last commit doesn't have, which a check that failed at
+      // staging, or a commit that failed, leaves.
       const untracked = folders.filter(folder => !kept.includes(folder))
       if (untracked.length > 0) await run(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '--', ...untracked])
       const present = folders.filter(folder => fs.existsSync(path.join(dir, folder)))
@@ -125,29 +163,48 @@ export function createGit({ proc, dir, clock = systemClock }) {
   }
 }
 
-// The entries of a folder, sorted, without following links.
+const DOT = '.'.charCodeAt(0)
+
+// The entries of the folder at `full` (bytes), sorted by name, without following links. Their
+// names are bytes too.
 function entriesOf(full) {
-  return fs.readdirSync(full, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  return fs.readdirSync(full, { withFileTypes: true, encoding: 'buffer' }).sort((a, b) => Buffer.compare(a.name, b.name))
 }
 
-// What `unexpectedFile` finds without git: the first entry, in name order, that is a dot name or
-// neither a regular file nor a folder. `folders` are paths from `dir`.
+// Whether the runner may `mode` (`fs.constants`) the file or folder at `full`.
+function mayAccess(full, mode) {
+  try {
+    fs.accessSync(full, mode)
+    return true
+  } catch (error) {
+    if (error.code === 'EACCES') return false
+    throw error
+  }
+}
+
+// What `unexpectedFile` finds without git: the first entry, in name order, that is a dot name;
+// neither a regular file nor a folder; a file the runner can't read; or a folder it can't read and
+// search. `folders` are paths from `dir`. The path returned is for people: a name that isn't
+// UTF-8 shows its bytes as `�`.
 export function findUnexpected(dir, folders = AGENT_FOLDERS) {
+  const { R_OK, X_OK } = fs.constants
   function walk(full, relative) {
+    if (!mayAccess(full, R_OK | X_OK)) return relative
     for (const entry of entriesOf(full)) {
-      const inner = `${relative}/${entry.name}`
-      if (entry.name.startsWith('.')) return inner
+      const inner = `${relative}/${entry.name.toString()}`
+      if (entry.name[0] === DOT) return inner
+      const innerFull = childPath(full, entry.name)
       if (entry.isDirectory()) {
-        const found = walk(path.join(full, entry.name), inner)
+        const found = walk(innerFull, inner)
         if (found !== null) return found
-      } else if (!entry.isFile()) {
+      } else if (!entry.isFile() || !mayAccess(innerFull, R_OK)) {
         return inner
       }
     }
     return null
   }
   for (const folder of folders) {
-    const full = path.join(dir, folder)
+    const full = Buffer.from(path.join(dir, folder))
     let stat
     try {
       stat = fs.lstatSync(full)
@@ -162,11 +219,12 @@ export function findUnexpected(dir, folders = AGENT_FOLDERS) {
   return null
 }
 
-// Removes from `folder` everything `findUnexpected` would find, without following links: a link
-// goes as a link, and a folder named with a dot, such as a nested `.git`, with all it holds. A
-// `folder` that is itself no folder goes too.
-function sweep(dir, folder) {
-  const full = path.join(dir, folder)
+// Removes from the folder at `full` (bytes) the dot names and the entries that are neither a
+// regular file nor a folder, which git can't see or won't remove, without following links: a
+// link goes as a link, and a folder named with a dot, such as a nested `.git`, with all it holds.
+// A `full` that is itself no folder goes too. The runner has its access back by now
+// (`restoreAccess`).
+function sweep(full) {
   let stat
   try {
     stat = fs.lstatSync(full)
@@ -179,8 +237,8 @@ function sweep(dir, folder) {
     return
   }
   for (const entry of entriesOf(full)) {
-    const inner = path.join(full, entry.name)
-    if (entry.name.startsWith('.') || !(entry.isDirectory() || entry.isFile())) fs.rmSync(inner, { recursive: true, force: true })
-    else if (entry.isDirectory()) sweep(full, entry.name)
+    const inner = childPath(full, entry.name)
+    if (entry.name[0] === DOT || !(entry.isDirectory() || entry.isFile())) fs.rmSync(inner, { recursive: true, force: true })
+    else if (entry.isDirectory()) sweep(inner)
   }
 }

@@ -16,6 +16,7 @@ import { createGit } from '../src/runner/git.mjs'
 import { loadProtocol, readMemoryFile, renderSystemPrompt } from '../src/runner/prompt.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
+import { skipIfRoot } from './support/root.mjs'
 import { writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -251,8 +252,10 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
   fs.writeFileSync(file('views/days/2026/11/2026-11-09.md'), '# Monday\n')
-  assert.equal(await agentGit.commitChanges('lifelog: #1'), true)
-  assert.equal(await agentGit.commitChanges('lifelog: #2'), false)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #2'), false)
   assert.equal(git(dir, 'log', '--format=%s'), 'lifelog: #1\nlifelog: initial commit\n')
 
   // What a run might leave: a changed file, a committed file turned into a link, a new folder,
@@ -284,6 +287,111 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   fs.rmSync(file('memory'), { recursive: true })
   await agentGit.discardChanges()
   assert.equal(modeOf(file('memory')), 0o700)
+})
+
+// The repository of `setup`, with git as the runner runs it.
+async function agentRepository(t) {
+  const { dir, ensure } = setup(t)
+  await ensure()
+  const clock = createFakeClock('2026-11-09T15:43:02Z')
+  const { log } = createTestLog({ clock })
+  return { dir, agentGit: createGit({ proc: createProc({ log, clock }), dir, clock }), file: name => path.join(dir, name) }
+}
+
+test('git: the check names a file or a folder the runner can\'t read, and the clean-up takes its access back first', { skip: skipIfRoot }, async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
+  fs.mkdirSync(file('views/a/b'), { recursive: true })
+  fs.writeFileSync(file('views/a/b/x.csv'), 'x\n')
+  fs.writeFileSync(file('memory/preferences.md'), '- x\n')
+  assert.equal(await agentGit.unexpectedFile(), null)
+
+  // pi runs as root in the VM, and can take its access away from what it writes, which is the
+  // runner's on the host (the review of milestone 4).
+  for (const [target, mode, found] of [
+    ['views/a/b', 0o000, 'views/a/b'],
+    ['views/a/b', 0o300, 'views/a/b'],
+    ['views/a/b', 0o600, 'views/a/b'],
+    ['memory/preferences.md', 0o000, 'memory/preferences.md'],
+    ['memory/preferences.md', 0o200, 'memory/preferences.md'],
+    ['views', 0o000, 'views'],
+  ]) {
+    fs.chmodSync(file(target), mode)
+    assert.equal(await agentGit.unexpectedFile(), found, `${target} ${mode.toString(8)}`)
+    fs.chmodSync(file(target), fs.statSync(file(target)).isDirectory() ? 0o700 : 0o600)
+  }
+  // A folder the runner can read but not write passes, and is committed.
+  fs.chmodSync(file('views/a'), 0o500)
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+
+  // The clean-up empties what is left whatever its modes, and the folders are the runner's again.
+  fs.chmodSync(file('views/a'), 0o700)
+  fs.writeFileSync(file('views/a/b/new.csv'), 'new\n')
+  fs.mkdirSync(file('views/a/b/c/d'), { recursive: true })
+  fs.writeFileSync(file('views/a/b/c/d/y.csv'), 'y\n')
+  fs.mkdirSync(file('memory/.hidden/inner'), { recursive: true })
+  fs.chmodSync(file('memory/.hidden/inner'), 0o000)
+  fs.writeFileSync(file('memory/needs-review.md'), 'x\n')
+  fs.chmodSync(file('memory/needs-review.md'), 0o000)
+  fs.chmodSync(file('views/a/b/x.csv'), 0o000)
+  fs.chmodSync(file('views/a/b/c/d'), 0o000)
+  fs.chmodSync(file('views/a/b/c'), 0o000)
+  fs.chmodSync(file('views/a/b'), 0o500)
+  fs.chmodSync(file('views'), 0o000)
+  await agentGit.discardChanges()
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.deepEqual(fs.readdirSync(file('views/a/b')), ['x.csv'])
+  assert.equal(fs.readFileSync(file('views/a/b/x.csv'), 'utf8'), 'x\n')
+  assert.deepEqual(fs.readdirSync(file('memory')), ['preferences.md'])
+  assert.equal(modeOf(file('views')), 0o700)
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+})
+
+test('git: a name that isn\'t UTF-8 is checked and committed as it is; a name git refuses is found when staging', async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
+  const bytes = (...parts) => Buffer.concat(parts.map(part => (typeof part === 'string' ? Buffer.from(part) : Buffer.from(part))))
+  fs.mkdirSync(bytes(file('views'), '/', [0x62, 0xff]))
+  fs.writeFileSync(bytes(file('views'), '/', [0x62, 0xff], '/x.csv'), 'x\n')
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  assert.equal(git(dir, 'ls-files', 'views'), '"views/b\\377/x.csv"\n')
+
+  // A dot name inside such a folder, and a folder git refuses, are found and thrown away.
+  fs.writeFileSync(bytes(file('views'), '/', [0x62, 0xff], '/.hidden'), 'x')
+  assert.equal(await agentGit.unexpectedFile(), 'views/b�/.hidden')
+  fs.rmSync(bytes(file('views'), '/', [0x62, 0xff], '/.hidden'))
+  fs.mkdirSync(file('views/GIT~1'))
+  fs.writeFileSync(file('views/GIT~1/x.csv'), 'x\n')
+  fs.writeFileSync(file('memory/preferences.md'), '- x\n')
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), 'views/GIT~1/x.csv')
+  await agentGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(file('views')), [bytes([0x62, 0xff]).toString()])
+  assert.deepEqual(fs.readdirSync(file('memory')), [])
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+})
+
+test('run folder: what the runner can\'t read in run/session/ is emptied, and a session file it can\'t read is refused', { skip: skipIfRoot }, async t => {
+  const { paths, dir, ensure, agent } = setup(t)
+  await ensure()
+  const config = agent()
+  const id = 'lifelog-2026-11-09'
+  const sessionDir = path.join(dir, 'run', 'session')
+  prepareRun({ paths, agent: config, protocol: '', sessionId: id })
+  fs.mkdirSync(path.join(sessionDir, 'locked'))
+  fs.writeFileSync(path.join(sessionDir, 'locked', 'x'), 'x')
+  fs.chmodSync(path.join(sessionDir, 'locked'), 0o000)
+  fs.writeFileSync(path.join(sessionDir, `2026-11-09T15-50-38-000Z_${id}.jsonl`), 'first\n')
+  fs.chmodSync(path.join(sessionDir, `2026-11-09T15-50-38-000Z_${id}.jsonl`), 0o000)
+  assert.equal(await keepSession({ paths, agent: config, sessionId: id }), 'refused')
+  fs.chmodSync(sessionDir, 0o000)
+  assert.equal(await keepSession({ paths, agent: config, sessionId: id }), 'refused')
+
+  prepareRun({ paths, agent: config, protocol: '', sessionId: id })
+  assert.deepEqual(fs.readdirSync(sessionDir), [])
+  assert.equal(fs.existsSync(path.join(dir, 'sessions', `${id}.jsonl`)), false)
 })
 
 test('memory: read without following a link, only from a regular file, and at most MEMORY_MAX_BYTES', t => {

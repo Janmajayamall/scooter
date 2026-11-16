@@ -3,9 +3,10 @@
 //
 // Before it builds a batch, the runner handles the command lines newer than `commandSeq`: it works
 // out the new state and the replies (`applyCommands`), writes the replies to the outbox, and saves
-// the state at once. Going by the cursor instead would handle a command again after a crash or a
-// failed batch, which leave the cursor where it was (row 11). A crash between the two writes can
-// send a reply twice, and never loses one.
+// the state at once. Going by the cursor instead would handle a command again after a run cut
+// short by a crash or a stop, which leaves the cursor where it was; a run that finishes, failed or
+// not, moves it (row 11; `docs/DECISIONS.md`, D78). A crash between the two writes can send a
+// reply twice, and never loses one.
 
 import { writeOutboxEntry } from '../common/outbox.mjs'
 import { applyCommands, saveState } from './state.mjs'

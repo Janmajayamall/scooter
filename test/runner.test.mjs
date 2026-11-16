@@ -309,6 +309,27 @@ test('tasks: a scheduled task that fails for its own reasons waits for its next 
   assert.deepEqual(outage.state().scheduled, { '21:30': '2026-11-09' })
 })
 
+test('tasks: a scheduled task that a setup error holds back is still the next try when the runner restarts', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: '2026-11-09T15:59:59Z' })
+  const { runner, clock, state, sandbox } = await startTestRunner(t, prepared)
+  sandbox.behave({ openrouter: 401 })
+  await clock.advance(SECOND)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'setup' })
+  assert.deepEqual(state().scheduled, { '21:30': '2026-11-08' })
+
+  // The key is fixed and the runner restarts, after the task's time: the task is tried at once.
+  runner.close()
+  sandbox.behave(null)
+  await clock.advance(MINUTE)
+  const restarted = await startTestRunner(t, prepared)
+  assert.deepEqual(restarted.state().scheduled, { '21:30': '2026-11-08' })
+  const { action, outcome } = await restarted.runner.tick()
+  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', date: '2026-11-09', task: action.task })
+  assert.deepEqual(outcome, { ok: true, cause: null })
+  assert.equal(state().paused, undefined)
+  assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
+})
+
 test('tasks: a once task runs at startup, and is recorded only after it succeeds', async t => {
   const prepared = prepareTestRunner(t, { yaml: TASK_YAML, lines: fillerLines(1041), state: HANDLED, start: START })
   const first = await startTestRunner(t, prepared)
@@ -410,6 +431,12 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   fs.writeFileSync(prepared.paths.runLock, '{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}\n')
   fs.writeFileSync(path.join(prepared.paths.agentViews('lifelog'), 'half.csv'), 'x\n')
   fs.symlinkSync('/etc/hostname', path.join(prepared.paths.agentMemory('lifelog'), 'link.md'))
+  // A folder pi took the runner's access away from, with another inside.
+  const locked = path.join(prepared.paths.agentViews('lifelog'), 'locked')
+  fs.mkdirSync(path.join(locked, 'deep'), { recursive: true })
+  fs.writeFileSync(path.join(locked, 'deep', 'notes.csv'), 'x\n')
+  fs.chmodSync(path.join(locked, 'deep'), 0o000)
+  fs.chmodSync(locked, 0o000)
   await startTestRunner(t, prepared)
   assert.equal(fs.existsSync(prepared.paths.runLock), false)
   assert.deepEqual(fs.readdirSync(prepared.paths.agentViews('lifelog')), [])

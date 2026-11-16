@@ -114,7 +114,9 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
     [failed(null, { timedOut: true }), { answer: 'none' }, { cause: 'outage', reason: "OpenRouter didn't answer", status: null }],
     // OpenRouter answering normally, or not asked at all: pi's own failure.
     [failed(3), { status: 200 }, { cause: 'other', reason: 'pi exited with code 3', status: 200 }],
-    [failed(1), { status: 400 }, { cause: 'other', reason: 'pi exited with code 1', status: 400 }],
+    // OpenRouter refusing a request for another reason: its error, as for the others (6.9).
+    [failed(1), { status: 400 }, { cause: 'other', reason: 'OpenRouter answered 400', status: 400 }],
+    [failed(null, { timedOut: true }), { status: 413 }, { cause: 'other', reason: 'OpenRouter answered 413', status: 413 }],
     [failed(127), null, { cause: 'other', reason: 'pi exited with code 127', status: null }],
     [failed(null, { timedOut: true }), { status: 200 }, { cause: 'other', reason: 'timed out', status: 200 }],
     [failed(null), { status: 200 }, { cause: 'other', reason: 'pi was stopped', status: 200 }],
@@ -127,6 +129,12 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
     cause: 'setup',
     reason: 'OpenRouter: No endpoints found matching your data policy',
     status: 404,
+  })
+  const tooLarge = '413: {"error":{"message":"Request body too large","code":413}}\n'
+  assert.deepEqual(failureCause({ result: failed(1, { stderr: tooLarge }), answer: { status: 413 } }), {
+    cause: 'other',
+    reason: 'OpenRouter: Request body too large',
+    status: 413,
   })
   // An unexpected file after a run that succeeded, whatever OpenRouter said.
   assert.deepEqual(failureCause({ result: failed(0), unexpected: 'views/.gitignore', answer: { status: 401 } }), {

@@ -12,7 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { copyUntrustedFile, ensureDir } from '../common/files.mjs'
+import { copyUntrustedFile, ensureDir, restoreAccess } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
@@ -72,11 +72,15 @@ function copyTree(source, target) {
 //
 // Returns `{ systemFile, skillDirs, sessionDir, sessionFile }`: the paths pi is given, and the
 // session file copied in, or null.
+//
+// pi could write `run/session/` in the last run, and take the runner's access away from what it
+// left there, so the runner takes it back before it empties `run/` (`restoreAccess`).
 export function prepareRun({ paths, agent, protocol, sessionId = null, skills = agent.skills }) {
   const name = agent.name
   const runDir = paths.agentRun(name)
   const configDir = paths.agentRunConfig(name)
   const sessionDir = paths.agentRunSession(name)
+  restoreAccess(runDir)
   fs.rmSync(runDir, { recursive: true, force: true })
   ensureDir(runDir, { mode: FOLDER_MODE })
 
@@ -115,7 +119,8 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 
 // After a successful run, keeps the session pi wrote as `sessions/<sessionId>.jsonl` (6.6). Returns
 // `kept`, `none` when pi left no session file, or `refused` when the file isn't one to keep: a link,
-// anything but a regular file, a file with more than one name, or one over `SESSION_MAX_BYTES`.
+// anything but a regular file, a file with more than one name, one over `SESSION_MAX_BYTES`, or
+// one the runner can't open, such as a file pi made unreadable or a session folder it can't list.
 //
 // pi finds a session by the first line of its file, not by its name (`docs/DECISIONS.md`, 0.4,
 // pi 2). It continues the copy `prepareRun` made, under that copy's name. A session it starts
@@ -131,6 +136,7 @@ export async function keepSession({ paths, agent, sessionId }) {
     names = fs.readdirSync(sessionDir)
   } catch (error) {
     if (error.code === 'ENOENT') return 'none'
+    if (error.code === 'EACCES') return 'refused'
     throw error
   }
   const fresh = names.filter(name => name.endsWith(`_${sessionId}.jsonl`)).sort()
@@ -143,7 +149,9 @@ export async function keepSession({ paths, agent, sessionId }) {
       mode: FILE_MODE,
     })
   } catch (error) {
-    if (error.code === 'EUNTRUSTED' || error.code === 'EFBIG') return 'refused'
+    // Besides what `copyUntrustedFile` refuses: `EACCES`, a file pi made unreadable; `ENOENT`, a
+    // name that isn't UTF-8, which doesn't open by the name it was listed under; `ENXIO`, a socket.
+    if (['EUNTRUSTED', 'EFBIG', 'EACCES', 'ENOENT', 'ENXIO'].includes(error.code)) return 'refused'
     throw error
   }
   return 'kept'

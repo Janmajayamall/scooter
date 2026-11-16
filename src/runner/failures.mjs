@@ -73,6 +73,10 @@ export function openRouterMessage(stderr, status) {
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
 // `status` OpenRouter's last status or null.
 //
+// The reason is OpenRouter's error whenever its last answer was one (6.9), in its own words when pi
+// printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
+// 413 for a prompt or an image too large, which is pi's own failure.
+//
 // A sandbox that couldn't run pi at all, such as a VM that doesn't boot, is a setup error: it is
 // the machine's, not the message's, and trying every message four times wouldn't help.
 export function failureCause({ result, unexpected = null, answer = null }) {
@@ -80,10 +84,10 @@ export function failureCause({ result, unexpected = null, answer = null }) {
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
 
-  if (status !== null && (SETUP_STATUSES.includes(status) || isOutageStatus(status))) {
+  if (status !== null && status >= 400) {
     const words = openRouterMessage(result.stderr ?? '', status)
     return {
-      cause: SETUP_STATUSES.includes(status) ? 'setup' : 'outage',
+      cause: SETUP_STATUSES.includes(status) ? 'setup' : isOutageStatus(status) ? 'outage' : 'other',
       reason: words === null ? `OpenRouter answered ${status}` : `OpenRouter: ${words}`,
       status,
     }

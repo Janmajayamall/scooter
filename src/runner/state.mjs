@@ -92,7 +92,10 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 // - **Scheduled tasks.** Every occurrence up to now counts as dealt with: a runner that starts after
 //   a task's time leaves it for its next time (6.4). The dates are worked out in the time zone the
 //   runner starts with, so a changed `SCOOTER_TZ` takes effect from here. Tasks no longer in the
-//   config are forgotten.
+//   config are forgotten. During a pause, though, the dates already there are kept: a task that
+//   failed on a setup error or an outage stays due, and is the next try (the plan's rule for
+//   milestone 4), and one that came due during the pause runs after it (D67, D83). Otherwise a
+//   pause that only a task held would be left with nothing to try.
 // - **A pause** is tried again at once: runs pause "until the next try, every 30 minutes and
 //   whenever it restarts" (6.9).
 // - **Backfills.** One whose entry is gone from the config is dropped. If none is in progress, the
@@ -103,7 +106,10 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 // or null.
 export function startupState(state, agent, { now, timeZone }) {
   const scheduled = {}
-  for (const { at, schedule } of agent.run.scheduled) scheduled[at] = lastOccurrence(schedule, { now, timeZone }).date
+  for (const { at, schedule } of agent.run.scheduled) {
+    const held = Boolean(state.paused) && state.scheduled[at] !== undefined
+    scheduled[at] = held ? state.scheduled[at] : lastOccurrence(schedule, { now, timeZone }).date
+  }
   let next = { ...state, scheduled }
 
   if (next.paused) next = { ...next, paused: { ...next.paused, next: isoSeconds(now) } }

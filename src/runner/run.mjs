@@ -5,9 +5,9 @@
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, and a copy of the
 //    current session (6.5, 6.6).
 // 3. **Run** pi in the sandbox, with the command, mounts, environment and network policy of 6.6.
-// 4. **After a successful run,** in this order (6.8): check the files pi left; copy its session back;
-//    commit; write the outbox entries; update the state. A crash part-way through only means the
-//    batch runs again.
+// 4. **After a successful run,** in this order (6.8): check the files pi left, staging them as the
+//    check's last step; copy its session back; commit; write the outbox entries; update the state.
+//    A crash part-way through only means the batch runs again.
 // 5. **After a failed run** (6.9): throw away its changes and its session, read why it failed from
 //    the network log, and update the state, with a notice for the first failure in a row.
 // 6. **Release** the lock.
@@ -180,16 +180,20 @@ export async function performRun(context) {
       return { state, outcome: 'stopped' }
     }
 
-    const unexpected = !result.error && result.code === 0 ? await git.unexpectedFile() : null
+    // 6.8, step 1: anything git wouldn't record fails the run. Staging is the check's last step,
+    // because only git knows every name it refuses; it comes before the session is kept, and the
+    // commit after.
+    const exited = !result.error && result.code === 0
+    const unexpected = exited ? ((await git.unexpectedFile()) ?? (await git.stage())) : null
     const timing = { now: endedAt, startedAt, durationMs: Math.max(0, Math.round(endedAt - startedAt)) }
-    if (!result.error && result.code === 0 && unexpected === null) return await afterSuccess(context, { result, sessionId: id, seqs, timing })
+    if (exited && unexpected === null) return await afterSuccess(context, { result, sessionId: id, seqs, timing })
     return await afterFailure(context, { result, unexpected, seqs, timing })
   } finally {
     releaseLock(paths.runLock)
   }
 }
 
-// 6.8: the session, git, the outbox, the state.
+// 6.8, after the check: the session, the commit, the outbox, the state.
 async function afterSuccess(context, { result, sessionId: id, seqs, timing }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
   const answer = parseAnswer(result.stdout)
@@ -197,7 +201,7 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing }) {
 
   const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id })
   if (session === 'refused') log.warn('runner.session_refused', { agent: agent.name, session: id })
-  const committed = await git.commitChanges(commitMessage(agent.name, job))
+  const committed = await git.commitStaged(commitMessage(agent.name, job))
 
   let next
   let entries

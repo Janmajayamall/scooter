@@ -1,4 +1,5 @@
-// Files: atomic writes, the folder hand-off, and sortable IDs.
+// Files: atomic writes, the folder hand-off, sortable IDs, and taking back access to a folder
+// another program wrote.
 //
 // Two services and several programs share Scooter's folders, so a reader must never see half of
 // anything. A file is written under a temporary name and renamed into place. A folder that is
@@ -144,6 +145,36 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
   } finally {
     await input.close()
   }
+}
+
+// The path of `name` in the folder `parent`, as bytes. Walking a folder by the bytes of its names
+// reaches every name as it is on disk: one that isn't UTF-8 doesn't survive a round trip through a
+// string.
+export function childPath(parent, name) {
+  return Buffer.concat([Buffer.from(parent), Buffer.from('/'), Buffer.from(name)])
+}
+
+// Gives the owner back its access to `target` and to everything under it: read, write and search
+// on every folder, read and write on every regular file. Links aren't followed, and anything else
+// is left as it is. Returns nothing; a `target` that isn't there is fine.
+//
+// It is for a folder that a sandboxed program wrote and the runner then checks or empties (6.8,
+// 6.9 of DESIGN.md). pi runs as root in its VM, and what it writes there belongs to the runner on
+// the host, so pi can take the runner's access away from a file or a whole folder, and the runner
+// could no longer read or remove it. The program must have stopped: a mode is set by path after
+// the entry was looked at, which a program still writing could swap for a link.
+export function restoreAccess(target) {
+  let stat
+  try {
+    stat = fs.lstatSync(target)
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  const wanted = stat.isDirectory() ? 0o700 : stat.isFile() ? 0o600 : 0
+  if ((stat.mode & wanted) !== wanted) fs.chmodSync(target, (stat.mode & 0o7777) | wanted)
+  if (!stat.isDirectory()) return
+  for (const name of fs.readdirSync(target, { encoding: 'buffer' })) restoreAccess(childPath(target, name))
 }
 
 // IDs that sort in the order they were made: the UTC time to the millisecond and a counter, such

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { readLock } from '../src/common/locks.mjs'
+import { skipIfRoot } from './support/root.mjs'
 import { exampleYaml, fillerLines, line } from './support/runner.mjs'
 import { KEY, MINUTE, SECOND, openTestRunner } from './support/test-runner.mjs'
 
@@ -234,6 +235,57 @@ test('run: a link, a FIFO, a dot name or a file git ignores fails the run; the c
       assert.equal(sandbox.runs.length, 1)
     })
   }
+})
+
+test('run: a file or a folder the runner can\'t read, or a name git refuses, fails the run; the clean-up removes it, and the next try runs', async t => {
+  for (const [leave, file, skip] of [
+    ['LOCKEDFILE', 'views/locked.csv', skipIfRoot],
+    ['LOCKEDDIR', 'memory/locked', skipIfRoot],
+    ['GITNAME', 'views/git~1', false],
+  ]) {
+    await t.test(leave, { skip }, async t => {
+      const { runner, clock, paths, state, outbox, git, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 MEMORY')])
+      sandbox.behave({ leave })
+      assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+      assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: `unexpected file ${file}` }])
+      // Everything the run wrote is gone, and nothing is staged; the session isn't kept.
+      assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+      assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+      assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+      assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
+      assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+      assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (unexpected file ${file}). I'll try again.` }])
+
+      // A minute later the item is tried again, and gets through.
+      sandbox.behave(null)
+      await clock.advance(MINUTE)
+      assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+      assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nmemory/preferences.md\nviews/notes.csv\n')
+      assert.deepEqual(state().retry, [])
+      assert.equal(sandbox.runs.length, 2)
+    })
+  }
+})
+
+test('run: a folder the runner can\'t read in run/session/ is passed over, a session file it can\'t read isn\'t kept, and the next runs start', { skip: skipIfRoot }, async t => {
+  const { runner, clock, paths, state, add, sandbox, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee RUNLOCKED')])
+  const kept = path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-09.jsonl')
+  // Anything but the session in run/session/ is ignored (6.6).
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(fs.readFileSync(kept, 'utf8').split('\n').length, 3)
+
+  // The next run empties run/ first; its session file is refused, like a link, and the one kept
+  // before stays.
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'tea SESSIONLOCKED'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(sandbox.seen()[1].sessionContinued, true)
+  assert.ok(events().includes('runner.session_refused'))
+  assert.equal(fs.readFileSync(kept, 'utf8').split('\n').length, 3)
+
+  add(line.text(1044, '2026-11-09T15:52:00Z', 'lunch 300'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(sandbox.seen()[2].sessionFiles, ['lifelog-2026-11-09.jsonl'])
+  assert.deepEqual(state().lastRun.seqs, [1044])
 })
 
 test('run: the commit holds views and memory, with the batch\'s numbers, and a run that changes nothing commits nothing', async t => {

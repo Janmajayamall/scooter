@@ -23,8 +23,14 @@
 // | `CRASH`                | `{"crash": 3}`         | files the items, then exits with that code         |
 // | `HANG`                 | `{"hang": true}`       | files the items, then waits for ever               |
 // | `DOTFILE`, `SYMLINK`,  | `{"leave": "FIFO"}`    | leaves a file git wouldn't record: `views/.hidden`,|
-// | `FIFO`, `IGNORED`      |                        | a link, a FIFO, or `views/scratch.tmp`             |
+// | `FIFO`, `IGNORED`,     |                        | a link, a FIFO, `views/scratch.tmp`, a file and a  |
+// | `LOCKEDFILE`,          |                        | folder the runner can't read (`views/locked.csv`,  |
+// | `LOCKEDDIR`, `GITNAME` |                        | `memory/locked/`), or `views/git~1`, a name git    |
+// |                        |                        | refuses                                            |
 // | `SESSIONLINK`          |                        | leaves its session file as a link                  |
+// | `SESSIONLOCKED`        |                        | leaves its session file unreadable                 |
+// | `RUNLOCKED`            |                        | leaves a folder the runner can't read in           |
+// |                        |                        | `run/session/`                                     |
 // | `NOREPLY`              |                        | answers `NO_REPLY`                                 |
 // | `MEMORY`               |                        | adds a line to `memory/preferences.md`             |
 // | `UNKNOWN`              |                        | reports numbers that weren't in the batch          |
@@ -131,13 +137,22 @@ if (options.sessionId) {
     const stamp = new Date(NOW).toISOString().replace(/[:.]/g, '-')
     const name = `${stamp}_${options.sessionId}.jsonl`
     const header = `${JSON.stringify({ type: 'session', version: 3, id: options.sessionId, timestamp: new Date(NOW).toISOString(), cwd: guestCwd })}\n`
+    file = path.join(dir, name)
     if (has('SESSIONLINK')) {
       fs.writeFileSync(path.join(dir, 'elsewhere.jsonl'), header + turn)
-      fs.symlinkSync('elsewhere.jsonl', path.join(dir, name))
+      fs.symlinkSync('elsewhere.jsonl', file)
     } else {
-      fs.writeFileSync(path.join(dir, name), header + turn)
+      fs.writeFileSync(file, header + turn)
     }
     process.stderr.write('Warning: No project session found, creating a new one\n')
+  }
+  // pi runs as root in the VM, and the files it writes are the runner's on the host: it can take
+  // the runner's access away from them.
+  if (has('SESSIONLOCKED')) fs.chmodSync(file, 0o000)
+  if (has('RUNLOCKED')) {
+    fs.mkdirSync(path.join(dir, 'locked'))
+    fs.writeFileSync(path.join(dir, 'locked', 'notes.txt'), 'x')
+    fs.chmodSync(path.join(dir, 'locked'), 0o000)
   }
 }
 fs.appendFileSync(path.join(CONTROL, 'calls.jsonl'), `${JSON.stringify(seen)}\n`)
@@ -208,11 +223,21 @@ function act() {
   if (has('MEMORY')) fs.appendFileSync(path.join(memory, 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
-  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED'].find(has)
+  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME'].find(has)
   if (leave === 'DOTFILE') fs.writeFileSync(path.join(views, '.hidden'), 'x')
   if (leave === 'SYMLINK') fs.symlinkSync('/etc/hostname', path.join(views, 'link.csv'))
   if (leave === 'FIFO') execFileSync('mkfifo', [path.join(memory, 'pipe')], { env: { PATH: process.env.PI_STUB_PATH } })
   if (leave === 'IGNORED') fs.writeFileSync(path.join(views, 'scratch.tmp'), 'x')
+  if (leave === 'LOCKEDFILE') {
+    fs.writeFileSync(path.join(views, 'locked.csv'), 'x')
+    fs.chmodSync(path.join(views, 'locked.csv'), 0o000)
+  }
+  if (leave === 'LOCKEDDIR') {
+    fs.mkdirSync(path.join(memory, 'locked'))
+    fs.writeFileSync(path.join(memory, 'locked', 'notes.md'), 'x')
+    fs.chmodSync(path.join(memory, 'locked'), 0o000)
+  }
+  if (leave === 'GITNAME') fs.writeFileSync(path.join(views, 'git~1'), 'x')
 
   const crash = valueOf('CRASH') ?? (has('CRASH') ? 3 : behavior.crash)
   if (crash !== undefined) {

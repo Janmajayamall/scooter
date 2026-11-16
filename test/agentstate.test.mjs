@@ -191,6 +191,22 @@ test('state: at startup, a pause is tried again at once', () => {
   assert.deepEqual(state.paused, { ...EXAMPLE.paused, next: '2026-11-09T15:55:00Z' })
 })
 
+test('state: at startup during a pause, scheduled tasks keep their dates, so one the pause holds back is still due', () => {
+  const agent = agentWith({
+    scheduled: [
+      { at: '21:30', schedule: { weekday: null, hour: 21, minute: 30 }, task: 'Check in.' },
+      { at: '07:00', schedule: { weekday: null, hour: 7, minute: 0 }, task: 'Morning.' },
+    ],
+  })
+  const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-08' }, paused: EXAMPLE.paused }
+  // Monday 9 November, 21:31 in Kolkata: today's 21:30 failed on a setup error, and is still due.
+  // A task new in the config starts from now, as always.
+  const { state } = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
+  assert.deepEqual(state.scheduled, { '21:30': '2026-11-08', '07:00': '2026-11-09' })
+  const { paused, ...unpaused } = before
+  assert.equal(startupState(unpaused, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' }).state.scheduled['21:30'], '2026-11-09')
+})
+
 test('state: at startup, the first backfill not done starts from the live cursor, and one removed from the config is dropped', () => {
   const options = { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' }
   const entries = [
