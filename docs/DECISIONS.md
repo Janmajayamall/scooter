@@ -914,7 +914,17 @@ The pull request was approved with seven smaller points. Each is below, with wha
 
 ### 3.4 What was run to verify the milestone, and what wasn't verified
 
-See the pull request for the commands and their results. The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+Run on 2026-11-16, on the Linux machine, from clean clones of the branch:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 277 tests: 252 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 270 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 253 pass, none fail. All 7 root tests run. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
+| The `intake`, `whatsapp`, `bridge` and `proc` tests, 64 times, 8 at once | No failure. The review of milestone 2 saw one in 64 before the stub's fix (3.3, point 2) |
+| This milestone's tests, with `time` and `datastore`, 32 times, 8 at once | No failure |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 
 | Required | Where |
 |---|---|
