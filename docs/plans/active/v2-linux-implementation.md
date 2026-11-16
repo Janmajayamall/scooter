@@ -265,6 +265,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **Crash safety** (row 3). `sending.json` holds the entry and the number of chunks already sent, and is rewritten after each chunk. At startup, every `sending.json` is sent again from the next chunk, texts and reactions alike.
 - **Entry IDs.** Two processes write entries. If a name is taken at the rename, take the next counter.
+- **Link previews.** Every text is sent with `--no-preview` (5.3). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8).
 - **`/status`** reports what it can read. Before the runner has ever started, it says so.
 
 **Tests** (10): Delivery, where recovery is now a resend from the recorded chunk; Routing.
@@ -307,6 +308,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - **Home and temporary folder:** `runner/home` and `runner/tmp` (row 16).
 - **Timeouts** close the VM. Aborting the command isn't enough in Gondolin 0.14.0.
 - **Mount point:** row 14.
+- **`sessions/`** is hidden from the VM with Gondolin's `ShadowProvider` (6.6). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8), and `test/support/vm.mjs` has the call.
 
 **Tests** (10): Sandbox, all of it.
 
@@ -504,7 +506,7 @@ Then check, and correct the code where reality differs:
 - a receipt photo ends up in `expenses.csv`, read through pi's `read` tool;
 - a real batch runs end to end in the sandbox;
 - the messages route accepts the `provider` fields; ZDR-only routing works for the model, and how much latency it adds;
-- wacli: how an edit and a deletion arrive; `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID;
+- wacli: how an edit and a deletion arrive; `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID; a text with a link in it, sent with `--no-preview`, arrives without a preview, and wacli fetches nothing for it (`docs/DECISIONS.md`, 0.8, says how to tell);
 - email: IDLE with the app password; the `Authentication-Results` header and its `dmarc=` result; the owner's own mail passes DMARC; `postal-mime` on a forwarded booking and on an audio attachment;
 - a backup to the real bucket, and a restore into an empty folder.
 
@@ -526,6 +528,7 @@ The items of section 14 of DESIGN.md:
 | Building the VM image in the runner container | Milestone 13 |
 | The runner container with a read-only root file system | Milestone 13 |
 | `wacli send react --sender`; edits and deletions; `@lid` owners | G4 |
+| A text with a link, sent with `--no-preview`: no preview, and nothing fetched | G4. Milestone 0 (wacli 3) covers wacli's documentation, its source and the flag |
 | `imapflow` with an app password; the `Authentication-Results` header; DMARC on the owner's mail; `postal-mime` on real mail | G4. Milestone 6 covers samples |
 | The webhook secret from wacli's environment | Milestone 0 (wacli 1) |
 | `docker compose build` | Milestone 13, for amd64 |

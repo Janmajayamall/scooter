@@ -1,0 +1,31 @@
+{
+  "distro": "alpine",
+  "alpine": {
+    "version": "3.23.8",
+    "rootfsPackages": [
+      "linux-virt",
+      "rng-tools",
+      "bash",
+      "ca-certificates",
+      "ca-certificates-bundle",
+      "e2fsprogs",
+      "e2fsprogs-extra",
+      "tzdata",
+      "nodejs",
+      "npm",
+      "git",
+      "curl",
+      "poppler-utils",
+      "libheif-tools",
+      "ripgrep",
+      "fd"
+    ]
+  },
+  "postBuild": {
+    "commands": [
+      "npm install --global --ignore-scripts --omit=dev --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.2",
+      "npm cache clean --force",
+      "git config --system --add safe.directory '*'"
+    ]
+  }
+}

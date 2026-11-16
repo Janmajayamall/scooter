@@ -6,7 +6,7 @@ An earlier prototype has been removed from the repository. Whatever it taught us
 
 When this document doesn't settle a question, pick the simplest option that keeps the principles in section 1, and record the choice in `docs/DECISIONS.md`. Don't change anything in section 2 without asking the owner.
 
-Two documents go with this one. `docs/ARCHITECTURE.md` maps the components, their boundaries and the decisions behind them; its section 8 lists the changes made to this document on 2026-11-15, while planning, with the reason for each. The implementation plan, under `docs/plans/`, sets the order of work.
+Two documents go with this one. `docs/ARCHITECTURE.md` maps the components, their boundaries and the decisions behind them; its section 8 lists the changes made to this document on 2026-11-15, while planning, with the reason for each. Changes made since, while building, are recorded in `docs/DECISIONS.md`. The implementation plan, under `docs/plans/`, sets the order of work.
 
 ## 1. What Scooter does
 
@@ -66,7 +66,7 @@ The bridge and the runner are two services: natively under systemd, or as two co
 
 ### 3.1 Network access
 
-- **The bridge** only makes outbound connections: to WhatsApp through wacli, to the mail server through the email reader, and to the backup bucket.
+- **The bridge** only makes outbound connections: to WhatsApp through wacli, to the mail server through the email reader, and to the backup bucket. It sends every text with wacli's link previews off, so a link in a reply makes wacli fetch nothing (5.3).
 - **The runner** makes outbound HTTPS requests to OpenRouter, and to public websites when internet access is on. It makes them itself, on pi's behalf.
 - **pi's VM** has no network of its own. Everything it sends goes through the runner's network policy (6.13): DNS is answered inside the runner, only HTTP(S) to allowed hosts goes out, and UDP, raw TCP and private addresses are refused.
 - Nothing listens for connections from outside.
@@ -180,7 +180,7 @@ The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which re
 | `start(onRecord)` | Starts receiving, and calls `onRecord` for each message from the owner. The module drops everything else itself. | wacli sync, the webhook and catch-up (5.1; 5.2 steps 1–5 and 7) | Starts the email reader, and reads its spool (5.6) |
 | `stop()` | Stops receiving, for backups and shutdown | Stops wacli sync | Stops the email reader |
 | `download(record, n, path)` | Saves the record's `n`th attachment | `wacli media download` into wacli's staging folder, then a copy | A copy from the spool |
-| `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text` | — |
+| `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text --no-preview` | — |
 | `react(id, emoji)` | Reacts to a message and returns the reaction's ID | `wacli send react` | — |
 | `status()` | One line for `/status` | The link state | Whether the reader is connected, and the emails stored and skipped in the last 24 hours |
 
@@ -233,7 +233,8 @@ The runner asks for messages to be sent by writing entries to `/data/exchange/ou
 
   `DEFAULT_CHANNEL` (8.2) must be a channel that can send, so in v2 it can only be `whatsapp`; the bridge refuses to start with anything else.
 - **Processing:** the bridge checks the folder every second and handles entries in order, sending at most one message every 1.5 seconds.
-  - `text`: split the text into chunks of at most 3,500 characters at paragraph or line breaks, and send each with the channel's `sendText`, quoting only with the first. WhatsApp: `wacli send text --to <owner chat> --message <chunk>`, and on the first chunk `--reply-to <sourceId of replyTo>`.
+  - `text`: split the text into chunks of at most 3,500 characters at paragraph or line breaks, and send each with the channel's `sendText`, quoting only with the first. WhatsApp: `wacli send text --to <owner chat> --message <chunk> --no-preview`, and on the first chunk `--reply-to <sourceId of replyTo>`.
+  - Every text is sent with `--no-preview`. Without it, wacli fetches the first URL in the text to build a link preview (13.1). Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request (3.1, 6.13). So links reach the owner as plain text.
   - `react`: the channel's `react`. WhatsApp: `wacli send react --to <owner chat> --id <sourceId of target> --sender <owner JID> --reaction <emoji>`.
   - After each successful send, log an `out` line with the channel as `source` and the ID it returned as `sourceId`, then delete the entry.
   - If `replyTo` points at a message whose `sourceId` is unknown, send it without quoting.
@@ -344,13 +345,13 @@ Validation:
 /data/agents/lifelog/      scooter-runner, 0700; a git repository
   views/                   expenses.csv, runs.csv, meals.csv, travel.csv, people.csv, days/YYYY/MM/YYYY-MM-DD.md
   memory/                  preferences.md, needs-review.md
-  sessions/                pi sessions (not in git); pi only gets a copy of the current one (6.6)
+  sessions/                pi sessions (not in git), hidden from the VM; pi only gets a copy of the current one (6.6)
   run/                     rebuilt before each run (not in git): system.md, config/ (a copy of the prompt and
                            skills from /config) and session/ (the copy of the current session)
   state.json               the runner's state, 0600 (not in git)
 ```
 
-- Everything here belongs to the `scooter-runner` user. pi reaches it only through its VM's mounts, which make `views/`, `memory/` and `run/session/` writable and everything else read-only (6.6).
+- Everything here belongs to the `scooter-runner` user. pi reaches it only through its VM's mounts, which make `views/`, `memory/` and `run/session/` writable, hide `sessions/`, and leave everything else read-only (6.6).
 - On first start the runner creates this layout, runs `git init` with a `.gitignore` listing `/sessions/`, `/run/` and `/state.json` (anchored with `/`, so they can't match anything inside `views/` or `memory/`), and makes an initial commit.
 - The VM image sets `git config --system --add safe.directory '*'`, so pi can use read-only commands like `git log` on the mounted repository (6.12).
 
@@ -442,10 +443,10 @@ For context only (no action, no DONE):
 Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.12). The runner starts it, runs pi in it, and closes it when pi exits. Nothing pi does inside the VM survives, apart from what it writes to the folders mounted read-write.
 
 - **Mounts**, at the same paths as on the host, so prompts and paths read the same:
-  - `/data/agents/lifelog`, read-only, except `views/`, `memory/` and `run/session/`, which are read-write;
+  - `/data/agents/lifelog`, read-only, except `views/`, `memory/` and `run/session/`, which are read-write, and `sessions/`, which is hidden;
   - `/data/datastore`, read-only.
 
-  Nothing else from the host is visible. Gondolin 0.14.0 puts its own file system at `/data` inside the VM by default, which is where Scooter's folders are in Docker, so the runner moves Gondolin's mount point somewhere else (13.4).
+  Nothing else from the host is visible. A read-only mount alone would let pi read every earlier session, so the runner hides `sessions/` with Gondolin's `ShadowProvider`: in the VM the folder doesn't exist, and can't be created (13.4). Gondolin 0.14.0 puts its own file system at `/data` inside the VM by default, which is where Scooter's folders are in Docker, so the runner moves Gondolin's mount point somewhere else (13.4).
 - **Network:** only through the runner's network policy (6.13).
 - **Environment:** only `PATH`, `HOME` (a fresh folder inside the VM), `LANG=C.UTF-8`, `TZ=<SCOOTER_TZ>`, `PI_SKIP_VERSION_CHECK=1`, `PI_OFFLINE=1`, `PI_TELEMETRY=0`, and `OPENROUTER_API_KEY` set to Gondolin's placeholder. The real key never enters the VM; the runner swaps it in on the way out (6.13).
 - **Acceleration** (`AGENT_ACCEL`, 8.2):
@@ -465,7 +466,7 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
   pi talks to OpenRouter at its usual address, with `OPENROUTER_API_KEY`, so it needs no `models.json`. `--no-mcp` turns off pi's built-in MCP support (13.2). The prompt is one argument, which is why a batch has a size limit (6.5).
 - **The model:** the network policy accepts only the agent's configured model (6.13), so a misled run can't switch to another, more expensive one.
 - **Session ID:** `lifelog-<day>`, where `<day>` is the local date of the current time minus `SESSION_ROLLOVER_HOUR` hours, with `-<n>` appended after `/new`. With `session: none`, use `--no-session` instead.
-- **Sessions belong to the runner.** pi never sees `sessions/`. Before a run, the runner empties `run/session/` and copies the current session's file into it, if there is one. After a successful run, once the files pass the check in 6.8, it copies that one file back if it's a regular file (not a symlink), and ignores anything else in `run/session/`. After a failed run it copies nothing back (6.9). So a run can only extend the session it continues; it can't change another session or plant one for a later day.
+- **Sessions belong to the runner.** pi never sees `sessions/`: the mounts hide it. Before a run, the runner empties `run/session/` and copies the current session's file into it, if there is one. After a successful run, once the files pass the check in 6.8, it copies that one file back if it's a regular file (not a symlink), and ignores anything else in `run/session/`. After a failed run it copies nothing back (6.9). So a run can only extend the session it continues; it can't change another session or plant one for a later day.
 - **Nothing carries over between runs.** Each run is a new VM from the same image. pi's home, `/tmp`, anything it installed and any process it left running are gone when the VM closes.
 - **Timeout:** after `timeout_minutes`, the runner closes the VM.
 - **Supervision:** if the runner dies, its VMs must die with it. Gondolin 0.14.0 leaves a VM's QEMU process running when the process that started it is killed (13.4), so the runner always runs under something that stops its whole process group: systemd with `KillMode=control-group` (8.5), or Docker as the container's main process (8.3).
@@ -837,10 +838,10 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 The controls, and what each one protects against:
 
 - **Strangers:** the bridge accepts WhatsApp messages only from the owner's IDs and ignores groups, and keeps email only from the owner's addresses, when it passes DMARC (5.6). Outbox entries have no recipient field, so replies always go to the owner.
-- **A misled agent sending data out:** pi runs in a VM with no network of its own. The runner's policy lets it reach only OpenRouter's two chat endpoints, with the configured model, and refuses anything that would make OpenRouter fetch from the web (6.13). DNS never leaves the runner, and private addresses are refused. With internet access off, the default, that's the agent's only way out. With it on, pi can also reach public HTTPS websites. Every request is logged.
+- **A misled agent sending data out:** pi runs in a VM with no network of its own. The runner's policy lets it reach only OpenRouter's two chat endpoints, with the configured model, and refuses anything that would make OpenRouter fetch from the web (6.13). DNS never leaves the runner, and private addresses are refused. The bridge sends the agent's replies with wacli's link previews off, so a link in a reply is never fetched from the bridge's side (5.3). With internet access off, the default, OpenRouter's two chat endpoints are the agent's only way out. With it on, pi can also reach public HTTPS websites. Every request is logged.
 - **Key theft:** the OpenRouter key exists only in the runner. The WhatsApp session, the mailbox password and the backup credentials exist only in the bridge. pi sees only a placeholder, which is worthless outside the runner.
 - **Third-party code that faces the outside:** wacli and the email reader each run as their own user, with only their own settings in their environment and only their own folder to read and write (3.2). Neither can read the keys, the datastore, the agent's folder (with the views' history in `.git`), the exchange, or the runner's and the bridge's state.
-- **Tampering with the record:** pi's VM sees the datastore read-only, and the agent's folder read-only except `views/`, `memory/` and its session copy. So it can't change the log, the outbox, the locks, `state.json`, the git history, other sessions or `/config`.
+- **Tampering with the record:** pi's VM sees the datastore read-only, and the agent's folder read-only except `views/`, `memory/` and its session copy, with `sessions/` hidden altogether (6.6). So it can't change the log, the outbox, the locks, `state.json`, the git history, other sessions or `/config`.
 - **Persistence after a malicious document:** every run starts a fresh VM from the same image, so whatever pi leaves inside one is gone when it closes. pi ignores project files (`--no-approve`) and starts with extension, skill, prompt-template and context-file discovery turned off, and its MCP support too. Skills load only from a copy of `/config` that pi can't write. It gets only a copy of the current session, so it can't plant a session for later. What pi can change, its views and memory, is in git, so the owner can see and revert it, and a run that leaves a file git wouldn't record fails (6.8).
 - **The webhook:** it listens on loopback only, with a new random secret on every start and a constant-time HMAC check.
 - **Logs:** they contain IDs, kinds, sizes and timings, never message text or file contents. The network log also names the hosts and paths the agent reached.
@@ -909,7 +910,7 @@ Required tests, at least:
   - An edit or deletion of a message waiting in `retry`, or in `failed`, brings that message into the same batch, shown as last edited.
   - Sessions: only the current one is copied into `run/session/`, and only it is copied back: never a symlink, and nothing after a failed run.
   - A symlink, a FIFO, a name starting with `.` (such as `views/.gitignore`) or a file git ignores, in `views/` or `memory/`, fails the run; the clean-up removes it, and pi's session isn't copied back.
-  - The sandbox gets the network policy for the configured internet mode, and the prompt shows which mode is on.
+  - The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the configured internet mode. The prompt shows which mode is on.
   - Scheduled and `once` tasks, and `/new`, which is handled once even when the batch after it fails.
   - Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies. `Now:` is each batch's own time, and batches don't cross the owner's days.
   - Backfills:
@@ -921,7 +922,7 @@ Required tests, at least:
   - `status.json` holds what `/status` shows about the runner's settings. The emulation notice goes out when the accelerator changes to emulation, and not again at the next start.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
-- **Delivery:** order, pacing, chunking, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again.
+- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again.
 - **Routing:** `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that can't send stops the bridge at startup.
 - **Network policy:**
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.
@@ -932,7 +933,7 @@ Required tests, at least:
   - The `request` line is written before the request goes out, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
 - **Sandbox** (these need QEMU, and skip themselves without it):
   - A VM boots from the built image and runs `pi --version`.
-  - The mounts: the datastore and the agent's folder are read-only, except `views/`, `memory/` and `run/session/`. They sit at the host's paths, also when the data folder is `/data`.
+  - The mounts: the datastore and the agent's folder are read-only, except `views/`, `memory/` and `run/session/`. `sessions/` isn't there, and a link made in a writable folder doesn't lead to it. They sit at the host's paths, also when the data folder is `/data`.
   - Nothing survives between runs: neither files outside the mounts nor background processes.
   - From inside the VM: another host, DNS to an outside resolver, UDP, and private addresses (the host's loopback, `169.254.169.254`, a LAN address) are all refused, and the environment holds only the placeholder.
   - `AGENT_ACCEL`: `auto` picks the fastest available and says which; a forced accelerator that isn't available stops the runner with an error.
@@ -1012,7 +1013,8 @@ The implementation plan under `docs/plans/` splits these milestones into smaller
 - **`wacli media download --chat <jid> --id <id> --output <path>`:** returns `data.path`, `data.bytes` and `data.source`.
 - **`wacli --read-only auth status`:** returns `{authenticated: false}` or `{authenticated: true, linked_jid, phone}`. `wacli auth` pairs with a QR code, or with a pairing code given `--phone`.
 - **Sending:**
-  - `wacli send text --to <jid> --message <text> [--reply-to <message ID>] [--reply-to-sender <jid>]` returns `data: {sent, to, id}`. `--reply-to` quotes a message, which must be in wacli's local store (incoming or sent).
+  - `wacli send text --to <jid> --message <text> [--no-preview] [--reply-to <message ID>] [--reply-to-sender <jid>]` returns `data: {sent, to, id}`. `--reply-to` quotes a message, which must be in wacli's local store (incoming or sent).
+  - Link previews: unless `--no-preview` is given, `send text` fetches the first `http://` or `https://` URL in the text, and the image that page names, to send a preview with the message. The fetch refuses private and local addresses, follows up to 3 redirects, and gives up after 10 seconds. While `sync` runs, it is the sync process that fetches, and the flag travels with the send. This is from wacli's `docs/send.md` and its source (`fetchLinkPreview` in `cmd/wacli/send.go`), read on 2026-11-16. Sending needs a paired number, so it hasn't been run (section 14).
   - `send file --to --file [--caption] [--reply-to]` and `send react --to --id --reaction [--sender]` also return the sent message's `id`.
   - wacli keeps the messages it sends in its store.
 - **Phone:** the bot number must be registered in WhatsApp Business on a phone that's opened at least every two weeks.
@@ -1088,6 +1090,7 @@ Checked in a prototype on an Ubuntu 24.04 server on 2026-11-15.
   - Its container mode runs the whole build as root in a privileged container instead. Under rootless Docker that needed no root on the host.
   - A native build as root hasn't been run (section 14).
 - **Mounts:** a host folder mounted read-only, except chosen subfolders, worked for pi's reads and writes. By default Gondolin puts its file system at `/data` in the guest, and shows each mount there too; the mount point can be moved (`vfs.fuseMount`).
+  - A path inside a mount can be hidden with `ShadowProvider`. The guest then finds nothing there, under Gondolin's own mount point either, and can't create it. The guest follows links itself, so a link made in a writable subfolder ends at the same missing path. Checked on 2026-11-16, on the Linux machine of the implementation plan.
 - **Docker:** a container with no added capabilities, no `--privileged` and no seccomp changes ran VMs, under emulation, and reached OpenRouter. On Linux:
   - in rootless Docker, the container runtime resets each container's supplementary groups, so the host's `kvm` group never reaches the container;
   - a per-user ACL on `/dev/kvm` let a rootless container's root, which is the host user, open it. But Ubuntu's udev rules (the `uaccess` tag) reset per-user ACLs on `/dev/kvm` whenever any VM is created or destroyed, so the ACL was gone as soon as a VM started;
@@ -1111,6 +1114,7 @@ Check these during implementation where you can, and put the rest in the README 
 - That `--no-mcp` works together with `-p` (6.6).
 - The runner container with a read-only root filesystem (8.3).
 - `wacli send react --sender` in a one-to-one chat.
+- That a text with a link, sent with `wacli send text --no-preview`, arrives without a preview, and that wacli fetches nothing for it (5.3, 13.1).
 - How wacli reports edits and deletions (13.1).
 - Owner matching when WhatsApp delivers the owner's messages from an `@lid` ID.
 - `imapflow` with an app password at the chosen mail provider, IDLE included, and the `Authentication-Results` header the provider adds: its server name (Gmail's should be `mx.google.com`) and its `dmarc=` result.
