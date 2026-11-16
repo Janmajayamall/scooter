@@ -5,10 +5,16 @@
   "engines": {
     "node": ">=22.19"
   },
+  "bin": {
+    "scooter": "src/cli.mjs"
+  },
   "scripts": {
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
-    "@earendil-works/gondolin": "0.14.0"
+    "@earendil-works/gondolin": "0.14.0",
+    "imapflow": "2.11.0",
+    "postal-mime": "4.2.1",
+    "yaml": "2.9.1"
   }
 }
