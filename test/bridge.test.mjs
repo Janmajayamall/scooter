@@ -1,0 +1,245 @@
+// The bridge as a whole (section 5 of DESIGN.md): signed webhooks from wacli become datastore lines
+// and attachments, and unsigned ones don't; the bridge's state; one bridge per data folder; and
+// `scooter bridge` as a real process.
+
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import net from 'node:net'
+import path from 'node:path'
+import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { holdInstance, startBridge } from '../src/bridge/main.mjs'
+import { openBridgeState } from '../src/bridge/state.mjs'
+import { limits, overrideLimits } from '../src/common/limits.mjs'
+import { makePaths } from '../src/common/paths.mjs'
+import { createProc } from '../src/common/proc.mjs'
+import { createFakeClock } from './support/clock.mjs'
+import { createTestLog } from './support/log.mjs'
+import { isRoot } from './support/root.mjs'
+import { atEnd, makeTestDir } from './support/tmp.mjs'
+import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
+
+const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url))
+
+function bridgeSettings(root) {
+  return {
+    side: 'bridge',
+    dataDir: path.join(root, 'data'),
+    configDir: path.join(root, 'config'),
+    timeZone: 'Asia/Kolkata',
+    ownerNumber: OWNER_NUMBER,
+    ownerJids: [],
+    defaultChannel: 'whatsapp',
+    email: null,
+    backupTime: '03:30',
+    backup: null,
+  }
+}
+
+async function start(t, root, { clock = createFakeClock('2026-11-09T15:45:00Z') } = {}) {
+  const { log, entries, events } = createTestLog({ clock })
+  // As root, without the users `setup` makes, wacli runs as root (whatsapp.test.mjs has the root test).
+  const proc = createProc({ log, clock })
+  const bridge = await startBridge({ settings: bridgeSettings(root), clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
+  atEnd(t, () => bridge.stop())
+  return { bridge, clock, entries, events }
+}
+
+test('bridge: signed webhook posts end up as the right datastore lines and attachments, and unsigned ones don\'t', async t => {
+  const root = makeTestDir(t)
+  const stub = createWacliStub(t, root)
+  const media = {
+    IMG1: { content: 'jpeg bytes of a receipt' },
+    DOC1: { content: '%PDF-1.7 a train ticket' },
+  }
+  stub.fixtures({ paired: true, messages: [], media })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0 }))
+  const { bridge } = await start(t, root)
+  const paths = makePaths(bridgeSettings(root))
+  await waitFor(() => stub.callsOf('sync').length > 0, 'wacli sync to start')
+
+  const send = async (payload, options) => {
+    const status = await stub.postWebhook(payload, options)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await bridge.intake.idle()
+    return status
+  }
+  const at = minute => `2026-11-09T15:${String(minute).padStart(2, '0')}:00Z`
+  const image = { Type: 'image', Caption: 'Blue Tokai, coffee', Filename: '', MimeType: 'image/jpeg', FileLength: 23 }
+  const document = { Type: 'document', Caption: '', Filename: 'Ticket.pdf', MimeType: 'application/pdf', FileLength: 23 }
+
+  const statuses = [
+    await send(webhookPayload({ ID: 'IMG1', Timestamp: at(30), Text: 'Blue Tokai, coffee', Media: image })),
+    await send(webhookPayload({ ID: 'TXT1', Timestamp: at(31), Text: 'coffee 150' })),
+    await send(webhookPayload({ ID: 'DOC1', Timestamp: at(32), Media: document })),
+    await send(webhookPayload({ ID: 'REP1', Timestamp: at(33), Text: 'work', ReplyToID: 'IMG1', ReplyToDisplay: 'Blue Tokai, coffee' })),
+    await send(webhookPayload({ ID: 'REA1', Timestamp: at(34), ReactionToID: 'TXT1', ReactionEmoji: '👍' })),
+    await send(webhookPayload({ ID: 'TXT1', Timestamp: at(35), Text: 'coffee 120', Edited: true })),
+    await send(webhookPayload({ ID: 'REP1', Timestamp: at(36), Revoked: true })),
+    await send(webhookPayload({ ID: 'CMD1', Timestamp: at(37), Text: '/status' })),
+    // The same edit, delivered again.
+    await send(webhookPayload({ ID: 'TXT1', Timestamp: at(35), Text: 'coffee 120', Edited: true })),
+    // Unsigned, and signed with a wrong secret.
+    await send(webhookPayload({ ID: 'FAKE1', Timestamp: at(38), Text: 'forged' }), { signature: null }),
+    await send(webhookPayload({ ID: 'FAKE2', Timestamp: at(39), Text: 'forged' }), { signature: `sha256=${'ab'.repeat(32)}` }),
+  ]
+  assert.deepEqual(statuses, [200, 200, 200, 200, 200, 200, 200, 200, 200, 401, 401])
+
+  const day = path.join(paths.datastore, '2026/11/09')
+  const lines = fs.readFileSync(path.join(day, 'log.jsonl'), 'utf8').split('\n').filter(Boolean)
+  const base = { dir: 'in', source: 'whatsapp', trust: 'owner' }
+  assert.deepEqual(
+    lines.map(line => JSON.parse(line)),
+    [
+      { seq: 1, kind: 'message', ...base, at: at(30), sourceId: 'IMG1', text: 'Blue Tokai, coffee', files: [{ path: '1.jpg', mime: 'image/jpeg', bytes: 23 }] },
+      { seq: 2, kind: 'message', ...base, at: at(31), sourceId: 'TXT1', text: 'coffee 150' },
+      { seq: 3, kind: 'message', ...base, at: at(32), sourceId: 'DOC1', text: '', files: [{ path: '3.pdf', mime: 'application/pdf', name: 'Ticket.pdf', bytes: 23 }] },
+      { seq: 4, kind: 'message', ...base, at: at(33), sourceId: 'REP1', replyTo: 1, quoted: 'Blue Tokai, coffee', text: 'work' },
+      { seq: 5, kind: 'reaction', ...base, at: at(34), sourceId: 'REA1', target: 2, emoji: '👍' },
+      { seq: 6, kind: 'edit', ...base, at: at(35), sourceId: 'TXT1', target: 2, text: 'coffee 120' },
+      { seq: 7, kind: 'delete', ...base, at: at(36), sourceId: 'REP1', target: 4 },
+      { seq: 8, kind: 'command', ...base, at: at(37), sourceId: 'CMD1', text: '/status' },
+    ].map(line => {
+      // The fields in the order the datastore writes them.
+      const { seq, kind, dir, at: time, source, sourceId, trust, ...rest } = line
+      return { seq, kind, dir, at: time, source, sourceId, trust, ...rest }
+    }),
+  )
+  assert.equal(fs.readFileSync(path.join(day, '1.jpg'), 'utf8'), 'jpeg bytes of a receipt')
+  assert.equal(fs.readFileSync(path.join(day, '3.pdf'), 'utf8'), '%PDF-1.7 a train ticket')
+  assert.deepEqual(fs.readdirSync(day).sort(), ['1.jpg', '3.pdf', 'log.jsonl'])
+  // The replies go to the chat the owner wrote from.
+  assert.equal(bridge.state.get().ownerChat.jid, OWNER)
+})
+
+test('bridge: the state records the first start, and keeps it', async t => {
+  const root = makeTestDir(t)
+  const paths = makePaths(bridgeSettings(root))
+  fs.mkdirSync(paths.bridge, { recursive: true })
+  const clock = createFakeClock('2026-11-09T15:45:00Z')
+  const { log } = createTestLog({ clock })
+  const state = openBridgeState({ paths, clock, log })
+  assert.deepEqual(state.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: null, lastBackup: null })
+  assert.equal(fs.statSync(paths.bridgeState).mode & 0o777, 0o600)
+  state.update({ ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' } })
+
+  clock.set('2026-11-12T08:00:00Z')
+  const again = openBridgeState({ paths, clock, log })
+  assert.deepEqual(again.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, lastBackup: null })
+  // What it holds is checked, when read and when changed.
+  assert.throws(() => again.update({ ownerChat: { jid: '' } }), /ownerChat must be null or/)
+  assert.throws(() => again.update({ firstStart: 'yesterday' }), /firstStart must be a UTC time/)
+  // A file that isn't a state stops the bridge, and the message says which.
+  fs.writeFileSync(paths.bridgeState, '{"firstStart":')
+  assert.throws(() => openBridgeState({ paths, clock, log }), new RegExp(`${paths.bridgeState} is not JSON`))
+  fs.writeFileSync(paths.bridgeState, '{"firstStart":"2026-11-09","ownerChat":null,"lastBackup":null}')
+  assert.throws(() => openBridgeState({ paths, clock, log }), /firstStart must be/)
+})
+
+test('bridge: a second bridge on the same data folder refuses to start', async t => {
+  const root = makeTestDir(t)
+  createWacliStub(t, root).fixtures({ paired: false })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0 }))
+  const { bridge } = await start(t, root)
+  await assert.rejects(start(t, root), /another bridge is running on this data folder/)
+  // The first is untouched.
+  assert.ok(fs.existsSync(bridge.paths.bridgeSocket))
+  await bridge.stop()
+  assert.equal(fs.existsSync(bridge.paths.bridgeSocket), false)
+  // Once it has stopped, another can start.
+  const { bridge: next } = await start(t, root)
+  await next.stop()
+})
+
+test('bridge: a socket left by a bridge that was killed is replaced', async t => {
+  const root = makeTestDir(t)
+  const socket = path.join(root, 'bridge.sock')
+  // A socket file with nobody listening, as a bridge killed with SIGKILL leaves it.
+  const script = `require('net').createServer().listen(${JSON.stringify(socket)}, () => console.log('listening'))`
+  const killed = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
+  await new Promise(resolve => killed.stdout.once('data', resolve))
+  killed.kill('SIGKILL')
+  await new Promise(resolve => killed.once('exit', resolve))
+  assert.ok(fs.existsSync(socket))
+  const instance = await holdInstance(socket)
+  await assert.rejects(holdInstance(socket), /another bridge is running/)
+  await instance.close()
+  assert.equal(fs.existsSync(socket), false)
+})
+
+test('bridge: attachments that waited for the store when the bridge stopped are cleared at startup', async t => {
+  const root = makeTestDir(t)
+  createWacliStub(t, root).fixtures({ paired: false })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0 }))
+  const paths = makePaths(bridgeSettings(root))
+  fs.mkdirSync(paths.bridgeIncoming, { recursive: true })
+  fs.writeFileSync(path.join(paths.bridgeIncoming, '20261109T154500000-0001-1'), 'half a download')
+  await start(t, root)
+  assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
+})
+
+test('bridge: its own folder is made 0700', async t => {
+  const root = makeTestDir(t)
+  createWacliStub(t, root).fixtures({ paired: false })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0 }))
+  const { bridge } = await start(t, root)
+  for (const dir of [bridge.paths.bridge, bridge.paths.bridgeIncoming, bridge.paths.wacli, bridge.paths.wacliStaging]) {
+    assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir)
+  }
+})
+
+// The port wacli posts to, unless a test sets another. `scooter bridge` as a process uses it.
+function portIsFree(port) {
+  return new Promise(resolve => {
+    const server = net.createServer()
+    server.once('error', () => resolve(false))
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)))
+  })
+}
+
+// As root, the bridge needs the users that `setup` makes.
+const asProcess = { skip: isRoot ? 'as root, scooter bridge needs the users setup makes' : false }
+
+test('bridge: `scooter bridge` runs as a process until SIGTERM, and leaves no wacli behind', asProcess, async t => {
+  if (!(await portIsFree(limits.WEBHOOK_PORT))) return t.skip(`port ${limits.WEBHOOK_PORT} is in use`)
+  const root = makeTestDir(t)
+  const stub = createWacliStub(t, root)
+  stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: '2099-01-01T00:00:00Z', Text: 'caught up' })] })
+  const dataDir = path.join(root, 'data')
+  const env = {
+    PATH: process.env.PATH,
+    TMPDIR: process.env.TMPDIR,
+    SCOOTER_ENV_DIR: path.join(root, 'no-env-files'),
+    OWNER_NUMBER: `+${OWNER_NUMBER}`,
+    DATA_DIR: dataDir,
+    CONFIG_DIR: path.join(root, 'config'),
+  }
+  const child = spawn(process.execPath, [CLI, 'bridge'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
+  atEnd(t, () => child.kill('SIGKILL'))
+  let stderr = ''
+  child.stderr.setEncoding('utf8').on('data', chunk => (stderr += chunk))
+  const events = () => stderr.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line).event)
+
+  // Another process may take the port between the check above and the bridge's start.
+  const early = exited.then(() => /EADDRINUSE/.test(stderr))
+  const started = waitFor(() => events().includes('whatsapp.caught_up') && stub.callsOf('sync').length > 0, 'the bridge to start')
+  if (await Promise.race([started.then(() => false), early])) return t.skip(`port ${limits.WEBHOOK_PORT} was taken`)
+  await started
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: '2099-01-01T00:00:01Z' })), 200)
+  const log = path.join(dataDir, 'datastore')
+  await waitFor(() => events().filter(event => event === 'intake.stored').length === 2, 'two lines')
+
+  child.kill('SIGTERM')
+  assert.deepEqual(await exited, { code: 0, signal: null })
+  const { pid } = stub.callsOf('sync')[0]
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
+  assert.deepEqual(events().slice(-2), ['whatsapp.stopped', 'bridge.stopped'])
+  // Every log line is JSON, and none holds what the owner wrote.
+  assert.ok(!stderr.includes('coffee') && !stderr.includes('caught up'))
+  const day = fs.readdirSync(log, { recursive: true }).find(name => name.endsWith('log.jsonl'))
+  const texts = fs.readFileSync(path.join(log, day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).text)
+  assert.deepEqual(texts.sort(), ['caught up', 'coffee 150'])
+  assert.equal(fs.existsSync(path.join(dataDir, 'bridge', 'bridge.sock')), false)
+})
