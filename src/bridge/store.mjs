@@ -14,7 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createIndex } from '../common/datastore/index.mjs'
 import { DatastoreError, checkLine, encodeLine } from '../common/datastore/line.mjs'
-import { LOG_NAME, createReader, listDays } from '../common/datastore/reader.mjs'
+import { createReader, listDays } from '../common/datastore/reader.mjs'
 import { TMP_PREFIX, ensureDir, setOwner } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { dayOfDate } from '../common/paths.mjs'
@@ -96,17 +96,19 @@ function fsyncPath(target) {
   }
 }
 
-// Opens the datastore in `dir` for writing, and returns the store.
+// Opens the datastore for writing, and returns the store.
 //
+// - `paths` is what `makePaths` returns (`src/common/paths.mjs`).
 // - `owner` is `{ uid, gid }` for everything the store creates: root and the runner's group. Leave
 //   it out when not running as root, and owners are left alone. Modes are set either way.
 // - It throws a `DatastoreError` if the datastore's contents are damaged: a complete line that
 //   isn't a line, or `seq` numbers out of order.
-export function openStore({ dir, clock = systemClock, log, owner = null }) {
+export function openStore({ paths, clock = systemClock, log, owner = null }) {
+  const dir = paths.datastore
   ensureDir(dir, { mode: DIR_MODE, owner })
 
   const index = createIndex()
-  const reader = createReader(dir)
+  const reader = createReader(paths)
   for (const { line, day } of reader.poll()) index.add(line, day)
 
   // Part of a line at the very end is what a crash in the middle of a write leaves. The line was
@@ -123,8 +125,8 @@ export function openStore({ dir, clock = systemClock, log, owner = null }) {
   let newestDay = listDays(dir).at(-1) ?? null
   if (newestDay !== null) {
     // Copies of attachments that a crash left unfinished.
-    for (const name of fs.readdirSync(path.join(dir, newestDay))) {
-      if (name.startsWith(TMP_PREFIX)) fs.rmSync(path.join(dir, newestDay, name), { force: true })
+    for (const name of fs.readdirSync(paths.dayDir(newestDay))) {
+      if (name.startsWith(TMP_PREFIX)) fs.rmSync(path.join(paths.dayDir(newestDay), name), { force: true })
     }
   }
   log.info('store.opened', { lines: index.lastSeq, newestDay })
@@ -201,7 +203,7 @@ export function openStore({ dir, clock = systemClock, log, owner = null }) {
     if (isDuplicate(draft)) return { stored: false, reason: 'duplicate' }
 
     const day = dayForNow()
-    const dayDir = path.join(dir, day)
+    const dayDir = paths.dayDir(day)
     ensureDir(dayDir, { mode: DIR_MODE, owner })
     newestDay = day
 
@@ -221,7 +223,7 @@ export function openStore({ dir, clock = systemClock, log, owner = null }) {
 
     const line = files.length > 0 ? { ...draft, files } : draft
     const bytes = Buffer.from(encodeLine(line))
-    const file = path.join(dayDir, LOG_NAME)
+    const file = paths.dayLog(day)
     const isNew = !fs.existsSync(file)
     const fd = fs.openSync(file, 'a', FILE_MODE)
     try {

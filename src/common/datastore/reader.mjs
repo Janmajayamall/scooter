@@ -13,8 +13,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { DatastoreError, decodeLine } from './line.mjs'
 
-export const LOG_NAME = 'log.jsonl'
-
 const NEWLINE = 0x0a
 
 function names(dir, pattern) {
@@ -69,7 +67,8 @@ function readFrom(file, offset) {
   }
 }
 
-// Returns a reader that starts at the first line of the datastore.
+// Returns a reader that starts at the first line of the datastore. `paths` is what `makePaths`
+// returns (`src/common/paths.mjs`).
 //
 // - `poll()` returns the lines that are new, in order, each as `{ line, day }`, where `day` is the
 //   line's day folder. It throws a `DatastoreError` if a complete line isn't a well-formed line,
@@ -79,7 +78,7 @@ function readFrom(file, offset) {
 // - `pending()` returns what is left unread at the end of the newest day's log, the part of a
 //   line: `{ day, file, offset, bytes }`, or null when there's nothing. The writer uses it at
 //   startup, to cut the part off.
-export function createReader(datastoreDir) {
+export function createReader(paths) {
   let day = null
   let offset = 0
   let lineNumber = 0
@@ -87,42 +86,49 @@ export function createReader(datastoreDir) {
 
   // Takes the complete lines after `offset` in the current day's log.
   function take(out) {
-    const file = path.join(datastoreDir, day, LOG_NAME)
+    const file = paths.dayLog(day)
     const fresh = readFrom(file, offset)
     const end = fresh.lastIndexOf(NEWLINE) + 1
     leftover = fresh.length - end
+    const lines = []
     let start = 0
     while (start < end) {
       const stop = fresh.indexOf(NEWLINE, start)
-      lineNumber += 1
-      let line
       try {
-        line = decodeLine(fresh.toString('utf8', start, stop))
+        lines.push({ line: decodeLine(fresh.toString('utf8', start, stop)), day })
       } catch (error) {
-        throw new DatastoreError(`${file}, line ${lineNumber}: ${error.message}`)
+        throw new DatastoreError(`${file}, line ${lineNumber + lines.length + 1}: ${error.message}`)
       }
-      out.push({ line, day })
       start = stop + 1
     }
+    out.push(...lines)
+    lineNumber += lines.length
     offset += end
   }
 
   function poll() {
     const out = []
-    const days = listDays(datastoreDir)
+    const days = listDays(paths.datastore)
     if (days.length === 0) return out
-    if (day === null) day = days[0]
-    for (;;) {
-      take(out)
-      const next = days.find(candidate => candidate > day)
-      if (next === undefined) return out
-      // The writer has moved on to a later day, so this day's log is finished.
-      if (leftover > 0) {
-        throw new DatastoreError(`${path.join(datastoreDir, day, LOG_NAME)} ends in part of a line, and isn't the newest day's log`)
+    const before = { day, offset, lineNumber, leftover }
+    try {
+      if (day === null) day = days[0]
+      for (;;) {
+        take(out)
+        const next = days.find(candidate => candidate > day)
+        if (next === undefined) return out
+        // The writer has moved on to a later day, so this day's log is finished.
+        if (leftover > 0) {
+          throw new DatastoreError(`${paths.dayLog(day)} ends in part of a line, and isn't the newest day's log`)
+        }
+        day = next
+        offset = 0
+        lineNumber = 0
       }
-      day = next
-      offset = 0
-      lineNumber = 0
+    } catch (error) {
+      // A poll gives all of its lines or none: the reader stays where it was.
+      ;({ day, offset, lineNumber, leftover } = before)
+      throw error
     }
   }
 
@@ -133,7 +139,7 @@ export function createReader(datastoreDir) {
     },
     pending() {
       if (day === null || leftover === 0) return null
-      return { day, file: path.join(datastoreDir, day, LOG_NAME), offset, bytes: leftover }
+      return { day, file: paths.dayLog(day), offset, bytes: leftover }
     },
   }
 }

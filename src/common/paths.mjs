@@ -2,7 +2,9 @@
 // DESIGN.md).
 //
 // `DATA_DIR` is `/data` in Docker and `/var/lib/scooter` natively; `CONFIG_DIR` is `/config` or
-// `/etc/scooter/config`. Nothing else in the code builds these paths by hand.
+// `/etc/scooter/config`. Code takes the paths from here and doesn't build them by hand. What a
+// module does build itself is the name of a file inside one of these folders, such as an
+// attachment in a day folder.
 
 import path from 'node:path'
 

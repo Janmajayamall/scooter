@@ -12,6 +12,7 @@ import { createIndex } from '../src/common/datastore/index.mjs'
 import { DatastoreError, checkLine, decodeLine, encodeLine } from '../src/common/datastore/line.mjs'
 import { createReader, listDays } from '../src/common/datastore/reader.mjs'
 import { overrideLimits } from '../src/common/limits.mjs'
+import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
@@ -38,10 +39,11 @@ function incoming(text, extra = {}) {
 // A store in a test's own folder, with a clock the test moves.
 function setup(t, start = '2026-11-09T15:43:02Z') {
   const root = makeTestDir(t)
-  const dir = path.join(root, 'datastore')
+  const paths = makePaths({ dataDir: root, configDir: path.join(root, 'config') })
+  const dir = paths.datastore
   const clock = createFakeClock(start)
   const { log, entries, events } = createTestLog({ clock })
-  const open = (options = {}) => openStore({ dir, clock, log, ...options })
+  const open = (options = {}) => openStore({ paths, clock, log, ...options })
   const logFile = day => path.join(dir, day, 'log.jsonl')
   const linesOf = day => fs.readFileSync(logFile(day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
   // A file standing in for a download in wacli's staging folder or the mail spool.
@@ -51,7 +53,7 @@ function setup(t, start = '2026-11-09T15:43:02Z') {
     fs.writeFileSync(file, contents)
     return file
   }
-  return { root, dir, clock, entries, events, open, logFile, linesOf, staged }
+  return { root, paths, dir, clock, entries, events, open, logFile, linesOf, staged }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -216,13 +218,13 @@ test('datastore: the day folder is the UTC date the line arrived, whatever the m
 })
 
 test('datastore: read in date order, the day folders give seq order', async t => {
-  const { open, clock, dir } = setup(t, '2026-11-28T10:00:00Z')
+  const { open, clock, dir, paths } = setup(t, '2026-11-28T10:00:00Z')
   const store = open()
   for (let day = 0; day < 40; day++) {
     for (let n = 0; n < 3; n++) await store.append(incoming(`day ${day} note ${n}`))
     clock.set(clock.now() + 24 * 3600 * 1000)
   }
-  const read = createReader(dir).poll()
+  const read = createReader(paths).poll()
   assert.equal(read.length, 120)
   assert.deepEqual(read.map(entry => entry.line.seq), Array.from({ length: 120 }, (_, n) => n + 1))
   assert.deepEqual([...new Set(read.map(entry => entry.day))], listDays(dir))
@@ -232,7 +234,7 @@ test('datastore: read in date order, the day folders give seq order', async t =>
 })
 
 test('datastore: day folders never go backwards, even when the clock does', async t => {
-  const { open, clock, dir, entries } = setup(t, '2026-11-10T00:30:00Z')
+  const { open, clock, dir, entries, paths } = setup(t, '2026-11-10T00:30:00Z')
   let store = open()
   await store.append(incoming('before the clock was set back'))
 
@@ -256,23 +258,24 @@ test('datastore: day folders never go backwards, even when the clock does', asyn
   // Once the clock has caught up, new days are used again.
   clock.set('2026-11-13T00:00:00Z')
   assert.equal((await store.append(incoming('caught up'))).day, '2026/11/13')
-  assert.deepEqual(createReader(dir).poll().map(entry => entry.line.seq), [1, 2, 3, 4, 5, 6])
+  assert.deepEqual(createReader(paths).poll().map(entry => entry.line.seq), [1, 2, 3, 4, 5, 6])
 })
 
 test('datastore: the time zone of the process changes nothing', async t => {
   // Everything stored is UTC (section 2), and the store is never told the owner's time zone. So
   // a restart in another time zone can't reorder the datastore or move a day folder.
-  const { dir, linesOf } = setup(t)
+  const { root, linesOf } = setup(t)
   const script = `
     import { openStore } from ${JSON.stringify(fileURLToPath(new URL('../src/bridge/store.mjs', import.meta.url)))}
-    const [dir, now, text] = process.argv.slice(1)
+    import { makePaths } from ${JSON.stringify(fileURLToPath(new URL('../src/common/paths.mjs', import.meta.url)))}
+    const [dataDir, now, text] = process.argv.slice(1)
     const log = { info() {}, warn() {}, error() {} }
-    const store = openStore({ dir, log, clock: { now: () => Date.parse(now) } })
+    const store = openStore({ paths: makePaths({ dataDir, configDir: '/config' }), log, clock: { now: () => Date.parse(now) } })
     const result = await store.append({ kind: 'message', dir: 'in', at: now, source: 'whatsapp', trust: 'owner', text })
     console.log(result.seq + ' ' + result.day)
   `
   const write = (zone, now, text) =>
-    execFileSync(process.execPath, ['--input-type=module', '-e', script, dir, now, text], { env: { TZ: zone }, encoding: 'utf8' }).trim()
+    execFileSync(process.execPath, ['--input-type=module', '-e', script, root, now, text], { env: { TZ: zone }, encoding: 'utf8' }).trim()
 
   // 20:30 UTC on the 9th is already the 10th in Kiritimati and in India, and still the 9th in Los Angeles.
   assert.equal(write('Pacific/Kiritimati', '2026-11-09T20:30:00Z', 'one'), '1 2026/11/09')
@@ -317,7 +320,7 @@ test('datastore: an incomplete last line is removed at startup, and its seq is u
 })
 
 test('datastore: an incomplete first line of a new day, and one cut inside a character', async t => {
-  const { open, clock, logFile, dir } = setup(t)
+  const { open, clock, logFile, dir, paths } = setup(t)
   let store = open()
   await store.append(incoming('yesterday'))
 
@@ -334,7 +337,7 @@ test('datastore: an incomplete first line of a new day, and one cut inside a cha
   fs.appendFileSync(logFile('2026/11/10'), euro.subarray(0, euro.length - 1))
   store = open()
   assert.equal((await store.append(incoming('₹450'))).seq, 3)
-  assert.deepEqual(createReader(dir).poll().map(entry => entry.line.text), ['yesterday', 'today', '₹450'])
+  assert.deepEqual(createReader(paths).poll().map(entry => entry.line.text), ['yesterday', 'today', '₹450'])
 })
 
 test('datastore: nothing is truncated when the last line is complete', async t => {
@@ -470,7 +473,7 @@ test('datastore: after a write fails, the store writes nothing more until it is 
 })
 
 test('datastore: a line that is not well formed is refused, and uses up no seq', async t => {
-  const { open, dir } = setup(t)
+  const { open, dir, paths } = setup(t)
   const store = open()
   await store.append(incoming('one'))
   const refused = [
@@ -488,7 +491,7 @@ test('datastore: a line that is not well formed is refused, and uses up no seq',
   }
   await assert.rejects(store.append({ kind: 'delete', dir: 'in', at: '2026-11-09T15:43:02Z', source: 'whatsapp', trust: 'owner', target: 1 }, [{ path: '/x', mime: 'a/b' }]), /only a message has attachments/)
   assert.equal((await store.append(incoming('two'))).seq, 2)
-  assert.equal(createReader(dir).poll().length, 2)
+  assert.equal(createReader(paths).poll().length, 2)
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -683,9 +686,9 @@ test('datastore: an attachment left by a crash, whose seq has no line, is overwr
 // The reader
 
 test('datastore: a reader takes only complete lines, and leaves a partial last line for its next poll', async t => {
-  const { open, dir, logFile } = setup(t)
+  const { open, dir, logFile, paths } = setup(t)
   const store = open()
-  const reader = createReader(dir)
+  const reader = createReader(paths)
   assert.deepEqual(reader.poll(), [])
   assert.deepEqual(reader.position, { day: null, offset: 0, lineNumber: 0 })
 
@@ -717,9 +720,9 @@ test('datastore: a reader takes only complete lines, and leaves a partial last l
 })
 
 test('datastore: a reader follows the writer across a crash and into a new day', async t => {
-  const { open, clock, dir, logFile } = setup(t)
+  const { open, clock, dir, logFile, paths } = setup(t)
   let store = open()
-  const reader = createReader(dir)
+  const reader = createReader(paths)
   await store.append(incoming('one'))
   assert.equal(reader.poll().length, 1)
 
@@ -742,7 +745,7 @@ test('datastore: a reader follows the writer across a crash and into a new day',
 })
 
 test('datastore: a reader started later reads from the first line, and skips what isn\'t a day folder', async t => {
-  const { open, clock, dir } = setup(t)
+  const { open, clock, dir, paths } = setup(t)
   const store = open()
   await store.append(incoming('one'), [])
   clock.set('2026-11-11T06:00:00Z')
@@ -754,18 +757,31 @@ test('datastore: a reader started later reads from the first line, and skips wha
   fs.writeFileSync(path.join(dir, '2026', '11', '99'), 'a file, not a folder')
   fs.mkdirSync(path.join(dir, '2026', '11', '10'))
   assert.deepEqual(listDays(dir), ['2026/11/09', '2026/11/10', '2026/11/11'])
-  assert.deepEqual(createReader(dir).poll().map(entry => [entry.line.seq, entry.day]), [
+  assert.deepEqual(createReader(paths).poll().map(entry => [entry.line.seq, entry.day]), [
     [1, '2026/11/09'],
     [2, '2026/11/11'],
   ])
+  // A line that isn't one stops a reader where it was before the poll: a poll gives all of its
+  // lines or none. Asked again, it says the same again.
+  const reader = createReader(paths)
+  assert.equal(reader.poll().length, 2)
+  const position = reader.position
+  clock.set('2026-11-12T06:00:00Z')
+  await store.append(incoming('three'))
+  fs.appendFileSync(paths.dayLog('2026/11/12'), 'not a line\n')
+  for (let n = 0; n < 2; n++) {
+    assert.throws(() => reader.poll(), /2026\/11\/12\/log\.jsonl, line 2: not JSON/)
+    assert.deepEqual(reader.position, position)
+  }
+  assert.throws(() => createReader(paths).poll(), /line 2: not JSON/)
   assert.deepEqual(listDays(path.join(dir, 'missing')), [])
-  assert.deepEqual(createReader(path.join(dir, 'missing')).poll(), [])
+  assert.deepEqual(createReader(makePaths({ dataDir: path.join(dir, 'missing'), configDir: '/config' })).poll(), [])
 })
 
 test('datastore: the runner\'s index, built from a reader, matches the store\'s', async t => {
-  const { open, clock, dir } = setup(t)
+  const { open, clock, dir, paths } = setup(t)
   const store = open()
-  const reader = createReader(dir)
+  const reader = createReader(paths)
   const index = createIndex()
   const follow = () => {
     for (const { line, day } of reader.poll()) index.add(line, day)
