@@ -92,6 +92,12 @@ const textOf = (text, media) => (media ? media.caption : stringOf(text))
 // By wacli's source at v0.26.0 (`internal/wa/messages.go`), an edit comes with `Edited: true`, the
 // ID of the message it changes and the new text, and a deletion with `Revoked: true` and the ID of
 // the message deleted. Returns null for a payload that isn't a message with an ID.
+//
+// Not yet seen on a paired number (gate G4): the same source takes `Chat` and `FromMe` of an edit
+// or a deletion from the key the sender's phone wrote, from the sender's side. So the owner's own
+// deletion may well arrive with `FromMe: true` and the bot's JID as `Chat`, and be dropped as the
+// bot's. If G4 finds it so, the correction is here: for an edit or a deletion from the owner, take
+// the chat and `fromMe` from the sender (docs/DECISIONS.md, 3.3, point 1).
 export function fromWebhook(payload) {
   if (!isObject(payload)) return null
   const id = idOf(payload.ID)
@@ -249,7 +255,8 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   async function wacli(args) {
     const result = await proc.run(WACLI, ['--json', ...args], { env, user, timeout: limits.WACLI_CALL_TIMEOUT })
     const what = args.filter(arg => /^[a-z]+$/.test(arg)).slice(0, 2).join(' ')
-    const failure = reason => Object.assign(new Error(`wacli ${what}: ${reason}`), { code: 'EWACLI', exitCode: result.code })
+    // The log shows the exit code and whether it timed out (`errorFields`), and nothing wacli wrote.
+    const failure = reason => Object.assign(new Error(`wacli ${what}: ${reason}`), { code: 'EWACLI', exitCode: result.code, timedOut: result.timedOut })
     if (result.timedOut) throw failure('timed out')
     if (result.code !== 0) throw failure(`exit code ${result.code}`)
     let answer
@@ -432,6 +439,12 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       // listed twice are duplicates. A page that is all one second moves past it instead.
       const last = parseIsoSeconds(fromListRow(rows.at(-1))[0]?.at ?? null)
       if (last === null) break
+      // A page that ends no later than what was asked for would be asked for again, for ever, or
+      // further back each time. The real wacli filters in SQL; one that doesn't is stopped here.
+      if (last <= after) {
+        log.warn('whatsapp.catchup_stopped', { reason: 'a full page that ends before the time asked for' })
+        break
+      }
       after = last - 1000 > after ? last - 1000 : last
     }
     log.info('whatsapp.caught_up', counts)
@@ -467,6 +480,9 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       for (const dir of [paths.wacli, paths.wacliStore, paths.wacliStaging, paths.wacliConfig, paths.wacliState, paths.wacliCache]) {
         ensureDir(dir, { mode: 0o700, owner: user })
       }
+      // What a bridge stopped in the middle of a download left in staging. Its message wasn't
+      // stored, and catch-up hands it over again. Removing doesn't follow links.
+      for (const name of fs.readdirSync(paths.wacliStaging)) fs.rmSync(path.join(paths.wacliStaging, name), { recursive: true, force: true })
       const secret = crypto.randomBytes(32).toString('hex')
       const server = await listen(secret, onRecord)
       const url = `http://127.0.0.1:${server.address().port}${WEBHOOK_PATH}`
@@ -483,7 +499,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       const stopping = new AbortController()
       const catchingUp = catchUpLoop(onRecord, stopping.signal)
       running = { server, supervisor, stopping, catchingUp }
-      log.info('whatsapp.started', { port: server.address().port })
+      log.info('whatsapp.started', { address: server.address().address, port: server.address().port })
     },
 
     // Stops sync, the webhook server and catch-up. Resolves once they have stopped and the
@@ -515,7 +531,8 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
         if (!isObject(data) || data.path !== staged) throw Object.assign(new Error('wacli media download: saved elsewhere'), { code: 'EWACLI' })
         await copyUntrustedFile(staged, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
       } finally {
-        fs.rmSync(staged, { force: true })
+        // Whatever is there, a folder included.
+        fs.rmSync(staged, { recursive: true, force: true })
       }
     },
 

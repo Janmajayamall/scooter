@@ -8,6 +8,8 @@
 //     paired     whether `auth status` says it is authenticated; `sync` refuses to run without it
 //     store      whether its store exists, which `messages list` needs (default: as paired)
 //     messages   the rows `messages list` returns, those of `--chat` after `--after`, by time
+//     ignoreAfter  when true, `messages list` leaves `--after` out of it, as a broken wacli might
+//     leftDir    by message ID, `media download` leaves a folder where the file should be
 //     media      by message ID, what `media download` does: `{ content, failures, as }`, where it
 //                fails `failures` times first, and `as` is `file` (the default), `symlink` to
 //                `target`, `elsewhere` (saved at another path), or `hang`
@@ -80,7 +82,9 @@ function sync() {
           request.on('error', () => resolve(0))
           request.end(raw)
         })
-        fs.writeFileSync(`${file}.status`, String(status))
+        // Written whole and renamed, so the helper that waits for it never reads it half written.
+        fs.writeFileSync(`${file}.status.tmp`, String(status))
+        fs.renameSync(`${file}.status.tmp`, `${file}.status`)
         fs.rmSync(file)
       }
     } finally {
@@ -93,7 +97,7 @@ function list() {
   if (!(fixtures.store ?? fixtures.paired)) return fail('open /data/wacli/store/wacli.db: no such file or directory')
   const after = options.after === undefined ? -Infinity : seconds(options.after)
   const rows = (fixtures.messages ?? [])
-    .filter(row => row.ChatJID === options.chat && seconds(row.Timestamp) > after)
+    .filter(row => row.ChatJID === options.chat && (fixtures.ignoreAfter || seconds(row.Timestamp) > after))
     .sort((a, b) => seconds(a.Timestamp) - seconds(b.Timestamp))
   const limit = Number(options.limit ?? 50)
   const page = rows.slice(0, limit)
@@ -102,6 +106,10 @@ function list() {
 
 function download() {
   const plan = fixtures.media?.[options.id]
+  if (fixtures.leftDir?.includes(options.id)) {
+    fs.mkdirSync(path.join(options.output, 'inside'), { recursive: true })
+    return fail('download media: interrupted')
+  }
   if (!plan) return fail('message has no downloadable media metadata (run `wacli sync` first)')
   const before = earlier.filter(call => call.args.includes('download') && call.args.includes(options.id)).length
   if (before < (plan.failures ?? 0)) return fail('download media: 404 Not Found')
