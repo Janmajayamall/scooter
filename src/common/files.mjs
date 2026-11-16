@@ -86,6 +86,66 @@ export function readJsonFile(file) {
   return JSON.parse(text)
 }
 
+// Copies a file that another program wrote, in a folder that program controls, into a folder of
+// Scooter's own: a download in wacli's staging folder (5.2), or an attachment in the mail spool
+// (5.6). The bridge runs as root and the other program doesn't, so the other program could leave
+// something in the file's place that gets root to copy what the program can't read itself:
+// - a symbolic link: the file is opened without following a link at the end of its path;
+// - a hard link to someone else's file: the file must have exactly one name, and, when `owner` is
+//   given, belong to that user;
+// - a FIFO or a device: it must be a regular file, checked on what was opened, and opening doesn't
+//   wait for a writer;
+// - something huge: at most `maxBytes` are copied, and a larger file is refused.
+//
+// The copy is written under a temporary name beside `target`, with `mode`, synced, and renamed into
+// place. Returns its size. Throws an error with the code `EUNTRUSTED` when the file isn't one to
+// copy, and `EFBIG` when it is too large; otherwise the system's error.
+export async function copyUntrustedFile(source, target, { owner = null, maxBytes, mode = 0o600 }) {
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+  const refuse = (code, why) => Object.assign(new Error(`not copied: ${why}`), { code })
+  let input
+  try {
+    input = await fs.promises.open(source, flags)
+  } catch (error) {
+    // Linux says ELOOP for a link at the end of the path, and macOS EMLINK or ELOOP.
+    if (error.code === 'ELOOP' || error.code === 'EMLINK') throw refuse('EUNTRUSTED', 'a symbolic link')
+    throw error
+  }
+  const tmp = path.join(path.dirname(target), `${TMP_PREFIX}${path.basename(target)}-${process.pid}-${++tmpCounter}`)
+  let output
+  try {
+    const stat = await input.stat()
+    if (!stat.isFile()) throw refuse('EUNTRUSTED', 'not a regular file')
+    if (stat.nlink !== 1) throw refuse('EUNTRUSTED', 'a file with more than one name')
+    if (owner && stat.uid !== owner.uid) throw refuse('EUNTRUSTED', 'a file of another user')
+    if (stat.size > maxBytes) throw refuse('EFBIG', 'too large')
+
+    output = await fs.promises.open(tmp, 'wx', mode)
+    const buffer = Buffer.alloc(1024 * 1024)
+    let bytes = 0
+    for (;;) {
+      const { bytesRead } = await input.read(buffer, 0, buffer.length, null)
+      if (bytesRead === 0) break
+      bytes += bytesRead
+      // It may still be growing, whatever its size was when it was opened.
+      if (bytes > maxBytes) throw refuse('EFBIG', 'too large')
+      await output.write(buffer, 0, bytesRead)
+    }
+    await output.chmod(mode)
+    await output.sync()
+    await output.close()
+    output = null
+    fs.renameSync(tmp, target)
+    return bytes
+  } catch (error) {
+    await output?.close()
+    fs.rmSync(tmp, { force: true })
+    throw error
+  } finally {
+    await input.close()
+  }
+}
+
 // IDs that sort in the order they were made: the UTC time to the millisecond and a counter, such
 // as `20261109T155015123-0001`. The counter starts again at 1 with each new millisecond.
 //
