@@ -105,9 +105,18 @@ function formatterFor(timeZone) {
   return formatter
 }
 
-// Whether `timeZone` is an IANA zone this Node knows, such as `Asia/Kolkata`.
+// How the tz database writes its zones' names: parts separated by `/`, each beginning with a
+// capital letter, such as `Asia/Kolkata`, `America/Port-au-Prince` or `Etc/GMT+5`.
+const ZONE_NAME = /^[A-Z][A-Za-z0-9_+-]*(?:\/[A-Z][A-Za-z0-9_+-]*)*$/
+
+// Whether `timeZone` is the name of an IANA zone, written as the tz database writes it, that this
+// Node knows, such as `Asia/Kolkata`.
+//
+// Node also takes a name in any case, and an offset such as `+05:30`. pi doesn't get the zone from
+// Node: its `TZ` (6.6) is looked up as a file in the VM's tz database, where names are case
+// sensitive and offsets aren't names. There, `asia/kolkata` would quietly mean UTC.
 export function isTimeZone(timeZone) {
-  if (typeof timeZone !== 'string' || timeZone === '') return false
+  if (typeof timeZone !== 'string' || !ZONE_NAME.test(timeZone)) return false
   try {
     formatterFor(timeZone)
     return true

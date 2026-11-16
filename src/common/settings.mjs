@@ -220,7 +220,7 @@ export function loadSettings(side, { env = process.env } = {}) {
   }
   const timeZone = () => {
     const value = get('SCOOTER_TZ') ?? 'Asia/Kolkata'
-    return isTimeZone(value) ? value : fault('SCOOTER_TZ', 'SCOOTER_TZ must be an IANA time zone, such as Asia/Kolkata')
+    return isTimeZone(value) ? value : fault('SCOOTER_TZ', 'SCOOTER_TZ must be an IANA time zone, written as the tz database writes it, such as Asia/Kolkata')
   }
 
   const settings = {

@@ -10,6 +10,10 @@ export const DIRECTIONS = ['in', 'out']
 export const SOURCES = ['whatsapp', 'email']
 export const TRUSTS = ['owner', 'external']
 
+// The commands (5.4). A `command` line's text is one of them, exactly. The bridge answers the
+// first three and the runner `/new`.
+export const COMMANDS = ['/status', '/backup', '/help', '/new']
+
 // The fields, in the order a line is written.
 const FIELDS = [
   'seq',
@@ -101,7 +105,8 @@ export function checkLine(line) {
   if (dir === 'out') need('by', value => isString(value) && value !== '', 'a string that isn\'t empty')
   else allow('by', false)
 
-  if (['message', 'edit', 'command'].includes(kind)) need('text', isString, 'a string')
+  if (kind === 'command') need('text', value => COMMANDS.includes(value), `one of ${COMMANDS.join(', ')}`)
+  else if (['message', 'edit'].includes(kind)) need('text', isString, 'a string')
   else allow('text', false)
 
   if (pointsAtAnother) need('target', isSeq, 'a seq')
@@ -109,7 +114,9 @@ export function checkLine(line) {
   if (kind === 'reaction') need('emoji', isString, 'a string')
   else allow('emoji', false)
 
-  allow('subject', isMessage && source === 'email', isString, 'a string')
+  // An email's message always has its subject, "" if it had none.
+  if (isMessage && source === 'email') need('subject', isString, 'a string')
+  else allow('subject', false)
   allow('files', isMessage, value => Array.isArray(value) && value.length > 0 && value.every(checkFile), 'a list of stored files')
   allow('media', isMessage, checkMedia, 'an object with type and error')
   allow('replyTo', isMessage, isSeq, 'a seq')

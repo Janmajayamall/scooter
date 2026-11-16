@@ -68,20 +68,28 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
     return spawn(file, args, { env, cwd, stdio, shell: false, ...identity(user) })
   }
 
-  // Resolves with `{ code, signal }` when the child has exited and its output is closed, or with
-  // `{ error }` when it couldn't be started.
+  // Two promises about a child. `exited` resolves when the program itself has ended. `closed`
+  // resolves with `{ code, signal }` when it has ended and its output is closed too. Both resolve
+  // with `{ error }` when it couldn't be started.
+  //
+  // The two differ when the program leaves a process of its own running that holds its output
+  // open, such as a shell wrapper that starts a program without `exec`.
   function ending(child) {
-    return new Promise(resolve => {
-      child.once('error', error => resolve({ code: null, signal: null, error }))
-      child.once('close', (code, signal) => resolve({ code, signal }))
-    })
+    const failed = new Promise(resolve => child.once('error', error => resolve({ code: null, signal: null, error })))
+    const exited = Promise.race([failed, new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))])
+    const closed = Promise.race([failed, new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })))])
+    return { exited, closed }
   }
 
   // SIGTERM now, and SIGKILL if the child is still there after `STOP_GRACE`. Resolves once it's
   // gone. `ended` is the child's `ending`.
+  //
+  // The signals go to the program alone (D25). Once it has exited, its pipes are closed from this
+  // side: whatever it left running may hold them open for as long as it likes, and a program that
+  // was stopped isn't owed the rest of its output. So a stop takes at most `STOP_GRACE`.
   async function terminate(child, ended) {
     const gone = new AbortController()
-    ended.then(() => gone.abort())
+    ended.exited.then(() => gone.abort())
     child.kill('SIGTERM')
     try {
       await clock.sleep(limits.STOP_GRACE, { signal: gone.signal })
@@ -89,7 +97,9 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
     } catch {
       // it exited within the grace period
     }
-    await ended
+    await ended.exited
+    for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy()
+    await ended.closed
   }
 
   // Runs a program to its end and returns `{ code, signal, stdout, stderr, timedOut }`. A non-zero
@@ -102,16 +112,20 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
   // - `signal`: an AbortSignal that stops the program the same way.
   // - `input`: text for its stdin, which is otherwise closed.
   // - `output`: `capture`, the default, collects stdout and stderr as text. `inherit` connects all
-  //   three streams to this process's own, for a program that talks to the terminal.
+  //   three streams to this process's own, for a program that talks to the terminal. `ignore`
+  //   throws both away, for a long-running program whose output would only pile up.
+  //
+  // A program that ends by itself is waited for until its output is closed, so all of it is
+  // collected. One that is stopped is waited for only until it has exited (`terminate`).
   async function run(program, args = [], options = {}) {
     const { timeout = null, signal = null, input = null, output = 'capture' } = options
-    const stdio = output === 'inherit' ? 'inherit' : [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe']
+    const stdio = output === 'capture' ? [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'] : output
     const child = start(program, args, { ...options, stdio })
     const ended = ending(child)
 
     let stdout = ''
     let stderr = ''
-    if (output !== 'inherit') {
+    if (output === 'capture') {
       child.stdout.setEncoding('utf8').on('data', chunk => (stdout += chunk))
       child.stderr.setEncoding('utf8').on('data', chunk => (stderr += chunk))
       if (input !== null) {
@@ -137,7 +151,7 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
     if (signal?.aborted) stop()
     signal?.addEventListener('abort', stop, { once: true })
 
-    const result = await ended
+    const result = await ended.closed
     done.abort()
     signal?.removeEventListener('abort', stop)
     await stopping
@@ -153,10 +167,14 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
   // by default; `onStart({ pid })`; and `onExit({ code, signal, ms, restartIn })` after each exit
   // that will be followed by a restart.
   //
+  // `before({ signal })`, if given, is awaited before each start, the first included. It may take
+  // as long as it needs, such as waiting until wacli is paired, and `signal` aborts when the
+  // supervisor is stopped. If it rejects for another reason, that counts as a start that failed.
+  //
   // Returns `{ stop, done }`. `stop()` ends the program with SIGTERM, then SIGKILL, starts it no
   // more, and resolves when it's gone. `done` resolves when the supervisor has finished.
   function supervise(program, args = [], options = {}) {
-    const { stdio = 'ignore', onStart, onExit } = options
+    const { stdio = 'ignore', onStart, onExit, before } = options
     const name = path.basename(program)
     const stopped = new AbortController()
     let current = null
@@ -164,9 +182,14 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
     const done = (async () => {
       let wait = limits.RESTART_BACKOFF.first
       while (!stopped.signal.aborted) {
-        const startedAt = clock.now()
+        let startedAt = clock.now()
         let outcome
         try {
+          if (before) {
+            await before({ signal: stopped.signal })
+            if (stopped.signal.aborted) break
+            startedAt = clock.now()
+          }
           const child = start(program, args, { ...options, stdio })
           const ended = ending(child)
           current = { child, ended }
@@ -174,7 +197,7 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
             log.info('proc.started', { program: name, pid: child.pid })
             onStart?.({ pid: child.pid })
           }
-          outcome = await ended
+          outcome = await ended.closed
         } catch (error) {
           outcome = { code: null, signal: null, error }
         }

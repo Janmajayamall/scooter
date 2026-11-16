@@ -128,6 +128,12 @@ test('datastore: what is not a line, and why', () => {
     [{ ...decodeLine(EXAMPLES[3]), emoji: undefined }, /emoji is missing/],
     [{ ...decodeLine(EXAMPLES[3]), text: 'hi' }, /text doesn't belong/],
     [{ ...decodeLine(EXAMPLES[3]), files: [{ path: 'a.jpg', mime: 'image/jpeg', bytes: 1 }] }, /files doesn't belong/],
+    // An email's message has its subject, "" when it had none (4.2).
+    [{ ...decodeLine(EXAMPLES[4]), subject: undefined }, /subject is missing/],
+    [{ ...decodeLine(EXAMPLES[4]), subject: null }, /subject must be a string/],
+    // A command's text is one of the four commands, exactly (5.4).
+    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: '/stats' }, /text must be one of \/status, \/backup, \/help, \/new/],
+    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: ' /status' }, /text must be one of/],
     [[], /not an object/],
     [null, /not an object/],
   ]
@@ -424,9 +430,9 @@ test('datastore: a damaged datastore stops the store, and the error says where',
     // A complete line that isn't a line.
     [`${one}\nsecret words that are not JSON\n`, day2, /2026\/11\/09\/log\.jsonl, line 2: not JSON/],
     [`${one}\n${two.replace('"kind":"message"', '"kind":"memo"')}\n`, day2, /log\.jsonl, line 2: kind must be one of/],
-    // A line missing, or there twice.
-    [`${one}\n`, day2, /seq 3 follows seq 1/],
-    [`${one}\n${two}\n${two}\n`, day2, /seq 2 follows seq 2/],
+    // A line missing, or there twice. The error names the file and the line.
+    [`${one}\n`, day2, /2026\/11\/10\/log\.jsonl, line 1: seq 3 follows seq 1/],
+    [`${one}\n${two}\n${two}\n`, day2, /2026\/11\/09\/log\.jsonl, line 3: seq 2 follows seq 2/],
     // Part of a line in a day that isn't the newest: a crash can't leave that.
     [`${one}\n${two.slice(0, 20)}`, day2, /2026\/11\/09\/log\.jsonl ends in part of a line/],
     [day1, `${day2}\n`, /2026\/11\/10\/log\.jsonl, line 2: not JSON/],
@@ -664,22 +670,59 @@ test('datastore: an attachment that can\'t be copied stores nothing, and the seq
   assert.equal(result.line.files, undefined)
 })
 
-test('datastore: an attachment left by a crash, whose seq has no line, is overwritten', async t => {
-  const { open, dir, staged } = setup(t)
+test('datastore: an attachment left by a crash, whose seq has no line, is removed at startup', async t => {
+  const { open, clock, dir, staged, events } = setup(t)
   let store = open()
-  await store.append(incoming('one'))
-  // The bridge died after copying the attachment of line 2 and before writing the line.
+  await store.append(incoming('one'), [{ path: staged('one.jpg'), mime: 'image/jpeg' }])
+  // The bridge died after copying the attachments of line 2 and before writing the line.
   const dayDir = path.join(dir, '2026/11/09')
   fs.writeFileSync(path.join(dayDir, '2.jpg'), 'left over from the crash')
-  fs.writeFileSync(path.join(dayDir, '.tmp-2-2.pdf'), 'half a copy')
+  fs.writeFileSync(path.join(dayDir, '2-2.pdf'), 'left over from the crash')
+  fs.writeFileSync(path.join(dayDir, '.tmp-2-3.pdf'), 'half a copy')
 
   store = open()
-  // Unfinished copies are cleared away at startup.
-  assert.deepEqual(fs.readdirSync(dayDir).sort(), ['2.jpg', 'log.jsonl'])
+  // Unfinished copies and finished ones without a line are cleared away at startup. Line 1's stays.
+  assert.deepEqual(fs.readdirSync(dayDir).sort(), ['1.jpg', 'log.jsonl'])
+  assert.ok(events().includes('store.leftovers_removed'))
+  // So line 2, a plain text, has no attachment beside it that pi could take for its own.
+  assert.equal((await store.append(incoming('two'))).seq, 2)
+  assert.deepEqual(fs.readdirSync(dayDir).sort(), ['1.jpg', 'log.jsonl'])
+  // And had a crash left one in the moment before another start, it is overwritten all the same.
+  fs.writeFileSync(path.join(dayDir, '3.jpg'), 'left over from the crash')
   const result = await store.append(incoming(''), [{ path: staged('new.jpg', 'the new photo'), mime: 'image/jpeg' }])
-  assert.equal(result.seq, 2)
-  assert.equal(fs.readFileSync(path.join(dayDir, '2.jpg'), 'utf8'), 'the new photo')
-  assert.deepEqual(result.line.files, [{ path: '2.jpg', mime: 'image/jpeg', bytes: 13 }])
+  assert.equal(result.seq, 3)
+  assert.equal(fs.readFileSync(path.join(dayDir, '3.jpg'), 'utf8'), 'the new photo')
+  assert.deepEqual(result.line.files, [{ path: '3.jpg', mime: 'image/jpeg', bytes: 13 }])
+
+  // A crash on the first line of a new day leaves the attachment in a folder with no log yet.
+  clock.set('2026-11-10T06:00:00Z')
+  fs.mkdirSync(path.join(dir, '2026/11/10'))
+  fs.writeFileSync(path.join(dir, '2026/11/10/4.jpg'), 'left over from the crash')
+  store = open()
+  assert.deepEqual(fs.readdirSync(path.join(dir, '2026/11/10')), [])
+})
+
+test('datastore: an edit, a deletion or a reaction points at a message or a command', async t => {
+  const { open } = setup(t)
+  const store = open()
+  await store.append(incoming('coffee 150'))
+  await store.append(incoming('/status', { kind: 'command' }))
+  const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'R1', trust: 'owner', target: 1, emoji: '👍' }
+  assert.equal((await store.append(reaction)).seq, 3)
+  assert.equal((await store.append({ ...reaction, sourceId: 'R2', target: 2 })).seq, 4)
+  // A reaction is not something to edit, delete or react to.
+  for (const line of [
+    { ...reaction, sourceId: 'R3', target: 3 },
+    incoming('coffee 120', { kind: 'edit', target: 3 }),
+    { kind: 'delete', dir: 'in', at: '2026-11-09T15:50:00Z', source: 'whatsapp', trust: 'owner', target: 3 },
+  ]) {
+    await assert.rejects(store.append(line), error => {
+      assert.ok(error instanceof DatastoreError)
+      assert.match(error.message, new RegExp(`a ${line.kind} must point at a message or a command, and seq 3 is neither`))
+      return true
+    })
+  }
+  assert.equal(store.index.lastSeq, 4)
 })
 
 // ---------------------------------------------------------------------------------------------
