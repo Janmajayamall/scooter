@@ -28,6 +28,10 @@ export const meta = {
 //      for at most `maxRounds` reviews;
 //   4. once approved, the pull request is merged into `main`, and the next milestone starts from there.
 //
+// A review can approve and still note smaller points. So that they aren't lost, each implementing
+// agent reads the reviews on the pull requests merged before its own, settles the points that are
+// still open, and records in docs/DECISIONS.md which it settled and which it left.
+//
 // The loop stops, and returns why, when an agent has a question for the owner, when a step needs the
 // owner (the plan's gates), when a pull request isn't approved within `maxRounds` reviews, or when a
 // merge fails. To go on, run it again: it skips the milestones whose pull request is already merged.
@@ -92,6 +96,7 @@ const implementPrompt = (n, question, answer) =>
   [
     `Implement milestone ${n} (${NAMES[n]}) of \`${PLAN}\`.`,
     `${READ} Then build what the milestone lists, until it meets ${DONE}.`,
+    `Also read the reviews on the pull requests already merged into \`${BASE}\`. Settle the smaller points in them that are still open, and record in \`docs/DECISIONS.md\` which you settled and which you left.`,
     `Work on the branch \`milestone-${n}\`, cut from the latest \`origin/${BASE}\`, and open a pull request against \`${BASE}\` titled "${title(n)}". If the branch or the pull request already exists, read the pull request's description and its reviews, and continue from there.`,
     "In the pull request's description, also say what you decided and why, for the agent that works on it after you.",
     `${ASK} Where the plan says a step needs the owner, finish what doesn't depend on it, push, and return what you need as a question.`,
@@ -126,8 +131,12 @@ const fixPrompt = (n, pr) =>
     'Return in two or three sentences what you changed and what you left.',
   ].join('\n\n')
 
+// The merge command runs by itself. In auto mode the safety check can deny a merge that a workflow
+// agent runs. A permission rule that allows `gh pr merge`, in the checkout's
+// .claude/settings.local.json, lets it through, but a rule covers a chained command only when
+// every part of the chain is allowed.
 const mergePrompt = pr =>
-  `Merge pull request #${pr} into \`${BASE}\` with a merge commit (\`gh pr merge ${pr} --merge\`), then bring the local \`${BASE}\` up to date with \`origin/${BASE}\`. Do nothing else. Return whether it merged, and the error if it did not.`
+  `Merge pull request #${pr} into \`${BASE}\` with a merge commit (\`gh pr merge ${pr} --merge\`). Run that command by itself, with nothing chained to it. Then bring the local \`${BASE}\` up to date with \`origin/${BASE}\`. Do nothing else. Return whether it merged, and the error if it did not.`
 
 const PROGRESS = {
   type: 'object',
