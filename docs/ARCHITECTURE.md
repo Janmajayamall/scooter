@@ -409,18 +409,18 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 4. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`. If a backup holds it, release `run.lock` and wait.
 5. **Prepare.** Write `run/system.md`, copy the prompt and skills into `run/config/`, and copy the current session into `run/session/`.
 6. **Run.** Boot the VM, run pi, close the VM.
-7. **After a successful run**, in this order: check the files, copy the session back, commit, write the outbox entries, update the state. A crash part-way only means the batch runs again.
+7. **After a successful run**, in this order: check the files, commit, copy the session back, write the outbox entries, update the state. A crash part-way only means the batch runs again. An error in checking or committing the files fails the run, as an unexpected file does.
 8. **Release** the lock.
 
 ### 5.2 A failed run
 
-The runner throws away the run's uncommitted changes and its session changes, then reads OpenRouter's last response during the run from the network log:
+The runner throws away the run's uncommitted changes and its session changes: it sets `views/` and `memory/` aside, takes the last commit's back, and removes what it set aside, which nothing pi left can stop. Then it reads OpenRouter's last response during the run from the network log:
 
 | Cause | Sign | What happens |
 |---|---|---|
 | Setup error | 401, 402, 403 or 404 | Runs pause. A try every 30 minutes and on restart. No item counts an attempt |
 | Outage | 408, 429, 5xx, or no answer | Tries after 1, 5 and 30 minutes, then every 30. No item counts an attempt |
-| Anything else | pi crashed or timed out, or left an unexpected file | Every item counts an attempt and is due again in a minute. After 4, it moves to `failed` |
+| Anything else | pi crashed or timed out, or left an unexpected file, or files that couldn't be checked or committed | Every item counts an attempt and is due again in a minute. After 4, it moves to `failed` |
 
 The owner gets one notice for the first failure in a row, and one when items are given up on.
 
@@ -498,7 +498,7 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 23. **The model does the judgment; code does the bookkeeping.** The runner chooses the batch, tracks the cursor, retries and failures, commits and sends. The agent reads, edits files and reports. *So:* progress never depends on the model remembering anything. (1, 6)
 24. **The agent reports in four kinds of line** at the end of its answer: `DONE`, `FAILED`, `REPLY_TO` and `NO_REPLY`. The protocol that describes them ships with the runner, not in `config/`, because the runner parses it. (6.7, 7.1)
 25. **The agent never waits for the owner.** It files its best guess, marks it ❓, notes the question in `memory/needs-review.md`, and asks. An item it asked about counts as done. *So:* the runner has no "waiting for an answer" state. (7.1)
-26. **After a run: files, session, git, outbox, state, in that order.** *Why:* a crash at any point only causes the batch to run again, and the agent then sees the replies already sent and the rows already filed. (6.8)
+26. **After a run: files, git, session, outbox, state, in that order.** *Why:* a crash at any point only causes the batch to run again, and the agent then sees the replies already sent and the rows already filed; and the session never remembers rows a crash threw away. An error in checking or committing the files fails the run rather than stopping the runner. (6.8; `docs/DECISIONS.md`, D88 and 4.7)
 27. **The cause of a failure comes from the network log.** OpenRouter's last response during the run decides between a pause, a backoff and a counted attempt. *So:* an outage or a revoked key never uses up a message's four attempts. (6.9)
 28. **A batch is what arrived before a quiet moment:** 8 seconds without a new message, retries first, at most 20 items and at most the prompt's size limit. An edit or deletion brings in the message it changes, so the two are never handled out of order. (6.4, 6.5; section 8, row 12)
 29. **Views and memory are in git, and the runner is the only committer.** A run that leaves anything git wouldn't record (a symlink, a dotfile, an ignored file) fails and is cleaned up. *So:* everything a run changes is visible and revertible, and nothing hidden carries over. (6.2, 6.8)

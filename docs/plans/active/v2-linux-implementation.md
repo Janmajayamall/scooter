@@ -311,6 +311,9 @@ Use the prompt shown in 6.5 as the first expected output.
 - **Timeouts** close the VM. Aborting the command isn't enough in Gondolin 0.14.0.
 - **Mount point:** row 14.
 - **`sessions/`** is hidden from the VM with Gondolin's `ShadowProvider` (6.6). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8), and `test/support/vm.mjs` has the call.
+- **Nothing pi does may stop the runner** (`docs/DECISIONS.md`, 4.7). Milestone 4 made sure of it for what pi leaves in its folders. Two ways remain, for the sandbox to close:
+  - *What pi prints.* The sandbox collects pi's stdout and stderr. With `-p` pi prints only its final answer, which the model's output limit bounds, but nothing in the interface does, and the fake sandbox collects everything. Keep at most a fixed amount of each, a constant in `limits.mjs`: the start of stdout, and the end of stderr, where OpenRouter's error is. A cut answer could fail the run as pi's own failure.
+  - *What pi writes.* pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`. The runner frees it after the run, before it records the run, but the bridge's writes could fail meanwhile. If Gondolin can cap what a writable mount takes, use it; otherwise say so in the README.
 
 **Tests** (10): Sandbox, all of it.
 
@@ -332,6 +335,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **ZDR is a switch per route** in the code. If the messages route turns out to refuse the `provider` fields (14), they're left out on that route, and the key's guardrail enforces ZDR alone.
 - **What failure handling reads** (`docs/DECISIONS.md`, D82 and 4.6). A `response` line written only at the end of a stream makes a run that times out mid-stream an outage, tried every 30 minutes for good; writing it when the status arrives avoids that. And a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure, and uses the items' attempts. When the refused request is the pinned pi's own, no longer matching the allowlist, that is nearer a setup error: settle how the log tells the runner which it was.
+- **A key of pi's own** (`docs/DECISIONS.md`, 4.6, the third review of milestone 4). The placeholder is swapped only where pi sends it (6.13). A request to `openrouter.ai` that carries another key, otherwise shaped to pass, would get a 401 from OpenRouter itself, which the runner reads as a setup error (D82): runs pause, and the same batch is tried every 30 minutes for as long as the message that misled the agent is in it. Refuse a request to `openrouter.ai` whose key header isn't the placeholder.
 
 **Tests** (10): Network policy, all of it, with a fake upstream.
 
@@ -366,6 +370,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - **Locks and the wait:** rows 6 and 7.
+- **`agents/.discarded/`** holds what the runner's clean-up set aside, and only until it has removed it (6.9; `docs/DECISIONS.md`, D88). Backups can leave it out.
 
 **Tests** (10): Backups. The coordination, with the stub. With restic installed, the real round trip against a repository in a temporary folder.
 
