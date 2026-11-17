@@ -78,6 +78,31 @@ const values = {
   MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped (6.2, 6.8).
   GIT_CALL_TIMEOUT: 1 * MINUTE,
+  // The most `views/` and `memory/` may hold together after a run, in bytes. pi can make a file of
+  // any size in an instant, all holes, and git reads every byte of a file to add it, so a run that
+  // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`
+  // (6.8). On the plan's Linux machine git adds this much in about 2 seconds, and the views of a
+  // year of daily use take about 1 MB.
+  AGENT_FILES_MAX_BYTES: 100 * MB,
+  // The most files and folders `views/` and `memory/` may hold together after a run. pi can make
+  // hundreds of thousands in a run, and some of git's work grows faster than their number, such as
+  // taking them out of the index again, so a run that leaves more fails before git reads anything
+  // (6.8). A year of daily use makes about 380, a day page and a month's folder at a time, and git
+  // adds this many small files in about a tenth of a second on the plan's Linux machine.
+  AGENT_FILES_MAX_COUNT: 20000,
+  // The largest session file copied back from a run. pi wrote it, and the whole session goes to
+  // the model on every request, so a larger one couldn't be sent anyway (6.6, 6.13).
+  SESSION_MAX_BYTES: 100 * MB,
+  // The longest reason kept in `state.json` or quoted in a notice, in characters: the agent's own
+  // reason on a `FAILED` line, or OpenRouter's error (6.8, 6.9). Both come from outside the
+  // runner's code.
+  REASON_MAX_CHARS: 200,
+  // How much of a message's text a notice quotes to name it, in characters (6.9).
+  NOTICE_QUOTE_CHARS: 40,
+  // The most texts one answer of the agent's sends: more than a full batch needs, a question about
+  // each of its 20 items and a few lines besides. The rest are dropped and counted in the log, so
+  // a misled run can't flood the owner's chat (6.7).
+  ANSWER_MAX_TEXTS: 25,
   // The values a number in `agents.yaml` may take, lowest and highest (6.1). A run can't be given
   // less than a minute, and a slip of the hand can't keep a backup waiting for hours (5.5).
   CONFIG_RANGES: {

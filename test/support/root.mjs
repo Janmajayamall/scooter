@@ -10,3 +10,5 @@ export const mayCreateUsers = isRoot && process.env.SCOOTER_ROOT_TESTS === '1'
 
 export const skipUnlessRoot = isRoot ? false : 'needs root'
 export const skipUnlessUsers = mayCreateUsers ? false : 'needs root and SCOOTER_ROOT_TESTS=1'
+// For tests of files their owner can't read: root reads every file.
+export const skipIfRoot = isRoot ? 'root reads every file' : false

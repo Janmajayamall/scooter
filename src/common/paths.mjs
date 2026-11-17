@@ -38,6 +38,9 @@ export function makePaths({ dataDir, configDir }) {
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
     agentState: name => path.join(agent(name), 'state.json'),
+    // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them (6.9):
+    // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
+    agentDiscarded: name => data('agents', '.discarded', name),
 
     // The exchange (5.3, 5.5, 6.4).
     exchange: data('exchange'),
@@ -46,9 +49,11 @@ export function makePaths({ dataDir, configDir }) {
     runLock: data('exchange', 'locks', 'run.lock'),
     backupLock: data('exchange', 'locks', 'backup.lock'),
 
-    // The runner's own folder (6.3, 6.6, 6.12, 6.13). `date` is a UTC date, `2026-11-09`.
+    // The runner's own folder (6.3, 6.6, 6.12, 6.13), and the socket that keeps a second runner
+    // from starting on the same data. `date` is a UTC date, `2026-11-09`.
     runner: data('runner'),
     runnerStatus: data('runner', 'status.json'),
+    runnerSocket: data('runner', 'runner.sock'),
     runnerImage: data('runner', 'image'),
     runnerHome: data('runner', 'home'),
     runnerTmp: data('runner', 'tmp'),

@@ -302,6 +302,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - `src/runner/sandbox/gondolin.mjs`: one VM per run, booted from `runner/image/`; the mounts and the environment of 6.6; the timeout; closing the VM on every path; sweeping the temporary folder at startup.
 - `src/runner/sandbox/accel.mjs`: `AGENT_ACCEL` (6.6).
 - `src/runner/sandbox/image.mjs` and `build-image`: builds from `config/image/build.json`, writes `packages.txt`, records the pi version and the build time, and provides the startup check (6.12).
+- `scooter runner` in `src/cli.mjs`: `runRunner` in `src/runner/main.mjs` with this sandbox as its `openSandbox`. Milestone 4 left the command unbuilt, since nothing could run pi yet (`docs/DECISIONS.md`, milestone 4).
 
 **Rules:**
 - **Building:** row 8. As root, build natively. Otherwise use Gondolin's container build when Docker or Podman is there. Otherwise stop, and say which of the two is needed. Install pi with `--ignore-scripts`. The build's commands never run pi or anything else npm installed, because a native build would run it as root on the host; read pi's installed version from its `package.json`.
@@ -310,6 +311,9 @@ Use the prompt shown in 6.5 as the first expected output.
 - **Timeouts** close the VM. Aborting the command isn't enough in Gondolin 0.14.0.
 - **Mount point:** row 14.
 - **`sessions/`** is hidden from the VM with Gondolin's `ShadowProvider` (6.6). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8), and `test/support/vm.mjs` has the call.
+- **Nothing pi does may stop the runner** (`docs/DECISIONS.md`, 4.7). Milestone 4 made sure of it for what pi leaves in its folders. Two ways remain, for the sandbox to close:
+  - *What pi prints.* The sandbox collects pi's stdout and stderr. With `-p` pi prints only its final answer, which the model's output limit bounds, but nothing in the interface does, and the fake sandbox collects everything. Keep at most a fixed amount of each, a constant in `limits.mjs`: the start of stdout, and the end of stderr, where OpenRouter's error is. A cut answer could fail the run as pi's own failure.
+  - *What pi writes.* pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`. The runner frees it after the run, before it makes anything or records the run, and at a start before it makes any folder or opens the sandbox (`docs/DECISIONS.md`, D88 and D89, the fourth review of milestone 4), but the bridge's writes could fail meanwhile. If Gondolin can cap what a writable mount takes, use it; otherwise say so in the README.
 
 **Tests** (10): Sandbox, all of it.
 
@@ -323,13 +327,15 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Build:**
 - `src/runner/sandbox/policy.mjs`: the hosts; the key swap; the two routes and their checks; re-encoding; ZDR; the internet switch.
-- `src/runner/sandbox/netlog.mjs`: writing the log. `src/common/netlog.mjs`: its format and a reader, shared by the runner's failure handling and the bridge's `/status`.
+- `src/runner/sandbox/netlog.mjs`: writing the log. `src/common/netlog.mjs`: its format and a reader, shared by the runner's failure handling and the bridge's `/status`. Milestone 4 wrote the format and the reader, with an `error` line for a request that got no answer, because its failure handling reads the log (`docs/DECISIONS.md`, milestone 4).
 - The fixtures from milestone 0: the pinned pi's requests on both routes.
 - The real log connected to failure handling and to `/status`.
 - `test/live/`: a script that runs pi in a VM against the real OpenRouter with a dummy key.
 
 **Rules:**
 - **ZDR is a switch per route** in the code. If the messages route turns out to refuse the `provider` fields (14), they're left out on that route, and the key's guardrail enforces ZDR alone.
+- **What failure handling reads** (`docs/DECISIONS.md`, D82 and 4.6). A `response` line written only at the end of a stream makes a run that times out mid-stream an outage, tried every 30 minutes for good; writing it when the status arrives avoids that. And a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure, and uses the items' attempts. When the refused request is the pinned pi's own, no longer matching the allowlist, that is nearer a setup error: settle how the log tells the runner which it was.
+- **A key of pi's own** (`docs/DECISIONS.md`, 4.6, the third review of milestone 4). The placeholder is swapped only where pi sends it (6.13). A request to `openrouter.ai` that carries another key, otherwise shaped to pass, would get a 401 from OpenRouter itself, which the runner reads as a setup error (D82): runs pause, and the same batch is tried every 30 minutes for as long as the message that misled the agent is in it. Refuse a request to `openrouter.ai` whose key header isn't the placeholder.
 
 **Tests** (10): Network policy, all of it, with a fake upstream.
 
@@ -346,6 +352,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - `rebuild` refuses to start while `run.lock` exists. It can't tell whether an idle runner is up, so the README says to stop the runner first.
+- A runner started during a rebuild removes the rebuild's `run.lock` and git's lock files, and throws away its uncommitted changes (`docs/DECISIONS.md`, D89 and 4.6). If `rebuild` holds `runner/runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up.
 - A rebuild sets `commandSeq` to the `seq` it stops at (6.10; row 11), so old commands aren't answered again.
 
 **Tests** (10, under Runner): Rebuilds; Backfills.
@@ -363,6 +370,8 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - **Locks and the wait:** rows 6 and 7.
+- **`agents/.discarded/`** holds what the runner's clean-up set aside, and only until it has removed it (6.9; `docs/DECISIONS.md`, D88). Backups can leave it out.
+- **Work past `run.lock`'s time** (`docs/DECISIONS.md`, D96, the fourth review of milestone 4). The time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it (5.5). But the runner still holds the lock while it packs the repository (`git gc --auto`) and while its clean-up removes what pi left, and neither has a time limit. After a run that used most of its time, a backup could read `.git` during a repack. Settle how a backup tells a runner still at work from one that is gone, for example by the pid `run.lock` holds.
 
 **Tests** (10): Backups. The coordination, with the stub. With restic installed, the real round trip against a repository in a temporary folder.
 
@@ -391,6 +400,7 @@ Use the prompt shown in 6.5 as the first expected output.
   5. **Command:** `/usr/local/bin/scooter`, a wrapper that runs `src/cli.mjs`.
   6. **Services:** the two units installed and enabled. `setup` prints what to do next and doesn't start them, since the env files may still be empty. `--no-services` skips this step, for containers and tests, where systemd isn't running.
 - `deploy/systemd/scooter-bridge.service`: root. `scooter-runner.service`: `User=scooter-runner`, `SupplementaryGroups=kvm`, its home and temporary folder under `runner/`. Both: `KillMode=control-group`, restart on failure, `TZ=UTC`.
+  - The runner stops on an error and leans on the service manager's backoff (`docs/DECISIONS.md`, D93). A fault that stays, such as a full disk at the commit, runs pi again at every start, and each start waits out the quiet period, so systemd's default start limit (5 starts in 10 seconds) never applies. Give `scooter-runner.service` a `RestartSec`, or steps that grow, chosen with that in mind (4.6).
 - `src/ops/doctor.mjs` (8.4).
 - `pair`, and anything in 8.4 not built yet.
 

@@ -71,6 +71,8 @@ test('config: what else is accepted', t => {
   assert.equal(parse(change(base, 'ack_reaction', '""')).agents[0].ackReaction, '')
   assert.equal(parse(change(base, 'ack_reaction', '"👍🏽"')).agents[0].ackReaction, '👍🏽')
   assert.equal(parse(change(base, 'ack_reaction', '"❤️"')).agents[0].ackReaction, '❤️')
+  assert.equal(parse(change(base, 'ack_reaction', '"🇮🇳"')).agents[0].ackReaction, '🇮🇳')
+  assert.equal(parse(change(base, 'ack_reaction', '"1️⃣"')).agents[0].ackReaction, '1️⃣')
   // Models of other forms in pi's catalog.
   for (const model of ['~anthropic/claude-sonnet-latest', 'google/gemma-3-4b-it:free', 'anthropic/claude-sonnet-5.5:batch']) {
     assert.equal(parse(change(base, 'model', model)).agents[0].model, model)
@@ -131,6 +133,10 @@ test('config: each validation error names the field, and its line', t => {
     [change(base, 'ack_reaction', 'ok'), 'agents.lifelog.ack_reaction', /must be one emoji, such as "✅", or "" for none/],
     [change(base, 'ack_reaction', '"✅✅"'), 'agents.lifelog.ack_reaction', /must be one emoji/],
     [change(base, 'ack_reaction', '~'), 'agents.lifelog.ack_reaction', /must be one emoji/],
+    // One grapheme, but a letter, a digit or a sign, not an emoji.
+    [change(base, 'ack_reaction', 'k'), 'agents.lifelog.ack_reaction', /must be one emoji/],
+    [change(base, 'ack_reaction', '"7"'), 'agents.lifelog.ack_reaction', /must be one emoji/],
+    [change(base, 'ack_reaction', '"é"'), 'agents.lifelog.ack_reaction', /must be one emoji/],
     [change(base, 'can_message', '"yes"'), 'agents.lifelog.can_message', /must be true or false/],
     [change(base, 'timeout_minutes', '0'), 'agents.lifelog.timeout_minutes', /must be a whole number of minutes from 1 to 120/],
     [change(base, 'timeout_minutes', '121'), 'agents.lifelog.timeout_minutes', /from 1 to 120/],
@@ -247,6 +253,32 @@ test('config: a skill holds only files and folders, and everything is inside the
   const { agents } = parseConfig(base.replace('- skills/runs', '- skills/running'), { configDir })
   assert.equal(agents[0].skills[1].name, 'running')
   assert.equal(agents[0].skills[1].dir, fs.realpathSync(path.join(configDir, 'skills', 'runs')))
+})
+
+test('config: no prompt or skill lies inside another skill\'s folder, where their copies would overlap', t => {
+  const { configDir, faults } = setup(t)
+  const base = exampleYaml()
+  fs.mkdirSync(path.join(configDir, 'skills', 'expenses', 'receipts'))
+  fs.writeFileSync(path.join(configDir, 'skills', 'expenses', 'receipts', 'SKILL.md'), '---\nname: receipts\ndescription: x\n---\n')
+
+  const nested = faults(base.replace('- skills/runs', '- skills/expenses/receipts'))
+  assert.equal(nested.length, 1)
+  assert.equal(nested[0].field, 'agents.lifelog.skills[1]')
+  assert.match(nested[0].message, /line 8: agents\.lifelog\.skills\[1\] names skills\/expenses\/receipts, which is inside the skill skills\/expenses: skills can't hold each other$/)
+
+  // The same the other way round: the inner one listed first.
+  const first = faults(base.replace('- skills/expenses', '- skills/expenses/receipts\n      - skills/expenses'))
+  assert.equal(first[0].field, 'agents.lifelog.skills[0]')
+
+  const prompt = faults(change(base, 'prompt', 'skills/expenses/SKILL.md'))
+  assert.equal(prompt.length, 1)
+  assert.equal(prompt[0].field, 'agents.lifelog.prompt')
+  assert.match(prompt[0].message, /names skills\/expenses\/SKILL\.md, which is inside the skill skills\/expenses: the prompt is a file of its own$/)
+
+  // Names that only begin the same are apart.
+  fs.cpSync(path.join(configDir, 'skills', 'expenses'), path.join(configDir, 'skills', 'expenses-old'), { recursive: true })
+  const { agents } = parseConfig(base.replace('- skills/runs', '- skills/expenses-old'), { configDir })
+  assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people', 'day-pages'])
 })
 
 test('config: loadConfig reads agents.yaml from the config folder, and names it when it can\'t', t => {

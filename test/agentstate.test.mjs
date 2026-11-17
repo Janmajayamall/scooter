@@ -58,6 +58,9 @@ test('state: each fault names its field', () => {
     [{ retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z' }] }, 'retry[0].reason is missing'],
     [{ retry: [{ seq: 0, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'x' }] }, 'retry[0].seq must be a seq'],
     [{ retry: [EXAMPLE.retry[0], EXAMPLE.retry[0]] }, 'retry holds a seq twice'],
+    // Everything in a retry list has been given to the agent, so it is at or before the cursor.
+    [{ retry: [{ ...EXAMPLE.retry[0], seq: 1050 }] }, 'retry[0].seq is after the cursor'],
+    [{ backfill: { ...EXAMPLE.backfill, retry: [{ ...EXAMPLE.retry[0], seq: 813 }] } }, 'backfill.retry[0].seq is after the cursor'],
     [{ failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: '' }] }, "failed[0].reason must be a string that isn't empty"],
     [{ session: { day: '2026-02-30', bump: 0 } }, 'session.day must be a date such as 2026-11-09'],
     [{ session: { day: '2026-11-09', bump: -1 } }, 'session.bump must be a whole number, 0 or more'],
@@ -153,6 +156,20 @@ test('state: /new starts a fresh session and is answered about itself; the bridg
   assert.deepEqual([bridgeOnly.state.commandSeq, bridgeOnly.state.session, bridgeOnly.replies], [5, null, []])
 })
 
+test('state: a /new counts for the session of the day it was sent, also when it is handled after the rollover', () => {
+  const options = { timeZone: 'Asia/Kolkata', rolloverHour: 4 }
+  // Sent at 03:50 on the 10th, Kolkata time, which is still the 9th's session; handled at 04:10,
+  // after a runner that was down came back.
+  const sent = line.command(1090, '2026-11-09T22:20:00Z', '/new')
+  const late = applyCommands(initialAgentState(), [sent], { ...options, now: at('2026-11-09T22:40:00Z') })
+  assert.deepEqual(late.state.session, { day: '2026-11-09', bump: 1 })
+  // So the 10th's session starts as usual.
+  assert.deepEqual(currentSession(late.state, { ...options, now: at('2026-11-09T22:40:00Z'), rolloverHour: 4 }), { day: '2026-11-10', bump: 0 })
+  // A time from the channel later than now counts as now.
+  const future = applyCommands(initialAgentState(), [line.command(1091, '2026-11-12T10:00:00Z', '/new')], { ...options, now: at('2026-11-09T15:50:00Z') })
+  assert.deepEqual(future.state.session, { day: '2026-11-09', bump: 1 })
+})
+
 test('state: at startup, scheduled tasks already past wait for their next time, and the rest is set up', () => {
   const agent = agentWith({
     scheduled: [
@@ -172,6 +189,22 @@ test('state: at startup, scheduled tasks already past wait for their next time, 
 test('state: at startup, a pause is tried again at once', () => {
   const { state } = startupState({ ...initialAgentState(), paused: EXAMPLE.paused }, agentWith(), { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' })
   assert.deepEqual(state.paused, { ...EXAMPLE.paused, next: '2026-11-09T15:55:00Z' })
+})
+
+test('state: at startup during a pause, scheduled tasks keep their dates, so one the pause holds back is still due', () => {
+  const agent = agentWith({
+    scheduled: [
+      { at: '21:30', schedule: { weekday: null, hour: 21, minute: 30 }, task: 'Check in.' },
+      { at: '07:00', schedule: { weekday: null, hour: 7, minute: 0 }, task: 'Morning.' },
+    ],
+  })
+  const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-08' }, paused: EXAMPLE.paused }
+  // Monday 9 November, 21:31 in Kolkata: today's 21:30 failed on a setup error, and is still due.
+  // A task new in the config starts from now, as always.
+  const { state } = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
+  assert.deepEqual(state.scheduled, { '21:30': '2026-11-08', '07:00': '2026-11-09' })
+  const { paused, ...unpaused } = before
+  assert.equal(startupState(unpaused, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' }).state.scheduled['21:30'], '2026-11-09')
 })
 
 test('state: at startup, the first backfill not done starts from the live cursor, and one removed from the config is dropped', () => {

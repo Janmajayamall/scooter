@@ -7,7 +7,7 @@
 
 import { checkAgentState, initialAgentState, readAgentState } from '../common/agentstate.mjs'
 import { writeFileAtomic } from '../common/files.mjs'
-import { isoSeconds, localDate, previousLocalTime, shiftDate, toLocal } from '../common/time.mjs'
+import { isoSeconds, localDate, parseIsoSeconds, previousLocalTime, shiftDate, toLocal } from '../common/time.mjs'
 
 // Reads the state at `file`, or returns the state of an agent that has never run when there is
 // none. Throws an `AgentStateError` that names the file and the fields if it isn't a state.
@@ -56,6 +56,10 @@ export const NEW_SESSION_REPLY = 'Started a fresh conversation.'
 // 5.4). The other commands are the bridge's, and are passed over. Returns `{ state, replies }`:
 // the state with `commandSeq` moved to the newest command, and the outbox entries to write.
 //
+// The day a `/new` applies to is the session's day when the owner sent it, which is the day it is
+// handled unless the runner was down across the rollover hour. A time from the channel that is
+// later than `now` counts as `now`.
+//
 // The runner writes the replies and saves the state before it builds a batch, so a crash or a
 // failed batch afterwards doesn't handle a command twice (row 11).
 export function applyCommands(state, lines, { now, timeZone, rolloverHour }) {
@@ -65,7 +69,8 @@ export function applyCommands(state, lines, { now, timeZone, rolloverHour }) {
     if (line.kind !== 'command' || line.seq <= next.commandSeq) continue
     next = { ...next, commandSeq: line.seq }
     if (line.text !== '/new') continue
-    const session = currentSession(next, { now, timeZone, rolloverHour })
+    const sent = Math.min(parseIsoSeconds(line.at) ?? now, now)
+    const session = currentSession(next, { now: sent, timeZone, rolloverHour })
     next = { ...next, session: { day: session.day, bump: session.bump + 1 } }
     replies.push({ type: 'text', by: 'runner', text: NEW_SESSION_REPLY, about: line.seq })
   }
@@ -87,7 +92,10 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 // - **Scheduled tasks.** Every occurrence up to now counts as dealt with: a runner that starts after
 //   a task's time leaves it for its next time (6.4). The dates are worked out in the time zone the
 //   runner starts with, so a changed `SCOOTER_TZ` takes effect from here. Tasks no longer in the
-//   config are forgotten.
+//   config are forgotten. During a pause, though, the dates already there are kept: a task that
+//   failed on a setup error or an outage stays due, and is the next try (the plan's rule for
+//   milestone 4), and one that came due during the pause runs after it (D67, D83). Otherwise a
+//   pause that only a task held would be left with nothing to try.
 // - **A pause** is tried again at once: runs pause "until the next try, every 30 minutes and
 //   whenever it restarts" (6.9).
 // - **Backfills.** One whose entry is gone from the config is dropped. If none is in progress, the
@@ -98,7 +106,10 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 // or null.
 export function startupState(state, agent, { now, timeZone }) {
   const scheduled = {}
-  for (const { at, schedule } of agent.run.scheduled) scheduled[at] = lastOccurrence(schedule, { now, timeZone }).date
+  for (const { at, schedule } of agent.run.scheduled) {
+    const held = Boolean(state.paused) && state.scheduled[at] !== undefined
+    scheduled[at] = held ? state.scheduled[at] : lastOccurrence(schedule, { now, timeZone }).date
+  }
   let next = { ...state, scheduled }
 
   if (next.paused) next = { ...next, paused: { ...next.paused, next: isoSeconds(now) } }
