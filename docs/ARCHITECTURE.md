@@ -87,6 +87,9 @@ The folders they share are passive: the datastore, the exchange, the agent's fol
 | `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given; returns the new message's ID |
 | `react(id, emoji)` | Reacts to a message; returns the reaction's ID |
 | `status()` | One line for `/status` |
+| `ready()` | Whether it can send now; entries for it wait meanwhile |
+
+Each channel also says whether it can send and whether it can react, which routing reads.
 
 A **record** is a message in channel-neutral form. The core turns records into lines, and tests drive the core with a fake channel.
 
@@ -428,8 +431,9 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 1. The bridge takes outbox entries in order, one message every 5 seconds.
 2. It finds the channel from the line the entry points at. A reply goes to that line's channel if it can send; everything else goes to `DEFAULT_CHANNEL`.
-3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks. Every text goes out with wacli's link previews off.
+3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks, and a text is at most four of them: a longer one is cut when it is written. Every text goes out with wacli's link previews off.
 4. After a crash, an entry still marked as sending is sent again, from the first chunk not recorded as sent.
+5. An entry waits while its channel can't send. A send that fails is tried again, with waits that double; after 8 tries the entry is given up on and logged, so it can't hold back the rest.
 
 ### 5.4 A backup
 

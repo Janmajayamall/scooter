@@ -183,6 +183,9 @@ The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which re
 | `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text --no-preview` | — |
 | `react(id, emoji)` | Reacts to a message and returns the reaction's ID | `wacli send react` | — |
 | `status()` | One line for `/status` | The link state | Whether the reader is connected, and the emails stored and skipped in the last 24 hours |
+| `ready()` | Whether it can send now | While wacli is paired and sync runs | — |
+
+Each channel also says whether it can send and whether it can react (5.3): WhatsApp can do both, and email neither.
 
 A **record** is the normalized message of 5.2 step 3 without the fields only WhatsApp needs (chat, sender, fromMe), plus `subject` for email. The core turns records into datastore lines (5.2 step 6), chooses the channel for each outbox entry (5.3), and runs the commands and backups. Tests can drive the core with a fake channel.
 
@@ -192,7 +195,7 @@ A **record** is the normalized message of 5.2 step 3 without the fields only Wha
 - The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line. wacli 0.26.0 takes it no other way: `--webhook-secret` is a plain flag, and no variable of its environment sets it (`docs/DECISIONS.md`, 0.6, wacli 1). So it stays there, the one exception of 3.2. Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
 - Before starting sync, check `wacli --json --read-only auth status`. If it isn't authenticated, log that the owner should run `pair`, and check again every minute.
 - Other calls use `--json` and return the `data` part of the result (13.1). While sync runs, wacli passes these calls to it internally; no special handling is needed.
-- The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, and the last backup (date, snapshot ID, result).
+- The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, the last backup (date, snapshot ID, result), and the `seq` of the newest command it has answered (5.4).
 
 ### 5.2 Intake
 
@@ -228,17 +231,19 @@ The runner asks for messages to be sent by writing entries to `/data/exchange/ou
   There is no recipient field. Everything goes to the owner. `replyTo` is the message a text answers, quoted. `about` is the newest message a text answers, not quoted: the runner sets it on an answer's text before the first `REPLY_TO` (6.7), and replies to commands carry the command's `seq`. A text with neither is something Scooter says on its own.
 - **Choosing the channel:** the bridge looks at the line that `replyTo`, `about` or `target` points at, and uses its `source`. The agent never names a channel; it only refers to messages by `seq`.
   - A `text` goes to that line's channel if the channel can send, quoting the line if it's `replyTo`. Otherwise, for an email or a line that doesn't exist, it goes to `DEFAULT_CHANNEL` without a quote.
-  - A `react` goes to `target`'s channel if the channel can react. A reaction to an email becomes a text on `DEFAULT_CHANNEL` instead, such as `✅ Email: Call with Sam`, so the owner knows it arrived. A reaction to an unknown line is dropped.
+  - A `react` goes to `target`'s channel if the channel can react. A reaction to an email becomes a text on `DEFAULT_CHANNEL` instead, such as `✅ Email: Call with Sam`, so the owner knows it arrived. A reaction to an unknown line is dropped, and so is one to a line Scooter sent: Scooter reacts only to the owner's messages.
   - A `text` with neither `replyTo` nor `about` goes to `DEFAULT_CHANNEL`: scheduled tasks, notices, the backfill summary and the bridge's backup messages.
 
   `DEFAULT_CHANNEL` (8.2) must be a channel that can send, so in v2 it can only be `whatsapp`; the bridge refuses to start with anything else.
 - **Processing:** the bridge checks the folder every second and handles entries in order, sending at most one message every 5 seconds.
+  - A text is at most 14,000 characters (`TEXT_MAX_CHARS`), four chunks. A longer one is cut when the entry is written, ending with a line that says so: the agent's texts are its own to make as long as it likes, and one of a megabyte would take the bot number half an hour to send.
   - `text`: split the text into chunks of at most 3,500 characters at paragraph or line breaks, and send each with the channel's `sendText`, quoting only with the first. WhatsApp: `wacli send text --to <owner chat> --message <chunk> --no-preview`, and on the first chunk `--reply-to <sourceId of replyTo>`.
   - Every text is sent with `--no-preview`. Without it, wacli fetches the first URL in the text to build a link preview (13.1). Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request (3.1, 6.13). So links reach the owner as plain text.
   - `react`: the channel's `react`. WhatsApp: `wacli send react --to <owner chat> --id <sourceId of target> --sender <owner JID> --reaction <emoji>`.
-  - After each successful send, log an `out` line with the channel as `source` and the ID it returned as `sourceId`, then delete the entry.
+  - After each successful send, log an `out` line with the channel as `source` and the ID it returned as `sourceId`, then delete the entry. A chunk that quoted a line has that line's `seq` as `replyTo`.
   - If `replyTo` points at a message whose `sourceId` is unknown, send it without quoting.
-- **Crash safety:** rename `entry.json` to `sending.json` before sending, and record in it how many chunks have gone out, rewriting it after each one. At startup, send each `sending.json` again from the first chunk it doesn't record as sent; a reaction is simply sent again. So a crash can repeat one message, and never loses one. The bridge doesn't search wacli's store for what already went out.
+  - While an entry's channel can't send, such as WhatsApp before `pair`, the entry waits, and the ones after it with it. A send that fails is tried again after a wait that doubles from 5 seconds up to 5 minutes, without its quote from the fifth try on. After 8 failed tries made while the channel could send (`SEND_ATTEMPTS`), the entry is logged and given up on, so that one which can never go out doesn't hold back every reply after it, `/status`'s among them.
+- **Crash safety:** rename `entry.json` to `sending.json` before sending, and record in it how many chunks have gone out, rewriting it after each one, once its `out` line is logged. At startup, send each `sending.json` again from the first chunk it doesn't record as sent; a reaction is simply sent again. So a crash can repeat one message, and never loses one. The bridge doesn't search wacli's store for what already went out. Nothing is sent that `sending.json` couldn't then record, such as on a full disk, or a bridge restarted for it would send the same chunk at every start.
 - The bridge's own messages (replies to `/status`, `/backup` and `/help`, and backup failure notices) are sent the same way and logged with `by: "bridge"`.
 
 ### 5.4 Commands
@@ -834,6 +839,9 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `POLL_INTERVAL` | 1 second | 5.3, 5.6, 6.4 | How often the runner looks for new lines, and the bridge checks the outbox and the email spool |
 | `SEND_INTERVAL` | 5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam. wacli warns about sends closer together than 5 seconds (13.1) |
 | `CHUNK_CHARS` | 3,500 | 5.3 | The longest piece of a reply, under WhatsApp's limit |
+| `TEXT_MAX_CHARS` | 14,000 | 5.3 | The longest text one outbox entry sends, four chunks; a longer one is cut when written, so one answer can't keep the bot number sending for half an hour |
+| `OUTBOX_ENTRY_MAX_BYTES` | 1 MB | 5.3 | The largest outbox entry file the bridge reads; a text at its longest takes far less |
+| `SEND_RETRY_BACKOFF`, `SEND_ATTEMPTS` | 5 seconds, doubling up to 5 minutes; 8 | 5.3 | The waits before a failed send is tried again, and the tries before the entry is given up on, so one that can never go out doesn't hold back the rest |
 | `WEBHOOK_MAX_BYTES` | 2 MB | 5.2 | The largest webhook body accepted from wacli |
 | `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back, how many rows |
 | `MEDIA_DOWNLOAD_RETRIES` | 2 | 5.2 | Retries for a failed media download |
@@ -846,6 +854,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | How long past the time in `run.lock` a backup still waits for the run to finish |
 | `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
 | `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
+| `NETLOG_LINE_MAX_BYTES` | 16 KB | 6.9, 6.13 | The longest line of the network log a reader takes, so reading it needs the same memory however large pi made it |
 | `SESSION_MAX_BYTES` | 100 MB | 6.6 | The largest session file copied back from a run. The whole session goes to the model on every request, so a larger one couldn't be sent anyway |
 | `ANSWER_MAX_TEXTS` | 25 | 6.7 | The most texts one answer sends, so a misled run can't flood the owner's chat |
 | `AGENT_FILES_MAX_BYTES` | 100 MB | 6.8 | The most `views/` and `memory/` may hold together after a run. git reads every byte of a file to add it, and pi can make a file of any size in an instant |
@@ -945,7 +954,7 @@ Required tests, at least:
   - `status.json` holds what `/status` shows about the runner's settings. The emulation notice goes out when the accelerator changes to emulation, and not again at the next start.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
-- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again.
+- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again. Entries wait while their channel can't send; a failed send is tried again, and given up on after `SEND_ATTEMPTS`; a text over `TEXT_MAX_CHARS` is cut.
 - **Routing:** `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that can't send stops the bridge at startup.
 - **Network policy:**
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.

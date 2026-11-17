@@ -1360,3 +1360,184 @@ After the third review, the pull request wasn't approved, and the milestone stop
 *Left, for the sandbox* (the plan's milestone 7 now says so): what pi prints, which the sandbox collects, and which nothing in the interface limits, though with `-p` pi prints only its answer; and a disk pi fills while it runs, which the runner frees after the run, while the bridge's writes in the meantime could fail. Neither is something pi leaves in its folders after it exits.
 
 *Not verified:* a VM making these against this code. The reviews' Gondolin 0.14.0 checks showed that what pi makes in the writable folders reaches the host as it is, as the runner's user, and the fake sandbox makes it the same way.
+
+## Milestone 5: delivery and commands
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.1, 5.3, 8.6 and section 10, to say what this milestone settled (5.3 here).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/bridge/outbox.mjs` | Delivery: routing, chunking, pacing, `sending.json`, `out` lines, waiting, failed sends, pausing |
+| `src/bridge/commands.mjs`, `src/bridge/status.mjs` | `/status`, `/help` and `/backup`, and the text of `/status` |
+| `src/bridge/channels/whatsapp.mjs`, `channels/index.mjs` | `sendText`, `react` and `ready`; the check of `DEFAULT_CHANNEL` |
+| `src/bridge/main.mjs`, `state.mjs`, `intake.mjs`, `store.mjs` | Delivery and the commands started with the bridge; `commandSeq` in the bridge's state |
+| `src/common/outbox.mjs`, `files.mjs` | The longest text and its cut, `sending.json`'s format; `readUntrustedFile` |
+| `src/common/netlog.mjs` | The network log read as a stream |
+| `src/common/limits.mjs`, `time.mjs`, `runnerstatus.mjs` | Five constants; `shortLocalTime`; agents' names checked in `status.json` |
+| `src/runner/answer.mjs`, `batch.mjs`, `prompt.mjs`, `failures.mjs`, `git.mjs` | The smaller points of the reviews of milestones 3 and 4 (5.2) |
+| `test/delivery`, `routing`, `status` | This milestone's tests, with additions to `bridge`, `whatsapp`, `outbox`, `files`, and the runner's tests for the reviews' points |
+| `test/support/fake-channel.mjs`, `wacli-stub.mjs` | Sends: the fake channel records them and fails as told; the stub answers `send text` and `send react` |
+
+### 5.1 Decisions
+
+**D97. Routing.**
+*Question:* 5.3 gives the rules by the kind of line an entry points at, and leaves some lines out.
+*Choice:* `routeEntry` in `src/bridge/outbox.mjs`.
+- A `text` goes to the channel of the line `replyTo` or `about` names when that channel is running and can send; otherwise to `DEFAULT_CHANNEL`, unquoted. With `replyTo` it quotes: an edit or a deletion as the message it changes, a command as the message it was, and a line Scooter sent by the ID the channel gave it. A line with no channel ID, or one that isn't a message, isn't quoted, and the text still goes to its channel.
+- A `react` goes to the channel of the message its target is or changes, by that message's channel ID. A reaction to an email is the text `✅ Email: <subject>`, or `(no subject)`, on `DEFAULT_CHANNEL`. One to a line that doesn't exist, to a line Scooter sent, or to a reaction is dropped and logged, and so is one whose channel can't react: WhatsApp's `send react` names the owner as `--sender`, and the runner reacts only to items, which are the owner's.
+- An `out` line has `replyTo` only when its chunk quoted that line, which is what 4.2 says `replyTo` is: the quoted message. A reply about an email isn't quoted, so its line has none, and the agent's prompt shows it as "you sent". The protocol already tells the agent to say which email it means.
+*Reason:* 5.3, with the cases it doesn't name settled by what a channel can do.
+
+**D98. Chunks.**
+*Choice:* a text is split into pieces of at most `CHUNK_CHARS` characters, a character being a Unicode code point, so an emoji is never split. A piece that would be too long is cut at the last paragraph break in its second half, or else the last line break there, or else the last space, or else at the limit; looking only in the second half keeps every piece but the last at least half full. The breaks where it is cut, and blank lines at the start of a piece, are left out, and so is a piece of nothing but spaces.
+*Reason:* 5.3 says "at paragraph or line breaks". Without the second-half rule, a break near the start of a long piece would make a piece of a few characters.
+
+**D99. A text is at most `TEXT_MAX_CHARS`, 14,000 characters, and a longer one is cut when it is written.**
+*Question:* D85 left how long one text may be to this milestone. The agent's answer is pi's to make: a text of a megabyte is 300 chunks, 25 minutes of the bot number sending, one every `SEND_INTERVAL`, and 25 such texts (`ANSWER_MAX_TEXTS`) ten hours.
+*Choice:* four chunks. `writeOutboxEntry` cuts a longer text and ends it with `[The rest of this message was too long to send.]`, for the runner's entries and the bridge's alike, and `checkOutboxEntry` refuses a longer one, so the bridge refuses an entry not written that way. The bridge reads an entry file of at most `OUTBOX_ENTRY_MAX_BYTES`, 1 MB, which a text at its longest stays far under.
+*Reason:* the text is cut, not refused, where it is written: a refusal would throw in the runner after a run that went well, and stop it (D93), which is the kind of problem 4.7 closed. A reply to the owner of 14,000 characters is already long; a `/status` is about 700. *Cost:* an answer can still send 25 texts of four chunks each, about eight minutes of sending.
+
+**D100. Pacing.**
+*Choice:* one interval for every message the bridge sends, texts, chunks and reactions alike, on every channel, measured from the start of the last try, failed ones included. A bridge that starts afresh sends its first message at once.
+*Reason:* 5.3, and wacli's own check notes the time of each attempt (between milestones 1 and 2). One channel sends in v2.
+
+**D101. `sending.json`, and when it is written.**
+*Choice:* `{"entry": {…}, "sent": n}`, written atomically, 0600. An `entry.json` becomes a `sending.json` with `sent: 0`, written before `entry.json` is removed, so a crash between them leaves both and `sending.json` wins. Then, for each message:
+1. `sending.json` is written again, with the count it has. If that fails, as on a full disk, the message isn't sent.
+2. The message is sent.
+3. Its `out` line is appended.
+4. `sending.json` is written with one more, or the folder is removed after the last.
+
+A crash between 2 and 4 sends that message again: at worst one repeated message, which row 3 accepts. If the store refuses the `out` line (D29), the message is still counted as sent, the entry's folder updated, and the bridge stops; its `out` line is missing.
+*Reason:* row 3 is about crashes. Without step 1, and without counting a message whose line the store refused, a disk that can't be written would make a bridge that restarts for it send the same message at every start, as fast as its service manager restarts it.
+
+**D102. When a send can't go out.**
+*Question:* 5.3 has entries handled in order, and says nothing of a send that fails. ARCHITECTURE.md 4.1 says outbox entries wait while wacli isn't paired.
+*Choice:*
+- A channel says whether it can send now (`ready()`). WhatsApp can't while wacli isn't paired or sync is starting again. While the first entry's channel can't, it waits, the entries after it with it, and that is logged once.
+- A send that fails is logged, without its text, and tried again after a wait that starts at 5 seconds and doubles up to 5 minutes (`SEND_RETRY_BACKOFF`). From the middle try on, a text goes without its quote: wacli needs the quoted message in its store (13.1), and a store made afresh, after pairing again, wouldn't have it.
+- After `SEND_ATTEMPTS`, 8, failed tries of the same message made while its channel could send, about 10 minutes, the entry is given up on: logged as `outbox.given_up`, with its ID, type, author and how far it got, and removed. A failure after which the channel can't send, such as sync stopping, isn't counted.
+- A look at the outbox that fails for another reason, such as a disk that can't be written, is tried again after the same waits, and logged each time.
+*Reason:* entries go out in order, so one that can never go out would hold back every reply after it, the answer to `/status` among them, for good. *Cost:* a message given up on reaches neither the owner nor the datastore; the log says so. Telling the owner would go through the same channel. How wacli fails when paired is unknown until gate G4, which can tell whether 8 tries is right.
+
+**D103. The bridge reads the outbox as someone else's folder.**
+*Choice:* the runner's user owns the outbox and writes the entries; the bridge, as root, reads `entry.json` and `sending.json` with `readUntrustedFile` (`src/common/files.mjs`): without following a link, only a regular file with one name, at most `OUTBOX_ENTRY_MAX_BYTES`. An entry that isn't a folder, has neither file, isn't JSON, or fails the check is logged with the reason, which names fields and never repeats values, and removed. Removal doesn't follow links.
+*Reason:* as D35 for wacli's staging folder: a link left in place of an entry would have root read a file the runner's user can't. An escape from pi's VM reaches the runner's user (section 9).
+
+**D104. The channel's sending functions.**
+*Choice:* `canSend` and `canReact`, as `takesCommands` is; `ready()`; `sendText(text, quoteId, { signal })` and `react(id, emoji, { signal })`, which resolve with the channel's ID of what was sent, or null when it gave none. A message with no ID is logged without `sourceId` (4.2 makes it optional) and not sent again. WhatsApp sends to the owner's chat (5.2 step 5), as `--to`, and names it as `--sender` of a reaction: in a one-to-one chat the owner's JID is the chat's. Its ID is `data.id` (13.1). `signal` stops wacli, for a bridge that is stopping; that send goes out again at the next start.
+
+**D105. `DEFAULT_CHANNEL` is checked once the channels exist, and a bad one exits with 2.**
+*Choice:* the bridge makes its channels, then refuses to start if `DEFAULT_CHANNEL` names one that isn't running or can't send (`defaultChannelProblem`), before it starts any; `scooter bridge` then prints why and exits with 2, which D30 gives to a command that can't start because of how it is configured. The settings still accept `email` (D18).
+*Reason:* "can send" is the channel module's to say. *Cost:* the store has been opened by then, and nothing else.
+
+**D106. The bridge answers commands from the datastore, keeping `commandSeq`.**
+*Question:* 5.4 has the bridge answer `/status`, `/help` and `/backup`, and says nothing of a crash between storing a command and answering it.
+*Choice:* as the runner does (6.4, row 11). `bridge/state.json` keeps `commandSeq`, the newest command line the bridge has handled. Intake tells the bridge when it has stored a command, and the bridge handles every command line after `commandSeq`, one at a time: it writes the reply (`by: "bridge"`, `about` the command), then saves the state. `/new` is the runner's and only moves `commandSeq`. At startup it handles any it didn't get to. A state from before has no `commandSeq` and gets the newest line's `seq`, as does a state made at the first start, so commands sent before are never answered late.
+*Reason:* the datastore is the record, and the same rule as the runner's answers each command once, also across a crash, at worst twice.
+
+**D107. What `/status` says.**
+*Choice:* `src/bridge/status.mjs`, one line or a few for each thing 5.4 lists, with times as the prompt shows them (`shortLocalTime`, moved to `src/common/time.mjs`):
+- each channel's `status()`; the newest message the owner sent, by `seq`, time and channel;
+- from `status.json`: when the runner started, KVM or emulation, when the image was built, ZDR and the agent's internet access;
+- from the network log, over `STATUS_WINDOW`: the requests, the hosts they went to, and the refusals;
+- for each agent `status.json` names: its last run, with its result, what it held and how long it took; whether runs are paused, since when, why and the next try; pending, retrying and failed; a backfill and how far it has got. Pending is the work items after the cursor from the sources the agent reads (`reads` in `status.json`);
+- backups: a line saying there are none in this version, until milestone 10.
+
+Before the runner has ever started there is no `status.json`, and `/status` says so and has no agent to report on. A file that can't be read is said to be so, with the reason's code, and the rest is reported. `checkRunnerStatus` now refuses an agent's name that `agents.yaml` wouldn't allow, since the bridge makes a path of it.
+
+**D108. The bridge makes the exchange's folders with the runner's owner when they are missing.**
+*Choice:* at startup, `exchange/` and `exchange/outbox/` are made, if missing, 0700 and owned by `scooter-runner` (3.2).
+*Reason:* the bridge writes its own replies into the outbox. Had it made the folder first, as root, the runner couldn't write its entries there, and would stop on every run. `setup` makes them in an install (milestone 12).
+
+**D109. Stopping the bridge stops delivery first.**
+*Choice:* delivery, then the channels, then what intake and the commands were doing. A send in progress is stopped and goes out again at the next start.
+
+**D110. The network log is read as a stream, and a log that can't be read doesn't keep a failed run from being recorded** (the fifth review of milestone 4, point 1).
+*Choice:* `scanNetworkLog` reads each day's file 64 KB at a time and calls back for each line in the window, taking a line only up to `NETLOG_LINE_MAX_BYTES`, 16 KB; a longer one is skipped and counted, as a line that isn't one is. The runner's failure handling keeps only the last request to OpenRouter and what came of it. An error in reading the log counts as no answer from OpenRouter, so the run is pi's own failure: recorded, its attempt counted, and logged as `runner.netlog_unreadable`. `/status` uses the same reader. The plan's milestone 8 now says to bound what one request, and one run, add to the log, since a `request` line a reader skips is one the failure handling doesn't see.
+*Reason:* the review's case, a day of 540 MB, stopped the round with `ERR_STRING_TOO_LONG` before the run was recorded, at every failed run until the day ended, and each start ran the batch again without counting an attempt. That is the kind of problem 4.7 closed. Now the same file takes 750 ms and 57 MB (5.4).
+
+**D111. Reading pi's answer takes time in step with its length** (the fifth review of milestone 4, point 2).
+*Choice:* the patterns for `DONE` and `FAILED` take every character (the `s` flag), so a carriage return or U+2028 after a long run of spaces can't make `FAILED` try every split of the spaces; and the items reported are kept in sets.
+*Reason:* the review's line of 78 KB took 6.1 seconds and one of 1 MB about 17 minutes, during which the runner did nothing else and couldn't be stopped. Milestone 7's limit on what the sandbox collects is then about memory, as the plan now says.
+
+**D112. The clean-up removes what staging copied into the repository** (the fifth review of milestone 4, point 3).
+*Choice:* once the clean-up has put back the last commit, it runs `git prune --expire=now`, which removes every object nothing refers to: what `git add` copied into `.git/objects` for the run that failed. Only the runner uses the repository, and no git of its own runs then. A failure is logged as `agent.prune_failed` and changes nothing else; the next clean-up tries again.
+*Reason:* each failed attempt left what it staged, up to `AGENT_FILES_MAX_BYTES`, for good: `git gc --auto` acts only once thousands of objects are loose, and then removes only what is two weeks old. The review's case, 90 MB staged beside `git~1` four times, left 360 MB; now nothing (5.4). *Cost:* every clean-up walks what the repository holds, which takes milliseconds for years of views. Objects someone staged by hand and left uncommitted go too, as their staging did already (D89).
+
+**D113. An item too long on its own is cut as little as will do** (the review of milestone 3, point 7).
+*Choice:* the search for the cap on the item's texts (D72) goes a stretch at a time, between the lengths of the texts the cap applies to, which the prompt reports, from the highest down. Within a stretch the prompt grows with the cap, so the search holds there; at a text's whole length the prompt is shorter than just below, since the text is then shown without its note.
+*Reason:* the search assumed the prompt grows with the cap everywhere, and so could cut a text more than it needed. A test compares it with trying every cap; the search before failed it.
+
+### 5.2 The reviews of the pull requests merged before this one
+
+Pull request 5, milestone 4, was approved by its fifth review with three smaller points. All three are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A day's network log too large to read keeps a failed run from being recorded; `/status` reads the same files | Settled (D110): read as a stream, and an error counts as no answer. The review's case, by its numbers, on `main` and on this branch (5.4). Tests in `failures` (a line too long, across pieces of the file; a log that can't be read) and `runner` (a failed run recorded with the log unreadable). The plan's milestone 8 says to bound what a request and a run add |
+| 2 | Reading an answer takes time that grows with the square of a line's length | Settled (D111). Test in `answer`: a megabyte of spaces with a carriage return and U+2028, and 160,000 numbers |
+| 3 | What a run staged stays in `.git/objects` when the run then fails | Settled (D112). Test in `agentdir`: a staged file is gone after the clean-up, and `git fsck --unreachable` finds nothing |
+
+The points the reviews of milestones 0 to 4 left, as each milestone's entry recorded them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 3, point 7 | The search for the largest cut in D72 can cut a text a little more than it needs to | Settled (D113), with a test that fails on the search before |
+| Milestone 0, point 6 | The VM tests' 2-minute start limit | Left, for milestone 7, whose sandbox sets how long a VM may take to start |
+| Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Left, for milestone 7, which can look the zone up in the VM's image |
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, which stops the channels before each backup. This milestone's sends take a stop signal (D104, D109) |
+| Milestone 4, first review, points 4, 5 and 6 | `RestartSec` for the runner's unit; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8, as the plan says |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time, packing and the clean-up's removal | Left, for milestone 10, as the plan says. D112 adds `git prune` to the clean-up, under `run.lock`, which takes milliseconds |
+
+### 5.3 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 5.3 left open:
+- 5: the channel functions include `ready()`, and each channel says whether it can send and react (D104).
+- 5.1: the bridge's state keeps the newest command it answered (D106).
+- 5.3: a text is at most 14,000 characters, cut when written (D99); a reaction to a line Scooter sent is dropped, and an `out` line has `replyTo` when its chunk quoted (D97); entries wait while their channel can't send, and a failed send is tried again and given up on after 8 tries (D102); `sending.json` is written once the `out` line is logged, and nothing is sent that it couldn't record (D101).
+- 8.6: the five constants of this milestone.
+- Section 10, Delivery: waiting, failed sends and the cut.
+
+ARCHITECTURE.md 2.1 and 5.3 have the same. The plan's milestones 6, 7, 8 and 10 say what this milestone did for them, or left for them. `bridge.env.example` says the bridge refuses a `DEFAULT_CHANNEL` that can't send.
+
+### 5.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `79d408b`:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 428 tests: 403 pass, none fail. 25 skip themselves: 18 need the image and 7 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 421 pass, none fail, in 109 seconds. The 7 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 397 pass, none fail. 31 skip themselves: 18 need the image, 4 need wacli, 2 run `scooter bridge` as a process, which as root needs the users `setup` makes, and 7 are about a file or folder root can read or write anyway. The WhatsApp root test runs, with the exchange made for the runner's user |
+| The `delivery`, `routing`, `status`, `bridge`, `whatsapp`, `outbox`, `failures`, `answer` and `batch` tests, 32 times, 8 at once | No failure, and no test folder left behind |
+| The `run`, `runner`, `agentdir` and `files` tests, 16 times, 8 at once | No failure |
+| The fifth review's first case: a day of the network log of 575 MB, 69,760 `refused` lines with paths of 8,000 bytes, and the cause of a run that exited with 1, by a script against `main` and this branch | `main`: `ERR_STRING_TOO_LONG`, with 1.1 GB of memory. This branch: `other`, "pi exited with code 1", in 750 ms with 57 MB |
+| Its second: `FAILED: 1`, 80,000 spaces, `a\rb`; and `DONE:` with 160,000 numbers | `main`: 6.4 s and 8.7 s. This branch: under 1 ms and 45 ms |
+| Its third: 90 MB of random bytes staged beside `views/git~1`, then the clean-up, four times | `main`: `.git/objects` grows by 90, 180, 270 and 360 MB. This branch: by nothing |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Delivery: order, pacing, chunking | `delivery.test.mjs`: four entries in order, a second apart then `SEND_INTERVAL`; a long text cut at paragraph breaks; `splitText` on 200 random texts |
+| Delivery: `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions | `whatsapp.test.mjs`, through the wacli stub: the command lines of a quoted text, a reaction with `--sender`, and a text in two chunks, each with `--no-preview`; sends to the chat the owner last wrote from |
+| Delivery: `out` lines logged with wacli's IDs | `delivery.test.mjs`, the lines whole; `whatsapp.test.mjs`, `SENT1`… from the stub; `bridge.test.mjs` end to end |
+| Delivery: recovery from `sending.json`, only the chunks not recorded going out again | `delivery.test.mjs`: a send that fails at the second chunk and a bridge started afresh; `sending.json` files left as a crash leaves them, a reaction among them |
+| Routing: `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` unquoted; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL` | `routing.test.mjs` |
+| Routing: a `DEFAULT_CHANNEL` that can't send stops the bridge at startup | `routing.test.mjs`: `startBridge` refuses before wacli is started, and `scooter bridge` exits with 2 |
+| Time: `/status` shows `SCOOTER_TZ` | `status.test.mjs`, the same files in Kolkata and New York |
+| `/status` reports the runner's state, and says when the runner hasn't started | `status.test.mjs`; `bridge.test.mjs`, through the runner and the bridge |
+
+Beyond section 10: waiting for a channel, failed sends and giving up, entries that aren't entries, pausing, the cut, a store that stops, and a `sending.json` that can't be written, in `delivery.test.mjs`; commands answered once across a restart, in `bridge.test.mjs`.
+
+The milestone's "done when": the first test in `bridge.test.mjs` under "From a webhook to a reply" posts a signed webhook through the wacli stub's sync, runs the runner with the fake sandbox and the pi stub, which asks a question, and checks that the bridge sends the reply with `--reply-to` the message's WhatsApp ID and `--no-preview`, and logs it as an `out` line with wacli's ID and `replyTo`. The second has `/status` report the runner's state, through both services.
+
+Not verified:
+- **wacli when paired** (gate G4): sending, its answers, and how it fails. The stub answers `send text` and `send react` as wacli's source and help say (13.1). That `--no-preview` keeps wacli from fetching a link (0.8), that `--sender` with the owner's chat is right for a reaction in a one-to-one chat, and whether `SEND_ATTEMPTS` and the dropped quote fit wacli's real failures, wait for the bot number.
+- **The end-to-end case from an email:** milestone 6, which builds the email channel. Routing for emails is tested here with a fake email channel.
+- **`/backup`:** a placeholder until milestone 10, which also uses delivery's `pause()`.
+- **The bridge under systemd or Compose:** milestones 12 and 13. `scooter bridge` runs as a process in one test, without an outbox entry.
+- **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `O_NONBLOCK` and `git prune` exist on macOS.
