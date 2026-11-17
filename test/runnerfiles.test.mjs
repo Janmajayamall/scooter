@@ -30,6 +30,8 @@ test('status.json: the format, each fault naming its field', () => {
     [{ agents: { lifelog: { ...STATUS.agents.lifelog, timeoutMinutes: 0 } } }, 'agents.lifelog.timeoutMinutes must be a whole number of minutes'],
     [{ agents: { lifelog: { ...STATUS.agents.lifelog, key: 'x' } } }, 'agents.lifelog.key is not a field of the status'],
     [{ extra: 1 }, 'extra is not a field of the status'],
+    // The bridge makes paths of the names, for `/status`.
+    [{ agents: { '../etc': STATUS.agents.lifelog } }, 'agents must be named as agents.yaml names them, such as lifelog'],
     [{ internet: undefined }, 'internet is missing'],
   ]
   for (const [changes, problem] of cases) {

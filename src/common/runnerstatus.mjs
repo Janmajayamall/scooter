@@ -33,6 +33,8 @@ const AGENT_FIELDS = ['model', 'timeoutMinutes', 'reads']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isTime = value => parseIsoSeconds(value) !== null
+// An agent's name, as `agents.yaml` allows it (6.1). The bridge makes paths of it, for `/status`.
+const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 
 // What is wrong with a status, as a list of statements that name fields. An empty list means it is
 // well formed.
@@ -58,6 +60,10 @@ export function checkRunnerStatus(status) {
     else {
       for (const [name, agent] of Object.entries(status.agents)) {
         const field = `agents.${name}`
+        if (!AGENT_NAME.test(name)) {
+          problems.push('agents must be named as agents.yaml names them, such as lifelog')
+          continue
+        }
         if (!isObject(agent)) {
           problems.push(`${field} must be an object`)
           continue

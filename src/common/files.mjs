@@ -147,6 +147,42 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
   }
 }
 
+// Reads a small file that another program wrote, in a folder that program controls, such as an
+// outbox entry, which the runner's user writes and the bridge, as root, reads (5.3). As with
+// `copyUntrustedFile`, it is opened without following a link at the end of its path and without
+// waiting for a writer, and it must be a regular file with exactly one name, of at most `maxBytes`.
+// Returns its contents as text. Throws an error with the code `EUNTRUSTED` when the file isn't one
+// to read, `EFBIG` when it is too large, and the system's error otherwise, `ENOENT` among them.
+export function readUntrustedFile(file, { maxBytes }) {
+  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
+  const refuse = (code, why) => Object.assign(new Error(`not read: ${why}`), { code })
+  let fd
+  try {
+    fd = fs.openSync(file, flags)
+  } catch (error) {
+    if (error.code === 'ELOOP' || error.code === 'EMLINK') throw refuse('EUNTRUSTED', 'a symbolic link')
+    throw error
+  }
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile()) throw refuse('EUNTRUSTED', 'not a regular file')
+    if (stat.nlink !== 1) throw refuse('EUNTRUSTED', 'a file with more than one name')
+    if (stat.size > maxBytes) throw refuse('EFBIG', 'too large')
+    // One byte more than allowed tells a file that grew since from one that didn't.
+    const buffer = Buffer.alloc(maxBytes + 1)
+    let filled = 0
+    for (;;) {
+      const count = fs.readSync(fd, buffer, filled, buffer.length - filled, null)
+      if (count === 0) break
+      filled += count
+      if (filled > maxBytes) throw refuse('EFBIG', 'too large')
+    }
+    return buffer.toString('utf8', 0, filled)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 // The path of `name` in the folder `parent`, as bytes. Walking a folder by the bytes of its names
 // reaches every name as it is on disk: one that isn't UTF-8 doesn't survive a round trip through a
 // string.

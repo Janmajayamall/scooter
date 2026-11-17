@@ -43,7 +43,8 @@ export const MEDIA_ERRORS = {
 //   and the store.
 // - `onFatal(error)`: called once if the store stops taking lines (D29). The bridge can't go on
 //   without a restart then.
-export function createIntake({ store, channels, paths, log, clock = systemClock, onFatal = () => {} }) {
+// - `onCommand(seq)`: called after a command line has been stored, for the bridge to answer it.
+export function createIntake({ store, channels, paths, log, clock = systemClock, onFatal = () => {}, onCommand = () => {} }) {
   const ids = createIds(clock)
   let queue = Promise.resolve()
   let failed = null
@@ -67,6 +68,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     if (result.stored) {
       newestIn.set(fields.source, fields.at)
       log.info('intake.stored', { source: fields.source, kind: fields.kind, seq: result.seq })
+      if (fields.kind === 'command') onCommand(result.seq)
     } else {
       log.info('intake.skipped', { source: fields.source, kind: fields.kind, reason: result.reason })
     }

@@ -16,7 +16,20 @@
 //                     code `EFBIG` means the attachment is too large to store, and isn't retried.
 //   status()          one line for `/status`
 //
-// Delivery adds `canSend`, `sendText(text, quoteId)` and `react(id, emoji)` in milestone 5.
+// And for delivery (5.3):
+//
+//   canSend           whether it can send text. WhatsApp can; email can't, since Scooter never
+//                     sends email
+//   canReact          whether it can react to a message
+//   ready()           whether it can send now. WhatsApp can't while wacli isn't paired, or while
+//                     sync is starting again; entries for it wait meanwhile
+//   sendText(text, quoteId, { signal })
+//                     sends `text`, quoting the message whose channel ID is `quoteId` when it isn't
+//                     null, and resolves with the new message's channel ID, or null if the channel
+//                     didn't say. Rejects if it couldn't send. `signal` stops it, for shutdown
+//   react(id, emoji, { signal })
+//                     reacts with `emoji` to the owner's message whose channel ID is `id`, and
+//                     resolves with the reaction's channel ID, or null, as `sendText` does
 //
 // A record is the message as the channel received it, in a form that is the same for every
 // channel: the normalized message of 5.2 step 3, without what only the channel needs (for
@@ -60,6 +73,17 @@ function checkAttachment(attachment) {
     orNull(value => Number.isSafeInteger(value) && value >= 0)(bytes) &&
     orNull(isText)(error)
   )
+}
+
+// Why the channel named `name` can't be `DEFAULT_CHANNEL` (5.3), or null when it can: it must be
+// one of `channels`, and one that can send. In v2 that leaves only `whatsapp`, and the bridge
+// refuses to start with anything else.
+export function defaultChannelProblem(channels, name) {
+  const channel = channels.get(name)
+  if (channel?.canSend) return null
+  const able = [...channels.values()].filter(other => other.canSend).map(other => other.name)
+  const which = channel ? `${name}, which can't send` : `${name}, which isn't running`
+  return `DEFAULT_CHANNEL is ${which}; it must be a channel that can send: ${able.join(' or ') || 'none is running'}`
 }
 
 // What is wrong with a record, as short statements that name fields and never repeat their values.

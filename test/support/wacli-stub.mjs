@@ -14,6 +14,10 @@
 //                fails `failures` times first, and `as` is `file` (the default), `symlink` to
 //                `target`, `elsewhere` (saved at another path), or `hang`
 //     syncExit   when set, `sync` exits at once with this code
+//     sendFailures  how many sends, `send text` and `send react` together, fail before they work
+//     sendNoId   when true, a send succeeds with no `id` in its answer
+//   A send that works answers `{sent: true, to, id}`, with the IDs `SENT1`, `SENT2`… in the order
+//   of the sends, failed ones included.
 // - as `sync --follow`, posts each file that appears in `webhooks/` to its webhook, signed with the
 //   secret on its command line, and writes the answer's status beside it.
 //
@@ -128,7 +132,31 @@ function download() {
   ok({ chat: options.chat, id: options.id, path: saved, bytes: Buffer.byteLength(plan.content ?? ''), media_type: 'image', mime_type: 'image/jpeg', downloaded: true, source: 'server', recorded: true })
 }
 
+function send(kind) {
+  if (!fixtures.paired) return fail('not authenticated; run `wacli auth`')
+  const before = earlier.filter(call => commandOf(call.args).startsWith('send ')).length
+  if (before < (fixtures.sendFailures ?? 0)) return fail('send: connection lost')
+  if (kind === 'react') process.stderr.write('warning: sends less than 5s apart may trigger WhatsApp rate limits\n')
+  ok({ sent: true, to: options.to, ...(fixtures.sendNoId ? {} : { id: `SENT${before + 1}` }) })
+}
+
+function commandOf(callArgs) {
+  const parts = []
+  for (let i = 0; i < callArgs.length; i++) {
+    if (FLAGS.has(callArgs[i])) continue
+    if (callArgs[i].startsWith('--')) i += 1
+    else parts.push(callArgs[i])
+  }
+  return parts.join(' ')
+}
+
 switch (command) {
+  case 'send text':
+    send('text')
+    break
+  case 'send react':
+    send('react')
+    break
   case 'auth status':
     ok(fixtures.paired ? { authenticated: true, linked_jid: '15550100000:3@s.whatsapp.net', phone: '15550100000' } : { authenticated: false })
     break

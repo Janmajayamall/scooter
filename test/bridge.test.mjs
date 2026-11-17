@@ -1,6 +1,7 @@
 // The bridge as a whole (section 5 of DESIGN.md): signed webhooks from wacli become datastore lines
-// and attachments, and unsigned ones don't; the bridge's state; one bridge per data folder; and
-// `scooter bridge` as a real process.
+// and attachments, and unsigned ones don't; a message goes through the runner and comes back as a
+// quoted reply, logged as an `out` line; the commands are answered; the bridge's state; one bridge
+// per data folder; and `scooter bridge` as a real process.
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -9,15 +10,18 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { HELP_TEXT, BACKUP_NOT_BUILT } from '../src/bridge/commands.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
+import { listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
 import { isRoot } from './support/root.mjs'
+import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
 
@@ -114,23 +118,181 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
   assert.equal(bridge.state.get().ownerChat.jid, OWNER)
 })
 
+// ---------------------------------------------------------------------------------------------
+// From a webhook to a reply, through the runner (milestone 5)
+
+// The runner of `test/support/test-runner.mjs`, with the fake sandbox and the pi stub, and the
+// bridge with the wacli stub, on one data folder and one fake clock.
+async function startBoth(t, { fixtures = { paired: true, messages: [] } } = {}) {
+  const prepared = prepareTestRunner(t, { start: '2026-11-09T15:50:30Z' })
+  const stub = createWacliStub(t, prepared.root)
+  stub.fixtures(fixtures)
+  // The clock jumps ahead while wacli calls run in real time; only the test of the timeout keeps it.
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * 3600_000 }))
+  const runner = await startTestRunner(t, prepared)
+  const { log, events } = createTestLog({ clock: prepared.clock })
+  const proc = createProc({ log, clock: prepared.clock })
+  const bridge = await startBridge({ settings: bridgeSettings(prepared.root), clock: prepared.clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
+  atEnd(t, () => bridge.stop())
+  await waitFor(() => stub.callsOf('sync').length > 0 && events().includes('whatsapp.caught_up'), 'the bridge to start')
+  const both = {
+    ...runner,
+    stub,
+    bridge,
+    bridgeEvents: events,
+    // Has wacli post a payload, and waits until the bridge has stored it and answered any command.
+    async post(payload) {
+      assert.equal(await stub.postWebhook(payload), 200)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      await bridge.intake.idle()
+      await bridge.commands.idle()
+    },
+    // Lets the runner see what was stored, waits out the quiet period, and runs what comes next.
+    async runNext() {
+      await runner.runner.tick()
+      await runner.clock.advance(8 * SECOND)
+      return runner.runner.tick()
+    },
+    // Moves the clock on a second at a time while the bridge sends, in real time, until the outbox
+    // is empty.
+    async deliver() {
+      await waitFor(
+        async () => {
+          await runner.clock.advance(SECOND)
+          return listHandOffs(runner.paths.outbox).length === 0
+        },
+        'the outbox to empty',
+        30_000,
+      )
+    },
+    sent: () => stub.calls().filter(call => call.command === 'send text').map(call => call.args),
+    lines: () => [...bridge.store.index.entries()].map(entry => entry.line),
+  }
+  return both
+}
+
+const messageOf = args => args[args.indexOf('--message') + 1]
+
+test('bridge: a signed webhook goes through the runner and comes back as a quoted reply, sent through wacli and logged as an out line', async t => {
+  const both = await startBoth(t)
+  await both.post(webhookPayload({ ID: 'IMG1', Timestamp: '2026-11-09T15:50:00Z', Text: 'Blue Tokai 450 ASK' }))
+  assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
+  // The runner asked for the reply; the bridge sends it.
+  assert.deepEqual(both.outbox(), [{ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 }])
+  await both.deliver()
+
+  assert.deepEqual(both.sent(), [['--json', 'send', 'text', '--to', OWNER, '--message', 'Work or personal?', '--no-preview', '--reply-to', 'IMG1']])
+  const [message, reply] = both.lines()
+  assert.equal(message.sourceId, 'IMG1')
+  const { at: time, ...rest } = reply
+  assert.deepEqual(rest, { seq: 2, kind: 'message', dir: 'out', source: 'whatsapp', sourceId: 'SENT1', by: 'lifelog', replyTo: 1, text: 'Work or personal?' })
+  assert.ok(Date.parse(time) > Date.parse('2026-11-09T15:50:30Z'))
+  // The runner sees its own reply as context, and has nothing more to do.
+  assert.deepEqual(both.state().retry, [])
+  assert.equal(both.state().cursor, 1)
+  await both.runner.tick()
+})
+
+test('bridge: /status reports the runner\'s state, /help lists the commands, /backup says it isn\'t built, and /new is the runner\'s', async t => {
+  const both = await startBoth(t)
+  await both.post(webhookPayload({ ID: 'M1', Timestamp: '2026-11-09T15:50:00Z', Text: 'coffee 150' }))
+  await both.runNext()
+  await both.deliver()
+  // The runner filed it, and the bridge sent its ✅.
+  assert.equal(both.stub.callsOf('send react').length, 1)
+
+  await both.post(webhookPayload({ ID: 'C1', Timestamp: '2026-11-09T15:51:00Z', Text: '/status' }))
+  await both.post(webhookPayload({ ID: 'C2', Timestamp: '2026-11-09T15:51:01Z', Text: ' /help ' }))
+  await both.post(webhookPayload({ ID: 'C3', Timestamp: '2026-11-09T15:51:02Z', Text: '/backup' }))
+  await both.post(webhookPayload({ ID: 'C4', Timestamp: '2026-11-09T15:51:03Z', Text: '/new' }))
+  // The runner answers `/new`, and passes over the bridge's three.
+  await both.runner.tick()
+  await both.deliver()
+
+  const texts = both.sent().map(messageOf)
+  assert.equal(texts.length, 4)
+  const [status, help, backup, fresh] = texts
+  assert.match(status, /^Scooter, Mon 9 Nov 21:2\d \(Asia\/Kolkata\)$/m)
+  assert.match(status, /^WhatsApp: linked$/m)
+  assert.match(status, /^Newest message: #1, 21:20, on WhatsApp$/m)
+  assert.match(status, /^Runner: started 21:20\. VMs run with KVM; their image was built 15:30\.$/m)
+  assert.match(status, /^Zero data retention: on\. The agent's internet access: off\.$/m)
+  assert.match(status, /^Network, last 24 hours: 1 request to 1 host\.$/m)
+  assert.match(status, /^lifelog: last run 21:20, ok, 1 message, 0 s\.$/m)
+  assert.match(status, /^Runs aren't paused\.$/m)
+  assert.match(status, /^Messages: 0 pending, 0 retrying, 0 failed\.$/m)
+  assert.equal(help, HELP_TEXT)
+  assert.equal(backup, BACKUP_NOT_BUILT)
+  assert.equal(fresh, 'Started a fresh conversation.')
+  // Each reply goes back where its command was sent, unquoted, and is logged with who sent it.
+  const replies = both.lines().filter(line => line.dir === 'out' && line.kind === 'message')
+  assert.deepEqual(replies.map(line => [line.by, line.replyTo]), [
+    ['bridge', undefined],
+    ['bridge', undefined],
+    ['bridge', undefined],
+    ['runner', undefined],
+  ])
+  assert.ok(both.sent().every(args => !args.includes('--reply-to')))
+  assert.equal(both.bridge.state.get().commandSeq, 6)
+})
+
+test('bridge: a command is answered once, also across a restart, and one left unanswered is answered at the start', async t => {
+  const root = makeTestDir(t)
+  const stub = createWacliStub(t, root)
+  stub.fixtures({ paired: true, messages: [] })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * 3600_000 }))
+  const clock = createFakeClock('2026-11-09T15:45:00Z')
+  const paths = makePaths(bridgeSettings(root))
+  const open = async () => {
+    const { bridge } = await start(t, root, { clock })
+    await waitFor(() => stub.callsOf('sync').length > 0, 'wacli sync to start')
+    return bridge
+  }
+  const entries = () => listHandOffs(paths.outbox).length
+  let bridge = await open()
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'H1', Text: '/help' })), 200)
+  await waitFor(() => entries() === 1, 'the reply')
+  assert.equal(bridge.state.get().commandSeq, 1)
+  await bridge.stop()
+
+  // Started again, it answers nothing again: the reply waits in the outbox, once.
+  bridge = await open()
+  await bridge.commands.idle()
+  assert.equal(entries(), 1)
+  await bridge.stop()
+
+  // As after a crash between the reply and the state: the command is answered at the start.
+  const state = openBridgeState({ paths, clock, log: createTestLog().log })
+  state.update({ commandSeq: 0 })
+  bridge = await open()
+  await bridge.commands.idle()
+  assert.equal(entries(), 2)
+  assert.equal(bridge.state.get().commandSeq, 1)
+})
+
 test('bridge: the state records the first start, and keeps it', async t => {
   const root = makeTestDir(t)
   const paths = makePaths(bridgeSettings(root))
   fs.mkdirSync(paths.bridge, { recursive: true })
   const clock = createFakeClock('2026-11-09T15:45:00Z')
   const { log } = createTestLog({ clock })
-  const state = openBridgeState({ paths, clock, log })
-  assert.deepEqual(state.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: null, lastBackup: null })
+  // On the very first start, commands already in the datastore count as handled.
+  const state = openBridgeState({ paths, clock, log, newestSeq: 12 })
+  assert.deepEqual(state.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: null, lastBackup: null, commandSeq: 12 })
   assert.equal(fs.statSync(paths.bridgeState).mode & 0o777, 0o600)
-  state.update({ ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' } })
+  state.update({ ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, commandSeq: 14 })
 
   clock.set('2026-11-12T08:00:00Z')
-  const again = openBridgeState({ paths, clock, log })
-  assert.deepEqual(again.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, lastBackup: null })
+  const again = openBridgeState({ paths, clock, log, newestSeq: 20 })
+  assert.deepEqual(again.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, lastBackup: null, commandSeq: 14 })
   // What it holds is checked, when read and when changed.
   assert.throws(() => again.update({ ownerChat: { jid: '' } }), /ownerChat must be null or/)
   assert.throws(() => again.update({ firstStart: 'yesterday' }), /firstStart must be a UTC time/)
+  assert.throws(() => again.update({ commandSeq: -1 }), /commandSeq must be a whole number/)
+  // A state written before the bridge answered commands starts from the newest line, and keeps it.
+  fs.writeFileSync(paths.bridgeState, '{"firstStart":"2026-11-09T15:45:00Z","ownerChat":null,"lastBackup":null}')
+  assert.equal(openBridgeState({ paths, clock, log, newestSeq: 20 }).get().commandSeq, 20)
+  assert.equal(JSON.parse(fs.readFileSync(paths.bridgeState, 'utf8')).commandSeq, 20)
   // A file that isn't a state stops the bridge, and the message says which.
   fs.writeFileSync(paths.bridgeState, '{"firstStart":')
   assert.throws(() => openBridgeState({ paths, clock, log }), new RegExp(`${paths.bridgeState} is not JSON`))

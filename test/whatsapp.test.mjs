@@ -24,7 +24,9 @@ import {
 } from '../src/bridge/channels/whatsapp.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { openStore } from '../src/bridge/store.mjs'
+import { createIds, listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
+import { writeOutboxEntry } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
@@ -693,6 +695,112 @@ test('whatsapp: a catch-up that fails is tried again at the next one, and not wh
 })
 
 // ---------------------------------------------------------------------------------------------
+// Sending (5.3)
+
+// Writes outbox entries as the runner would, and moves the fake clock on, a second at a time, while
+// the sends go through the stub in real time, until the outbox is empty.
+async function deliver(context, ...entries) {
+  const ids = createIds(context.clock)
+  for (const entry of entries) await writeOutboxEntry({ paths: context.paths, ids, entry })
+  await waitFor(
+    async () => {
+      await context.clock.advance(1000)
+      return listHandOffs(context.paths.outbox).length === 0
+    },
+    'the outbox to empty',
+    30_000,
+  )
+}
+
+const outLines = context => context.lines().filter(line => line.dir === 'out')
+
+test('whatsapp: every text goes out with --no-preview, a reply with --reply-to the quoted message\'s WhatsApp ID, and a reaction with --sender', async t => {
+  const context = await setup(t, { fixtures: { paired: true, messages: [] } })
+  const { stub, synced, caughtUp } = context
+  await synced()
+  await caughtUp()
+  await post(context, webhookPayload({ ID: 'A1', Text: 'coffee 150' }))
+  await post(context, webhookPayload({ ID: 'A2', Text: 'lunch https://example.com/menu', Timestamp: '2026-11-09T15:44:00Z' }))
+  const long = ['a'.repeat(3490), 'see https://example.com/x'].join('\n\n')
+  await deliver(
+    context,
+    { type: 'text', by: 'lifelog', text: 'Work or personal? https://example.com/receipt', replyTo: 1 },
+    { type: 'react', by: 'lifelog', target: 2, emoji: '✅' },
+    { type: 'text', by: 'lifelog', text: long, about: 2 },
+  )
+
+  const sends = stub.calls().filter(call => call.command.startsWith('send '))
+  assert.deepEqual(
+    sends.map(call => call.args),
+    [
+      ['--json', 'send', 'text', '--to', OWNER, '--message', 'Work or personal? https://example.com/receipt', '--no-preview', '--reply-to', 'A1'],
+      ['--json', 'send', 'react', '--to', OWNER, '--id', 'A2', '--sender', OWNER, '--reaction', '✅'],
+      ['--json', 'send', 'text', '--to', OWNER, '--message', 'a'.repeat(3490), '--no-preview'],
+      ['--json', 'send', 'text', '--to', OWNER, '--message', 'see https://example.com/x', '--no-preview'],
+    ],
+  )
+  // Every text, quoted or not, with link previews off.
+  for (const call of sends.filter(call => call.command === 'send text')) assert.ok(call.args.includes('--no-preview'))
+  // Logged as out lines, each with the ID wacli gave it; the reaction's warning on stderr isn't a failure.
+  assert.deepEqual(
+    outLines(context).map(line => [line.seq, line.kind, line.sourceId, line.replyTo, line.target, line.by]),
+    [
+      [3, 'message', 'SENT1', 1, undefined, 'lifelog'],
+      [4, 'reaction', 'SENT2', undefined, 2, 'lifelog'],
+      [5, 'message', 'SENT3', undefined, undefined, 'lifelog'],
+      [6, 'message', 'SENT4', undefined, undefined, 'lifelog'],
+    ],
+  )
+  // Pacing is in `delivery.test.mjs`: here the fake clock moves on while each send runs in real time.
+})
+
+test('whatsapp: sends go to the chat the owner last wrote from', async t => {
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, settings: { ownerJids: [LID] } })
+  const { stub, synced, caughtUp } = context
+  await synced()
+  await caughtUp()
+  await post(context, webhookPayload({ ID: 'L1', Chat: LID, SenderJID: LID, Text: 'from my lid' }))
+  await deliver(context, { type: 'text', by: 'runner', text: 'a notice' }, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
+  const sends = stub.calls().filter(call => call.command.startsWith('send '))
+  assert.deepEqual(
+    sends.map(call => [call.args[call.args.indexOf('--to') + 1], call.args.includes('--sender') ? call.args[call.args.indexOf('--sender') + 1] : null]),
+    [
+      [LID, null],
+      [LID, LID],
+    ],
+  )
+})
+
+test('whatsapp: entries wait while wacli isn\'t paired, and go once it is', async t => {
+  const context = await setup(t, { fixtures: { paired: false, messages: [] } })
+  const { stub, clock, paths } = context
+  await clock.whenSleeping()
+  const ids = createIds(clock)
+  await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'runner', text: 'a notice' } })
+  for (let n = 0; n < 30; n++) await clock.advance(1000)
+  assert.deepEqual(stub.callsOf('send text'), [])
+  assert.equal(context.bridge.channels.get('whatsapp').ready(), false)
+  stub.fixtures({ paired: true })
+  await clock.advance(limits.AUTH_CHECK_INTERVAL)
+  await context.synced()
+  await waitFor(() => context.bridge.channels.get('whatsapp').ready(), 'wacli to be linked')
+  await deliver(context)
+  assert.equal(stub.callsOf('send text').length, 1)
+  assert.deepEqual(outLines(context).map(line => line.text), ['a notice'])
+})
+
+test('whatsapp: a send wacli fails is tried again, and logged once it goes', async t => {
+  const context = await setup(t, { fixtures: { paired: true, messages: [], sendFailures: 1 } })
+  const { stub, synced, caughtUp, events } = context
+  await synced()
+  await caughtUp()
+  await deliver(context, { type: 'text', by: 'runner', text: 'a notice' })
+  assert.equal(stub.callsOf('send text').length, 2)
+  assert.deepEqual(outLines(context).map(line => line.sourceId), ['SENT2'])
+  assert.ok(events().includes('outbox.send_failed'))
+})
+
+// ---------------------------------------------------------------------------------------------
 // Least privilege
 
 test('whatsapp: every wacli call gets only wacli\'s environment, and no secret but the webhook\'s is on a command line', async t => {
@@ -706,9 +814,10 @@ test('whatsapp: every wacli call gets only wacli\'s environment, and no secret b
   await synced()
   await caughtUp()
   await post(context, webhookPayload({ ID: 'P1', Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 5 } }))
+  await deliver(context, { type: 'text', by: 'lifelog', text: 'a photo of what?', replyTo: 1 }, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
 
   const calls = stub.calls()
-  assert.deepEqual([...new Set(calls.map(call => call.command))].sort(), ['auth status', 'media download', 'messages list', 'sync'])
+  assert.deepEqual([...new Set(calls.map(call => call.command))].sort(), ['auth status', 'media download', 'messages list', 'send react', 'send text', 'sync'])
   for (const call of calls) assert.deepEqual(call.env, wacliEnv(paths), call.command)
 
   const everything = JSON.stringify(calls)
