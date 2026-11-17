@@ -8,11 +8,12 @@ import path from 'node:path'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { overrideLimits } from '../src/common/limits.mjs'
-import { checkNetworkLogLine, formatNetworkLogLine, readNetworkLog } from '../src/common/netlog.mjs'
+import { checkNetworkLogLine, formatNetworkLogLine, readNetworkLog, scanNetworkLog } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import {
   describeItem,
   failureCause,
+  readFailureCause,
   failureNotice,
   givenUpNotice,
   isFirstFailure,
@@ -75,6 +76,37 @@ test('network log: read by time across UTC days, skipping what isn\'t a line', t
   // A line after `to` is left out.
   assert.deepEqual(readNetworkLog(paths, { from: at('2026-11-09T15:50:12Z'), to: at('2026-11-09T15:50:18Z') }).entries, [request(ID1)])
   assert.deepEqual(readNetworkLog(paths, { from: at('2026-11-10T00:00:00Z'), to: at('2026-11-10T10:00:00Z') }), { entries: [], skipped: 0 })
+})
+
+test('network log: read as a stream, a line too long to take is skipped and counted, and memory stays the same', t => {
+  const paths = makePaths({ dataDir: path.join(makeTestDir(t), 'data'), configDir: '/config' })
+  fs.mkdirSync(paths.networkLogDir, { recursive: true })
+  atEnd(t, overrideLimits({ NETLOG_LINE_MAX_BYTES: 400 }))
+  // Lines across many pieces of the file, with one too long in the middle and one at the end.
+  const lines = []
+  for (let n = 1; n <= 3000; n++) {
+    lines.push(formatNetworkLogLine({ ...request(`20261109T155012041-${String(n).padStart(4, '0')}`), path: `/api/v1/messages/${'x'.repeat(n % 200)}` }))
+    if (n === 1500) lines.push(formatNetworkLogLine({ ...request(ID2), path: `/${'y'.repeat(100_000)}` }))
+  }
+  fs.writeFileSync(paths.networkLog('2026-11-09'), `${lines.join('')}{"id":"${'z'.repeat(1000)}`)
+  let count = 0
+  const { skipped } = scanNetworkLog(paths, { from: at('2026-11-09T00:00:00Z'), to: at('2026-11-09T23:59:59Z') }, entry => {
+    assert.equal(entry.event, 'request')
+    count += 1
+  })
+  assert.equal(count, 3000)
+  assert.equal(skipped, 2)
+})
+
+test('failures: a network log that can\'t be read counts as no answer from OpenRouter, and the run is pi\'s own failure', t => {
+  const paths = makePaths({ dataDir: path.join(makeTestDir(t), 'data'), configDir: '/config' })
+  // A folder where the day's file should be: reading it fails.
+  fs.mkdirSync(paths.networkLog('2026-11-09'), { recursive: true })
+  const warnings = []
+  const log = { warn: (event, fields) => warnings.push({ event, ...fields }), info() {}, error() {} }
+  const failure = readFailureCause({ paths, result: { code: 1, stderr: '', timedOut: false }, startedAt: TIMING.startedAt, endedAt: NOW, log })
+  assert.deepEqual(failure, { cause: 'other', reason: 'pi exited with code 1', status: null })
+  assert.deepEqual(warnings, [{ event: 'runner.netlog_unreadable', error: 'Error', code: 'EISDIR', syscall: 'read' }])
 })
 
 // ---------------------------------------------------------------------------------------------

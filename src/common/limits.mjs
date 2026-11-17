@@ -33,6 +33,20 @@ const values = {
   SEND_INTERVAL: 5 * SECOND,
   // The longest piece of a reply, in characters, under WhatsApp's limit (5.3).
   CHUNK_CHARS: 3500,
+  // The longest text one outbox entry sends, in characters: four chunks. A longer one is cut, with
+  // a line that says so, when it is written. The agent's answers are its own to make as long as it
+  // likes, and one text of a megabyte would otherwise take the bot number half an hour of sending,
+  // one chunk every `SEND_INTERVAL` (5.3, 6.7).
+  TEXT_MAX_CHARS: 14000,
+  // The largest `entry.json` or `sending.json` the bridge reads. A text at its longest takes far
+  // less, so a larger file was written by something else than `writeOutboxEntry` (5.3).
+  OUTBOX_ENTRY_MAX_BYTES: 1 * MB,
+  // A send that fails is tried again after a wait that starts at `first` and doubles up to `max`,
+  // and an entry is given up on after `SEND_ATTEMPTS` failed tries of the same message, made while
+  // its channel was linked. Entries are sent in order, so one that can never go out would
+  // otherwise hold back every one after it, the replies to `/status` among them (5.3).
+  SEND_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
+  SEND_ATTEMPTS: 8,
   // Where wacli posts its webhooks, on loopback (5.1, 5.2).
   WEBHOOK_PORT: 8787,
   // The largest webhook body accepted from wacli (5.2).
@@ -72,6 +86,10 @@ const values = {
   RESTIC_CHECK_WEEKDAY: 7,
   // The period `/status` counts over (5.4, 6.13).
   STATUS_WINDOW: 24 * HOUR,
+  // The longest line of the network log that a reader takes. A longer one is skipped and counted,
+  // as a line that isn't one is. The policy writes lines of a few hundred bytes; the bound is what
+  // keeps a reader's memory fixed however the log was written (6.9, 6.13).
+  NETLOG_LINE_MAX_BYTES: 16 * KB,
   // The most of each memory file, `preferences.md` and `needs-review.md`, that goes into the
   // agent's system prompt. pi writes them, and one that grew without bound would make every run's
   // request too large, with no run left that could shorten it (6.5).

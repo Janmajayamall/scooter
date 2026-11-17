@@ -13,8 +13,11 @@
 
 import { limits } from '../common/limits.mjs'
 
-const DONE = /^DONE:(.*)$/
-const FAILED = /^FAILED:\s*#?(\d+)(?:\s+(.*))?$/
+// `s`, so `.` takes every character, a carriage return and U+2028 among them: without it a reason
+// with one of those in it, after a long run of spaces, made the pattern try every split of the
+// spaces, in time that grows with the square of the line (the fifth review of milestone 4).
+const DONE = /^DONE:(.*)$/s
+const FAILED = /^FAILED:\s*#?(\d+)(?:\s+(.*))?$/s
 const REPLY_TO = /^REPLY_TO:\s*#?(\d+)$/
 const SEQ = /^#?(\d+)$/
 
@@ -42,8 +45,10 @@ export function shortReason(text) {
 // An instruction that can't be read, such as `DONE: soon` or `FAILED:` without a number, is never
 // sent as text: its line starts with the instruction's word, so it was meant as one.
 export function parseAnswer(stdout) {
-  const done = []
+  // In the order given, each once. A set, so a long `DONE:` line takes time in step with its length.
+  const done = new Set()
   const failed = []
+  const failedSeqs = new Set()
   const messages = []
   let current = { replyTo: null, lines: [] }
   let noReply = false
@@ -61,11 +66,14 @@ export function parseAnswer(stdout) {
       for (const token of match[1].split(/[\s,]+/).filter(Boolean)) {
         const seq = SEQ.exec(token)
         if (!seq) unreadable += 1
-        else if (!done.includes(Number(seq[1]))) done.push(Number(seq[1]))
+        else done.add(Number(seq[1]))
       }
     } else if ((match = FAILED.exec(line))) {
       const seq = Number(match[1])
-      if (!failed.some(entry => entry.seq === seq)) failed.push({ seq, reason: shortReason(match[2] ?? '') || NO_REASON })
+      if (!failedSeqs.has(seq)) {
+        failedSeqs.add(seq)
+        failed.push({ seq, reason: shortReason(match[2] ?? '') || NO_REASON })
+      }
     } else if ((match = REPLY_TO.exec(line))) {
       close()
       current = { replyTo: Number(match[1]), lines: [] }
@@ -83,7 +91,7 @@ export function parseAnswer(stdout) {
     }
   }
   close()
-  return { done, failed, messages, noReply, unreadable }
+  return { done: [...done], failed, messages, noReply, unreadable }
 }
 
 // What an answer does to the items of a batch: `{ done, failed, unknown }`. `done` is the set of

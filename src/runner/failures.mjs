@@ -21,7 +21,8 @@
 // Everything here is a pure function, apart from reading the log.
 
 import { limits } from '../common/limits.mjs'
-import { readNetworkLog } from '../common/netlog.mjs'
+import { errorFields } from '../common/log.mjs'
+import { scanNetworkLog } from '../common/netlog.mjs'
 import { isoSeconds } from '../common/time.mjs'
 import { shortReason } from './answer.mjs'
 import { OPENROUTER_HOST } from './sandbox/index.mjs'
@@ -39,11 +40,31 @@ const isOutageStatus = status => status === 408 || status === 429 || status >= 5
 //   { answer: 'none' }   the request got no answer: it couldn't be sent, or the connection broke,
 //                        or the run ended while it waited
 export function lastOpenRouterAnswer(entries) {
-  const requests = entries.filter(entry => entry.event === 'request' && entry.host === OPENROUTER_HOST)
-  const last = requests.at(-1)
-  if (!last) return null
-  const outcome = entries.find(entry => entry.id === last.id && (entry.event === 'response' || entry.event === 'error'))
-  return outcome?.event === 'response' ? { status: outcome.status } : { answer: 'none' }
+  const answers = openRouterAnswers()
+  for (const entry of entries) answers.add(entry)
+  return answers.last()
+}
+
+// `lastOpenRouterAnswer`, a line at a time, so the log can be read as a stream: `add(entry)` for
+// each line in order, then `last()`. It keeps only the last request to OpenRouter and what came of
+// it, however many lines there are.
+function openRouterAnswers() {
+  let request = null
+  let outcome = null
+  return {
+    add(entry) {
+      if (entry.event === 'request' && entry.host === OPENROUTER_HOST) {
+        request = entry.id
+        outcome = null
+      } else if (request !== null && outcome === null && entry.id === request && (entry.event === 'response' || entry.event === 'error')) {
+        outcome = entry
+      }
+    },
+    last() {
+      if (request === null) return null
+      return outcome?.event === 'response' ? { status: outcome.status } : { answer: 'none' }
+    },
+  }
 }
 
 // What OpenRouter said, in its own words, from the last line pi printed on stderr: `401 {…}` on
@@ -105,9 +126,19 @@ export function failureCause({ result, unexpected = null, filesError = null, ans
 }
 
 // Reads the cause of a failed run from the network log, for the run from `startedAt` to `endedAt`.
-export function readFailureCause({ paths, result, unexpected = null, filesError = null, startedAt, endedAt }) {
-  const { entries } = readNetworkLog(paths, { from: startedAt, to: endedAt })
-  return failureCause({ result, unexpected, filesError, answer: lastOpenRouterAnswer(entries) })
+// A log that can't be read counts as one with no answer from OpenRouter in it, so the run is pi's
+// own failure: the run is still recorded and its attempt counted, which an error here would keep
+// from happening, and the runner, stopped, would run the batch again at its next start.
+export function readFailureCause({ paths, result, unexpected = null, filesError = null, startedAt, endedAt, log }) {
+  const answers = openRouterAnswers()
+  let answer = null
+  try {
+    scanNetworkLog(paths, { from: startedAt, to: endedAt }, entry => answers.add(entry))
+    answer = answers.last()
+  } catch (error) {
+    log?.warn('runner.netlog_unreadable', errorFields(error))
+  }
+  return failureCause({ result, unexpected, filesError, answer })
 }
 
 // ---------------------------------------------------------------------------------------------

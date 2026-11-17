@@ -16,14 +16,18 @@
 // Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never
 // headers, bodies or query strings. The runner writes the log (`src/runner/sandbox/`), and reads
 // it to learn why a run failed (6.9). The bridge reads it for `/status`, which is why its format
-// is here.
+// is here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
 
 import fs from 'node:fs'
+import { limits } from './limits.mjs'
 import { parseIsoSeconds, utcDate } from './time.mjs'
 
 export const NETLOG_EVENTS = ['request', 'response', 'error', 'refused']
 
 const DAY = 24 * 60 * 60 * 1000
+const NEWLINE = 0x0a
+// How much of a file is read at a time.
+const READ_BYTES = 64 * 1024
 
 // The fields of each event, in the order they are written, and those that may be left out.
 const FIELDS = {
@@ -85,43 +89,101 @@ export function formatNetworkLogLine(entry) {
   return `${JSON.stringify(ordered)}\n`
 }
 
-// The lines of the log from `from` to `to`, instants in milliseconds, in the order they were
-// written. A line counts by its `at`, which is to the second, so the second `from` falls in counts
-// whole. Each day's file is read whole; the log is a few hundred lines a day.
+// Calls `each(entry)` for every line of the log from `from` to `to`, instants in milliseconds, in
+// the order they were written. A line counts by its `at`, which is to the second, so the second
+// `from` falls in counts whole.
 //
-// Lines that aren't lines of the log are skipped, and so is part of a line that a crash left at the
-// end of a file: the log is a record for reading, and one bad line shouldn't hide the rest. Returns
-// `{ entries, skipped }`, with how many were skipped.
-export function readNetworkLog(paths, { from, to }) {
+// Each day's file is read as a stream, a piece at a time, and a line is taken only up to
+// `NETLOG_LINE_MAX_BYTES`: the log holds a line for every request pi makes, with a path of pi's
+// choosing, so a day's file has no size that a reader could take whole, and its memory stays the
+// same however large the file is.
+//
+// Lines that aren't lines of the log are skipped, and so are lines too long to take and part of a
+// line that a crash left at the end of a file: the log is a record for reading, and one bad line
+// shouldn't hide the rest. Returns `{ skipped }`, how many were skipped. Throws when a file can't
+// be read; a missing day is no lines.
+export function scanNetworkLog(paths, { from, to }, each) {
   const start = Math.floor(from / 1000) * 1000
-  const entries = []
   let skipped = 0
-  for (let day = Date.parse(`${utcDate(start)}T00:00:00Z`); day <= to; day += DAY) {
-    let text
+  const take = bytes => {
+    let entry
     try {
-      text = fs.readFileSync(paths.networkLog(utcDate(day)), 'utf8')
+      entry = JSON.parse(bytes.toString('utf8'))
+    } catch {
+      skipped += 1
+      return
+    }
+    if (checkNetworkLogLine(entry).length > 0) {
+      skipped += 1
+      return
+    }
+    const at = parseIsoSeconds(entry.at)
+    if (at >= start && at <= to) each(entry)
+  }
+  for (let day = Date.parse(`${utcDate(start)}T00:00:00Z`); day <= to; day += DAY) {
+    let fd
+    try {
+      fd = fs.openSync(paths.networkLog(utcDate(day)), 'r')
     } catch (error) {
       if (error.code === 'ENOENT') continue
       throw error
     }
-    const lines = text.split('\n')
-    // What follows the last line break is part of a line, or nothing.
-    if (lines.pop() !== '') skipped += 1
-    for (const text of lines) {
-      let entry
-      try {
-        entry = JSON.parse(text)
-      } catch {
-        skipped += 1
-        continue
-      }
-      if (checkNetworkLogLine(entry).length > 0) {
-        skipped += 1
-        continue
-      }
-      const at = parseIsoSeconds(entry.at)
-      if (at >= start && at <= to) entries.push(entry)
+    try {
+      // Taken first: `take` counts what it skips as it goes.
+      const passed = readLines(fd, take)
+      skipped += passed
+    } finally {
+      fs.closeSync(fd)
     }
   }
+  return { skipped }
+}
+
+// Reads the file `fd` a piece at a time, and calls `take(bytes)` for each line, without its line
+// break. Returns how many lines it passed over: those longer than `NETLOG_LINE_MAX_BYTES`, and part
+// of a line at the end.
+function readLines(fd, take) {
+  const max = limits.NETLOG_LINE_MAX_BYTES
+  const piece = Buffer.alloc(READ_BYTES)
+  let parts = []
+  let length = 0
+  let tooLong = false
+  let passed = 0
+  for (;;) {
+    const count = fs.readSync(fd, piece, 0, piece.length, null)
+    if (count === 0) break
+    let begin = 0
+    while (begin < count) {
+      const end = piece.indexOf(NEWLINE, begin)
+      const stop = end === -1 || end >= count ? count : end
+      if (!tooLong) {
+        length += stop - begin
+        if (length > max) {
+          tooLong = true
+          parts = []
+        } else {
+          parts.push(Buffer.from(piece.subarray(begin, stop)))
+        }
+      }
+      if (stop === count) break
+      // The end of a line.
+      if (tooLong) passed += 1
+      else take(Buffer.concat(parts, length))
+      parts = []
+      length = 0
+      tooLong = false
+      begin = stop + 1
+    }
+  }
+  // What follows the last line break is part of a line, or nothing.
+  if (tooLong || length > 0) passed += 1
+  return passed
+}
+
+// The lines of the log from `from` to `to`, as `scanNetworkLog` finds them: `{ entries, skipped }`.
+// For a short stretch of the log, such as one test's.
+export function readNetworkLog(paths, window) {
+  const entries = []
+  const { skipped } = scanNetworkLog(paths, window, entry => entries.push(entry))
   return { entries, skipped }
 }

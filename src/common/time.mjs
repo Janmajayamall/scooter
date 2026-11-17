@@ -178,6 +178,20 @@ export function localDate(ms, timeZone) {
   return toLocal(ms, timeZone).date
 }
 
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// A time as the owner reads it in a short line, in their zone: `21:13` on the zone's date of `now`,
+// `Sun 8 Nov 20:02` on another date of the same year, and `Sat 8 Nov 2025 20:02` in another year.
+// The agent's prompt shows its items this way (6.5), and `/status` its times (5.4).
+export function shortLocalTime(ms, now, timeZone) {
+  const t = toLocal(ms, timeZone)
+  const clock = `${pad(t.hour)}:${pad(t.minute)}`
+  if (t.date === localDate(now, timeZone)) return clock
+  const year = t.year === toLocal(now, timeZone).year ? '' : ` ${t.year}`
+  return `${DAY_NAMES[t.weekday - 1]} ${t.day} ${MONTH_NAMES[t.month - 1]}${year} ${clock}`
+}
+
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 
 // Whether `text` is a calendar date written as `2026-11-09`, one that exists.

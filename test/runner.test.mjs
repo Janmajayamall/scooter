@@ -71,6 +71,17 @@ test('failures: a crash discards the run\'s changes, counts an attempt, and send
   assert.equal(outbox({ take: true }).length, 1)
 })
 
+test('failures: a network log that can\'t be read doesn\'t keep a failed run from being recorded (the fifth review of milestone 4)', async t => {
+  const { runner, clock, state, outbox, paths, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 CRASH')])
+  // A day's log that can't be read: a folder in its place. Too large to read whole was the same.
+  fs.mkdirSync(paths.networkLog('2026-11-09'), { recursive: true })
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.equal(state().cursor, 1042)
+  assert.deepEqual(state().retry.map(entry => [entry.seq, entry.attempts]), [[1042, 1]])
+  assert.equal(outbox({ take: true }).length, 1)
+  assert.ok(events().includes('runner.netlog_unreadable'))
+})
+
 // Puts a switch in the runner's git: `fail(subcommand)` says how a command fails, or null for
 // none: `{ timedOut: true }`, as a command stopped after `GIT_CALL_TIMEOUT`, or `{ code }`. The
 // fake sandbox keeps the real `proc`. Call before the runner starts.

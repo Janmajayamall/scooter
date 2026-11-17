@@ -81,6 +81,23 @@ export function assembleBatch({ agent, state, index }, candidates, fresh) {
   return { items: sorted, context, covered: Math.max(covered, state.cursor), newest: sorted.at(-1).seq }
 }
 
+// The largest cap on the item's texts at which the prompt fits, given that it fits at 0. `render`
+// renders it at a cap, and `lengths` are the lengths of the texts the cap applies to. The prompt
+// grows with the cap, except where the cap reaches a text's whole length: the text is then shown
+// whole, without the note that follows a cut text, and the prompt is shorter than just below. So
+// the caps are searched a stretch at a time, between those lengths, from the highest down, and the
+// first stretch whose lowest cap fits holds the answer (the review of milestone 3, point 7).
+function largestCap(render, lengths) {
+  const ok = cap => fits(render(cap))
+  let high = limits.PROMPT_MAX_BYTES
+  for (const low of [...new Set([...lengths, 0])].sort((a, b) => b - a)) {
+    if (low > high) continue
+    if (ok(low)) return largest(low, high, ok)
+    high = low - 1
+  }
+  return 0
+}
+
 // Fits the prompt of a batch of one candidate that is too long as it stands.
 function fitOne(batch, view) {
   const all = batch.context.length
@@ -89,7 +106,9 @@ function fitOne(batch, view) {
   if (fits(render(0, Infinity))) return render(largest(0, all, keep => fits(render(keep, Infinity))), Infinity)
   // It doesn't: its texts are cut, as little as will do, with the context if there is room for it.
   for (const keep of [all, 0]) {
-    if (fits(render(keep, 0))) return render(keep, largest(0, limits.PROMPT_MAX_BYTES, cap => fits(render(keep, cap))))
+    const lengths = []
+    if (!fits(renderBatchPrompt(batch, view, { contextKeep: keep, itemCap: 0, onCapped: bytes => lengths.push(bytes) }))) continue
+    return render(keep, largestCap(cap => render(keep, cap), lengths))
   }
   return null
 }
