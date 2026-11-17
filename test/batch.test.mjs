@@ -6,8 +6,8 @@ import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { buildBatch, buildTaskPrompt } from '../src/runner/batch.mjs'
-import { cutText } from '../src/runner/prompt.mjs'
+import { buildBatch, buildTaskPrompt, headerFor } from '../src/runner/batch.mjs'
+import { cutText, renderBatchPrompt } from '../src/runner/prompt.mjs'
 import { EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, fillerLines, indexOf, line } from './support/runner.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
@@ -195,6 +195,34 @@ test('batch: whatever the texts, the prompt keeps within its limit and has an it
     const flood = build({ lines: [...fillerLines(2), line.email(3, '2026-11-09T15:00:00Z', 'Parts', 'All of them.', { files })], state: { ...initialAgentState(), cursor: 2 } })
     assert.ok(bytes(flood.prompt) <= 3000)
     assert.ok(flood.prompt.endsWith('\n(The rest of this prompt was cut: it was too long.)'))
+  } finally {
+    restore()
+  }
+})
+
+test('batch: an item too long on its own is cut as little as will do, also where a text fits whole (the review of milestone 3, point 7)', () => {
+  const max = 800
+  const restore = overrideLimits({ PROMPT_MAX_BYTES: max })
+  try {
+    const now = Date.parse(EXAMPLE_NOW)
+    const view = { paths: PATHS, agentName: 'lifelog', now, timeZone: 'Asia/Kolkata', header: headerFor({ agent: AGENT, paths: PATHS, now, timeZone: 'Asia/Kolkata', homeCurrency: 'INR', internet: false }) }
+    let oneWhole = 0
+    // An item that quotes a message, so two texts are cut. The quoted one's length passes through
+    // the stretch where it fits whole, and just below, cut and with its note, it doesn't.
+    for (let length = 100; length < 400; length += 3) {
+      const lines = [...fillerLines(2), line.text(3, '2026-11-09T14:00:00Z', 'q'.repeat(length)), line.text(4, '2026-11-09T15:00:00Z', 'o'.repeat(700), { replyTo: 3 })]
+      const result = build({ lines, state: { ...initialAgentState(), cursor: 3 } })
+      const index = indexOf(lines)
+      // Every cap, from the highest down: the first that fits is the least cut.
+      let best = null
+      for (let cap = max; cap >= 0 && best === null; cap--) {
+        const prompt = renderBatchPrompt(result.batch, { ...view, index }, { itemCap: cap, contextKeep: 0 })
+        if (bytes(prompt) <= max) best = prompt
+      }
+      assert.equal(result.prompt, best, `a quoted text of ${length} bytes`)
+      if ((best.match(/\(cut; /g) ?? []).length === 1) oneWhole += 1
+    }
+    assert.ok(oneWhole > 0)
   } finally {
     restore()
   }

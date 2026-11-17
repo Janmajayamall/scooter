@@ -26,7 +26,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { limits } from '../common/limits.mjs'
-import { localDate, parseIsoSeconds, toLocal } from '../common/time.mjs'
+import { parseIsoSeconds, shortLocalTime, toLocal } from '../common/time.mjs'
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -52,14 +52,8 @@ export function longTime(ms, timeZone) {
 }
 
 // An item's time: `21:13` on the owner's day of `now`, `Sun 8 Nov 20:02` on another day of the
-// same year, and `Sat 8 Nov 2025 20:02` in another year.
-export function itemTime(ms, now, timeZone) {
-  const t = toLocal(ms, timeZone)
-  const clock = `${pad(t.hour)}:${pad(t.minute)}`
-  if (t.date === localDate(now, timeZone)) return clock
-  const year = t.year === toLocal(now, timeZone).year ? '' : ` ${t.year}`
-  return `${WEEKDAYS[t.weekday - 1].slice(0, 3)} ${t.day} ${MONTHS[t.month - 1].slice(0, 3)}${year} ${clock}`
-}
+// same year, and `Sat 8 Nov 2025 20:02` in another year (`shortLocalTime`).
+export const itemTime = shortLocalTime
 
 // The two lines every prompt starts with.
 export function promptHeader({ now, timeZone, homeCurrency, replyMode, internet, agentDir, datastoreDir }) {
@@ -101,7 +95,7 @@ export function cutText(text, bytes) {
 
 // A text as a JSON string. Longer than `cap` bytes, it is cut there and followed by `where`, which
 // says where the whole of it is.
-function quote(text, cap, where) {
+function quoteText(text, cap, where) {
   if (Buffer.byteLength(text) <= cap) return JSON.stringify(text)
   return `${JSON.stringify(cutText(text, cap))} (cut; ${where})`
 }
@@ -134,7 +128,13 @@ function mediaKind(type) {
 // Returns the functions that describe lines of the datastore, for one prompt.
 // - `view`: `{ index, paths, agentName, now, timeZone }`.
 // - `cap`: the most bytes of each text the items show.
-function describer({ index, paths, agentName, now, timeZone }, cap) {
+// - `onCapped(bytes)`: called with the length of each text `cap` applies to.
+function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = () => {}) {
+  // A text as `quote` shows it, and its length told to `onCapped` when a cap applies to it.
+  const quote = (text, textCap, where) => {
+    if (textCap !== Infinity) onCapped(Buffer.byteLength(text))
+    return quoteText(text, textCap, where)
+  }
   const filePath = (entry, file) => path.join(paths.dayDir(entry.day), file.path)
   const fileText = (entry, file) => `${file.name ? `${JSON.stringify(file.name)} ` : ''}${filePath(entry, file)} (${token(file.mime)})`
   const lineRef = seq => {
@@ -230,9 +230,10 @@ function describer({ index, paths, agentName, now, timeZone }, cap) {
 // agentName, header, now, timeZone }`, with `header` from `promptHeader`. Options, which
 // `batch.mjs` uses to fit the prompt within its limit:
 // - `itemCap`: the most bytes of each text an item shows, whole by default;
-// - `contextKeep`: how many lines of context to show, newest first, all by default.
-export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep = Infinity } = {}) {
-  const describe = describer(view, itemCap)
+// - `contextKeep`: how many lines of context to show, newest first, all by default;
+// - `onCapped(bytes)`: called with the length of each text `itemCap` applies to.
+export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep = Infinity, onCapped } = {}) {
+  const describe = describer(view, itemCap, onCapped)
   const sections = [view.header]
   const fresh = batch.items.filter(item => item.origin === 'new')
   const retrying = batch.items.filter(item => item.origin !== 'new')

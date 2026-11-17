@@ -555,6 +555,29 @@ test('git: the clean-up sets the folders aside and puts back the last commit, wh
   assert.ok(fs.existsSync('/etc/hostname'))
 })
 
+test('git: what a failed run staged doesn\'t stay in the repository after the clean-up (the fifth review of milestone 4)', async t => {
+  const { dir, agentGit, file, events } = await agentRepository(t)
+  fs.writeFileSync(file('views/kept.csv'), 'kept\n')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  const kept = git(dir, 'rev-parse', 'HEAD:views/kept.csv').trim()
+
+  // A run stages a large file beside a name git refuses, and fails: `git add` has copied the file
+  // into `.git/objects` by then.
+  fs.writeFileSync(file('views/big.bin'), Buffer.alloc(2 * 1024 * 1024, 7))
+  fs.writeFileSync(file('views/git~1'), 'x')
+  assert.equal(await agentGit.stage(), 'views/git~1')
+  const staged = git(dir, 'hash-object', file('views/big.bin')).trim()
+  git(dir, 'cat-file', '-e', staged)
+
+  await agentGit.discardChanges()
+  assert.throws(() => git(dir, 'cat-file', '-e', staged))
+  // What the last commit holds stays.
+  git(dir, 'cat-file', '-e', kept)
+  assert.equal(git(dir, 'fsck', '--no-progress', '--unreachable'), '')
+  assert.ok(!events().includes('agent.prune_failed'))
+})
+
 test('git: the check names a path longer than the system takes, and the clean-up removes what pi left and puts back what was committed, whatever the length of their paths', async t => {
   const { dir, paths, agentGit, file, events } = await agentRepository(t)
   const discarded = paths.agentDiscarded('lifelog')

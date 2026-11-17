@@ -9,7 +9,8 @@
 //   best-effort;
 // - turns what wacli says into a normalized message, and drops everything that isn't the owner's
 //   one-to-one chat before it reaches the core;
-// - downloads media into wacli's staging folder, and copies it out with care.
+// - downloads media into wacli's staging folder, and copies it out with care;
+// - sends texts, always with link previews off, and reactions, to the owner's chat (5.3).
 //
 // wacli is third-party code that talks to the outside world, so everything it says is input to
 // check. Its formats are read in two functions only, `fromWebhook` and `fromListRow`. How it
@@ -251,14 +252,14 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   let running = null
 
   // Runs wacli with `--json` and returns the `data` part of its answer (13.1). Rejects when it
-  // fails, without repeating what it said: its errors can name chats and files.
-  async function wacli(args) {
-    const result = await proc.run(WACLI, ['--json', ...args], { env, user, timeout: limits.WACLI_CALL_TIMEOUT })
+  // fails, without repeating what it said: its errors can name chats and files. `signal` stops it.
+  async function wacli(args, { signal = null } = {}) {
+    const result = await proc.run(WACLI, ['--json', ...args], { env, user, timeout: limits.WACLI_CALL_TIMEOUT, signal })
     const what = args.filter(arg => /^[a-z]+$/.test(arg)).slice(0, 2).join(' ')
     // The log shows the exit code and whether it timed out (`errorFields`), and nothing wacli wrote.
     const failure = reason => Object.assign(new Error(`wacli ${what}: ${reason}`), { code: 'EWACLI', exitCode: result.code, timedOut: result.timedOut })
     if (result.timedOut) throw failure('timed out')
-    if (result.code !== 0) throw failure(`exit code ${result.code}`)
+    if (result.code !== 0) throw failure(signal?.aborted ? 'stopped' : `exit code ${result.code}`)
     let answer
     try {
       answer = JSON.parse(result.stdout)
@@ -468,9 +469,14 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     }
   }
 
+  // The ID wacli gives a message it sent, in `data.id` (13.1), or null when it gives none.
+  const sentId = data => (isObject(data) ? idOf(data.id) : null)
+
   return {
     name: 'whatsapp',
     takesCommands: true,
+    canSend: true,
+    canReact: true,
 
     // Starts the webhook server, then sync once wacli is paired, then catch-up.
     async start(onRecord) {
@@ -534,6 +540,30 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
         // Whatever is there, a folder included.
         fs.rmSync(staged, { recursive: true, force: true })
       }
+    },
+
+    // Whether a send can go out now: wacli is paired and sync is running, and sends are handed to
+    // it (0.6). Otherwise the outbox waits, and its entries with it.
+    ready: () => link === 'linked',
+
+    // Sends a text to the owner's chat (5.3): `wacli send text --to <owner chat> --message <text>
+    // --no-preview`, with `--reply-to <quoteId>` to quote a message. Link previews are always off:
+    // without `--no-preview` wacli fetches the first link in the text, which the agent wrote, to
+    // build a preview, and nothing would log that request (0.8). Resolves with the ID of the
+    // message sent, or null if wacli gave none. wacli's warning about sends less than 5 seconds
+    // apart is on stderr, with exit code 0, and isn't a failure.
+    async sendText(text, quoteId = null, { signal = null } = {}) {
+      const args = ['send', 'text', '--to', ownerChat(), '--message', text, '--no-preview']
+      if (quoteId !== null) args.push('--reply-to', quoteId)
+      return sentId(await wacli(args, { signal }))
+    },
+
+    // Reacts to the owner's message `id` in the owner's chat: `wacli send react --to <owner chat>
+    // --id <id> --sender <owner> --reaction <emoji>`. In a one-to-one chat the owner's JID is the
+    // chat's. Resolves with the reaction's ID, or null.
+    async react(id, emoji, { signal = null } = {}) {
+      const chat = ownerChat()
+      return sentId(await wacli(['send', 'react', '--to', chat, '--id', id, '--sender', chat, '--reaction', emoji], { signal }))
     },
 
     // One line for `/status`: the link state.

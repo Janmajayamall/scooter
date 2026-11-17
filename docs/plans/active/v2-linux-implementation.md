@@ -286,6 +286,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - `test/support/`: a fake mailbox behind the adapter; sample emails as Gmail, Apple Mail and Outlook send them, including HTML-only mail, a forwarded booking and an audio attachment.
 
 **Rules:**
+- **Delivery** (`docs/DECISIONS.md`, milestone 5). The email channel says `canSend: false` and `canReact: false`, and has a `ready()`, which the outbox calls only for a channel that sends. Routing already sends a reply about an email to `DEFAULT_CHANNEL` unquoted, and turns a reaction to one into a `✅ Email:` text. The end-to-end test can start the runner and the bridge on one data folder as `startBoth` in `test/bridge.test.mjs` does.
 - **The sender check** reads the raw header block. Addresses are compared without regard to case. "Topmost" is the first `Authentication-Results` header after unfolding; its server name is its first token; and `dmarc=pass` must be a result, not text inside a comment.
 
 **Tests** (10): Email, all of it; Least privilege, for the reader's environment.
@@ -312,7 +313,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - **Mount point:** row 14.
 - **`sessions/`** is hidden from the VM with Gondolin's `ShadowProvider` (6.6). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8), and `test/support/vm.mjs` has the call.
 - **Nothing pi does may stop the runner** (`docs/DECISIONS.md`, 4.7). Milestone 4 made sure of it for what pi leaves in its folders. Two ways remain, for the sandbox to close:
-  - *What pi prints.* The sandbox collects pi's stdout and stderr. With `-p` pi prints only its final answer, which the model's output limit bounds, but nothing in the interface does, and the fake sandbox collects everything. Keep at most a fixed amount of each, a constant in `limits.mjs`: the start of stdout, and the end of stderr, where OpenRouter's error is. A cut answer could fail the run as pi's own failure.
+  - *What pi prints.* The sandbox collects pi's stdout and stderr. With `-p` pi prints only its final answer, which the model's output limit bounds, but nothing in the interface does, and the fake sandbox collects everything. Keep at most a fixed amount of each, a constant in `limits.mjs`: the start of stdout, and the end of stderr, where OpenRouter's error is. A cut answer could fail the run as pi's own failure. Reading the answer takes time in step with its length since milestone 5 (`docs/DECISIONS.md`, the fifth review of milestone 4), so the limit is about memory, and the texts sent are cut at `TEXT_MAX_CHARS` each.
   - *What pi writes.* pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`. The runner frees it after the run, before it makes anything or records the run, and at a start before it makes any folder or opens the sandbox (`docs/DECISIONS.md`, D88 and D89, the fourth review of milestone 4), but the bridge's writes could fail meanwhile. If Gondolin can cap what a writable mount takes, use it; otherwise say so in the README.
 
 **Tests** (10): Sandbox, all of it.
@@ -335,6 +336,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **ZDR is a switch per route** in the code. If the messages route turns out to refuse the `provider` fields (14), they're left out on that route, and the key's guardrail enforces ZDR alone.
 - **What failure handling reads** (`docs/DECISIONS.md`, D82 and 4.6). A `response` line written only at the end of a stream makes a run that times out mid-stream an outage, tried every 30 minutes for good; writing it when the status arrives avoids that. And a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one reads as pi's own failure, and uses the items' attempts. When the refused request is the pinned pi's own, no longer matching the allowlist, that is nearer a setup error: settle how the log tells the runner which it was.
+- **What one request, and one run, add to the log** (`docs/DECISIONS.md`, milestone 5, the fifth review of milestone 4). Every request leaves a line, with a path of pi's choosing, and a run can make tens of thousands. Readers read the log as a stream since milestone 5, and skip a line over `NETLOG_LINE_MAX_BYTES`, so neither the runner nor `/status` fails on a large log. But a `request` line they skip is a request the runner's failure handling doesn't see. Bound the path the log keeps, so every line fits within `NETLOG_LINE_MAX_BYTES`, and bound what one run can add, for example by counting refusals past a number instead of writing each.
 - **A key of pi's own** (`docs/DECISIONS.md`, 4.6, the third review of milestone 4). The placeholder is swapped only where pi sends it (6.13). A request to `openrouter.ai` that carries another key, otherwise shaped to pass, would get a 401 from OpenRouter itself, which the runner reads as a setup error (D82): runs pause, and the same batch is tried every 30 minutes for as long as the message that misled the agent is in it. Refuse a request to `openrouter.ai` whose key header isn't the placeholder.
 
 **Tests** (10): Network policy, all of it, with a fake upstream.
@@ -370,6 +372,7 @@ Use the prompt shown in 6.5 as the first expected output.
 
 **Rules:**
 - **Locks and the wait:** rows 6 and 7.
+- **What milestone 5 left for this one** (`docs/DECISIONS.md`, milestone 5). `/backup`'s reply is `BACKUP_NOT_BUILT`, given to `createCommands` as `backup()`, and `/status`'s line about backups is `BACKUPS_NOT_BUILT`, both in `src/bridge/`. Delivery has `pause()` and `resume()` (`src/bridge/outbox.mjs`). Commands are answered one at a time, so a `/backup` that waits for its backup holds back a `/status` sent after it.
 - **`agents/.discarded/`** holds what the runner's clean-up set aside, and only until it has removed it (6.9; `docs/DECISIONS.md`, D88). Backups can leave it out.
 - **Work past `run.lock`'s time** (`docs/DECISIONS.md`, D96, the fourth review of milestone 4). The time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it (5.5). But the runner still holds the lock while it packs the repository (`git gc --auto`) and while its clean-up removes what pi left, and neither has a time limit. After a run that used most of its time, a backup could read `.git` during a repack. Settle how a backup tells a runner still at work from one that is gone, for example by the pid `run.lock` holds.
 

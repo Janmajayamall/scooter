@@ -191,8 +191,10 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     //    staged. Taking a large number of names out of it one folder at a time takes time that
     //    grows faster than their number.
     // 5. The last commit's files are written back (`git restore`).
-    // Last, the folders are checked, without the limits on count and size: what is left is the last
+    // Then the folders are checked, without the limits on count and size: what is left is the last
     // commit, and the clean-up can't make that smaller. If anything else is still there, it throws.
+    // Last, the objects that staging copied into the repository, which nothing refers to now, are
+    // removed (`git prune`).
     async discardChanges(folders = AGENT_FOLDERS) {
       ensureDir(discardDir, { mode: 0o700 })
       for (const folder of folders) {
@@ -219,6 +221,17 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
       if (kept.length > 0) await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...kept])
       const left = await this.unexpectedFile(folders, { maxBytes: Infinity, maxCount: Infinity })
       if (left !== null) throw Object.assign(new Error(`the clean-up left ${left} in the agent's folder`), { code: 'EGIT' })
+      // What the run staged is in `.git/objects` by now, copied there by `git add`, and the last
+      // commit doesn't refer to it. Left there, each failed attempt could leave up to
+      // `AGENT_FILES_MAX_BYTES` for good: `git gc` removes only what is two weeks old, and only
+      // once thousands of objects are loose. Only the runner uses the repository, so what nothing
+      // refers to now is the run's, and goes. A failure changes nothing else, and the next
+      // clean-up tries again.
+      try {
+        await run(['prune', '--expire=now'])
+      } catch (error) {
+        log.warn('agent.prune_failed', errorFields(error))
+      }
     },
 
     // Removes the lock files git left in the repository, and returns their paths from `.git`.

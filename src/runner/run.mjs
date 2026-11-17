@@ -282,7 +282,7 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     cleanup = error
   }
   const unexpected = files?.unexpected ?? null
-  const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now })
+  const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now, log })
   log.warn('runner.run_failed', {
     agent: agent.name,
     job: job.kind,

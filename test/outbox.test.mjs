@@ -5,10 +5,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { createIds } from '../src/common/files.mjs'
-import { checkOutboxEntry, writeOutboxEntry } from '../src/common/outbox.mjs'
+import { overrideLimits } from '../src/common/limits.mjs'
+import { CUT_NOTE, checkOutboxEntry, checkSendingFile, cutText, textLength, writeOutboxEntry } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createFakeClock } from './support/clock.mjs'
-import { makeTestDir } from './support/tmp.mjs'
+import { atEnd, makeTestDir } from './support/tmp.mjs'
 
 // The four examples of 5.3.
 const EXAMPLES = [
@@ -67,4 +68,33 @@ test('outbox: an entry is a folder with entry.json, renamed into place, its IDs 
   // An entry that isn't one is never written.
   await assert.rejects(writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'lifelog', text: '' } }), /not an outbox entry: text must be a string/)
   assert.ok(fs.readdirSync(paths.outbox).every(name => !name.startsWith('.')))
+})
+
+test('outbox: a text is at most TEXT_MAX_CHARS characters; a longer one is cut when written, with a line that says so', async t => {
+  atEnd(t, overrideLimits({ TEXT_MAX_CHARS: 60 }))
+  assert.equal(cutText('short'), 'short')
+  const exact = '😀'.repeat(60)
+  assert.equal(cutText(exact), exact)
+  // Characters are code points: the emoji count once each, and none is split.
+  const cut = cutText('😀'.repeat(61))
+  assert.equal(cut, `${'😀'.repeat(60 - textLength(CUT_NOTE))}${CUT_NOTE}`)
+  assert.equal(textLength(cut), 60)
+  // What it ends on before the note is trimmed.
+  assert.equal(textLength(CUT_NOTE), 50)
+  assert.equal(cutText('abcd '.repeat(20)), `abcd abcd${CUT_NOTE}`)
+  assert.deepEqual(checkOutboxEntry({ type: 'text', by: 'lifelog', text: 'x'.repeat(61) }), ['text must be at most 60 characters'])
+
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
+  const id = await writeOutboxEntry({ paths, ids: createIds(createFakeClock()), entry: { type: 'text', by: 'lifelog', text: 'y'.repeat(1000), replyTo: 3 } })
+  const written = JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8'))
+  assert.deepEqual(written, { type: 'text', by: 'lifelog', text: cutText('y'.repeat(1000)), replyTo: 3 })
+})
+
+test('outbox: sending.json holds the entry and how many of its messages have gone out', () => {
+  assert.deepEqual(checkSendingFile({ entry: EXAMPLES[0], sent: 0 }), [])
+  assert.deepEqual(checkSendingFile({ entry: EXAMPLES[3], sent: 1 }), [])
+  assert.deepEqual(checkSendingFile(null), ['not an object'])
+  assert.deepEqual(checkSendingFile({ entry: EXAMPLES[0], sent: 1.5 }), ['sent must be a whole number, 0 or more'])
+  assert.deepEqual(checkSendingFile({ entry: { type: 'text', by: 'x' }, sent: 0, extra: 1 }), ["extra doesn't belong in sending.json", 'entry: text is missing'])
 })

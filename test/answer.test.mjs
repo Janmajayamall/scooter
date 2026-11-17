@@ -103,6 +103,26 @@ test('answer parsing: a reason from outside is one line, cut at REASON_MAX_CHARS
   assert.deepEqual(parseAnswer('FAILED: 4 0123456789abcdef').failed, [{ seq: 4, reason: '012345678…' }])
 })
 
+test('answer parsing: a long line takes time in step with its length (the fifth review of milestone 4)', () => {
+  const started = performance.now()
+  const spaces = ' '.repeat(1024 * 1024)
+  const numbers = Array.from({ length: 160_000 }, (_, n) => n + 1)
+  const answer = parseAnswer(
+    [
+      // A carriage return and U+2028, which `.` alone doesn't take, after a megabyte of spaces.
+      `FAILED: 1${spaces}a\rb\u2028c`,
+      `DONE: ${numbers.join(' ')}`,
+      ...numbers.map(n => `FAILED: ${n} again`),
+    ].join('\n'),
+  )
+  const ms = performance.now() - started
+  assert.deepEqual(answer.failed[0], { seq: 1, reason: 'a b c' })
+  assert.equal(answer.failed.length, 160_000)
+  assert.equal(answer.done.length, 160_000)
+  // Before, the first line took about 17 minutes, and the second about 9 seconds.
+  assert.ok(ms < 5000, `${Math.round(ms)} ms`)
+})
+
 test('answer: what a REPLY_TO quotes', () => {
   assert.equal(replyTarget(index, 1), 1)
   assert.equal(replyTarget(index, 2), 2)

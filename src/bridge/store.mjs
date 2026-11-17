@@ -304,6 +304,7 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
       get: seq => index.get(seq),
       seqOf: (source, sourceId) => index.seqOf(source, sourceId),
       current: seq => index.current(seq),
+      commandsAfter: seq => index.commandsAfter(seq),
       entries: () => index.entries(),
       get lastSeq() {
         return index.lastSeq

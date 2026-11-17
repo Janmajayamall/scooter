@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, removeTree, writeFileAtomic } from '../src/common/files.mjs'
+import { copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeTree, writeFileAtomic } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { deepChain, deepTree } from './support/deep-tree.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
@@ -253,6 +253,28 @@ test('files: what another program could put in a file\'s place is refused, and n
 
   assert.deepEqual(fs.readdirSync(ours), [])
   assert.equal(fs.readFileSync(secret, 'utf8'), 'not for them')
+})
+
+test('files: a small file another program wrote is read only when it is a regular file with one name, within the size', t => {
+  const dir = makeTestDir(t)
+  const secret = path.join(dir, 'secret')
+  fs.writeFileSync(secret, 'not for them')
+  const read = name => readUntrustedFile(path.join(dir, name), { maxBytes: 20 })
+  fs.writeFileSync(path.join(dir, 'entry.json'), '{"type":"text"}')
+  assert.equal(read('entry.json'), '{"type":"text"}')
+  fs.writeFileSync(path.join(dir, 'exact'), 'x'.repeat(20))
+  assert.equal(read('exact'), 'x'.repeat(20))
+  fs.symlinkSync(secret, path.join(dir, 'symlink'))
+  assert.throws(() => read('symlink'), { code: 'EUNTRUSTED', message: 'not read: a symbolic link' })
+  fs.linkSync(secret, path.join(dir, 'hardlink'))
+  assert.throws(() => read('hardlink'), { code: 'EUNTRUSTED', message: 'not read: a file with more than one name' })
+  execFileSync('mkfifo', [path.join(dir, 'fifo')])
+  assert.throws(() => read('fifo'), { code: 'EUNTRUSTED', message: 'not read: not a regular file' })
+  fs.mkdirSync(path.join(dir, 'folder'))
+  assert.throws(() => read('folder'), { code: 'EUNTRUSTED' })
+  fs.writeFileSync(path.join(dir, 'large'), 'x'.repeat(21))
+  assert.throws(() => read('large'), { code: 'EFBIG' })
+  assert.throws(() => read('missing'), { code: 'ENOENT' })
 })
 
 test('files: removing what a program wrote reaches every entry however deep it goes, past what a path can name, whatever its modes', t => {

@@ -8,7 +8,7 @@ const SECOND = 1000
 const MINUTE = 60 * SECOND
 const MB = 1024 * 1024
 
-test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 4', () => {
+test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 5', () => {
   const expected = {
     BATCH_MAX_ITEMS: 20,
     PROMPT_MAX_BYTES: 96 * 1024,
@@ -50,10 +50,22 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     // Milestone 4, after the owner's answer (docs/DECISIONS.md, 4.7).
     AGENT_FILES_MAX_COUNT: 20000,
     ANSWER_MAX_TEXTS: 25,
+    // Milestone 5: docs/DECISIONS.md, milestone 5.
+    TEXT_MAX_CHARS: 14000,
+    OUTBOX_ENTRY_MAX_BYTES: MB,
+    SEND_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
+    SEND_ATTEMPTS: 8,
+    NETLOG_LINE_MAX_BYTES: 16 * 1024,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
   }
+})
+
+test('limits: a text at its longest is a few chunks, and its entry far under what the bridge reads', () => {
+  assert.equal(limits.TEXT_MAX_CHARS, 4 * limits.CHUNK_CHARS)
+  // A character JSON writes longest is a control character, as six bytes.
+  assert.ok(limits.TEXT_MAX_CHARS * 6 + 1024 < limits.OUTBOX_ENTRY_MAX_BYTES)
 })
 
 test('limits: the prompt fits in one command-line argument', () => {
