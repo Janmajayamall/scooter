@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { overrideLimits } from '../src/common/limits.mjs'
-import { NO_REASON, answerEntries, parseAnswer, replyTarget, reportsOf, shortReason } from '../src/runner/answer.mjs'
+import { NO_REASON, answerEntries, droppedTexts, parseAnswer, replyTarget, reportsOf, shortReason } from '../src/runner/answer.mjs'
 import { indexOf, line } from './support/runner.mjs'
 import { atEnd } from './support/tmp.mjs'
 
@@ -156,4 +156,23 @@ test('answer: confirm mode reacts to nothing, "" reacts to nothing, and can_mess
     { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9 },
   ])
   assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, canMessage: false }, index, about: 9, done }), [])
+})
+
+test('answer: at most ANSWER_MAX_TEXTS texts are sent, and a message whose reply was dropped gets its reaction', () => {
+  // 30 texts: a question about #1 first, then 28 more, then a question about #9 past the limit.
+  const lines = ['REPLY_TO: 1', 'Which café?']
+  for (let n = 0; n < 28; n++) lines.push(`REPLY_TO: 999${n}`, `Text ${n}`)
+  lines.push('REPLY_TO: 9', 'Lunch with whom?', 'DONE: 1 9')
+  const answer = parseAnswer(lines.join('\n'))
+  assert.equal(answer.messages.length, 30)
+  const entries = answerEntries({ answer, agent: AGENT, index, about: 9, done: new Set([1, 9]) })
+  const texts = entries.filter(entry => entry.type === 'text')
+  assert.equal(texts.length, 25)
+  assert.deepEqual(texts[0], { type: 'text', by: 'lifelog', text: 'Which café?', replyTo: 1 })
+  assert.equal(texts.at(-1).text, 'Text 23')
+  assert.deepEqual(entries.filter(entry => entry.type === 'react'), [{ type: 'react', by: 'lifelog', target: 9, emoji: '✅' }])
+  assert.equal(droppedTexts(answer, AGENT), 5)
+  // NO_REPLY, or can_message: false, sends none, so drops none.
+  assert.equal(droppedTexts(parseAnswer(`${lines.join('\n')}\nNO_REPLY`), AGENT), 0)
+  assert.equal(droppedTexts(answer, { ...AGENT, canMessage: false }), 0)
 })

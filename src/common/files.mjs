@@ -1,5 +1,5 @@
-// Files: atomic writes, the folder hand-off, sortable IDs, and taking back access to a folder
-// another program wrote.
+// Files: atomic writes, the folder hand-off, sortable IDs, and removing a folder another program
+// wrote.
 //
 // Two services and several programs share Scooter's folders, so a reader must never see half of
 // anything. A file is written under a temporary name and renamed into place. A folder that is
@@ -154,16 +154,21 @@ export function childPath(parent, name) {
   return Buffer.concat([Buffer.from(parent), Buffer.from('/'), Buffer.from(name)])
 }
 
-// Gives the owner back its access to `target` and to everything under it: read, write and search
-// on every folder, read and write on every regular file. Links aren't followed, and anything else
-// is left as it is. Returns nothing; a `target` that isn't there is fine.
+// Removes `target` and everything under it, without following links: a link goes as a link. A
+// `target` that isn't there is fine. `target` is a path, as a string or as bytes.
 //
-// It is for a folder that a sandboxed program wrote and the runner then checks or empties (6.8,
-// 6.9 of DESIGN.md). pi runs as root in its VM, and what it writes there belongs to the runner on
-// the host, so pi can take the runner's access away from a file or a whole folder, and the runner
-// could no longer read or remove it. The program must have stopped: a mode is set by path after
-// the entry was looked at, which a program still writing could swap for a link.
-export function restoreAccess(target) {
+// It is for a folder that a sandboxed program wrote (6.6, 6.9 of DESIGN.md), and nothing in it can
+// stop the removal:
+// - pi runs as root in its VM, and what it writes there belongs to the runner on the host, so it
+//   can take the runner's access away from a file or a whole folder. Each folder is given back
+//   read, write and search before it is read; removing a file needs no access to the file itself.
+// - Names are read as bytes, so a name that isn't UTF-8 is reached as it is on disk.
+// - Each folder is read as a stream, one entry at a time, and each entry is removed as it comes,
+//   so a folder of millions of names takes time, about 7 microseconds a name on the plan's Linux
+//   machine, but no more memory than one of a few.
+// The program must have stopped: a mode is set by path after the entry was looked at, which a
+// program still writing could swap for a link.
+export function removeTree(target) {
   let stat
   try {
     stat = fs.lstatSync(target)
@@ -171,10 +176,18 @@ export function restoreAccess(target) {
     if (error.code === 'ENOENT') return
     throw error
   }
-  const wanted = stat.isDirectory() ? 0o700 : stat.isFile() ? 0o600 : 0
-  if ((stat.mode & wanted) !== wanted) fs.chmodSync(target, (stat.mode & 0o7777) | wanted)
-  if (!stat.isDirectory()) return
-  for (const name of fs.readdirSync(target, { encoding: 'buffer' })) restoreAccess(childPath(target, name))
+  if (!stat.isDirectory()) {
+    fs.unlinkSync(target)
+    return
+  }
+  if ((stat.mode & 0o700) !== 0o700) fs.chmodSync(target, 0o700)
+  const dir = fs.opendirSync(target, { encoding: 'buffer' })
+  try {
+    for (let entry; (entry = dir.readSync()) !== null; ) removeTree(childPath(target, entry.name))
+  } finally {
+    dir.closeSync()
+  }
+  fs.rmdirSync(target)
 }
 
 // IDs that sort in the order they were made: the UTC time to the millisecond and a counter, such

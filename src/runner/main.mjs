@@ -63,7 +63,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
   const instance = await holdInstance(paths.runnerSocket, 'runner')
   try {
     const sandbox = await openSandbox({ paths, settings, log, clock })
-    const git = createGit({ proc, dir: paths.agentDir(agent.name), clock })
+    const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
     await ensureAgentDir({ paths, name: agent.name, git, log })
     await git.discardChanges()
 

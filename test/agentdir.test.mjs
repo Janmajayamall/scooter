@@ -31,10 +31,10 @@ function setup(t) {
   const { log, events, entries } = createTestLog({ clock })
   const proc = createProc({ log, clock })
   const dir = paths.agentDir('lifelog')
-  const agentGit = createGit({ proc, dir, clock })
+  const agentGit = createGit({ proc, dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
   const ensure = () => ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
   const agent = () => loadConfig({ paths }).agents[0]
-  return { root, paths, clock, events, entries, dir, ensure, agent }
+  return { root, paths, clock, log, events, entries, dir, ensure, agent }
 }
 
 test('agent folder: made on the first start, with git, a .gitignore and one commit by Scooter', async t => {
@@ -210,13 +210,13 @@ test('run folder: something in the config that isn\'t a file or a folder stops t
 })
 
 test('session: the file pi wrote is kept, never a link, a file with two names, or one too large', async t => {
-  const { root, paths, dir, ensure, agent } = setup(t)
+  const { root, paths, dir, ensure, agent, log } = setup(t)
   await ensure()
   const config = agent()
   const id = 'lifelog-2026-11-09'
   const sessionDir = path.join(dir, 'run', 'session')
   const kept = path.join(dir, 'sessions', `${id}.jsonl`)
-  const keep = () => keepSession({ paths, agent: config, sessionId: id })
+  const keep = () => keepSession({ paths, agent: config, sessionId: id, log })
   const fresh = () => prepareRun({ paths, agent: config, protocol: '', sessionId: id })
 
   // Nothing written: nothing kept.
@@ -266,11 +266,11 @@ test('session: the file pi wrote is kept, never a link, a file with two names, o
 })
 
 test('git: the clean-up puts views and memory back as they were committed, whatever pi left', async t => {
-  const { dir, ensure } = setup(t)
+  const { dir, ensure, paths } = setup(t)
   await ensure()
   const clock = createFakeClock('2026-11-09T15:43:02Z')
   const { log } = createTestLog({ clock })
-  const agentGit = createGit({ proc: createProc({ log, clock }), dir, clock })
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
   const file = name => path.join(dir, name)
   fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
@@ -314,11 +314,12 @@ test('git: the clean-up puts views and memory back as they were committed, whate
 
 // The repository of `setup`, with git as the runner runs it.
 async function agentRepository(t) {
-  const { dir, ensure } = setup(t)
+  const { dir, ensure, paths } = setup(t)
   await ensure()
   const clock = createFakeClock('2026-11-09T15:43:02Z')
-  const { log } = createTestLog({ clock })
-  return { dir, agentGit: createGit({ proc: createProc({ log, clock }), dir, clock }), file: name => path.join(dir, name) }
+  const { log, events, entries } = createTestLog({ clock })
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  return { dir, paths, agentGit, events, entries, file: name => path.join(dir, name) }
 }
 
 test('git: the check names a file or a folder the runner can\'t read, and the clean-up takes its access back first', { skip: skipIfRoot }, async t => {
@@ -455,19 +456,124 @@ test('git: staging removes empty folders, one inside another too, so views and m
   assert.equal(git(dir, 'ls-tree', '-r', '--name-only', 'HEAD', '--', 'views', 'memory'), 'views/expenses.csv\n')
 })
 
-test('git: an empty folder the runner can\'t remove is named when staging, and the clean-up removes it', { skip: skipIfRoot }, async t => {
-  const { agentGit, file } = await agentRepository(t)
+test('git: staging puts back the modes git doesn\'t record, so a later run can write, and git records only whether a file can be run', async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
   fs.mkdirSync(file('views/a/empty'), { recursive: true })
   fs.writeFileSync(file('views/a/notes.csv'), 'x\n')
+  fs.writeFileSync(file('views/pace.sh'), '#!/bin/sh\n')
+  fs.writeFileSync(file('memory/preferences.md'), '- x\n')
+  // What pi can leave, as root in its VM: folders no one can write, a file read-only, one others
+  // may write, and one with the set-user-ID bit.
+  fs.chmodSync(file('views/pace.sh'), 0o4755)
+  fs.chmodSync(file('views/a/notes.csv'), 0o666)
+  fs.chmodSync(file('memory/preferences.md'), 0o400)
   fs.chmodSync(file('views/a'), 0o500)
+  fs.chmodSync(file('views'), 0o555)
+  fs.chmodSync(file('memory'), 0o500)
   assert.equal(await agentGit.unexpectedFile(), null)
-  assert.equal(await agentGit.stage(), 'views/a/empty')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  for (const [target, mode] of [['views', 0o700], ['views/a', 0o700], ['views/a/notes.csv', 0o600], ['views/pace.sh', 0o700], ['memory', 0o700], ['memory/preferences.md', 0o600]]) {
+    assert.equal(modeOf(file(target)), mode, target)
+  }
+  // The empty folder, in a folder pi had left without write access, is gone too.
+  assert.deepEqual(fs.readdirSync(file('views/a')), ['notes.csv'])
+  assert.equal(git(dir, 'ls-files', '-s', '--', 'views', 'memory').replace(/ [0-9a-f]{40} /g, ' '), '100644 0\tmemory/preferences.md\n100644 0\tviews/a/notes.csv\n100755 0\tviews/pace.sh\n')
+  assert.equal(git(dir, 'status', '--porcelain', '--', 'views', 'memory'), '')
+  fs.appendFileSync(file('memory/preferences.md'), '- y\n')
+  fs.writeFileSync(file('views/a/later.csv'), 'y\n')
+})
+
+test('git: the check names the name at which views and memory pass AGENT_FILES_MAX_COUNT files and folders in all, before git reads any', async t => {
+  const { agentGit, file } = await agentRepository(t)
+  t.after(overrideLimits({ AGENT_FILES_MAX_COUNT: 5 }))
+  fs.mkdirSync(file('views/days/2026'), { recursive: true })
+  fs.writeFileSync(file('views/days/2026/2026-11-09.md'), '# Monday\n')
+  fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
+  fs.writeFileSync(file('memory/preferences.md'), '- x\n')
+  // Five names in all, folders counted: the limit passes.
+  assert.equal(await agentGit.unexpectedFile(), null)
+  // One more fails, at the name that passes it, in the order its folder gives them.
+  fs.writeFileSync(file('memory/needs-review.md'), '- x\n')
+  assert.match(await agentGit.unexpectedFile(), /^memory\/(needs-review|preferences)\.md$/)
+  fs.rmSync(file('memory/needs-review.md'))
+
+  // A folder of many names is read only up to the one that passes the limit; the clean-up removes
+  // them all.
+  fs.mkdirSync(file('views/many'))
+  for (let n = 0; n < 5000; n++) fs.writeFileSync(file(`views/many/${n}.csv`), '')
+  assert.match(await agentGit.unexpectedFile(), /^views\/many\/\d+\.csv$/)
   await agentGit.discardChanges()
   assert.deepEqual(fs.readdirSync(file('views')), [])
 })
 
+test('git: the check names a file with more than one name, which git would record as two', async t => {
+  const { agentGit, file } = await agentRepository(t)
+  fs.writeFileSync(file('views/notes.csv'), 'x\n')
+  fs.linkSync(file('views/notes.csv'), file('views/notes-copy.csv'))
+  assert.equal(await agentGit.unexpectedFile(), 'views/notes-copy.csv')
+  await agentGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(file('views')), [])
+})
+
+test('git: the clean-up sets the folders aside and puts back the last commit, whatever the index holds, and removes what it set aside', async t => {
+  const { dir, paths, agentGit, file } = await agentRepository(t)
+  fs.mkdirSync(file('views/days'), { recursive: true })
+  fs.writeFileSync(file('views/days/2026-11-09.md'), '# Monday\n')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+
+  // memory/ has nothing committed, and 30,000 names staged in it, as a check that failed at
+  // staging or a crash before the commit leaves. Taking them out of the index one folder at a time
+  // takes time that grows faster than their number: 900,000 took past GIT_CALL_TIMEOUT.
+  fs.mkdirSync(file('memory/many'))
+  for (let n = 0; n < 30000; n++) fs.writeFileSync(file(`memory/many/${n}.md`), '')
+  git(dir, 'add', '--', 'memory')
+  // views/ is now a link to elsewhere, which a rename moves as a link; and a clean-up before
+  // couldn't remove all it set aside.
+  fs.rmSync(file('views'), { recursive: true })
+  fs.symlinkSync('/etc', file('views'))
+  const discarded = paths.agentDiscarded('lifelog')
+  fs.mkdirSync(path.join(discarded, 'run-left', 'views', 'locked'), { recursive: true })
+  fs.writeFileSync(path.join(discarded, 'run-left', 'views', 'locked', 'x.csv'), 'x')
+  fs.chmodSync(path.join(discarded, 'run-left', 'views', 'locked'), 0o000)
+
+  await agentGit.discardChanges()
+  assert.equal(fs.lstatSync(file('views')).isDirectory(), true)
+  assert.equal(fs.readFileSync(file('views/days/2026-11-09.md'), 'utf8'), '# Monday\n')
+  assert.deepEqual(fs.readdirSync(file('memory')), [])
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nviews/days/2026-11-09.md\n')
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(modeOf(file('views')), 0o700)
+  assert.equal(modeOf(file('memory')), 0o700)
+  // Nothing set aside is left, from this clean-up or the one before.
+  assert.deepEqual(fs.readdirSync(path.dirname(discarded)), [])
+  assert.ok(fs.existsSync('/etc/hostname'))
+})
+
+test('git: a commit doesn\'t pack the repository on its own; the runner packs it, in the foreground', async t => {
+  const { dir, agentGit, file } = await agentRepository(t)
+  // git packs once it finds enough loose objects; here, as few as it can count.
+  git(dir, 'config', 'gc.auto', '1')
+  const blobs = path.join(dir, 'run', 'blobs')
+  fs.mkdirSync(blobs, { recursive: true })
+  for (let n = 0; n < 3000; n++) fs.writeFileSync(path.join(blobs, String(n)), `blob ${n}\n`)
+  execFileSync('git', ['hash-object', '-w', '--stdin-paths'], { cwd: dir, input: fs.readdirSync(blobs).map(name => path.join(blobs, name)).join('\n'), env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } })
+  const packs = () => fs.readdirSync(path.join(dir, '.git', 'objects', 'pack')).filter(name => name.endsWith('.pack'))
+  fs.writeFileSync(file('views/notes.csv'), 'x\n')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  await new Promise(resolve => setTimeout(resolve, 200))
+  assert.deepEqual(packs(), [])
+
+  await agentGit.pack()
+  assert.equal(packs().length, 1)
+  assert.equal(fs.existsSync(path.join(dir, '.git', 'gc.pid')), false)
+  assert.equal(git(dir, 'log', '--format=%s'), 'lifelog: #1\nlifelog: initial commit\n')
+})
+
 test('run folder: what the runner can\'t read in run/session/ is emptied, and a session file it can\'t read is refused', { skip: skipIfRoot }, async t => {
-  const { paths, dir, ensure, agent } = setup(t)
+  const { paths, dir, ensure, agent, log } = setup(t)
   await ensure()
   const config = agent()
   const id = 'lifelog-2026-11-09'
@@ -478,9 +584,9 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   fs.chmodSync(path.join(sessionDir, 'locked'), 0o000)
   fs.writeFileSync(path.join(sessionDir, `2026-11-09T15-50-38-000Z_${id}.jsonl`), 'first\n')
   fs.chmodSync(path.join(sessionDir, `2026-11-09T15-50-38-000Z_${id}.jsonl`), 0o000)
-  assert.equal(await keepSession({ paths, agent: config, sessionId: id }), 'refused')
+  assert.equal(await keepSession({ paths, agent: config, sessionId: id, log }), 'refused')
   fs.chmodSync(sessionDir, 0o000)
-  assert.equal(await keepSession({ paths, agent: config, sessionId: id }), 'refused')
+  assert.equal(await keepSession({ paths, agent: config, sessionId: id, log }), 'refused')
 
   prepareRun({ paths, agent: config, protocol: '', sessionId: id })
   assert.deepEqual(fs.readdirSync(sessionDir), [])

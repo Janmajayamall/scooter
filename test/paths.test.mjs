@@ -25,6 +25,7 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
     agentRunConfig: '/data/agents/lifelog/run/config',
     agentRunSession: '/data/agents/lifelog/run/session',
     agentState: '/data/agents/lifelog/state.json',
+    agentDiscarded: '/data/agents/.discarded/lifelog',
     exchange: '/data/exchange',
     outbox: '/data/exchange/outbox',
     locks: '/data/exchange/locks',

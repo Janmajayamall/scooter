@@ -13,7 +13,7 @@ import { acquireRunLock } from '../src/runner/run.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { createFakeSandbox } from './support/fake-sandbox.mjs'
 import { exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
-import { MINUTE, SECOND, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
+import { MINUTE, SECOND, gitOf, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd } from './support/tmp.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
@@ -67,6 +67,82 @@ test('failures: a crash discards the run\'s changes, counts an attempt, and send
   add(line.text(1044, '2026-11-09T15:53:00Z', 'tea CRASH'))
   await runNext(runner, clock)
   assert.equal(outbox({ take: true }).length, 1)
+})
+
+// Puts a switch in the runner's git: `fail(subcommand)` says how a command fails, or null for
+// none: `{ timedOut: true }`, as a command stopped after `GIT_CALL_TIMEOUT`, or `{ code }`. The
+// fake sandbox keeps the real `proc`. Call before the runner starts.
+function gitSwitch(prepared) {
+  const real = prepared.proc
+  let fail = () => null
+  prepared.proc = {
+    ...real,
+    run: async (program, args, options) => {
+      // The subcommand is the first argument that isn't `-c` or its setting.
+      const how = program === 'git' ? fail(args.find((arg, n) => arg !== '-c' && args[n - 1] !== '-c')) : null
+      if (!how) return real.run(program, args, options)
+      return { code: how.timedOut ? null : how.code, signal: how.timedOut ? 'SIGTERM' : null, stdout: '', stderr: '', timedOut: how.timedOut === true }
+    },
+  }
+  return { set: next => (fail = next ?? (() => null)) }
+}
+
+test('failures: an error in checking or committing what pi left fails the run and counts an attempt, without stopping the runner', async t => {
+  const prepared = prepareTestRunner(t, { lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 MEMORY')], state: HANDLED, start: START })
+  const git = gitSwitch(prepared)
+  const { runner, clock, state, outbox, paths, sandbox, events } = await startTestRunner(t, prepared)
+
+  // `git add` stopped once its time is up, as the review saw for a folder of 900,000 names.
+  git.set(command => (command === 'add' ? { timedOut: true } : null))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: "couldn't commit the run's files (git add: timed out)" }])
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (couldn't commit the run's files (git add: timed out)). I'll try again." }])
+  assert.ok(events().includes('runner.files_failed'))
+  // Thrown away, and the session not kept.
+  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+
+  // The same for `git commit`, at the next try: nothing is kept that the commit would have held.
+  git.set(command => (command === 'commit' ? { code: 128 } : null))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(state().retry.map(entry => [entry.attempts, entry.reason]), [[2, "couldn't commit the run's files (git commit: exit code 128)"]])
+  assert.equal(gitOf(paths, 'status', '--porcelain', '--', 'views', 'memory'), '')
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+
+  // Once git works, the next try commits.
+  git.set(null)
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+  assert.equal(gitOf(paths, 'show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nmemory/preferences.md\nviews/notes.csv\n')
+  assert.deepEqual(state().retry, [])
+  assert.equal(sandbox.runs.length, 3)
+})
+
+test('failures: a clean-up that can\'t finish records the run first, then stops the runner; the start after cleans up, and the next try counts the next attempt', async t => {
+  const prepared = prepareTestRunner(t, { lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 CRASH')], state: HANDLED, start: START })
+  const git = gitSwitch(prepared)
+  const { runner, clock, state, outbox, sandbox } = await startTestRunner(t, prepared)
+  git.set(command => (command === 'read-tree' ? { code: 128 } : null))
+  await runner.tick()
+  await clock.advance(8 * SECOND)
+  await assert.rejects(runner.tick(), /^Error: git read-tree: exit code 128$/)
+  // The attempt is counted, and the owner told, before the runner stops.
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'pi exited with code 3' }])
+  assert.equal(state().cursor, 1042)
+  assert.equal(outbox({ take: true }).length, 1)
+
+  // Its service manager starts it again; git works, the start cleans up, and the next try is
+  // attempt 2, not the same batch run again for nothing.
+  runner.close()
+  git.set(null)
+  const restarted = await startTestRunner(t, prepared)
+  assert.equal(gitOf(prepared.paths, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  await clock.advance(MINUTE)
+  assert.deepEqual((await restarted.runner.tick()).outcome, { ok: false, cause: 'other' })
+  assert.equal(restarted.state().retry[0].attempts, 2)
+  assert.equal(sandbox.runs.length, 2)
 })
 
 test('failures: a timeout closes the run, which counts an attempt; run.lock records when the run must be over', async t => {

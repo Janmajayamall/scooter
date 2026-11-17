@@ -12,7 +12,8 @@
 // | outage  | 408, 429, a 5xx, or no answer                   | Tried after 1, 5 and 30 minutes,    |
 // |         |                                                 | then every 30                       |
 // | other   | pi crashed or timed out while OpenRouter was    | Each item counts an attempt, and is |
-// |         | answering, or it left an unexpected file        | due again a minute later            |
+// |         | answering, or it left an unexpected file, or    | due again a minute later            |
+// |         | files that couldn't be checked or committed     |                                     |
 //
 // Neither a setup error nor an outage counts an attempt: the batch's items wait in `retry` for the
 // next try, with their counts unchanged, so nothing they hold up ends in `failed`.
@@ -69,9 +70,13 @@ export function openRouterMessage(stderr, status) {
 
 // Why a run failed. `result` is what the sandbox returned, or `{ error }` when it couldn't run
 // the command; `unexpected` the file a successful pi left that git wouldn't record, or null;
+// `filesError` the error that checking or committing what a successful pi left met, or null;
 // `answer` what `lastOpenRouterAnswer` found. Returns `{ cause, reason, status }`: `cause` is
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
 // `status` OpenRouter's last status or null.
+//
+// An unexpected file, or an error in checking or committing the files, is pi's own failure,
+// whatever the log says: it is what pi left that failed the run.
 //
 // The reason is OpenRouter's error whenever its last answer was one (6.9), in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
@@ -79,10 +84,11 @@ export function openRouterMessage(stderr, status) {
 //
 // A sandbox that couldn't run pi at all, such as a VM that doesn't boot, is a setup error: it is
 // the machine's, not the message's, and trying every message four times wouldn't help.
-export function failureCause({ result, unexpected = null, answer = null }) {
+export function failureCause({ result, unexpected = null, filesError = null, answer = null }) {
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
+  if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 
   if (status !== null && status >= 400) {
     const words = openRouterMessage(result.stderr ?? '', status)
@@ -99,9 +105,9 @@ export function failureCause({ result, unexpected = null, answer = null }) {
 }
 
 // Reads the cause of a failed run from the network log, for the run from `startedAt` to `endedAt`.
-export function readFailureCause({ paths, result, unexpected = null, startedAt, endedAt }) {
+export function readFailureCause({ paths, result, unexpected = null, filesError = null, startedAt, endedAt }) {
   const { entries } = readNetworkLog(paths, { from: startedAt, to: endedAt })
-  return failureCause({ result, unexpected, answer: lastOpenRouterAnswer(entries) })
+  return failureCause({ result, unexpected, filesError, answer: lastOpenRouterAnswer(entries) })
 }
 
 // ---------------------------------------------------------------------------------------------

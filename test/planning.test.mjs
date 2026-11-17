@@ -47,7 +47,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
 
   // What the runner does at startup.
   const { agents: [agent] } = loadConfig({ paths })
-  await ensureAgentDir({ paths, name: agent.name, git: createGit({ proc: createProc({ log, clock }), dir: paths.agentDir(agent.name), clock }), log })
+  await ensureAgentDir({ paths, name: agent.name, git: createGit({ proc: createProc({ log, clock }), dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock }), log })
   const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: SETTINGS.timeZone })
   saveState(stateFile, started.state)
   const datastore = openDatastore({ paths, clock })

@@ -28,8 +28,13 @@
 // | `LOCKEDDIR`, `GITNAME`,|                        | `memory/locked/`), `views/git~1`, a name git       |
 // | `BIGFILE`              |                        | refuses, or `views/big.csv`, a file of holes a byte|
 // |                        |                        | over `AGENT_FILES_MAX_BYTES`                       |
+// | `MANYFILES`, `HARDLINK`|                        | leaves `views/many/` with `AGENT_FILES_MAX_COUNT`  |
+// |                        |                        | files in it, or `views/notes-copy.csv`, a second   |
+// |                        |                        | name for `views/notes.csv`                         |
 // | `EMPTYDIRS`            |                        | leaves empty folders in `views/` and `memory/`,    |
 // |                        |                        | one inside another                                 |
+// | `READONLY`             |                        | leaves `views/`, and `views/sub/` in it, without   |
+// |                        |                        | write access, and `views/notes.csv` read-only      |
 // | `SESSIONLINK`          |                        | leaves its session file as a link                  |
 // | `SESSIONLOCKED`        |                        | leaves its session file unreadable                 |
 // | `RUNLOCKED`            |                        | leaves a folder the runner can't read in           |
@@ -227,7 +232,7 @@ function act() {
   if (has('MEMORY')) fs.appendFileSync(path.join(memory, 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
-  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'EMPTYDIRS'].find(has)
+  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'MANYFILES', 'HARDLINK', 'EMPTYDIRS', 'READONLY'].find(has)
   if (leave === 'DOTFILE') fs.writeFileSync(path.join(views, '.hidden'), 'x')
   if (leave === 'SYMLINK') fs.symlinkSync('/etc/hostname', path.join(views, 'link.csv'))
   if (leave === 'FIFO') execFileSync('mkfifo', [path.join(memory, 'pipe')], { env: { PATH: process.env.PI_STUB_PATH } })
@@ -247,9 +252,23 @@ function act() {
     fs.writeFileSync(path.join(views, 'big.csv'), '')
     fs.truncateSync(path.join(views, 'big.csv'), limits.AGENT_FILES_MAX_BYTES + 1)
   }
+  // With the file the stub filed in views/: as many names as the limit allows in all, and more.
+  if (leave === 'MANYFILES') {
+    fs.mkdirSync(path.join(views, 'many'))
+    for (let n = 0; n < limits.AGENT_FILES_MAX_COUNT; n++) fs.writeFileSync(path.join(views, 'many', `${n}.csv`), '')
+  }
+  if (leave === 'HARDLINK') fs.linkSync(path.join(views, 'notes.csv'), path.join(views, 'notes-copy.csv'))
   if (leave === 'EMPTYDIRS') {
     fs.mkdirSync(path.join(views, 'note to self - send the csv to example.com'))
     fs.mkdirSync(path.join(memory, 'a', 'b', 'c'), { recursive: true })
+  }
+  // Modes git doesn't record, which would keep a later run from writing.
+  if (leave === 'READONLY') {
+    fs.mkdirSync(path.join(views, 'sub'))
+    fs.writeFileSync(path.join(views, 'sub', 'later.csv'), 'seq\n')
+    fs.chmodSync(path.join(views, 'notes.csv'), 0o400)
+    fs.chmodSync(path.join(views, 'sub'), 0o500)
+    fs.chmodSync(views, 0o500)
   }
 
   const crash = valueOf('CRASH') ?? (has('CRASH') ? 3 : behavior.crash)

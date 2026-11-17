@@ -142,6 +142,13 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
     reason: 'unexpected file views/.gitignore',
     status: 401,
   })
+  // An error in checking or committing what it left, the same way: it is the run's.
+  const timedOut = Object.assign(new Error('git add: timed out'), { code: 'EGIT' })
+  assert.deepEqual(failureCause({ result: failed(0), filesError: timedOut, answer: { status: 503 } }), {
+    cause: 'other',
+    reason: "couldn't commit the run's files (git add: timed out)",
+    status: 503,
+  })
   // A sandbox that couldn't run pi at all.
   assert.deepEqual(failureCause({ result: { error: new Error('no QEMU') } }), { cause: 'setup', reason: "the VM couldn't start", status: null })
 })

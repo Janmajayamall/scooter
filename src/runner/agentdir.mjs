@@ -12,8 +12,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { copyUntrustedFile, ensureDir, restoreAccess } from '../common/files.mjs'
+import { copyUntrustedFile, ensureDir, removeTree } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
+import { errorFields } from '../common/log.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside `views/`
@@ -77,15 +78,15 @@ function copyTree(source, target) {
 // Returns `{ systemFile, skillDirs, sessionDir, sessionFile }`: the paths pi is given, and the
 // session file copied in, or null.
 //
-// pi could write `run/session/` in the last run, and take the runner's access away from what it
-// left there, so the runner takes it back before it empties `run/` (`restoreAccess`).
+// pi could write `run/session/` in the last run, and leave there what it liked, if the runner
+// stopped before it emptied the folder (`clearRunSession`), so `run/` is removed as anything pi
+// wrote is (`removeTree`): access taken back, and no folder read whole.
 export function prepareRun({ paths, agent, protocol, sessionId = null, skills = agent.skills }) {
   const name = agent.name
   const runDir = paths.agentRun(name)
   const configDir = paths.agentRunConfig(name)
   const sessionDir = paths.agentRunSession(name)
-  restoreAccess(runDir)
-  fs.rmSync(runDir, { recursive: true, force: true })
+  removeTree(runDir)
   ensureDir(runDir, { mode: FOLDER_MODE })
 
   ensureDir(configDir, { mode: FOLDER_MODE })
@@ -125,6 +126,7 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 // `kept`, `none` when pi left no session file, or `refused` when the file isn't one to keep: a link,
 // anything but a regular file, a file with more than one name, one over `SESSION_MAX_BYTES`, or
 // one the runner can't open, such as a file pi made unreadable or a session folder it can't list.
+// A refusal is logged as `runner.session_refused`, with why.
 //
 // pi finds a session by the first line of its file, not by its name (`docs/DECISIONS.md`, 0.4,
 // pi 2). It continues the copy `prepareRun` made, under that copy's name. A session it starts
@@ -132,31 +134,53 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 // into a new file it names `<UTC time>_<sessionId>.jsonl`, and that is the one to take. Anything
 // else in `run/session/` is ignored, so a run can only extend its own session.
 //
-// The file is copied without following a link, and checked on what was opened (`copyUntrustedFile`).
-export async function keepSession({ paths, agent, sessionId }) {
+// pi wrote everything in `run/session/`, so nothing there may stop the runner: the folder is read
+// as a stream, which a folder of millions of names can't make costly in memory, and the file is
+// copied without following a link, and checked on what was opened (`copyUntrustedFile`). Any error
+// is a refusal: the run is committed by now (6.8), and the session kept before stays.
+export async function keepSession({ paths, agent, sessionId, log }) {
   const sessionDir = paths.agentRunSession(agent.name)
-  let names
-  try {
-    names = fs.readdirSync(sessionDir)
-  } catch (error) {
-    if (error.code === 'ENOENT') return 'none'
-    if (error.code === 'EACCES') return 'refused'
-    throw error
+  const refuse = (error = null) => {
+    log.warn('runner.session_refused', { agent: agent.name, session: sessionId, ...(error ? errorFields(error) : {}) })
+    return 'refused'
   }
-  const fresh = names.filter(name => name.endsWith(`_${sessionId}.jsonl`)).sort()
-  const name = fresh.at(-1) ?? (names.includes(`${sessionId}.jsonl`) ? `${sessionId}.jsonl` : null)
-  if (name === null) return 'none'
-  ensureDir(paths.agentSessions(agent.name), { mode: FOLDER_MODE })
   try {
+    if (!fs.lstatSync(sessionDir).isDirectory()) return refuse()
+    // The newest file pi named itself, or else the copy it continued.
+    let fresh = null
+    let copy = false
+    const dir = fs.opendirSync(sessionDir)
+    try {
+      for (let entry; (entry = dir.readSync()) !== null; ) {
+        if (entry.name.endsWith(`_${sessionId}.jsonl`) && (fresh === null || entry.name > fresh)) fresh = entry.name
+        else if (entry.name === `${sessionId}.jsonl`) copy = true
+      }
+    } finally {
+      dir.closeSync()
+    }
+    const name = fresh ?? (copy ? `${sessionId}.jsonl` : null)
+    if (name === null) return 'none'
+    ensureDir(paths.agentSessions(agent.name), { mode: FOLDER_MODE })
     await copyUntrustedFile(path.join(sessionDir, name), path.join(paths.agentSessions(agent.name), `${sessionId}.jsonl`), {
       maxBytes: limits.SESSION_MAX_BYTES,
       mode: FILE_MODE,
     })
+    return 'kept'
   } catch (error) {
-    // Besides what `copyUntrustedFile` refuses: `EACCES`, a file pi made unreadable; `ENOENT`, a
-    // name that isn't UTF-8, which doesn't open by the name it was listed under; `ENXIO`, a socket.
-    if (['EUNTRUSTED', 'EFBIG', 'EACCES', 'ENOENT', 'ENXIO'].includes(error.code)) return 'refused'
-    throw error
+    if (error.code === 'ENOENT' && !fs.existsSync(sessionDir)) return 'none'
+    return refuse(error)
   }
-  return 'kept'
+}
+
+// Empties `run/session/` once a run is over and its session has been kept, before the runner
+// records the run: pi wrote what is there, and could have filled the disk with it. Returns nothing.
+// An error is logged and left to `prepareRun`, which empties `run/` again before the next run.
+export function clearRunSession({ paths, agent, log }) {
+  const sessionDir = paths.agentRunSession(agent.name)
+  try {
+    removeTree(sessionDir)
+    ensureDir(sessionDir, { mode: FOLDER_MODE })
+  } catch (error) {
+    log.warn('runner.run_session_left', { agent: agent.name, ...errorFields(error) })
+  }
 }

@@ -128,13 +128,15 @@ export function replyTarget(index, seq) {
 // - `done`: the items reported `DONE`, from `reportsOf`; none for a task.
 //
 // A `REPLY_TO` whose message doesn't exist is sent as plain text. A reaction goes only to a message
-// that is still there: the owner has deleted one that isn't.
+// that is still there: the owner has deleted one that isn't. Only the first `ANSWER_MAX_TEXTS`
+// texts are sent (`droppedTexts` counts the rest), and a message whose reply was dropped gets its
+// reaction.
 export function answerEntries({ answer, agent, index, about = null, done = new Set() }) {
   if (!agent.canMessage) return []
   const entries = []
   const answered = new Set()
   if (!answer.noReply) {
-    for (const message of answer.messages) {
+    for (const message of answer.messages.slice(0, limits.ANSWER_MAX_TEXTS)) {
       const target = message.replyTo === null ? null : replyTarget(index, message.replyTo)
       const entry = { type: 'text', by: agent.name, text: message.text }
       if (target !== null) {
@@ -154,4 +156,10 @@ export function answerEntries({ answer, agent, index, about = null, done = new S
     }
   }
   return entries
+}
+
+// How many of an answer's texts `answerEntries` leaves out for `ANSWER_MAX_TEXTS`.
+export function droppedTexts(answer, agent) {
+  if (!agent.canMessage || answer.noReply) return 0
+  return Math.max(0, answer.messages.length - limits.ANSWER_MAX_TEXTS)
 }

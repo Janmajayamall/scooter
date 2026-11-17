@@ -6,19 +6,26 @@
 //    current session (6.5, 6.6).
 // 3. **Run** pi in the sandbox, with the command, mounts, environment and network policy of 6.6.
 // 4. **After a successful run,** in this order (6.8): check the files pi left, staging them as the
-//    check's last step; copy its session back; commit; write the outbox entries; update the state.
+//    check's last step; commit; copy its session back; write the outbox entries; update the state.
 //    A crash part-way through only means the batch runs again.
 // 5. **After a failed run** (6.9): throw away its changes and its session, read why it failed from
 //    the network log, and update the state, with a notice for the first failure in a row.
 // 6. **Release** the lock.
+//
+// Everything from the check to the commit reads what pi left, so an error there, such as a git
+// command that times out, fails the run like an unexpected file, and counts an attempt: it never
+// stops the runner, which would run the same batch again at its next start without counting one.
+// `run/session/` is emptied before the run is recorded, and on a failure `views/` and `memory/`
+// are cleaned up first, so nothing pi left takes room the state needs. A clean-up that can't
+// finish stops the runner, once the run is recorded.
 
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
 import { lockExists, releaseLock, takeLock } from '../common/locks.mjs'
 import { errorFields } from '../common/log.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
-import { keepSession, prepareRun } from './agentdir.mjs'
-import { answerEntries, parseAnswer, reportsOf } from './answer.mjs'
+import { clearRunSession, keepSession, prepareRun } from './agentdir.mjs'
+import { answerEntries, droppedTexts, parseAnswer, reportsOf, shortReason } from './answer.mjs'
 import { failureNotice, givenUpNotice, isFirstFailure, readFailureCause, settleBatch, settleTask } from './failures.mjs'
 import { GUEST_HOME, GUEST_PATH, OPENROUTER_HOST, PI_PROGRAM } from './sandbox/index.mjs'
 import { currentSession, saveState, sessionId } from './state.mjs'
@@ -180,28 +187,43 @@ export async function performRun(context) {
       return { state, outcome: 'stopped' }
     }
 
-    // 6.8, step 1: anything git wouldn't record fails the run. Staging is the check's last step,
-    // because only git knows every name it refuses; it comes before the session is kept, and the
-    // commit after.
     const exited = !result.error && result.code === 0
-    const unexpected = exited ? ((await git.unexpectedFile()) ?? (await git.stage())) : null
+    const files = exited ? await commitFiles(context) : null
     const timing = { now: endedAt, startedAt, durationMs: Math.max(0, Math.round(endedAt - startedAt)) }
-    if (exited && unexpected === null) return await afterSuccess(context, { result, sessionId: id, seqs, timing })
-    return await afterFailure(context, { result, unexpected, seqs, timing })
+    if (files !== null && files.committed !== undefined) return await afterSuccess(context, { result, sessionId: id, seqs, timing, committed: files.committed })
+    return await afterFailure(context, { result, files, seqs, timing })
   } finally {
     releaseLock(paths.runLock)
   }
 }
 
-// 6.8, after the check: the session, the commit, the outbox, the state.
-async function afterSuccess(context, { result, sessionId: id, seqs, timing }) {
+// 6.8, steps 1 and 2, after pi exited with 0: anything git wouldn't record fails the run, then what
+// was staged is committed. Staging is the check's last step, because only git knows every name it
+// refuses. Returns `{ committed }`, whether there was a commit; `{ unexpected }`, the path the
+// check found; or `{ error }`, when a step failed. Everything here reads what pi left, so any
+// error is the run's, and fails it as an unexpected file would.
+async function commitFiles({ agent, git, log, job }) {
+  try {
+    const unexpected = (await git.unexpectedFile()) ?? (await git.stage())
+    if (unexpected !== null) return { unexpected }
+    return { committed: await git.commitStaged(commitMessage(agent.name, job)) }
+  } catch (error) {
+    log.warn('runner.files_failed', { agent: agent.name, ...errorFields(error) })
+    return { error }
+  }
+}
+
+// 6.8, after the commit: the session, the outbox, the state; then, outside what the run depends
+// on, the repository is packed if it needs it.
+async function afterSuccess(context, { result, sessionId: id, seqs, timing, committed }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
   const answer = parseAnswer(result.stdout)
   if (answer.unreadable > 0) log.warn('runner.answer_unreadable', { agent: agent.name, lines: answer.unreadable })
+  const dropped = droppedTexts(answer, agent)
+  if (dropped > 0) log.warn('runner.answer_texts_dropped', { agent: agent.name, texts: dropped })
 
-  const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id })
-  if (session === 'refused') log.warn('runner.session_refused', { agent: agent.name, session: id })
-  const committed = await git.commitStaged(commitMessage(agent.name, job))
+  const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id, log })
+  clearRunSession({ paths, agent, log })
 
   let next
   let entries
@@ -236,14 +258,29 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing }) {
     committed,
     session,
   })
+  if (committed) {
+    try {
+      await git.pack()
+    } catch (error) {
+      log.warn('agent.pack_failed', { agent: agent.name, ...errorFields(error) })
+    }
+  }
   return { state: next, outcome: { ok: true, cause: null } }
 }
 
-// 6.9: throw the run away, find why it failed, and count it.
-async function afterFailure(context, { result, unexpected, seqs, timing }) {
+// 6.9: throw the run away, find why it failed, and count it. `files` is what `commitFiles` found,
+// or null when pi itself failed.
+async function afterFailure(context, { result, files, seqs, timing }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
-  await git.discardChanges()
-  const failure = readFailureCause({ paths, result, unexpected, startedAt: timing.startedAt, endedAt: timing.now })
+  let cleanup = null
+  try {
+    await git.discardChanges()
+  } catch (error) {
+    cleanup = error
+  }
+  clearRunSession({ paths, agent, log })
+  const unexpected = files?.unexpected ?? null
+  const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now })
   log.warn('runner.run_failed', {
     agent: agent.name,
     job: job.kind,
@@ -251,7 +288,8 @@ async function afterFailure(context, { result, unexpected, seqs, timing }) {
     status: failure.status,
     exitCode: result.code,
     timedOut: result.timedOut,
-    file: unexpected ?? undefined,
+    // A name pi chose, cut as the reason is: it could hold a message's words.
+    file: unexpected === null ? undefined : shortReason(unexpected),
     ms: timing.durationMs,
   })
 
@@ -269,5 +307,7 @@ async function afterFailure(context, { result, unexpected, seqs, timing }) {
   }
   for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
   saveState(stateFile, next)
+  // The run is recorded, and its attempt counted; a start cleans up again (D89).
+  if (cleanup !== null) throw cleanup
   return { state: next, outcome: { ok: false, cause: failure.cause } }
 }

@@ -38,6 +38,9 @@ export function makePaths({ dataDir, configDir }) {
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
     agentState: name => path.join(agent(name), 'state.json'),
+    // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them (6.9):
+    // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
+    agentDiscarded: name => data('agents', '.discarded', name),
 
     // The exchange (5.3, 5.5, 6.4).
     exchange: data('exchange'),
