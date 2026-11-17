@@ -303,14 +303,16 @@ test('settings: email is off without EMAIL_IMAP_HOST, and complete with it', () 
   const off = loadSettings('bridge', { env: { ...BRIDGE, EMAIL_USER: 'someone', EMAIL_IMAP_PORT: 'imap', EMAIL_CHECK_SECONDS: '1' } })
   assert.equal(off.email, null)
 
-  // On: everything email needs must be there.
+  // On: everything email needs must be there. `EMAIL_AUTHSERV_ID` may wait: `email-check` shows
+  // what it should be, and the bridge refuses to start without it (test/email.test.mjs).
   assert.deepEqual(Object.keys(faults('bridge', { ...BRIDGE, EMAIL_IMAP_HOST: 'imap.gmail.com' })).sort(), [
-    'EMAIL_AUTHSERV_ID',
     'EMAIL_OWNER_ADDRESSES',
     'EMAIL_PASSWORD',
     'EMAIL_USER',
   ])
   assert.match(faults('bridge', { ...BRIDGE, EMAIL_IMAP_HOST: 'imap.gmail.com' }).EMAIL_USER, /EMAIL_USER is required when EMAIL_IMAP_HOST is set/)
+  const { EMAIL_AUTHSERV_ID: _, ...withoutAuthserv } = EMAIL
+  assert.equal(loadSettings('bridge', { env: { ...BRIDGE, ...withoutAuthserv } }).email.authservId, null)
 
   const bad = {
     EMAIL_IMAP_HOST: ['imap gmail com', 'imaps://imap.gmail.com', 'imap.gmail.com:993'],

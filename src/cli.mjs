@@ -52,6 +52,7 @@ export const COMMANDS = {
     usage: 'email-check',
     where: 'bridge',
     summary: 'List the mailbox\'s newest 5 messages and whether each would pass the sender check',
+    load: async () => (await import('./bridge/channels/email.mjs')).runEmailCheck,
   },
   'backup-init': { side: 'bridge', usage: 'backup-init', where: 'bridge', summary: 'Create the backup repository' },
   snapshots: { side: 'bridge', usage: 'snapshots', where: 'bridge', summary: 'List the backups' },

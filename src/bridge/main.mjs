@@ -9,12 +9,13 @@
 // 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each give
 //    out the same `seq`, and the datastore would need repairing by hand (D29).
 // 3. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
-// 4. It checks `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp (5.3).
+// 4. It makes its channels: WhatsApp, and email when `EMAIL_IMAP_HOST` is set (5.6). It checks
+//    `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp (5.3).
 // 5. It starts the channels.
 // 6. It answers the commands it hadn't answered, and starts delivery, which first sends what was
 //    left in the outbox, from where a crash cut it short (5.3).
 //
-// Later milestones add to this: the email channel (6), and removing a leftover `backup.lock` (10).
+// Milestone 10 adds removing a leftover `backup.lock`.
 
 import fs from 'node:fs'
 import { createIds, ensureDir } from '../common/files.mjs'
@@ -23,6 +24,7 @@ import { createLog, errorFields } from '../common/log.mjs'
 import { makePaths } from '../common/paths.mjs'
 import { createProc } from '../common/proc.mjs'
 import { systemClock } from '../common/time.mjs'
+import { createEmail } from './channels/email.mjs'
 import { defaultChannelProblem } from './channels/index.mjs'
 import { createWhatsApp } from './channels/whatsapp.mjs'
 import { createCommands } from './commands.mjs'
@@ -45,12 +47,18 @@ export class BridgeConfigError extends Error {
 
 // Starts the bridge. Returns `{ paths, store, state, intake, channels, outbox, commands, fatal,
 // stop }`, where `fatal` resolves with an error if the bridge can't go on, and `stop()` stops it.
-// `proc` is what `createProc` returns; tests give one with a clock of their own. Throws a
-// `BridgeConfigError` when `DEFAULT_CHANNEL` can't send.
-export async function startBridge({ settings, clock = systemClock, log = createLog({ component: 'bridge', clock }), proc = createProc({ log, clock }) }) {
+// `proc` is what `createProc` returns; tests give one with a clock of their own, and `emailReader`
+// a stub of the email reader. Throws a `BridgeConfigError` when `DEFAULT_CHANNEL` can't send, or
+// email is on without `EMAIL_AUTHSERV_ID`.
+export async function startBridge({ settings, clock = systemClock, log = createLog({ component: 'bridge', clock }), proc = createProc({ log, clock }), emailReader }) {
+  // `email-check` runs without it, so the owner can find it there (8.4); the sender check can't.
+  if (settings.email && !settings.email.authservId) {
+    throw new BridgeConfigError('EMAIL_AUTHSERV_ID is required when EMAIL_IMAP_HOST is set; `scooter email-check` shows what to set it to')
+  }
   const paths = makePaths(settings)
   const wacliUser = await proc.lookupUser('scooter-wacli')
   const runnerUser = await proc.lookupUser('scooter-runner')
+  const mailUser = settings.email ? await proc.lookupUser('scooter-mail') : null
   // Root's, with the runner's group, so the runner can read it and only root can write it (3.2).
   const storeOwner = runnerUser ? { uid: 0, gid: runnerUser.gid } : null
 
@@ -66,7 +74,8 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   const instance = await holdInstance(paths.bridgeSocket, 'bridge')
   try {
     // Attachments that waited for the store when the bridge last stopped. Their messages weren't
-    // stored, and catch-up or the mail spool hands them over again.
+    // stored, and catch-up or the mail spool, whose folders stay until they are, hands them over
+    // again.
     fs.rmSync(paths.bridgeIncoming, { recursive: true, force: true })
     const store = openStore({ paths, clock, log, owner: storeOwner })
     const state = openBridgeState({ paths, clock, log, newestSeq: store.index.lastSeq })
@@ -89,6 +98,10 @@ export async function startBridge({ settings, clock = systemClock, log = createL
       newestIncomingAt: () => intake.newestIncomingAt('whatsapp'),
     })
     channels.set(whatsapp.name, whatsapp)
+    if (settings.email) {
+      const email = createEmail({ settings, paths, proc, log, clock, user: mailUser, ...(emailReader ? { reader: emailReader } : {}) })
+      channels.set(email.name, email)
+    }
     const problem = defaultChannelProblem(channels, settings.defaultChannel)
     if (problem !== null) throw new BridgeConfigError(problem)
 

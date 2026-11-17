@@ -31,6 +31,7 @@ import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
+import { createMailReaderStub } from './support/mail-reader.mjs'
 import { isRoot, skipUnlessRoot } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
@@ -260,7 +261,9 @@ async function setup(t, { fixtures = { paired: true }, settings: extra, start = 
   const restore = overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * 3600_000, ...changes })
   atEnd(t, restore)
   await seed?.(paths, { clock, log })
-  const bridge = await startBridge({ settings, clock, log, proc })
+  // With email on, the email reader runs too: its stub, which reaches no mailbox.
+  const emailReader = settings.email ? createMailReaderStub(root).reader : undefined
+  const bridge = await startBridge({ settings, clock, log, proc, emailReader })
   atEnd(t, () => bridge.stop())
   const whatsapp = bridge.channels.get('whatsapp')
   const lines = () => [...bridge.store.index.entries()].map(entry => entry.line)

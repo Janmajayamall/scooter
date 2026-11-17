@@ -147,26 +147,42 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
   }
 }
 
-// Reads a small file that another program wrote, in a folder that program controls, such as an
-// outbox entry, which the runner's user writes and the bridge, as root, reads (5.3). As with
-// `copyUntrustedFile`, it is opened without following a link at the end of its path and without
-// waiting for a writer, and it must be a regular file with exactly one name, of at most `maxBytes`.
-// Returns its contents as text. Throws an error with the code `EUNTRUSTED` when the file isn't one
-// to read, `EFBIG` when it is too large, and the system's error otherwise, `ENOENT` among them.
-export function readUntrustedFile(file, { maxBytes }) {
+// Opens a file that another program wrote, in a folder that program controls, for reading: without
+// following a link at the end of its path, without waiting for a writer, and only if it is a
+// regular file with exactly one name, belonging to `owner` when one is given. Returns `{ fd, stat }`.
+function openUntrusted(file, owner) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
-  const refuse = (code, why) => Object.assign(new Error(`not read: ${why}`), { code })
+  const refuse = why => Object.assign(new Error(`not read: ${why}`), { code: 'EUNTRUSTED' })
   let fd
   try {
     fd = fs.openSync(file, flags)
   } catch (error) {
-    if (error.code === 'ELOOP' || error.code === 'EMLINK') throw refuse('EUNTRUSTED', 'a symbolic link')
+    if (error.code === 'ELOOP' || error.code === 'EMLINK') throw refuse('a symbolic link')
     throw error
   }
   try {
     const stat = fs.fstatSync(fd)
-    if (!stat.isFile()) throw refuse('EUNTRUSTED', 'not a regular file')
-    if (stat.nlink !== 1) throw refuse('EUNTRUSTED', 'a file with more than one name')
+    if (!stat.isFile()) throw refuse('not a regular file')
+    if (stat.nlink !== 1) throw refuse('a file with more than one name')
+    if (owner && stat.uid !== owner.uid) throw refuse('a file of another user')
+    return { fd, stat }
+  } catch (error) {
+    fs.closeSync(fd)
+    throw error
+  }
+}
+
+// Reads a small file that another program wrote, in a folder that program controls, such as an
+// outbox entry, which the runner's user writes and the bridge, as root, reads (5.3). As with
+// `copyUntrustedFile`, it is opened without following a link at the end of its path and without
+// waiting for a writer, and it must be a regular file with exactly one name, of at most `maxBytes`,
+// and belong to `owner` when one is given (`{ uid, gid }`). Returns its contents as text. Throws an
+// error with the code `EUNTRUSTED` when the file isn't one to read, `EFBIG` when it is too large,
+// and the system's error otherwise, `ENOENT` among them.
+export function readUntrustedFile(file, { maxBytes, owner = null }) {
+  const refuse = (code, why) => Object.assign(new Error(`not read: ${why}`), { code })
+  const { fd, stat } = openUntrusted(file, owner)
+  try {
     if (stat.size > maxBytes) throw refuse('EFBIG', 'too large')
     // One byte more than allowed tells a file that grew since from one that didn't.
     const buffer = Buffer.alloc(maxBytes + 1)
@@ -178,6 +194,25 @@ export function readUntrustedFile(file, { maxBytes }) {
       if (filled > maxBytes) throw refuse('EFBIG', 'too large')
     }
     return buffer.toString('utf8', 0, filled)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+// Reads at most the first `maxBytes` of a file that another program wrote, with the care of
+// `readUntrustedFile`, such as the header block of an email in the mail spool (5.6), whose whole
+// file may be 100 MB. Returns `{ bytes, size }`: what was read, as a Buffer, and the file's size.
+export function readUntrustedStart(file, { maxBytes, owner = null }) {
+  const { fd, stat } = openUntrusted(file, owner)
+  try {
+    const buffer = Buffer.alloc(Math.min(maxBytes, stat.size))
+    let filled = 0
+    while (filled < buffer.length) {
+      const count = fs.readSync(fd, buffer, filled, buffer.length - filled, null)
+      if (count === 0) break
+      filled += count
+    }
+    return { bytes: buffer.subarray(0, filled), size: stat.size }
   } finally {
     fs.closeSync(fd)
   }

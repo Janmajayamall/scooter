@@ -56,10 +56,26 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     SEND_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
     SEND_ATTEMPTS: 8,
     NETLOG_LINE_MAX_BYTES: 16 * 1024,
+    // Milestone 6: docs/DECISIONS.md, milestone 6.
+    EMAIL_SUBJECT_MAX_CHARS: 1000,
+    EMAIL_HEADER_MAX_BYTES: 256 * 1024,
+    EMAIL_PARSED_MAX_BYTES: MB,
+    SPOOL_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
+    EMAIL_CHECK_COUNT: 5,
+    EMAIL_CHECK_TIMEOUT: 2 * MINUTE,
+    STATUS_FILE_MAX_BYTES: 4 * MB,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
   }
+})
+
+test('limits: an email\'s text and subject at their longest fit the description the bridge reads, with room for its attachments', () => {
+  // The reader keeps one character past each cut; JSON writes a control character as six bytes.
+  const longest = (limits.EMAIL_TEXT_MAX_CHARS + 1 + limits.EMAIL_SUBJECT_MAX_CHARS + 1) * 6
+  assert.ok(longest * 4 < limits.EMAIL_PARSED_MAX_BYTES)
+  // A `✅ Email:` text, which stands for a reaction to an email, goes out as one message.
+  assert.ok(limits.EMAIL_SUBJECT_MAX_CHARS + 20 < limits.CHUNK_CHARS)
 })
 
 test('limits: a text at its longest is a few chunks, and its entry far under what the bridge reads', () => {

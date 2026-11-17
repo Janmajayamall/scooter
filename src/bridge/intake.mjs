@@ -34,6 +34,8 @@ export const MEDIA_ERRORS = {
   tooLarge: 'too large, not downloaded',
   downloadFailed: 'download failed',
   notStored: 'could not be stored',
+  // An email the reader couldn't parse, stored with its `.eml` (5.6).
+  notParsed: 'could not be parsed',
 }
 
 // Returns intake. Options:
@@ -131,9 +133,16 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         if (attachment.error !== null) result = { error: attachment.error }
         else if (attachment.bytes !== null && attachment.bytes > limits.ATTACHMENT_MAX_BYTES) result = { error: MEDIA_ERRORS.tooLarge }
         else result = await download(channel, record, n)
-        if (result.file) downloaded.push(result)
+        if (result.file) downloaded.push({ ...result, n })
         // The line has room for one `media` object: the first attachment that couldn't be stored.
         else media ??= mediaOf(attachment, result.error)
+      }
+      // An email's files start with the whole message, `<seq>.eml` (5.6), which the agent's prompt
+      // names as the whole email. Without it the files would be numbered from its first part, so
+      // none is kept, and `media` says why.
+      if (record.source === 'email' && downloaded.length > 0 && downloaded[0].n !== 1) {
+        log.warn('intake.email_parts_dropped', { files: downloaded.length })
+        for (const { file } of downloaded.splice(0)) fs.rmSync(file, { force: true })
       }
       const files = downloaded.map(({ file, attachment }) => ({ path: file, mime: attachment.mime, name: attachment.name }))
       try {
