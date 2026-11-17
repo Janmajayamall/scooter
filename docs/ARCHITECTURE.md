@@ -397,7 +397,7 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 
 **Bridge:** load `bridge.env`; read the datastore and rebuild the index; remove a leftover `backup.lock`; start the channels; send what was left in the outbox; then loop.
 
-**Runner:** load `runner.env`; validate `agents.yaml`; check the image and pick the accelerator; create the agent's folder if it's new; remove a leftover `run.lock`; write `status.json`; run any `once` task and start any backfill; then loop.
+**Runner:** load `runner.env`; validate `agents.yaml`; free what pi left, then create the agent's folder if it's new and throw away a run's uncommitted changes; check the image and pick the accelerator; remove a leftover `run.lock`; write `status.json`; run any `once` task and start any backfill; then loop.
 
 ## 5. Flows
 
@@ -414,7 +414,7 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 
 ### 5.2 A failed run
 
-The runner throws away the run's uncommitted changes and its session changes: it sets `views/` and `memory/` aside, takes the last commit's back, and removes what it set aside, which nothing pi left can stop. Then it reads OpenRouter's last response during the run from the network log:
+The runner throws away the run's session changes and its uncommitted changes: it empties `run/session/`, sets `views/` and `memory/` aside, removes what it set aside, and takes the last commit's back. Nothing pi left can stop that, however deep it goes or however full it left the disk: everything pi wrote is freed before anything new is made. Then it reads OpenRouter's last response during the run from the network log:
 
 | Cause | Sign | What happens |
 |---|---|---|

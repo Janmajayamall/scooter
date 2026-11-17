@@ -313,7 +313,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - **`sessions/`** is hidden from the VM with Gondolin's `ShadowProvider` (6.6). The owner decided this after milestone 0 (`docs/DECISIONS.md`, 0.8), and `test/support/vm.mjs` has the call.
 - **Nothing pi does may stop the runner** (`docs/DECISIONS.md`, 4.7). Milestone 4 made sure of it for what pi leaves in its folders. Two ways remain, for the sandbox to close:
   - *What pi prints.* The sandbox collects pi's stdout and stderr. With `-p` pi prints only its final answer, which the model's output limit bounds, but nothing in the interface does, and the fake sandbox collects everything. Keep at most a fixed amount of each, a constant in `limits.mjs`: the start of stdout, and the end of stderr, where OpenRouter's error is. A cut answer could fail the run as pi's own failure.
-  - *What pi writes.* pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`. The runner frees it after the run, before it records the run, but the bridge's writes could fail meanwhile. If Gondolin can cap what a writable mount takes, use it; otherwise say so in the README.
+  - *What pi writes.* pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`. The runner frees it after the run, before it makes anything or records the run, and at a start before it makes any folder or opens the sandbox (`docs/DECISIONS.md`, D88 and D89, the fourth review of milestone 4), but the bridge's writes could fail meanwhile. If Gondolin can cap what a writable mount takes, use it; otherwise say so in the README.
 
 **Tests** (10): Sandbox, all of it.
 
@@ -371,6 +371,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **Locks and the wait:** rows 6 and 7.
 - **`agents/.discarded/`** holds what the runner's clean-up set aside, and only until it has removed it (6.9; `docs/DECISIONS.md`, D88). Backups can leave it out.
+- **Work past `run.lock`'s time** (`docs/DECISIONS.md`, D96, the fourth review of milestone 4). The time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it (5.5). But the runner still holds the lock while it packs the repository (`git gc --auto`) and while its clean-up removes what pi left, and neither has a time limit. After a run that used most of its time, a backup could read `.git` during a repack. Settle how a backup tells a runner still at work from one that is gone, for example by the pid `run.lock` holds.
 
 **Tests** (10): Backups. The coordination, with the stub. With restic installed, the real round trip against a repository in a temporary folder.
 
