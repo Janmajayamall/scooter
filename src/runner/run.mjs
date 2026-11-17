@@ -8,7 +8,7 @@
 // 4. **After a successful run,** in this order (6.8): check the files pi left, staging them as the
 //    check's last step; commit; copy its session back; write the outbox entries; update the state.
 //    A crash part-way through only means the batch runs again.
-// 5. **After a failed run** (6.9): throw away its changes and its session, read why it failed from
+// 5. **After a failed run** (6.9): throw away its session and its changes, read why it failed from
 //    the network log, and update the state, with a notice for the first failure in a row.
 // 6. **Release** the lock.
 //
@@ -16,8 +16,8 @@
 // command that times out, fails the run like an unexpected file, and counts an attempt: it never
 // stops the runner, which would run the same batch again at its next start without counting one.
 // `run/session/` is emptied before the run is recorded, and on a failure `views/` and `memory/`
-// are cleaned up first, so nothing pi left takes room the state needs. A clean-up that can't
-// finish stops the runner, once the run is recorded.
+// are cleaned up after it, so nothing pi left takes room the clean-up or the state needs: pi may
+// have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
 
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
@@ -182,6 +182,7 @@ export async function performRun(context) {
     }
     const endedAt = clock.now()
     if (signal?.aborted) {
+      clearRunSession({ paths, agent, log })
       await git.discardChanges()
       log.info('runner.run_stopped', { agent: agent.name, job: job.kind, ms: endedAt - startedAt })
       return { state, outcome: 'stopped' }
@@ -269,16 +270,17 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
 }
 
 // 6.9: throw the run away, find why it failed, and count it. `files` is what `commitFiles` found,
-// or null when pi itself failed.
+// or null when pi itself failed. `run/session/` is emptied first: it frees room, which the clean-up
+// needs to make the folders again if pi filled the disk.
 async function afterFailure(context, { result, files, seqs, timing }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
+  clearRunSession({ paths, agent, log })
   let cleanup = null
   try {
     await git.discardChanges()
   } catch (error) {
     cleanup = error
   }
-  clearRunSession({ paths, agent, log })
   const unexpected = files?.unexpected ?? null
   const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now })
   log.warn('runner.run_failed', {

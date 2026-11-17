@@ -15,6 +15,7 @@ import { loadConfig } from '../src/runner/config.mjs'
 import { createGit } from '../src/runner/git.mjs'
 import { loadProtocol, readMemoryFile, renderSystemPrompt } from '../src/runner/prompt.mjs'
 import { createFakeClock } from './support/clock.mjs'
+import { deepTree } from './support/deep-tree.mjs'
 import { createTestLog } from './support/log.mjs'
 import { skipIfRoot } from './support/root.mjs'
 import { writeConfig } from './support/runner.mjs'
@@ -40,7 +41,8 @@ function setup(t) {
 test('agent folder: made on the first start, with git, a .gitignore and one commit by Scooter', async t => {
   const { paths, dir, ensure, events } = setup(t)
   await ensure()
-  for (const folder of [paths.agents, dir, paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentSessions('lifelog'), paths.agentRun('lifelog')]) {
+  // With the folder a clean-up sets aside what it throws away in, made at the first start and kept.
+  for (const folder of [paths.agents, dir, paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
     assert.equal(modeOf(folder), 0o700, folder)
   }
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), '/sessions/\n/run/\n/state.json\n')
@@ -534,9 +536,9 @@ test('git: the clean-up sets the folders aside and puts back the last commit, wh
   fs.rmSync(file('views'), { recursive: true })
   fs.symlinkSync('/etc', file('views'))
   const discarded = paths.agentDiscarded('lifelog')
-  fs.mkdirSync(path.join(discarded, 'run-left', 'views', 'locked'), { recursive: true })
-  fs.writeFileSync(path.join(discarded, 'run-left', 'views', 'locked', 'x.csv'), 'x')
-  fs.chmodSync(path.join(discarded, 'run-left', 'views', 'locked'), 0o000)
+  fs.mkdirSync(path.join(discarded, 'views-1', 'locked'), { recursive: true })
+  fs.writeFileSync(path.join(discarded, 'views-1', 'locked', 'x.csv'), 'x')
+  fs.chmodSync(path.join(discarded, 'views-1', 'locked'), 0o000)
 
   await agentGit.discardChanges()
   assert.equal(fs.lstatSync(file('views')).isDirectory(), true)
@@ -546,9 +548,50 @@ test('git: the clean-up sets the folders aside and puts back the last commit, wh
   assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
   assert.equal(modeOf(file('views')), 0o700)
   assert.equal(modeOf(file('memory')), 0o700)
-  // Nothing set aside is left, from this clean-up or the one before.
-  assert.deepEqual(fs.readdirSync(path.dirname(discarded)), [])
+  // Nothing set aside is left, from this clean-up or the one before; the folder it was set aside
+  // in stays, for the next clean-up.
+  assert.deepEqual(fs.readdirSync(path.dirname(discarded)), ['lifelog'])
+  assert.deepEqual(fs.readdirSync(discarded), [])
   assert.ok(fs.existsSync('/etc/hostname'))
+})
+
+test('git: the check names a path longer than the system takes, and the clean-up removes what pi left and puts back what was committed, whatever the length of their paths', async t => {
+  const { dir, paths, agentGit, file, events } = await agentRepository(t)
+  const discarded = paths.agentDiscarded('lifelog')
+  // A tree moved into another, as `mv` makes it in the VM, has paths past the limit. The check
+  // names the first of them, before git reads anything, and the clean-up removes it all.
+  deepTree(file('views'))
+  const found = await agentGit.unexpectedFile()
+  assert.match(found, /^views\/t1(\/d{200}){12}\/t2(\/d{200})+$/)
+  assert.ok(Buffer.byteLength(path.join(dir, found)) > 4095)
+  assert.ok(Buffer.byteLength(path.join(dir, path.dirname(found))) <= 4095)
+  await agentGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(file('views')), [])
+  assert.deepEqual(fs.readdirSync(discarded), [])
+
+  // A file whose path is 4,090 bytes, which the system takes, is committed. Set aside, its path is
+  // longer than that, and the clean-up removes it all the same, then puts it back from git.
+  const folders = []
+  let length = Buffer.byteLength(file('views'))
+  while (4090 - length - 1 > 255) {
+    folders.push('e'.repeat(200))
+    length += 201
+  }
+  const deep = path.join(file('views'), ...folders, 'f'.repeat(4090 - length - 1))
+  assert.equal(Buffer.byteLength(deep), 4090)
+  fs.mkdirSync(path.dirname(deep), { recursive: true })
+  fs.writeFileSync(deep, 'committed\n')
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
+  fs.writeFileSync(deep, 'changed\n')
+  fs.writeFileSync(path.join(path.dirname(deep), 'new.csv'), 'x\n')
+  await agentGit.discardChanges()
+  assert.equal(fs.readFileSync(deep, 'utf8'), 'committed\n')
+  assert.deepEqual(fs.readdirSync(path.dirname(deep)), [path.basename(deep)])
+  assert.deepEqual(fs.readdirSync(discarded), [])
+  assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(events().includes('agent.discarded_left'), false)
 })
 
 test('git: a commit doesn\'t pack the repository on its own; the runner packs it, in the foreground', async t => {

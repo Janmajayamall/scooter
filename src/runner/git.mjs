@@ -13,15 +13,16 @@
 // After each run the runner checks what pi left in `views/` and `memory/`, commits it, or throws
 // it away. Those are the only folders pi can write, apart from its session copy (6.6).
 //
-// pi chose every name, mode, size and number of files there. So the check walks the folders by the
-// bytes of their names, without following links, and counts and weighs what they hold before git
-// reads any of it; staging puts back the modes, which git doesn't record; and the clean-up sets
-// the folders aside and takes the last commit's back, which nothing pi left can slow down or stop.
-// Nothing pi leaves can stop the runner, at the end of a run or at its next start.
+// pi chose every name, mode, size and depth, and the number of files there. So the check walks the
+// folders by the bytes of their names, without following links, and counts and weighs what they
+// hold before git reads any of it; staging puts back the modes, which git doesn't record; and the
+// clean-up sets the folders aside, frees what pi wrote, and takes the last commit's back, which
+// nothing pi left can slow down or stop, not even a disk it filled. Nothing pi leaves can stop the
+// runner, at the end of a run or at its next start.
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { childPath, ensureDir, removeTree } from '../common/files.mjs'
+import { childPath, emptyFolder, ensureDir } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { systemClock } from '../common/time.mjs'
@@ -115,11 +116,12 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     // The first thing in `folders` that git wouldn't record, as a path from the agent's folder, or
     // null when there is none (6.8): anything that isn't a regular file or a folder, such as a
     // link or a FIFO; any name starting with `.`, such as a `.gitignore` or a nested `.git`; a
-    // file the runner can't read, or a folder it can't read and search, which git would pass
-    // over or fail on; a file with more than one name, which git would record as two; the name
-    // at which `folders` pass `maxCount` files and folders in all, or the file at which they pass
-    // `maxBytes`, which git would take too long over; and any file git ignores. All but the last
-    // are found without git, so git reads nothing before the files have been counted and weighed.
+    // file the runner can't read, or a folder it can't read and search, or a path longer than the
+    // system takes, which git would pass over or fail on; a file with more than one name, which
+    // git would record as two; the name at which `folders` pass `maxCount` files and folders in
+    // all, or the file at which they pass `maxBytes`, which git would take too long over; and any
+    // file git ignores. All but the last are found without git, so git reads nothing before the
+    // files have been counted and weighed.
     async unexpectedFile(folders = AGENT_FOLDERS, { maxBytes = limits.AGENT_FILES_MAX_BYTES, maxCount = limits.AGENT_FILES_MAX_COUNT } = {}) {
       const found = findUnexpected(dir, folders, { maxBytes, maxCount })
       if (found !== null) return found
@@ -175,22 +177,24 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     },
 
     // Throws away every change in `folders` since the last commit, so the next run starts from the
-    // last good state (6.9). Nothing pi left can slow this down or stop it:
-    // 1. The folders are set aside, renamed into a new folder in `discardDir`, and made again,
-    //    empty. A rename takes the same time whatever they hold.
+    // last good state (6.9). Nothing pi left can slow this down or stop it, and it frees what pi
+    // wrote before it makes anything new, because pi may have filled the disk, and on a full disk
+    // a new folder has no room:
+    // 1. The folders are set aside, renamed into `discardDir`, which a start made and which is
+    //    kept (`ensureAgentDir`). A rename takes the same time whatever they hold, and no room.
     // 2. Everything in `discardDir` is removed, with what earlier clean-ups couldn't remove
-    //    (`removeTree`): without git, with no time limit, taking access back as it goes. If that
-    //    fails, it is logged, and tried again by the next clean-up: it is out of pi's sight and
-    //    git's.
-    // 3. The index is the last commit's again (`git read-tree HEAD`), in one step, whatever was
+    //    (`emptyFolder`): without git, with no time limit, taking access back as it goes, however
+    //    deep it goes. If that fails, it is logged, and tried again by the next clean-up and at
+    //    the next start: it is out of pi's sight and git's.
+    // 3. The folders are made again, empty, as the VM's mount points.
+    // 4. The index is the last commit's again (`git read-tree HEAD`), in one step, whatever was
     //    staged. Taking a large number of names out of it one folder at a time takes time that
     //    grows faster than their number.
-    // 4. The last commit's files are written back (`git restore`).
+    // 5. The last commit's files are written back (`git restore`).
     // Last, the folders are checked, without the limits on count and size: what is left is the last
     // commit, and the clean-up can't make that smaller. If anything else is still there, it throws.
     async discardChanges(folders = AGENT_FOLDERS) {
       ensureDir(discardDir, { mode: 0o700 })
-      const aside = fs.mkdtempSync(path.join(discardDir, 'run-'))
       for (const folder of folders) {
         const full = path.join(dir, folder)
         let stat = null
@@ -199,19 +203,17 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
         } catch (error) {
           if (error.code !== 'ENOENT') throw error
         }
-        if (stat !== null) {
-          // A folder moves to another only if it can be written: its `..` changes.
-          if (stat.isDirectory() && (stat.mode & 0o700) !== 0o700) fs.chmodSync(full, 0o700)
-          fs.renameSync(full, path.join(aside, folder))
-        }
-        // The VM's mount points.
-        ensureDir(path.join(dir, folder), { mode: 0o700 })
+        if (stat === null) continue
+        // A folder moves to another only if it can be written: its `..` changes.
+        if (stat.isDirectory() && (stat.mode & 0o700) !== 0o700) fs.chmodSync(full, 0o700)
+        fs.renameSync(full, freeName(discardDir, folder))
       }
       try {
-        removeTree(discardDir)
+        emptyFolder(discardDir)
       } catch (error) {
         log.warn('agent.discarded_left', { folder: path.basename(discardDir), ...errorFields(error) })
       }
+      for (const folder of folders) ensureDir(path.join(dir, folder), { mode: 0o700 })
       await run(['read-tree', 'HEAD'])
       const kept = await tracked(folders)
       if (kept.length > 0) await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...kept])
@@ -253,6 +255,20 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
 
 const DOT = '.'.charCodeAt(0)
 
+// A path in `folder` for `name` that nothing has, `<name>-<n>`, so a folder set aside never
+// meets what an earlier clean-up couldn't remove.
+function freeName(folder, name) {
+  for (let n = 1; ; n++) {
+    const candidate = path.join(folder, `${name}-${n}`)
+    try {
+      fs.lstatSync(candidate)
+    } catch (error) {
+      if (error.code === 'ENOENT') return candidate
+      throw error
+    }
+  }
+}
+
 // The entries of the folder at `full` (bytes), without following links, sorted by name; their
 // names are bytes too. The folder is read as a stream, and at most `limit` entries are taken:
 // `over` is the name of the next one, or null when there was none. So a folder of millions of
@@ -275,23 +291,26 @@ function entriesOf(full, limit = Infinity) {
   return { entries: entries.sort((a, b) => Buffer.compare(a.name, b.name)), over }
 }
 
-// Whether the runner may `mode` (`fs.constants`) the file or folder at `full`.
+// Whether the runner may `mode` (`fs.constants`) the file or folder at `full`. Not when its path is
+// longer than the system takes, which pi can make by moving a folder into another.
 function mayAccess(full, mode) {
   try {
     fs.accessSync(full, mode)
     return true
   } catch (error) {
-    if (error.code === 'EACCES') return false
+    if (error.code === 'EACCES' || error.code === 'ENAMETOOLONG') return false
     throw error
   }
 }
 
 // What `unexpectedFile` finds without git: the first entry, in name order, that is a dot name;
 // neither a regular file nor a folder; a file the runner can't read, or one with more than one
-// name; a folder it can't read and search; the name at which the files and folders so far pass
-// `maxCount`, in the order the folder gives them; or the file at which the sizes of the files so
-// far pass `maxBytes`. `folders` are paths from `dir`, walked in their order. The path returned is
-// for people: a name that isn't UTF-8 shows its bytes as `�`.
+// name; a folder it can't read and search; a path longer than the system takes; the name at which
+// the files and folders so far pass `maxCount`, in the order the folder gives them; or the file at
+// which the sizes of the files so far pass `maxBytes`. `folders` are paths from `dir`, walked in
+// their order. The path returned is for people: a name that isn't UTF-8 shows its bytes as `�`.
+// The walk goes one call deeper for each folder, which the system's limit on a path's length
+// keeps to about 2,000.
 export function findUnexpected(dir, folders = AGENT_FOLDERS, { maxBytes = Infinity, maxCount = Infinity } = {}) {
   const { R_OK, X_OK } = fs.constants
   let bytes = 0

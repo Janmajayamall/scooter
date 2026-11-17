@@ -35,10 +35,17 @@
 // |                        |                        | one inside another                                 |
 // | `READONLY`             |                        | leaves `views/`, and `views/sub/` in it, without   |
 // |                        |                        | write access, and `views/notes.csv` read-only      |
+// | `DEEPTREE`             |                        | leaves `views/t1/`, a tree whose paths on the host |
+// |                        |                        | pass what the system takes, made as `mv` makes it  |
+// |                        |                        | in the VM                                          |
+// | `FILLDISK`             |                        | leaves `fill.bin` in `views/`, a byte over         |
+// |                        |                        | `AGENT_FILES_MAX_BYTES`, and in `run/session/`, as |
+// |                        |                        | a run that filled the disk would                   |
 // | `SESSIONLINK`          |                        | leaves its session file as a link                  |
 // | `SESSIONLOCKED`        |                        | leaves its session file unreadable                 |
 // | `RUNLOCKED`            |                        | leaves a folder the runner can't read in           |
 // |                        |                        | `run/session/`                                     |
+// | `DEEPSESSION`          |                        | leaves the tree of `DEEPTREE` in `run/session/`    |
 // | `NOREPLY`              |                        | answers `NO_REPLY`                                 |
 // | `MEMORY`               |                        | adds a line to `memory/preferences.md`             |
 // | `UNKNOWN`              |                        | reports numbers that weren't in the batch          |
@@ -55,6 +62,7 @@ import path from 'node:path'
 import { limits } from '../../src/common/limits.mjs'
 import { formatNetworkLogLine } from '../../src/common/netlog.mjs'
 import { isoSeconds, utcDate, utcStamp } from '../../src/common/time.mjs'
+import { deepTree } from './deep-tree.mjs'
 
 const ROOT = process.env.PI_STUB_ROOT
 const CONTROL = process.env.PI_STUB_CONTROL
@@ -163,6 +171,7 @@ if (options.sessionId) {
     fs.writeFileSync(path.join(dir, 'locked', 'notes.txt'), 'x')
     fs.chmodSync(path.join(dir, 'locked'), 0o000)
   }
+  if (has('DEEPSESSION')) deepTree(dir)
 }
 fs.appendFileSync(path.join(CONTROL, 'calls.jsonl'), `${JSON.stringify(seen)}\n`)
 
@@ -232,7 +241,9 @@ function act() {
   if (has('MEMORY')) fs.appendFileSync(path.join(memory, 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
-  const leave = behavior.leave ?? ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'MANYFILES', 'HARDLINK', 'EMPTYDIRS', 'READONLY'].find(has)
+  const leave =
+    behavior.leave ??
+    ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'MANYFILES', 'HARDLINK', 'EMPTYDIRS', 'READONLY', 'DEEPTREE', 'FILLDISK'].find(has)
   if (leave === 'DOTFILE') fs.writeFileSync(path.join(views, '.hidden'), 'x')
   if (leave === 'SYMLINK') fs.symlinkSync('/etc/hostname', path.join(views, 'link.csv'))
   if (leave === 'FIFO') execFileSync('mkfifo', [path.join(memory, 'pipe')], { env: { PATH: process.env.PI_STUB_PATH } })
@@ -269,6 +280,15 @@ function act() {
     fs.chmodSync(path.join(views, 'notes.csv'), 0o400)
     fs.chmodSync(path.join(views, 'sub'), 0o500)
     fs.chmodSync(views, 0o500)
+  }
+  if (leave === 'DEEPTREE') deepTree(views)
+  // Holes, as `truncate -s` makes them: the test's own file system stays as it was, and the test
+  // makes it act full while these are there.
+  if (leave === 'FILLDISK') {
+    for (const file of [path.join(views, 'fill.bin'), path.join(agent, 'run', 'session', 'fill.bin')]) {
+      fs.writeFileSync(file, '')
+      fs.truncateSync(file, limits.AGENT_FILES_MAX_BYTES + 1)
+    }
   }
 
   const crash = valueOf('CRASH') ?? (has('CRASH') ? 3 : behavior.crash)

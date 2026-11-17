@@ -3,10 +3,11 @@
 // At startup, in order:
 // 1. It reads `agents.yaml`, and stops on any fault, naming the field (6.1).
 // 2. It makes sure it is the only runner on this data folder (`holdInstance`).
-// 3. It opens the sandbox, which checks the VM image and picks the accelerator (6.6, 6.12).
-// 4. It creates the agent's folder if it is new (6.2), removes the lock files a git that was killed
-//    left there, and throws away the changes of a run that a crash or a stop cut short, so the next
-//    run starts from the last commit (6.9).
+// 3. It frees what pi wrote that a crash or a stop left taking room, before it makes any folder:
+//    pi may have filled the disk. Then it creates the agent's folder if it is new (6.2), removes the
+//    lock files a git that was killed left there, and throws away the changes of a run that a
+//    crash or a stop cut short, so the next run starts from the last commit (6.9).
+// 4. It opens the sandbox, which checks the VM image and picks the accelerator (6.6, 6.12).
 // 5. It removes a leftover `run.lock` (6.4).
 // 6. It writes `status.json`, and tells the owner if its VMs have just fallen back to emulation
 //    (6.3, 6.6; rows 6 and 15).
@@ -62,10 +63,11 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
   for (const folder of [paths.runner, paths.agents, paths.exchange, paths.locks]) ensureDir(folder, { mode: 0o700 })
   const instance = await holdInstance(paths.runnerSocket, 'runner')
   try {
-    const sandbox = await openSandbox({ paths, settings, log, clock })
+    // What pi left is freed before the sandbox opens, which may need room on the disk.
     const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
     await ensureAgentDir({ paths, name: agent.name, git, log })
     await git.discardChanges()
+    const sandbox = await openSandbox({ paths, settings, log, clock })
 
     if (lockExists(paths.runLock)) {
       releaseLock(paths.runLock)

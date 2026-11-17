@@ -11,7 +11,9 @@ import { readRunnerStatus } from '../src/common/runnerstatus.mjs'
 import { openRunner, runRunner, startRunner } from '../src/runner/main.mjs'
 import { acquireRunLock } from '../src/runner/run.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
+import { deepTree } from './support/deep-tree.mjs'
 import { createFakeSandbox } from './support/fake-sandbox.mjs'
+import { actFull, holds } from './support/full-disk.mjs'
 import { exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
 import { MINUTE, SECOND, gitOf, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd } from './support/tmp.mjs'
@@ -528,6 +530,52 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
   assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
   assert.equal(second.git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+})
+
+test('startup: trees whose paths pass what the system takes, in views/, run/session/ and what a clean-up set aside, don\'t keep the runner from starting', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  first.runner.close()
+  // pi made them by moving a folder into another (the fourth review of milestone 4); a run cut
+  // short left the first two, and a clean-up that couldn't remove it the third.
+  const { paths } = prepared
+  const discarded = paths.agentDiscarded('lifelog')
+  fs.mkdirSync(path.join(discarded, 'views-1'), { recursive: true })
+  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), path.join(discarded, 'views-1')]) deepTree(dir)
+
+  const second = await startTestRunner(t, prepared)
+  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
+  assert.deepEqual(prepared.events().filter(event => event.endsWith('_left')), [])
+  second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
+  assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
+})
+
+test('startup: on a disk pi filled, the start frees what pi wrote before it makes any folder', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  first.runner.close()
+  // A crash, after a run that filled the disk, cut its clean-up short once views/ was set aside and
+  // before it was made again; run/session/ was still full too.
+  const { paths } = prepared
+  const discarded = paths.agentDiscarded('lifelog')
+  fs.mkdirSync(discarded, { recursive: true })
+  fs.renameSync(paths.agentViews('lifelog'), path.join(discarded, 'views-1'))
+  fs.mkdirSync(paths.agentRunSession('lifelog'))
+  for (const file of [path.join(discarded, 'views-1', 'fill.bin'), path.join(paths.agentRunSession('lifelog'), 'fill.bin')]) {
+    fs.writeFileSync(file, '')
+    fs.truncateSync(file, 1024 ** 3)
+  }
+  const restore = actFull(() => holds([paths.agentRunSession('lifelog'), discarded], 'fill.bin'))
+  let second
+  try {
+    second = await startTestRunner(t, prepared)
+  } finally {
+    restore()
+  }
+  assert.equal(fs.statSync(paths.agentViews('lifelog')).isDirectory(), true)
+  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
+  second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
+  assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
 })
 
 test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {

@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { readLock } from '../src/common/locks.mjs'
+import { actFull, holds } from './support/full-disk.mjs'
 import { skipIfRoot } from './support/root.mjs'
 import { exampleYaml, fillerLines, line } from './support/runner.mjs'
 import { KEY, MINUTE, SECOND, openTestRunner } from './support/test-runner.mjs'
@@ -248,6 +249,9 @@ test('run: a file or a folder the runner can\'t read, a name git refuses, a file
     // passes the limit, in the order the folder gives them.
     ['MANYFILES', /^views\/many\/\d+\.csv$/, false],
     ['HARDLINK', 'views/notes-copy.csv', false],
+    // A tree whose paths pass what the system takes, made by moving a folder into another: the
+    // path at which it does is named, cut as a reason is, and the clean-up removes it all.
+    ['DEEPTREE', /^views\/t1\/d+…$/, false],
   ]) {
     await t.test(leave, { skip }, async t => {
       const { runner, clock, paths, state, outbox, git, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 MEMORY')])
@@ -265,7 +269,7 @@ test('run: a file or a folder the runner can\'t read, a name git refuses, a file
       assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
       assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
       assert.deepEqual(fs.readdirSync(paths.agentRunSession('lifelog')), [])
-      assert.deepEqual(fs.readdirSync(path.dirname(paths.agentDiscarded('lifelog'))), [])
+      assert.deepEqual(fs.readdirSync(paths.agentDiscarded('lifelog')), [])
       assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (unexpected file ${found}). I'll try again.` }])
 
       // A minute later the item is tried again, and gets through.
@@ -341,6 +345,45 @@ test('run: a folder the runner can\'t read in run/session/ is passed over, a ses
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.deepEqual(sandbox.seen()[2].sessionFiles, ['lifelog-2026-11-09.jsonl'])
   assert.deepEqual(state().lastRun.seqs, [1044])
+})
+
+test('run: a tree in run/session/ whose paths pass what the system takes is emptied, and the next runs start', async t => {
+  const { runner, clock, paths, state, add, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee DEEPSESSION')])
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.ok(fs.existsSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-09.jsonl')))
+  assert.deepEqual(fs.readdirSync(paths.agentRunSession('lifelog')), [])
+  assert.equal(events().includes('runner.run_session_left'), false)
+
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'lunch 300'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(state().lastRun.seqs, [1043])
+})
+
+test('run: on a disk pi filled, a failed run frees what pi wrote before it makes anything, and is recorded', async t => {
+  for (const session of ['daily', 'none']) {
+    await t.test(`session: ${session}`, async t => {
+      const { runner, clock, paths, state, outbox, git, sandbox, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 FILLDISK')], {
+        yaml: exampleYaml().replace('session: daily', `session: ${session}`),
+      })
+      const folders = [paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentRunSession('lifelog'), paths.agentDiscarded('lifelog')]
+      // pi leaves fill.bin in views/ and in run/session/, and exits with 0. Until both are gone,
+      // nothing can be made: neither the folders the clean-up makes again, nor the outbox entry,
+      // nor the state.
+      t.after(actFull(() => holds(folders, 'fill.bin')))
+      assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+      assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'unexpected file views/fill.bin' }])
+      assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (unexpected file views/fill.bin). I'll try again." }])
+      for (const folder of folders) assert.deepEqual(fs.readdirSync(folder), [], folder)
+      assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+      assert.deepEqual(events().filter(event => event.endsWith('_left')), [])
+
+      // The next try runs, and commits.
+      sandbox.behave({ leave: 'nothing' })
+      await clock.advance(MINUTE)
+      assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
+      assert.equal(git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+    })
+  }
 })
 
 test('run: the commit holds views and memory, with the batch\'s numbers, and a run that changes nothing commits nothing', async t => {

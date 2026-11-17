@@ -12,7 +12,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { copyUntrustedFile, ensureDir, removeTree } from '../common/files.mjs'
+import { copyUntrustedFile, emptyFolder, ensureDir, removeTree } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
@@ -28,13 +28,26 @@ const FILE_MODE = 0o600
 // folders, `git init`, the `.gitignore`, and a first commit with the `.gitignore` alone. A folder
 // that is complete is left as it is. `git` is what `createGit` returns, for this folder.
 //
+// First it frees what pi wrote that a crash or a stop may have left taking room: what a clean-up
+// set aside and couldn't remove, in `agents/.discarded/<agent>/`, and `run/session/`. pi could have
+// filled the disk, and on a full disk no folder can be made, so this comes before any is. The
+// clean-up that follows at a start frees `views/` and `memory/` (6.9). `agents/.discarded/<agent>/`
+// is made here, while there is room, and kept, so a clean-up makes nothing before it has freed
+// what it set aside.
+//
 // `git init` runs whenever the folder has no commit: a start killed during `git init` can leave an
 // empty `.git`, and running it again on a repository is safe. A git killed while it held the
 // index or a branch leaves its lock file, such as `.git/index.lock`, and git would refuse to work
 // until it is gone, so it goes first. Only the runner uses this repository (D90).
 export async function ensureAgentDir({ paths, name, git, log }) {
   const dir = paths.agentDir(name)
-  for (const folder of [dir, paths.agentViews(name), paths.agentMemory(name), paths.agentSessions(name), paths.agentRun(name)]) {
+  try {
+    emptyFolder(paths.agentDiscarded(name))
+  } catch (error) {
+    log.warn('agent.discarded_left', { folder: name, ...errorFields(error) })
+  }
+  emptyRunSession({ paths, name, log })
+  for (const folder of [dir, paths.agentViews(name), paths.agentMemory(name), paths.agentSessions(name), paths.agentRun(name), paths.agentDiscarded(name)]) {
     ensureDir(folder, { mode: FOLDER_MODE })
   }
   const locks = git.removeLeftoverLocks()
@@ -80,7 +93,7 @@ function copyTree(source, target) {
 //
 // pi could write `run/session/` in the last run, and leave there what it liked, if the runner
 // stopped before it emptied the folder (`clearRunSession`), so `run/` is removed as anything pi
-// wrote is (`removeTree`): access taken back, and no folder read whole.
+// wrote is (`removeTree`): access taken back, no folder read whole, and however deep it goes.
 export function prepareRun({ paths, agent, protocol, sessionId = null, skills = agent.skills }) {
   const name = agent.name
   const runDir = paths.agentRun(name)
@@ -172,15 +185,18 @@ export async function keepSession({ paths, agent, sessionId, log }) {
   }
 }
 
-// Empties `run/session/` once a run is over and its session has been kept, before the runner
-// records the run: pi wrote what is there, and could have filled the disk with it. Returns nothing.
-// An error is logged and left to `prepareRun`, which empties `run/` again before the next run.
+// Empties `run/session/` once a run is over and its session has been kept, and before a failed
+// run's clean-up, so before the runner records the run: pi wrote what is there, and could have
+// filled the disk with it. The folder stays, so nothing is made. Returns nothing. An error is
+// logged and left to `prepareRun`, which empties `run/` again before the next run.
 export function clearRunSession({ paths, agent, log }) {
-  const sessionDir = paths.agentRunSession(agent.name)
+  emptyRunSession({ paths, name: agent.name, log })
+}
+
+function emptyRunSession({ paths, name, log }) {
   try {
-    removeTree(sessionDir)
-    ensureDir(sessionDir, { mode: FOLDER_MODE })
+    emptyFolder(paths.agentRunSession(name))
   } catch (error) {
-    log.warn('runner.run_session_left', { agent: agent.name, ...errorFields(error) })
+    log.warn('runner.run_session_left', { agent: name, ...errorFields(error) })
   }
 }

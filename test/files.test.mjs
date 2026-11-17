@@ -1,14 +1,15 @@
 // Atomic file writes, the folder hand-off that the outbox and the mail spool share, sortable IDs,
-// and copying a file out of a folder another program controls (5.2, 5.3, 5.6 and 6.3 of
-// DESIGN.md).
+// copying a file out of a folder another program controls, and removing what such a program
+// wrote (5.2, 5.3, 5.6, 6.3 and 6.9 of DESIGN.md).
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { copyUntrustedFile, createIds, ensureDir, handOff, listHandOffs, readJsonFile, writeFileAtomic } from '../src/common/files.mjs'
+import { copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, removeTree, writeFileAtomic } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
+import { deepChain, deepTree } from './support/deep-tree.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
@@ -252,4 +253,55 @@ test('files: what another program could put in a file\'s place is refused, and n
 
   assert.deepEqual(fs.readdirSync(ours), [])
   assert.equal(fs.readFileSync(secret, 'utf8'), 'not for them')
+})
+
+test('files: removing what a program wrote reaches every entry however deep it goes, past what a path can name, whatever its modes', t => {
+  const dir = makeTestDir(t)
+  const target = path.join(dir, 'gone')
+  fs.mkdirSync(target)
+  // pi can nest folders without limit by moving one into another (the fourth review of milestone 4):
+  // a chain of 20,000 folders, whose deepest path is about 40,000 bytes, and folders with long
+  // names whose paths pass the limit, one of them without the runner's access.
+  deepChain(target, { depth: 20000 })
+  deepTree(target, { locked: true })
+  fs.writeFileSync(path.join(target, 'top.txt'), 'x\n')
+  removeTree(target)
+  assert.equal(fs.existsSync(target), false)
+
+  // Emptying leaves the folder, the runner's again, and makes nothing in it.
+  fs.mkdirSync(target)
+  deepTree(target)
+  fs.chmodSync(target, 0o500)
+  emptyFolder(target)
+  assert.deepEqual(fs.readdirSync(target), [])
+  assert.equal(modeOf(target) & 0o700, 0o700)
+  // Nothing there, or nothing at all, is fine; something else than a folder isn't.
+  emptyFolder(target)
+  emptyFolder(path.join(dir, 'missing'))
+  removeTree(path.join(dir, 'missing'))
+  fs.writeFileSync(path.join(dir, 'file'), 'x')
+  assert.throws(() => emptyFolder(path.join(dir, 'file')), { code: 'ENOTDIR' })
+})
+
+test('files: removing what a program wrote goes on past what it can\'t remove, and throws the first error at the end', t => {
+  const dir = makeTestDir(t)
+  const target = path.join(dir, 'folder')
+  fs.mkdirSync(path.join(target, 'a', 'b'), { recursive: true })
+  fs.writeFileSync(path.join(target, 'a', 'b', 'stuck'), 'x')
+  for (const name of ['0', '1', 'z']) fs.writeFileSync(path.join(target, 'a', name), 'x')
+  fs.writeFileSync(path.join(target, 'top.txt'), 'x')
+  const unlink = fs.unlinkSync
+  fs.unlinkSync = file => {
+    if (String(file).endsWith('/stuck')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+    return unlink(file)
+  }
+  try {
+    assert.throws(() => emptyFolder(target), { code: 'EPERM' })
+  } finally {
+    fs.unlinkSync = unlink
+  }
+  // Only what it couldn't remove is left, with the folders that hold it; the next removal takes it.
+  assert.deepEqual(fs.readdirSync(target, { recursive: true }).sort(), ['a', 'a/b', 'a/b/stuck'])
+  removeTree(target)
+  assert.equal(fs.existsSync(target), false)
 })
