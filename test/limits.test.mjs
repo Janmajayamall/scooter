@@ -82,6 +82,9 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     RUN_REFUSALS_LOGGED_MAX: 100,
     // Milestone 10: docs/DECISIONS.md, milestone 10.
     RESTIC_TIMEOUT: 6 * 60 * MINUTE,
+    // Milestone 12: docs/DECISIONS.md, milestone 12.
+    DOCTOR_TIMEOUT: 30 * SECOND,
+    DOCTOR_RESPONSE_MAX_BYTES: 32 * MB,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)

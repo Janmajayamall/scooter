@@ -23,7 +23,9 @@ import http from 'node:http'
 import path from 'node:path'
 import { checkOwnFolder, copyUntrustedFile, createIds, ensureDir, startsWithId } from '../../common/files.mjs'
 import { limits } from '../../common/limits.mjs'
-import { errorFields } from '../../common/log.mjs'
+import { createLog, errorFields } from '../../common/log.mjs'
+import { makePaths } from '../../common/paths.mjs'
+import { createProc } from '../../common/proc.mjs'
 import { isoSeconds, parseIsoSeconds, systemClock } from '../../common/time.mjs'
 
 const WACLI = 'wacli'
@@ -519,9 +521,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       if (running) throw new Error('the WhatsApp channel is already started')
       // wacli reads and writes only its own folder (3.2). A native install makes these folders in
       // `setup`; here they are made if they're missing, as in development.
-      for (const dir of [paths.wacli, paths.wacliStore, paths.wacliStaging, paths.wacliConfig, paths.wacliState, paths.wacliCache]) {
-        ensureDir(dir, { mode: 0o700, owner: user })
-      }
+      ensureWacliFolders(paths, user)
       clearStaging()
       const secret = crypto.randomBytes(32).toString('hex')
       const server = await listen(secret, onRecord)
@@ -619,4 +619,68 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
 
     ownerChat,
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pairing (8.4)
+
+// wacli's folders, made if they are missing, as the channel makes them when it starts.
+function ensureWacliFolders(paths, user) {
+  for (const dir of [paths.wacli, paths.wacliStore, paths.wacliStaging, paths.wacliConfig, paths.wacliState, paths.wacliCache]) {
+    ensureDir(dir, { mode: 0o700, owner: user })
+  }
+}
+
+// The phone number `--phone` gives, as wacli takes it: its digits, in international format, as
+// `OWNER_NUMBER` is read (`settings.mjs`). Null when it isn't one.
+export function pairingPhone(given) {
+  const digits = given.replace(/[\s()-]/g, '').replace(/^\+/, '')
+  return /^[1-9]\d{6,14}$/.test(digits) ? digits : null
+}
+
+// `scooter pair [--phone +91…]`: links wacli to the bot's number, with a QR code to scan, or with
+// `--phone`, the bot's number, a code to type into WhatsApp. It runs `wacli auth` as
+// `scooter-wacli`, with wacli's environment and nothing else (5.1), and the terminal attached.
+// When wacli is linked already, it says so and does nothing. A bridge that is running finds the
+// link at its next pairing check, within a minute, and starts sync. Exits with 2 for wrong
+// arguments, and with 1 when wacli fails.
+export async function runPair({ args = [], settings, stdout = process.stdout, stderr = process.stderr, clock = systemClock, log = createLog({ component: 'bridge', clock }), proc = createProc({ log, clock }) }) {
+  let phone = null
+  const rest = [...args]
+  if (rest[0] === '--phone' && rest.length === 2) phone = rest[1]
+  else if (rest.length === 1 && rest[0].startsWith('--phone=')) phone = rest[0].slice('--phone='.length)
+  else if (rest.length > 0) {
+    stderr.write('scooter pair: it takes nothing, or --phone and the bot\'s number, such as --phone +919812345678\n')
+    return 2
+  }
+  if (phone !== null) {
+    phone = pairingPhone(phone)
+    if (phone === null) {
+      stderr.write('scooter pair: --phone takes the bot\'s number in international format, such as +919812345678\n')
+      return 2
+    }
+  }
+  const paths = makePaths(settings)
+  const user = await proc.lookupUser('scooter-wacli')
+  ensureWacliFolders(paths, user)
+  const env = wacliEnv(paths)
+
+  const status = await proc.run(WACLI, ['--json', '--read-only', 'auth', 'status'], { env, user, timeout: limits.WACLI_CALL_TIMEOUT })
+  let data = null
+  try {
+    data = JSON.parse(status.stdout).data
+  } catch {
+    // not an answer
+  }
+  if (status.code === 0 && isObject(data) && data.authenticated === true) {
+    stdout.write('wacli is linked already. To link it to another number, unlink this one first, in WhatsApp on the bot\'s phone: Linked devices.\n')
+    return 0
+  }
+  const result = await proc.run(WACLI, ['auth', ...(phone === null ? [] : ['--phone', phone])], { env, user, output: 'inherit' })
+  if (result.code !== 0) {
+    stderr.write(`scooter pair: wacli auth ended with ${result.signal ?? `exit code ${result.code}`}\n`)
+    return 1
+  }
+  stdout.write('Linked. A running bridge starts receiving within a minute.\n')
+  return 0
 }

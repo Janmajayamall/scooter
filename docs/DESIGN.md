@@ -713,7 +713,7 @@ The day page template (leave out empty sections):
 - Lunch: poke bowl (~650 kcal)
 
 ## Travel
-- ✈ 6E 2135 BLR → DEL, Fri 14 Nov 06:10, seat 12A, PNR ABC123
+- Booked: ✈ 6E 2135 BLR → DEL, Sat 14 Nov 06:10, seat 12A, PNR ABC123
 
 ## People
 - 20:43 · 30 min · Sam · planning the Goa trip

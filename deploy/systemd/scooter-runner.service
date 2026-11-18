@@ -1,0 +1,36 @@
+# Scooter's runner, as scooter-runner (8.5 of DESIGN.md). `sudo scooter setup` installs and enables
+# this unit, and doesn't start it: fill in /etc/scooter/runner.env, and build the VM image with
+# `sudo scooter build-image`, first.
+#
+# - It reaches /dev/kvm through the kvm group.
+# - Its home and temporary folder are under the data folder's runner/: the runner sets both itself
+#   when it opens the sandbox (6.6), from DATA_DIR, so this unit doesn't.
+# - Stopping it, or its dying, stops every process of the unit, the QEMU of a run among them:
+#   Gondolin leaves a VM running when only the process that started it is killed (6.6).
+# - It restarts on failure, after 1 minute, then about 5, then 30, and every 30 minutes after:
+#   OpenRouter's outage waits (6.9). A fault that stays after pi has run, such as a disk too full
+#   to record the run, runs pi again at every start, and each start waits out the quiet period, so
+#   systemd's start limit never stops it; these waits bound what such a fault spends (D207).
+#   systemd keeps counting the restarts until the unit is started by hand or the machine starts
+#   again.
+
+[Unit]
+Description=Scooter runner: the agent's runs, in VMs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=scooter-runner
+Group=scooter-runner
+SupplementaryGroups=kvm
+ExecStart=/usr/local/bin/scooter runner
+Environment=TZ=UTC
+KillMode=control-group
+Restart=on-failure
+RestartSec=1min
+RestartSteps=2
+RestartMaxDelaySec=30min
+
+[Install]
+WantedBy=multi-user.target

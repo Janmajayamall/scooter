@@ -67,13 +67,18 @@ export function makePaths({ dataDir, configDir }) {
     imageStaging: data('.image-build'),
 
     // The bridge's own folder (5.1): its state; the socket that keeps a second bridge from
-    // starting on the same data; where attachments wait between their channel and the store; and
-    // the cache of the backup program (5.5), which marks itself as a cache, so backups leave it out.
+    // starting on the same data; where attachments wait between their channel and the store; the
+    // cache of the backup program (5.5), which marks itself as a cache, so backups leave it out;
+    // and delivery's two folders (5.3): the bridge's own outbox entries, and its record of how much
+    // of each runner's entry it has sent, `<entry ID>.json`. Both are here, in a folder only root
+    // can write, rather than in the runner's outbox, so the bridge writes nothing there (D205).
     bridge: data('bridge'),
     bridgeState: data('bridge', 'state.json'),
     bridgeSocket: data('bridge', 'bridge.sock'),
     bridgeIncoming: data('bridge', 'incoming'),
     backupCache: data('bridge', 'backup-cache'),
+    bridgeOutbox: data('bridge', 'outbox'),
+    bridgeSending: data('bridge', 'sending'),
 
     // wacli's folder (5.1, 5.5): its home, its store, where it downloads media for the bridge, and
     // the XDG folders it is given.

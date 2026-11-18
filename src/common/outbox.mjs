@@ -12,10 +12,15 @@
 // There is no recipient: everything goes to the owner. Messages are named by `seq` only, and the
 // bridge picks the channel from the line an entry points at.
 //
-// While the bridge sends an entry, the folder holds `sending.json` in place of `entry.json`: the
-// entry, and how many of its messages have gone out (row 3):
+// While the bridge sends an entry, it keeps a record of it: the entry, and how many of its messages
+// have gone out (row 3):
 //
 //   {"entry":{"type":"text","by":"lifelog","text":"…","replyTo":1042},"sent":1}
+//
+// The bridge keeps that record in its own folder, never in the runner's outbox, which the runner's
+// user controls: `bridge/sending/<id>.json` for an entry of the runner's. The bridge's own entries,
+// such as its replies to commands, are written to `bridge/outbox/` in the same form, and their
+// record is `sending.json` in the entry's folder there (D205).
 //
 // A text is at most `TEXT_MAX_CHARS` long. `writeOutboxEntry` cuts a longer one, with a line that
 // says so, rather than refuse it: what the agent wrote is its own to make as long as it likes, and
@@ -131,19 +136,21 @@ export function orderedEntry(entry) {
   return ordered
 }
 
-// Writes an entry into the outbox and returns its ID. `ids` is a generator from `createIds`
+// Writes an entry into an outbox and returns its ID. `ids` is a generator from `createIds`
 // (`files.mjs`), one per process. A text is made one that can be sent (`cutText`): U+0000 replaced,
 // and cut at `TEXT_MAX_CHARS`. Throws if the entry isn't well formed.
 //
-// The outbox folder is made, 0700, if it is missing, as in development. An installed Scooter makes
-// it in `setup`, owned by the runner's user, so that both services can write there (3.2).
-export async function writeOutboxEntry({ paths, ids, entry: given }) {
+// `outbox` is the runner's outbox, `paths.outbox`, unless given: the bridge gives its own,
+// `paths.bridgeOutbox`, so that it writes nothing in a folder the runner's user controls (D205).
+// The folder is made, 0700, if it is missing, as in development. An installed Scooter makes the
+// runner's in `setup`, owned by the runner's user (3.2).
+export async function writeOutboxEntry({ paths, ids, entry: given, outbox = paths.outbox }) {
   const entry = given?.type === 'text' && typeof given.text === 'string' ? { ...given, text: cutText(given.text) } : given
   const problems = checkOutboxEntry(entry)
   if (problems.length > 0) throw new Error(`not an outbox entry: ${problems.join('; ')}`)
   const ordered = orderedEntry(entry)
-  ensureDir(paths.outbox, { mode: 0o700 })
-  return handOff(paths.outbox, ids, dir => {
+  ensureDir(outbox, { mode: 0o700 })
+  return handOff(outbox, ids, dir => {
     fs.writeFileSync(path.join(dir, ENTRY_FILE), `${JSON.stringify(ordered)}\n`, { mode: 0o600, flag: 'wx' })
   })
 }

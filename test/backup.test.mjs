@@ -121,7 +121,8 @@ function harness(t, { extra = {}, start = START, quiesce, resume, onFatal } = {}
     onFatal,
   })
   atEnd(t, () => backups.stop())
-  const outbox = () => listHandOffs(paths.outbox).filter(id => id !== FIXTURE_ENTRY).map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
+  // The bridge writes its own entries to its own outbox (D205).
+  const outbox = () => listHandOffs(paths.bridgeOutbox).map(id => JSON.parse(fs.readFileSync(path.join(paths.bridgeOutbox, id, 'entry.json'), 'utf8')))
   return { root, stub, clock, log, entries, events, proc, settings, paths, state, backups, happened, outbox }
 }
 
@@ -684,7 +685,7 @@ test('backups: in the bridge, a /backup waiting for a run doesn\'t hold back a /
     await bridge.intake.idle()
     await bridge.commands.idle()
   }
-  const replies = () => listHandOffs(bridge.paths.outbox).map(id => JSON.parse(fs.readFileSync(path.join(bridge.paths.outbox, id, 'entry.json'), 'utf8')))
+  const replies = () => listHandOffs(bridge.paths.bridgeOutbox).map(id => JSON.parse(fs.readFileSync(path.join(bridge.paths.bridgeOutbox, id, 'entry.json'), 'utf8')))
 
   // A run is under way.
   takeLock(bridge.paths.runLock, { deadline: clock.now() + 10 * MINUTE, clock })

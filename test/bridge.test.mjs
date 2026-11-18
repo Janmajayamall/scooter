@@ -167,13 +167,14 @@ async function startBoth(t, { fixtures = { paired: true, messages: [] }, email =
       await runner.clock.advance(8 * SECOND)
       return runner.runner.tick()
     },
-    // Moves the clock on a second at a time while the bridge sends, in real time, until the outbox
-    // is empty.
+    // Moves the clock on a second at a time while the bridge sends, in real time, until both
+    // outboxes are empty, the runner's and the bridge's own (D205), and the bridge keeps no record.
     async deliver() {
+      const { paths } = runner
       await waitFor(
         async () => {
           await runner.clock.advance(SECOND)
-          return listHandOffs(runner.paths.outbox).length === 0
+          return [paths.outbox, paths.bridgeOutbox, paths.bridgeSending].every(folder => listHandOffs(folder).length === 0)
         },
         'the outbox to empty',
         30_000,
@@ -282,7 +283,10 @@ test('bridge: /status reports the runner\'s state, /help lists the commands, /ba
   await both.post(webhookPayload({ ID: 'C2', Timestamp: '2026-11-09T15:51:01Z', Text: ' /help ' }))
   await both.post(webhookPayload({ ID: 'C3', Timestamp: '2026-11-09T15:51:02Z', Text: '/backup' }))
   await both.post(webhookPayload({ ID: 'C4', Timestamp: '2026-11-09T15:51:03Z', Text: '/new' }))
-  // The runner answers `/new`, and passes over the bridge's three.
+  // The runner answers `/new`, and passes over the bridge's three. A millisecond later: the two
+  // services' entries are in two outboxes, and two made in the same millisecond, here by one fake
+  // clock, go in no set order between them (D205).
+  await both.clock.advance(1)
   await both.runner.tick()
   await both.deliver()
 
@@ -326,7 +330,8 @@ test('bridge: a command is answered once, also across a restart, and one left un
     await waitFor(() => stub.callsOf('sync').length > 0, 'wacli sync to start')
     return bridge
   }
-  const entries = () => listHandOffs(paths.outbox).length
+  // The bridge writes its replies to its own outbox (D205).
+  const entries = () => listHandOffs(paths.bridgeOutbox).length
   let bridge = await open()
   assert.equal(await stub.postWebhook(webhookPayload({ ID: 'H1', Text: '/help' })), 200)
   await waitFor(() => entries() === 1, 'the reply')
@@ -360,9 +365,8 @@ test('bridge: a reply to a command that can\'t be written is tried again after w
   const state = openBridgeState({ paths, clock, log })
   const commands = createCommands({ store, state, paths, ids: createIds(clock), log, clock, status: async () => 'status' })
   atEnd(t, () => commands.stop())
-  // The outbox can't be written, as on a full disk: a file where its folder should be.
-  fs.mkdirSync(paths.exchange, { recursive: true })
-  fs.writeFileSync(paths.outbox, 'not a folder')
+  // The bridge's outbox can't be written, as on a full disk: a file where its folder should be.
+  fs.writeFileSync(paths.bridgeOutbox, 'not a folder')
   await commands.handle()
   const failures = () => entries.filter(entry => entry.event === 'bridge.command_failed').map(entry => entry.failures)
   assert.deepEqual(failures(), [1])
@@ -371,12 +375,13 @@ test('bridge: a reply to a command that can\'t be written is tried again after w
   assert.deepEqual(failures(), [1, 2])
   assert.equal(state.get().commandSeq, 0)
   // The disk is back: the next try, 10 seconds later, writes the reply.
-  fs.rmSync(paths.outbox)
+  fs.rmSync(paths.bridgeOutbox)
   await clock.advance(9 * SECOND)
-  assert.deepEqual(listHandOffs(paths.outbox), [])
+  assert.deepEqual(listHandOffs(paths.bridgeOutbox), [])
   await clock.advance(SECOND)
   await commands.idle()
-  assert.equal(listHandOffs(paths.outbox).length, 1)
+  assert.equal(listHandOffs(paths.bridgeOutbox).length, 1)
+  assert.equal(fs.existsSync(paths.outbox), false)
   assert.equal(state.get().commandSeq, 1)
   // Stopped, it tries nothing more.
   await commands.stop()

@@ -8,6 +8,7 @@ import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
 import { ConfigError, loadConfig, parseConfig } from '../src/runner/config.mjs'
 import { SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
+import { skipIfRoot } from './support/root.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 function setup(t, options) {
@@ -276,7 +277,10 @@ test("config: a skill's SKILL.md gives the folder's name and a description, as p
     ['---\nname: runs\n---\n', /has no description, which says when to use the skill: pi doesn't load a skill without one/],
     ['---\nname: runs\ndescription: "  "\n---\n', /has no description/],
     ['---\nname: runs\ndescription: 42\n---\n', /has no description/],
-    [`---\nname: runs\ndescription: ${'x'.repeat(1025)}\n---\n`, /has a description of 1025 characters: pi takes at most 1024/],
+    [`---\nname: runs\ndescription: ${'x'.repeat(1025)}\n---\n`, /has a description of 1025 characters, where the Agent Skills format allows 1024, and pi warns of more/],
+    // pi leaves it out of what it offers the model (the review of milestone 11, point 3).
+    ['---\nname: runs\ndescription: Runs.\ndisable-model-invocation: true\n---\n', /says disable-model-invocation: true, so pi wouldn't offer it to the model/],
+    ['---\nname: 42\ndescription: Runs.\n---\n', /gives the name "42": it must be runs/],
   ]
   for (const [text, message] of cases) {
     fs.writeFileSync(skillFile, text)
@@ -297,15 +301,34 @@ test("config: a skill's SKILL.md gives the folder's name and a description, as p
   }
 
   // What pi accepts is accepted: a byte-order mark, Windows line breaks, a description of 1024
-  // characters, other keys, and a body after the frontmatter.
+  // characters, other keys, `disable-model-invocation: false`, and a body after the frontmatter.
   for (const text of [
-    '﻿---\r\nname: runs\r\ndescription: Runs.\r\n---\r\n# Runs\r\n',
+    '\uFEFF---\r\nname: runs\r\ndescription: Runs.\r\n---\r\n# Runs\r\n',
+    '---\nname: runs\ndescription: Runs.\ndisable-model-invocation: false\n---\n',
     `---\nname: runs\ndescription: ${'é'.repeat(1024)}\n---\n`,
     '---\nname: runs\ndescription: >-\n  Runs, walks\n  and workouts.\nlicense: MIT\n---\n\n# Runs\n\nThe body.\n',
   ]) {
     fs.writeFileSync(skillFile, text)
     assert.equal(parse(base).agents[0].skills[1].name, 'runs', text)
   }
+
+  // A folder named with digits only, whose name YAML reads as a number, as pi takes it.
+  fs.mkdirSync(path.join(configDir, 'skills', '42'))
+  fs.writeFileSync(path.join(configDir, 'skills', '42', 'SKILL.md'), '---\nname: 42\ndescription: The answer.\n---\n')
+  assert.equal(parse(base.replace('- skills/runs', '- skills/42')).agents[0].skills[1].name, '42')
+})
+
+test("config: a SKILL.md the runner can't read is a fault that names the field, listed with the others", { skip: skipIfRoot }, t => {
+  // The review of milestone 11, point 4: it stopped the runner with EACCES and exit code 1.
+  const { configDir, faults } = setup(t)
+  const skillFile = path.join(configDir, 'skills', 'meals', 'SKILL.md')
+  fs.chmodSync(skillFile, 0o000)
+  const problems = faults(exampleYaml().replace('timeout_minutes: 10', 'timeout_minutes: 0'))
+  assert.deepEqual(
+    problems.map(problem => problem.field),
+    ['agents.lifelog.skills[2]', 'agents.lifelog.timeout_minutes'],
+  )
+  assert.match(problems[0].message, /names skills\/meals, whose SKILL\.md can't be read \(EACCES\)$/)
 })
 
 test('config: no prompt or skill lies inside another skill\'s folder, where their copies would overlap', t => {

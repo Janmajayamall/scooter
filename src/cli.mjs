@@ -43,8 +43,34 @@ export const COMMANDS = {
     usage: 'setup [--no-services]',
     where: 'the host, as root',
     summary: 'Create the users, folders, env files and services of a native install',
+    load: async () => (await import('./ops/setup.mjs')).runSetup,
   },
-  doctor: { side: 'runner', usage: 'doctor', where: 'runner', summary: 'Check what the runner needs, and change nothing' },
+  doctor: {
+    side: 'runner',
+    usage: 'doctor',
+    where: 'runner',
+    summary: 'Check what the runner needs, and change nothing',
+    // Its checks of the config, the image and the accelerator are the runner's own code, which
+    // `src/ops` doesn't import (ARCHITECTURE.md 4.2).
+    load: async () => {
+      const [{ runDoctor }, config, image, accel] = await Promise.all([
+        import('./ops/doctor.mjs'),
+        import('./runner/config.mjs'),
+        import('./runner/sandbox/image.mjs'),
+        import('./runner/sandbox/accel.mjs'),
+      ])
+      const runner = {
+        loadConfig: config.loadConfig,
+        ConfigError: config.ConfigError,
+        readBuildFile: image.readBuildFile,
+        pinnedPiVersion: image.pinnedPiVersion,
+        checkImage: image.checkImage,
+        qemuProgram: image.qemuProgram,
+        kvmProblem: accel.kvmProblem,
+      }
+      return ({ settings, env, stdout }) => runDoctor({ settings, env, stdout, runner })
+    },
+  },
   'build-image': {
     side: 'host',
     usage: 'build-image',
@@ -57,6 +83,7 @@ export const COMMANDS = {
     usage: 'pair [--phone +91…]',
     where: 'bridge',
     summary: 'Link wacli to the bot\'s WhatsApp number, with a QR code or a pairing code',
+    load: async () => (await import('./bridge/channels/whatsapp.mjs')).runPair,
   },
   'email-check': {
     side: 'bridge',

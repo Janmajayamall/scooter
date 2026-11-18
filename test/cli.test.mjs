@@ -168,9 +168,10 @@ test('cli: run as a program, directly and through a link', async t => {
   const linked = await exec(link, ['help'], { env })
   assert.equal(linked.stdout, help.stdout)
 
+  // A bridge command, without the bridge's settings, says what is missing.
   await assert.rejects(exec(link, ['pair'], { env }), error => {
-    assert.equal(error.code, 1)
-    assert.equal(error.stderr, "scooter pair: this command isn't built yet\n")
+    assert.equal(error.code, 2)
+    assert.equal(error.stderr, 'scooter pair: OWNER_NUMBER is required\n')
     return true
   })
   await assert.rejects(exec(link, [], { env }), error => error.code === 2)

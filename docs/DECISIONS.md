@@ -2698,7 +2698,7 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 
 | Command | Result |
 |---|---|
-| `npm ci && npm test` | 719 tests: 673 pass, none fail. 46 skip themselves: 35 need the image (18 of milestone 0, 17 of the sandbox), 10 need root, and 1 needs root and `SCOOTER_ROOT_TESTS=1` |
+| `npm ci && npm test` | 719 tests: 673 pass, none fail. 46 skip themselves: 35 need the image (18 of milestone 0, 17 of the sandbox), 8 need root, and 3 need root and `SCOOTER_ROOT_TESTS=1` (corrected in milestone 12, for the review of this milestone, smaller point 8: it said 10 and 1) |
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 721 tests: 710 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left. The new sandbox test passes: pi in a VM, run by the runner with the files of `config/`, is given the protocol, the prompt and the memory in that order, is offered the six skills at their copies in `run/config/` with their descriptions, reads `expenses/SKILL.md` there, finds the six programs the instructions name, writes `expenses.csv` and a day page, and the runner commits both and reacts ✅ |
 | The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 719 tests, 663 pass, none fail. 56 skip themselves: 35 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. This milestone's tests all run there, and pass |
 | The `instructions`, `config`, `backup`, `agentdir`, `answer`, `planning`, `runner` and `backfill` tests, 16 times, 8 at once | No failure |
