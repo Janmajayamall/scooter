@@ -409,7 +409,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - `pair`, and anything in 8.4 not built yet.
 
 **Rules:**
-- **`build-image` as root** (`docs/DECISIONS.md`, milestone 7). It refuses to build when `runner/` doesn't exist, so that it never makes the runner's folder as root: `setup` makes it. It gives the finished image to `scooter-runner`, and holds `runner/runner.sock` while it builds. The runner sets its own home and temporary folder under `runner/` when it opens the sandbox, so the unit needn't, though setting them there too does no harm.
+- **`build-image` as root** (`docs/DECISIONS.md`, milestone 7). It refuses to build when `runner/` doesn't exist, so that it never makes the runner's folder as root: `setup` makes it. It builds in `.image-build/` in the data folder, gives the finished image to `scooter-runner` there, renames it into `runner/image/`, and holds `runner/runner.sock` while it builds (D151). So `setup` makes the data folder root's, writable by root alone, which `build-image` checks. The runner sets its own home and temporary folder under `runner/` when it opens the sandbox, so the unit needn't, though setting them there too does no harm.
 - **What the bridge writes in the outbox** (`docs/DECISIONS.md`, D136, the review of milestone 6). The bridge, as root, removes in the folders other users control only names it knows, but it still writes `sending.json` into an entry's folder (D101), and hands its own entries off into the outbox. Node can't act relative to a folder it has open, so the runner's user could swap a link in between the bridge's read of an entry and that write, and steer it, as root, into another folder, under that name. Settle it, for example by keeping `sending.json` in `bridge/`, and add the root test.
 
 **Tests:**
@@ -431,6 +431,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **The outbox's owner in rootless Docker** (the second review of milestone 6, smaller point 3). The bridge takes outbox entries only while `exchange/outbox` belongs to `scooter-runner` (D136), which it looks up as 10002. In the rootless variant of 8.3 the runner runs as the container's root, uid 0, and makes the outbox as that user when it writes its first entry, such as the emulation notice at its start; the bridge then refuses the outbox for good, and nothing goes out, `/status`'s reply included. Settle which user owns the runner's folders there, and how the bridge knows it.
 - **`build-image` in Docker** (`docs/DECISIONS.md`, milestone 7). It reads only `DATA_DIR` and `CONFIG_DIR`, and refuses while a runner holds `runner/runner.sock`, which works across containers that share the folder. In the runner container it is either root, and builds natively, or uses a container runtime, which the runner container doesn't have.
+  - It builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, so the two must be on one file system, and as root it refuses a `/data` another user can write (D151). With a volume for each folder of 3.2, `/data` itself is the container's own file system, read-only in the runner's service, and the rename would cross file systems. Settle how the two share one in Docker, such as one volume for the whole data folder, and record it.
 
 **Check** on the Linux machine, which has rootless Docker:
 - `docker compose build` succeeds;

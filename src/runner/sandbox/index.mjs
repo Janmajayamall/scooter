@@ -23,9 +23,9 @@
 //   }
 //
 // - `mounts`: each host folder `path`, at the same path inside the VM, read-only unless
-//   `writable`. `hide` lists paths inside the mount, from its root, that the VM doesn't see at all
-//   and can't create, such as `sessions` in the agent's folder. A mount inside another takes its
-//   place there. Nothing else of the host is visible.
+//   `writable`. `hide` lists paths inside a read-only mount, from its root, that the VM doesn't
+//   see at all and can't create, such as `sessions` in the agent's folder; a writable mount hides
+//   nothing. A mount inside another takes its place there. Nothing else of the host is visible.
 // - `policy`: the network policy for the run (6.13): the model OpenRouter may be asked for, whether
 //   the agent's internet access is on, and whether to ask for zero data retention. `secrets` maps
 //   a variable's name to `{ hosts, value }`: the program gets the variable holding a placeholder,
@@ -131,6 +131,9 @@ export function checkRunSpec(spec) {
       else if (typeof mount.writable !== 'boolean') problems.push(`mounts[${n}].writable must be true or false`)
       else if (!Array.isArray(mount.hide) || !mount.hide.every(inner => typeof inner === 'string' && inner !== '' && !path.isAbsolute(inner) && !inner.split('/').includes('..'))) {
         problems.push(`mounts[${n}].hide must list paths inside the mount`)
+      } else if (mount.writable && mount.hide.length > 0) {
+        // The VM could make what is hidden again, through the writable mount.
+        problems.push(`mounts[${n}].hide must be empty: only a read-only mount hides paths`)
       }
     })
   }

@@ -11,12 +11,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { holdInstance } from '../src/common/instance.mjs'
+import { overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { createProc } from '../src/common/proc.mjs'
+import { createProc, findProgram } from '../src/common/proc.mjs'
 import { runRunner } from '../src/runner/main.mjs'
 import { openGondolinSandbox } from '../src/runner/sandbox/gondolin.mjs'
 import {
   IMAGE_RECORD,
+  ImageError,
   PACKAGES_FILE,
   apkIndexFromArchive,
   buildImage,
@@ -30,9 +32,10 @@ import {
   resolvePackages,
 } from '../src/runner/sandbox/image.mjs'
 import { SandboxSetupError } from '../src/runner/sandbox/index.mjs'
-import { FAKE_BUILD_TIME, apkIndexArchive, apkIndexText, fakeImageSkipReason, makeFakeImage } from './support/fake-image.mjs'
+import { FAKE_BUILD_TIME, apkIndexArchive, apkIndexText, fakeImageSkipReason, makeFakeImage, readFakeImage } from './support/fake-image.mjs'
 import { BUILD_FILE } from './support/image.mjs'
 import { createTestLog } from './support/log.mjs'
+import { isRoot, skipUnlessRoot } from './support/root.mjs'
 import { prepareTestRunner } from './support/test-runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -73,6 +76,34 @@ test('image: the build file pins pi, installed without its scripts, and says not
   }
   assert.throws(() => pin(['npm install --global @earendil-works/pi-coding-agent@1.5.2']), /must install pi with npm install --ignore-scripts/)
   assert.throws(() => pin(['pnpm add --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), /must install pi with npm install --ignore-scripts/)
+  // npm takes the last word about scripts: one that turns them back on is refused.
+  for (const again of ['--ignore-scripts=false', '--no-ignore-scripts']) {
+    assert.throws(() => pin([`${install('1.5.2')} ${again}`]), /must install pi with npm install --ignore-scripts/, again)
+  }
+
+  // pi named again, with or without a version, as by a second install (the review of milestone 7,
+  // smaller point 4), or in a path.
+  assert.throws(() => pin([install('1.5.2'), 'npm install --global @earendil-works/pi-coding-agent']), /named more than once/)
+  assert.throws(() => pin([install('1.5.2'), 'ls /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/']), /named more than once/)
+  assert.throws(() => pin(['npm install --global --ignore-scripts @earendil-works/pi-coding-agent']), /must pin pi to an exact version/)
+  // Another package whose name starts with pi's isn't pi.
+  assert.equal(pin(['npm install --global @earendil-works/pi-coding-agent-extra', install('1.5.2')]), '1.5.2')
+  // The install command is that one command: nothing the shell would read as another, or as more.
+  for (const more of [
+    `${install('1.5.2')} ; echo --ignore-scripts`,
+    `${install('1.5.2')} && node /usr/local/bin/pi --version`,
+    `${install('1.5.2')} & node /usr/local/bin/pi`,
+    `${install('1.5.2')} | sh`,
+    `${install('1.5.2')}\nnode /usr/local/bin/pi`,
+    `${install('1.5.2')} $(node /usr/local/bin/pi)`,
+    `${install('1.5.2')} \`pi\``,
+    `${install('1.5.2')} '--x'`,
+    `${install('1.5.2')} > /dev/null`,
+  ]) {
+    assert.throws(() => pin([more]), /postBuild\.commands\[0\] must be one npm install command, of plain words/, more)
+  }
+  // The build file's own command is plain words.
+  assert.equal(pin(['npm install --global --ignore-scripts --omit=dev --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.2']), '1.5.2')
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -212,13 +243,14 @@ function prepareBuild(t, { pi = '1.5.2' } = {}) {
   return { dir, paths, build, builds, fetch, fetched, log, events, proc: createProc({ log }) }
 }
 
-test('image: build-image builds beside the old image, records what it holds, and takes the old one\'s place', needsE2fs, async t => {
+test('image: build-image builds beside the runner\'s folder, records what it holds, and takes the old image\'s place', needsE2fs, async t => {
   const { paths, build, builds, fetch, fetched, log, proc } = prepareBuild(t)
   fs.mkdirSync(paths.runnerImage, { recursive: true })
   fs.writeFileSync(path.join(paths.runnerImage, 'old'), 'the image before')
-  // A build cut short earlier left these.
-  fs.mkdirSync(`${paths.runnerImage}.new`)
-  fs.mkdirSync(`${paths.runnerImage}.old`)
+  // A build cut short earlier left these: an image half built, and the old image set aside.
+  fs.mkdirSync(path.join(paths.imageStaging, 'image', 'sub'), { recursive: true })
+  fs.mkdirSync(path.join(paths.imageStaging, 'old'))
+  fs.writeFileSync(path.join(paths.imageStaging, 'old', 'rootfs.ext4'), 'an image before that')
 
   const built = await buildImage({ paths, proc, log, isRoot: false, build, fetch })
   assert.equal(built.pi, '1.5.2')
@@ -228,14 +260,16 @@ test('image: build-image builds beside the old image, records what it holds, and
   assert.equal(config.arch, process.arch === 'arm64' ? 'aarch64' : 'x86_64')
   assert.equal(config.container.force, true)
   assert.deepEqual(config.postBuild, readBuildFile(BUILD_FILE).postBuild)
-  assert.equal(options.outputDir, `${paths.runnerImage}.new`)
+  // Built outside the runner's folder, beside it in the data folder.
+  assert.equal(options.outputDir, path.join(paths.dataDir, '.image-build', 'image'))
 
   assert.deepEqual(fetched, ['https://mirror.test/alpine/v3.23/main/x86_64/APKINDEX.tar.gz', 'https://mirror.test/alpine/v3.23/community/x86_64/APKINDEX.tar.gz'])
   const names = fs.readdirSync(paths.runnerImage).sort()
   assert.deepEqual(names, ['initramfs.cpio.lz4', 'manifest.json', PACKAGES_FILE, 'rootfs.ext4', IMAGE_RECORD, 'vmlinuz-virt'].sort())
   assert.equal(fs.statSync(paths.runnerImage).mode & 0o777, 0o700)
-  assert.equal(fs.existsSync(`${paths.runnerImage}.new`), false)
-  assert.equal(fs.existsSync(`${paths.runnerImage}.old`), false)
+  // The folder it built in is gone, and nothing is left in the runner's folder but the image.
+  assert.equal(fs.existsSync(paths.imageStaging), false)
+  assert.deepEqual(fs.readdirSync(paths.runner), ['image'])
   const record = JSON.parse(fs.readFileSync(path.join(paths.runnerImage, IMAGE_RECORD), 'utf8'))
   assert.equal(record.builtAt, FAKE_BUILD_TIME.replace(/\.\d+Z$/, 'Z'))
   const packages = fs.readFileSync(path.join(paths.runnerImage, PACKAGES_FILE), 'utf8')
@@ -267,6 +301,127 @@ test('image: build-image refuses while a runner runs, and a build of another pi 
   await assert.rejects(buildImage({ paths, proc, log, isRoot: false, build: other.build, fetch }), /the image built holds pi 1\.4\.0, where config\/image\/build\.json pins 1\.5\.2/)
   assert.deepEqual(fs.readdirSync(paths.runnerImage), ['old'])
   // The socket is let go of: a runner can start.
+  await (await holdInstance(paths.runnerSocket, 'runner')).close()
+})
+
+// A builder that writes a fake image with a stand-in for its file system, which `readFakeImage`
+// reads: for the tests of where and how `build-image` builds, which need no e2fsprogs.
+const standInBuild = async (config, options) => {
+  makeFakeImage(options.outputDir, { ext4: false, arch: config.arch })
+}
+
+// For a test that builds as this process is: natively as root, which gives the image to nobody
+// here, or else in a container, which needs Docker or Podman to be there.
+const asWeAre = { skip: isRoot || findProgram('docker') || findProgram('podman') ? false : 'needs root, or Docker or Podman' }
+const buildAsWeAre = ({ paths, fetch, log }, options = {}) => {
+  const proc = { ...createProc({ log }), lookupUser: async () => null }
+  return buildImage({ paths, proc, log, isRoot, build: standInBuild, fetch, readImage: readFakeImage, ...options })
+}
+
+test('image: as root, build-image builds where only root can write, and a link the runner\'s user puts in its folder meanwhile leads it nowhere', { skip: skipUnlessRoot }, async t => {
+  const { dir, paths, fetch, log } = prepareBuild(t)
+  // `scooter-runner`, by its uid: giving a file to it needs no such user.
+  const runnerUser = { uid: 4242, gid: 4242 }
+  const proc = { ...createProc({ log }), lookupUser: async name => (name === 'scooter-runner' ? runnerUser : null) }
+  // The data folder is root's, and runner/ the runner's user's, with its old image, as setup and
+  // an earlier build leave them.
+  fs.mkdirSync(paths.runnerImage, { recursive: true, mode: 0o755 })
+  fs.chmodSync(paths.dataDir, 0o755)
+  fs.writeFileSync(path.join(paths.runnerImage, 'manifest.json'), '{}')
+  for (const owned of [paths.runner, paths.runnerImage, path.join(paths.runnerImage, 'manifest.json')]) fs.chownSync(owned, runnerUser.uid, runnerUser.gid)
+  fs.chmodSync(paths.runner, 0o700)
+  // A folder of root's, with a secret in it, as /etc/scooter is.
+  const victim = path.join(dir, 'etc-scooter')
+  fs.mkdirSync(victim, { mode: 0o755 })
+  fs.chmodSync(victim, 0o755)
+  fs.writeFileSync(path.join(victim, 'bridge.env'), 'RESTIC_PASSWORD=x\n', { mode: 0o600 })
+
+  // A data folder another user can write is refused: a link could take the place of the folder
+  // build-image builds in.
+  fs.chmodSync(paths.dataDir, 0o777)
+  await assert.rejects(buildImage({ paths, proc, log, isRoot: true, build: standInBuild, fetch, readImage: readFakeImage }), /must be a folder of root's that only root can write/)
+  fs.chmodSync(paths.dataDir, 0o755)
+
+  const aside = path.join(paths.runner, 'image-aside')
+  let outputDir
+  const build = async (config, options) => {
+    outputDir = options.outputDir
+    // The runner's user, meanwhile, in its own folder: the old image renamed aside, and links to
+    // the victim in its place and at the names an earlier build-image used.
+    fs.renameSync(paths.runnerImage, aside)
+    fs.symlinkSync(victim, paths.runnerImage)
+    for (const name of ['image.new', 'image.old']) fs.symlinkSync(victim, path.join(paths.runner, name))
+    await standInBuild(config, options)
+  }
+  await buildImage({ paths, proc, log, isRoot: true, build, fetch, readImage: readFakeImage })
+
+  // It built in a folder of root's, beside the runner's.
+  assert.equal(outputDir, path.join(paths.dataDir, '.image-build', 'image'))
+  // The victim is as it was: nothing written into it, given away or removed.
+  assert.deepEqual(fs.readdirSync(victim), ['bridge.env'])
+  for (const [file, mode] of [[victim, 0o755], [path.join(victim, 'bridge.env'), 0o600]]) {
+    const stat = fs.lstatSync(file)
+    assert.deepEqual({ uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 }, { uid: 0, gid: 0, mode }, file)
+  }
+  // The image is the new one, a folder of the runner's user's, 0700, with its files the user's.
+  const image = fs.lstatSync(paths.runnerImage)
+  assert.ok(image.isDirectory())
+  assert.deepEqual({ uid: image.uid, gid: image.gid, mode: image.mode & 0o777 }, { ...runnerUser, mode: 0o700 })
+  assert.deepEqual(fs.readdirSync(paths.runnerImage).sort(), ['initramfs.cpio.lz4', 'manifest.json', PACKAGES_FILE, 'rootfs.ext4', IMAGE_RECORD, 'vmlinuz-virt'].sort())
+  for (const name of fs.readdirSync(paths.runnerImage)) {
+    const stat = fs.lstatSync(path.join(paths.runnerImage, name))
+    assert.deepEqual({ uid: stat.uid, file: stat.isFile() }, { uid: runnerUser.uid, file: true }, name)
+  }
+  // What the runner's user left in its folder is as it left it; the link in the image's place went.
+  for (const name of ['image.new', 'image.old']) assert.equal(fs.readlinkSync(path.join(paths.runner, name)), victim)
+  assert.deepEqual(fs.readdirSync(aside), ['manifest.json'])
+  assert.equal(fs.lstatSync(aside).uid, runnerUser.uid)
+  assert.deepEqual(fs.readdirSync(paths.runner).sort(), ['image', 'image-aside', 'image.new', 'image.old'])
+  assert.equal(fs.existsSync(paths.imageStaging), false)
+})
+
+test('image: an old image holding what no image holds is left where only build-image reaches it, and the next build says so', asWeAre, async t => {
+  const prepared = prepareBuild(t)
+  const { paths, events } = prepared
+  fs.mkdirSync(path.join(paths.runnerImage, 'folder'), { recursive: true })
+  fs.writeFileSync(path.join(paths.runnerImage, 'folder', 'file'), 'x')
+  fs.writeFileSync(path.join(paths.runnerImage, 'manifest.json'), '{}')
+  await buildAsWeAre(prepared)
+  // The new image is in place; the old one, set aside, keeps its folder: no folder in it is entered.
+  assert.ok(fs.existsSync(path.join(paths.runnerImage, IMAGE_RECORD)))
+  assert.ok(events().includes('image.old_left'))
+  assert.ok(fs.existsSync(path.join(paths.imageStaging, 'old', 'folder', 'file')))
+  await assert.rejects(
+    buildAsWeAre(prepared),
+    /an earlier build set the old image aside in .*\.image-build\/old and couldn't remove it \((EISDIR|EPERM)\): it holds what no image does/,
+  )
+  // A link in the old image's place is removed as a link, and what it leads to stays.
+  fs.rmSync(path.join(paths.imageStaging, 'old'), { recursive: true })
+  const kept = path.join(paths.dataDir, 'kept')
+  fs.mkdirSync(kept)
+  fs.writeFileSync(path.join(kept, 'manifest.json'), 'kept')
+  fs.renameSync(paths.runnerImage, path.join(paths.dataDir, 'new-image'))
+  fs.symlinkSync(kept, paths.runnerImage)
+  await buildAsWeAre(prepared)
+  assert.ok(fs.lstatSync(paths.runnerImage).isDirectory())
+  assert.deepEqual(fs.readdirSync(kept), ['manifest.json'])
+  assert.equal(fs.existsSync(paths.imageStaging), false)
+})
+
+test("image: build-image waits for Alpine's index only so long, and keeps the old image", asWeAre, async t => {
+  const prepared = prepareBuild(t)
+  const { paths } = prepared
+  fs.mkdirSync(paths.runnerImage, { recursive: true })
+  fs.writeFileSync(path.join(paths.runnerImage, 'old'), 'the image before')
+  t.after(overrideLimits({ APK_INDEX_TIMEOUT: 50 }))
+  // An index that never comes, until the fetch is aborted.
+  const fetch = (_url, { signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+  await assert.rejects(
+    buildAsWeAre(prepared, { fetch }),
+    error => error instanceof ImageError && !error.setup && /^Alpine's index at https:\/\/mirror\.test\/alpine\/v3\.23\/main didn't come within 0\.05 seconds$/.test(error.message),
+  )
+  assert.deepEqual(fs.readdirSync(paths.runnerImage), ['old'])
+  // The socket is let go of.
   await (await holdInstance(paths.runnerSocket, 'runner')).close()
 })
 

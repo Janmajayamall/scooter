@@ -59,6 +59,10 @@ export function makePaths({ dataDir, configDir }) {
     runnerTmp: data('runner', 'tmp'),
     networkLogDir: data('runner', 'log'),
     networkLog: date => data('runner', 'log', `${date}.jsonl`),
+    // Where `build-image` builds the VM image, and sets the old one aside, before and after it
+    // renames the new one into `runner/image/` (6.12): beside `runner/`, so on the same file
+    // system, and natively in a folder only root can write, not in the runner's own.
+    imageStaging: data('.image-build'),
 
     // The bridge's own folder (5.1): its state; the socket that keeps a second bridge from
     // starting on the same data; and where attachments wait between their channel and the store.

@@ -237,6 +237,10 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
     )
 
     const output = createOutput()
+    // How the VM ended, when nothing ended it on purpose (`why`): `exited` when the program did,
+    // `lost` when the command failed under it, such as when its QEMU was killed, and `not_started`
+    // when it never booted.
+    let ended = 'not_started'
     try {
       try {
         if (!ending.signal.aborted) await vm.start()
@@ -249,14 +253,23 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
       let result = null
       if (!ending.signal.aborted) {
         log.info('sandbox.vm_started', { accel: accel.accel, ms: clock.now() - startedAt, qemu: vm.getHostPid() ?? undefined })
+        ended = 'exited'
         const assignments = Object.entries({ ...spec.env, ...hooks.env }).map(([name, value]) => `${name}=${value}`)
+        // The command settles once the program has exited and its output has closed (D139).
         const execution = vm.exec([ENV_PROGRAM, '-i', ...assignments, ...spec.argv], {
           cwd: spec.cwd,
           stdout: sink(chunk => output.add('stdout', chunk)),
           stderr: sink(chunk => output.add('stderr', chunk)),
         })
+        const finished = Promise.resolve(execution).catch(error => {
+          if (why === null) {
+            ended = 'lost'
+            log.error('sandbox.vm_lost', { accel: accel.accel, ms: clock.now() - startedAt, ...errorFields(error) })
+          }
+          return null
+        })
         const aborted = new Promise(resolve => ending.signal.addEventListener('abort', () => resolve(null), { once: true }))
-        result = await Promise.race([Promise.resolve(execution).catch(() => null), aborted])
+        result = await Promise.race([finished, aborted])
         // A program that ended at the same moment as a limit still counts as stopped by it.
         if (why !== null) result = null
       }
@@ -275,7 +288,7 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
       ending.abort()
       signal?.removeEventListener('abort', stop)
       await close()
-      log.info('sandbox.vm_closed', { ms: clock.now() - startedAt, ended: why ?? 'exited' })
+      log.info('sandbox.vm_closed', { ms: clock.now() - startedAt, ended: why ?? ended })
     }
   }
 

@@ -339,6 +339,26 @@ test("sandbox: a VM that doesn't start in time fails the run as one that couldn'
   t.after(overrideLimits({ VM_START_TIMEOUT: 1 }))
   await assert.rejects(sandbox.run(sh(paths, 'true')), /^Error: the VM couldn't start/)
   await waitFor(() => fs.readdirSync(paths.runnerTmp).length === 0, 'the temporary folder to empty', 10_000)
+  // The log says it never started, not that a program exited.
+  assert.deepEqual(prepared.entries.filter(entry => entry.event === 'sandbox.vm_closed').map(entry => entry.ended), ['not_started'])
+})
+
+test('sandbox: a VM lost under its program, as when its QEMU is killed, ends the run, and the log says so', options, async t => {
+  const prepared = prepare(t)
+  const { paths } = prepared
+  const sandbox = await openTestSandbox(t, prepared)
+  const running = sandbox.run(sh(paths, 'sleep 600'))
+  await waitFor(() => qemuPids(prepared.entries).length === 1, 'the VM')
+  await sleep(1000)
+  process.kill(qemuPids(prepared.entries)[0], 'SIGKILL')
+  const result = await running
+  assert.deepEqual({ code: result.code, timedOut: result.timedOut, wroteTooMuch: result.wroteTooMuch }, { code: null, timedOut: false, wroteTooMuch: false })
+  const lost = prepared.entries.filter(entry => entry.event === 'sandbox.vm_lost')
+  assert.equal(lost.length, 1)
+  t.diagnostic(`lost: ${JSON.stringify(lost[0])}`)
+  assert.equal(typeof lost[0].error, 'string')
+  assert.deepEqual(prepared.entries.filter(entry => entry.event === 'sandbox.vm_closed').map(entry => entry.ended), ['lost'])
+  await waitFor(() => fs.readdirSync(paths.runnerTmp).length === 0, 'the temporary folder to empty', 10_000)
 })
 
 test("sandbox: opening it empties the runner's temporary folder, and gives the runner its home and temporary folder", options, async t => {

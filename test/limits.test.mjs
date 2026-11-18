@@ -74,6 +74,8 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     SANDBOX_STDERR_MAX_BYTES: 64 * 1024,
     RUN_WRITE_MAX_BYTES: 1024 * MB,
     RUN_NAMES_MAX_COUNT: 100000,
+    // Milestone 7, after its review.
+    APK_INDEX_TIMEOUT: MINUTE,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)

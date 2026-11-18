@@ -13,8 +13,10 @@
 //   was built, pi's version, Alpine's release, the architecture and the image's time zones; and
 //   `packages.txt` the versions of the Alpine packages in it, since they change within a release.
 // - **One at a time, and not under a running runner.** It holds `runner/runner.sock` while it
-//   builds (D90), so a runner can't start meanwhile, and it can't start while one runs. The new
-//   image is built beside the old one and takes its place when it is complete.
+//   builds (D90), so a runner can't start meanwhile, and it can't start while one runs.
+// - **Where it builds.** In `.image-build/`, beside `runner/` in the data folder, which natively
+//   only root can write, not in the runner's own folder: the image is built, recorded and given to
+//   the runner's user there, and renamed into `runner/image/` once it is complete (D151).
 //
 // At startup the runner refuses to run when the image is missing, was built for another pi version
 // than the one the build file pins, for another architecture, or doesn't know the owner's time
@@ -23,8 +25,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { ensureDir, removeTree, writeFileAtomic } from '../../common/files.mjs'
+import { checkOwnFolder, ensureDir, removeHandOff, removeTree, writeFileAtomic } from '../../common/files.mjs'
 import { holdInstance } from '../../common/instance.mjs'
+import { limits } from '../../common/limits.mjs'
 import { createLog, errorFields } from '../../common/log.mjs'
 import { makePaths } from '../../common/paths.mjs'
 import { createProc, findProgram } from '../../common/proc.mjs'
@@ -94,24 +97,36 @@ export function readBuildFile(file) {
   return build
 }
 
-const PI_PIN = new RegExp(`${PI_PACKAGE.replace('/', '\\/')}@(\\S*)`, 'g')
+// Every mention of pi's package in a command, with or without a version: its name, followed by
+// nothing a package's name holds, and by `@<version>` when one is given.
+const PI_MENTION = new RegExp(`${PI_PACKAGE.replace('/', '\\/')}(?![a-z0-9._~-])(?:@(\\S*))?`, 'g')
 
-// pi's version, as the build file pins it, strictly: one install command names pi with an exact
-// version, such as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install
-// scripts (row 8). Throws an `ImageError` that names the command otherwise.
+// What the command that installs pi may hold: words of letters, digits and `@/._=:+,-`, apart by
+// spaces. The shell reads them as they are, so the command is that one `npm install` and nothing
+// else: no `;`, `&` or `|`, newline, quote, `$`, backquote, redirection or pattern.
+const PLAIN_COMMAND = /^[A-Za-z0-9@/._=:+,\- ]+$/
+
+// pi's version, as the build file pins it, strictly: the commands name pi once, with or without a
+// version, and that is in an install command of plain words that pins it to an exact version, such
+// as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install scripts (row 8).
+// Throws an `ImageError` that names the command otherwise.
 export function pinnedPiVersion(build, file = 'config/image/build.json') {
   const found = []
   build.postBuild.commands.forEach((command, n) => {
-    for (const match of command.matchAll(PI_PIN)) found.push({ n, command, version: match[1] })
+    for (const match of command.matchAll(PI_MENTION)) found.push({ n, command, version: match[1] ?? null })
   })
   if (found.length !== 1) {
     throw new ImageError(`${file}: postBuild.commands must install ${PI_PACKAGE} exactly once, as ${PI_PACKAGE}@<version>, and ${found.length === 0 ? 'none does' : 'it is named more than once'}`)
   }
   const [{ n, command, version }] = found
   const where = `${file}: postBuild.commands[${n}]`
-  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new ImageError(`${where} must pin pi to an exact version, such as ${PI_PACKAGE}@1.5.2`)
-  const words = command.trim().split(/\s+/)
-  if (words[0] !== 'npm' || words[1] !== 'install' || !words.includes('--ignore-scripts')) {
+  if (version === null || !/^\d+\.\d+\.\d+$/.test(version)) throw new ImageError(`${where} must pin pi to an exact version, such as ${PI_PACKAGE}@1.5.2`)
+  if (!PLAIN_COMMAND.test(command)) {
+    throw new ImageError(`${where} must be one npm install command, of plain words: no ;, &, |, newline, quote, $ or anything else the shell reads as more`)
+  }
+  const words = command.trim().split(/ +/)
+  const scripts = words.filter(word => word.includes('ignore-scripts'))
+  if (words[0] !== 'npm' || words[1] !== 'install' || scripts.length === 0 || scripts.some(word => word !== '--ignore-scripts')) {
     throw new ImageError(`${where} must install pi with npm install --ignore-scripts, so the build runs none of its packages' code`)
   }
   return version
@@ -337,12 +352,31 @@ ${lines.join('\n')}
 `
 }
 
-async function fetchApkIndexes({ repositories, arch, fetch }) {
+// Alpine's index of each repository the image lists, each fetched within `APK_INDEX_TIMEOUT`, its
+// body included.
+async function fetchApkIndexes({ repositories, arch, fetch, clock }) {
   const indexes = []
   for (const repository of repositories.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'))) {
-    const response = await fetch(`${repository}/${arch}/APKINDEX.tar.gz`)
-    if (!response.ok) throw new ImageError(`Alpine's index at ${repository} answered ${response.status}`, { setup: false })
-    indexes.push(parseApkIndex(apkIndexFromArchive(Buffer.from(await response.arrayBuffer()))))
+    const fetching = new AbortController()
+    const done = new AbortController()
+    let timedOut = false
+    clock.sleep(limits.APK_INDEX_TIMEOUT, { signal: done.signal }).then(
+      () => {
+        timedOut = true
+        fetching.abort()
+      },
+      () => {},
+    )
+    try {
+      const response = await fetch(`${repository}/${arch}/APKINDEX.tar.gz`, { signal: fetching.signal })
+      if (!response.ok) throw new ImageError(`Alpine's index at ${repository} answered ${response.status}`, { setup: false })
+      indexes.push(parseApkIndex(apkIndexFromArchive(Buffer.from(await response.arrayBuffer()))))
+    } catch (error) {
+      if (timedOut) throw new ImageError(`Alpine's index at ${repository} didn't come within ${limits.APK_INDEX_TIMEOUT / 1000} seconds`, { setup: false })
+      throw error
+    } finally {
+      done.abort()
+    }
   }
   return indexes
 }
@@ -361,17 +395,96 @@ export function buildMethod({ isRoot, find = findProgram }) {
   )
 }
 
+// Reads what a built image holds, with `debugfs`, which must be there before a build starts.
+function imageReader(proc) {
+  if (debugfsProgram() === null) throw new ImageError('build-image needs debugfs, from e2fsprogs')
+  return dir => recordImage(dir, { proc })
+}
+
+// As root, `build-image` builds in the data folder (D151), so the data folder must be root's, and
+// writable by root alone: otherwise another user could put a link in the place of the folder it
+// builds in. Natively it is `/var/lib/scooter`, which `setup` makes.
+function checkDataFolder(dataDir) {
+  let stat
+  try {
+    stat = fs.statSync(dataDir)
+  } catch (error) {
+    throw new ImageError(`${dataDir} can't be looked at (${error.code ?? error.name}): run scooter setup first`)
+  }
+  if (!stat.isDirectory() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
+    throw new ImageError(`${dataDir} must be a folder of root's that only root can write, since build-image builds the image in it as root`)
+  }
+}
+
+// Removes the old image, once it has been renamed out of the runner's folder into `staging`. It
+// was the runner's, so a process of that user's that was in it, such as a shell whose working
+// folder it was, can still change what it holds, though nothing can reach it by its path any
+// more, and nobody but root can rename it. So it is removed as a handed-over folder is: each name
+// in it is unlinked, which follows no link and removes no folder, and then the folder, which goes
+// only once that empties it. Gondolin's image holds no folder. A link or a file that was put in
+// the image's place is unlinked. Throws when anything is left.
+function removeOldImage(dir) {
+  let stat
+  try {
+    stat = fs.lstatSync(dir)
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  if (!stat.isDirectory()) fs.unlinkSync(dir)
+  else removeHandOff(dir, () => true)
+}
+
+// The folder `build-image` builds in, `paths.imageStaging`, made if it isn't there, with what a
+// build cut short left in it removed: the image it was building, which nobody but root could
+// reach, and the old image it had set aside (`removeOldImage`).
+function openStaging(paths, isRoot) {
+  const staging = paths.imageStaging
+  if (fs.existsSync(staging)) {
+    if (isRoot) {
+      try {
+        checkOwnFolder(staging, { uid: 0 })
+      } catch (error) {
+        throw new ImageError(`${staging} isn't a folder of root's (${error.message}): remove it, and build again`)
+      }
+    }
+    removeTree(path.join(staging, STAGED_IMAGE))
+    try {
+      removeOldImage(path.join(staging, STAGED_OLD))
+    } catch (error) {
+      throw new ImageError(`an earlier build set the old image aside in ${path.join(staging, STAGED_OLD)} and couldn't remove it (${error.code ?? error.name}): it holds what no image does. Look at it, remove it, and build again`)
+    }
+  }
+  ensureDir(staging, { mode: 0o700 })
+  fs.chmodSync(staging, 0o700)
+  return staging
+}
+
+// The names in `paths.imageStaging`: the image being built, and the old one once it is set aside.
+const STAGED_IMAGE = 'image'
+const STAGED_OLD = 'old'
+
 // Builds the image into `paths.runnerImage`. `log` takes the steps; Gondolin prints its own
-// progress on stderr. Returns the record.
-export async function buildImage({ paths, proc, log, clock = systemClock, isRoot = process.getuid?.() === 0, fetch = globalThis.fetch, build: buildAssets }) {
+// progress on stderr. `build`, `fetch` and `readImage`, which reads what a built image holds, are
+// for tests. Returns the record.
+//
+// The image is built, recorded and given to the runner's user in `paths.imageStaging`, beside the
+// runner's folder, which natively only root can write. The runner's user owns `runner/`, and
+// could put a link where the image is built, or in an image's place, at any moment: root would
+// then write into, give away or remove what the link leads to (D151). So, in the runner's folder,
+// `build-image` holds its socket and makes two renames, the old image out to the staging folder
+// and the new one in, and nothing else. A rename follows no link, and replaces nothing but an
+// empty folder or what it moves.
+export async function buildImage({ paths, proc, log, clock = systemClock, isRoot = process.getuid?.() === 0, fetch = globalThis.fetch, build: buildAssets, readImage }) {
   const build = readBuildFile(paths.imageBuild)
   const pinned = pinnedPiVersion(build, paths.imageBuild)
   const method = buildMethod({ isRoot })
-  if (debugfsProgram() === null) throw new ImageError('build-image needs debugfs, from e2fsprogs')
+  readImage ??= imageReader(proc)
   if (!fs.existsSync(paths.runner)) {
     if (isRoot) throw new ImageError(`${paths.runner} doesn't exist: run scooter setup first`)
     ensureDir(paths.runner, { mode: 0o700 })
   }
+  if (isRoot) checkDataFolder(paths.dataDir)
 
   let instance
   try {
@@ -379,37 +492,55 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
   } catch (error) {
     throw new ImageError(`build-image can't run while the runner does (${error.message}): stop the runner first`)
   }
-  const fresh = `${paths.runnerImage}.new`
-  const old = `${paths.runnerImage}.old`
   try {
-    for (const leftover of [fresh, old]) removeTree(leftover)
+    const staging = openStaging(paths, isRoot)
+    const fresh = path.join(staging, STAGED_IMAGE)
+    const old = path.join(staging, STAGED_OLD)
     const config = { ...structuredClone(build), arch: machineArch(), container: method.native ? { force: false } : { force: true, runtime: method.runtime } }
     const started = clock.now()
     log.info('image.build_started', { native: method.native, runtime: method.runtime, pi: pinned })
     buildAssets ??= (await import('@earendil-works/gondolin')).buildAssets
     await buildAssets(config, { outputDir: fresh, configDir: path.dirname(paths.imageBuild), verbose: true })
 
-    const found = await recordImage(fresh, { proc })
+    const found = await readImage(fresh)
     if (found.record.pi !== pinned) {
       throw new ImageError(`the image built holds pi ${found.record.pi}, where config/image/build.json pins ${pinned}`, { setup: false })
     }
     const indexedAt = isoSeconds(clock.now())
-    const indexes = await fetchApkIndexes({ repositories: found.repositories, arch: found.record.arch, fetch })
+    const indexes = await fetchApkIndexes({ repositories: found.repositories, arch: found.record.arch, fetch, clock })
     const resolved = resolvePackages(indexes, found.requested)
     writeFileAtomic(path.join(fresh, PACKAGES_FILE), packagesText({ ...found, resolved, indexedAt }), { mode: 0o644 })
     writeFileAtomic(path.join(fresh, IMAGE_RECORD), `${JSON.stringify(found.record, null, 2)}\n`, { mode: 0o644 })
+    const bytes = fs.readdirSync(fresh).reduce((sum, name) => sum + fs.lstatSync(path.join(fresh, name)).size, 0)
 
-    // Natively the image is root's: it goes to the runner's user, who boots it (row 8).
+    // Natively the image is root's: it goes to the runner's user, who boots it (row 8), while it is
+    // still where only root can reach it.
     const owner = isRoot ? await proc.lookupUser('scooter-runner') : null
     if (owner) {
-      fs.chownSync(fresh, owner.uid, owner.gid)
       for (const name of fs.readdirSync(fresh)) fs.lchownSync(path.join(fresh, name), owner.uid, owner.gid)
+      fs.chownSync(fresh, owner.uid, owner.gid)
     }
     fs.chmodSync(fresh, 0o700)
-    if (fs.existsSync(paths.runnerImage)) fs.renameSync(paths.runnerImage, old)
-    fs.renameSync(fresh, paths.runnerImage)
-    removeTree(old)
-    const bytes = fs.readdirSync(paths.runnerImage).reduce((sum, name) => sum + fs.statSync(path.join(paths.runnerImage, name)).size, 0)
+
+    // The two renames in the runner's folder: whatever is in the image's place out, a link
+    // included, and the new image in.
+    try {
+      fs.renameSync(paths.runnerImage, old)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new ImageError(`build-image couldn't set the old image in ${paths.runnerImage} aside (${error.code ?? error.name})`, { setup: false })
+    }
+    try {
+      fs.renameSync(fresh, paths.runnerImage)
+    } catch (error) {
+      throw new ImageError(`build-image couldn't put the image in ${paths.runnerImage} (${error.code ?? error.name}): something took its place during the build`, { setup: false })
+    }
+    try {
+      removeOldImage(old)
+      fs.rmdirSync(staging)
+    } catch (error) {
+      // The new image is in place. What is left is in root's folder, and the next build says so.
+      log.warn('image.old_left', errorFields(error))
+    }
     log.info('image.built', { pi: found.record.pi, arch: found.record.arch, bytes, ms: clock.now() - started })
     return { ...found.record, bytes, ms: clock.now() - started }
   } finally {
