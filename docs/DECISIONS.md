@@ -1999,3 +1999,32 @@ Not verified:
 - **A native build as root** (gate G2), and `build-image` in the runner container (milestone 13).
 - **`packages.txt` against the files Gondolin unpacked**, one by one. Its versions agree with what milestone 0 found in the image.
 - **KVM in Docker** (gate G3), **arm64** and **macOS**. The architecture is named in `machineArch` and `qemuProgram` alone.
+
+### 7.6 The review of this milestone
+
+The review of the pull request, at `17d6b7b`, found the milestone's "done when" met, asked for one change, and noted seven smaller points. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which section 9 says an escape from pi's VM can't reach | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and 3.3, and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
+| 1 | A VM that is lost is logged as one whose program exited, and its error is dropped; one that never started too | Fixed (D139): `sandbox.vm_closed` says `lost` or `not_started` in `ended`, and a lost VM also logs `sandbox.vm_lost`, with the error's name and code, but not its message, which can quote the guest's output (`errorFields`). Gondolin's error then is a plain `Error` (7.2). Sandbox tests: QEMU killed a second into a run, with KVM and under emulation; and the test of a VM that doesn't boot in time looks for `not_started` |
+| 2 | A run ends when the program's output closes, not when it exits | A line in D139, as the review said |
+| 3 | `hide` on a writable mount is accepted and ignored | Fixed (D152), the review's first way: `checkRunSpec` refuses it. Case in `runnerfiles` |
+| 4 | The pin isn't as strict as D144 says: a second install of pi without a version, `… ; echo --ignore-scripts`, and `… && node /usr/local/bin/pi --version` pass | Fixed (D144), the review's way and a little further: every mention of the package counts, with or without a version, a path among them; the install command must be plain words, which also refuses a newline, `$(…)`, a backquote, a quote and a redirection; and no other word about scripts, such as `--ignore-scripts=false` or `--no-ignore-scripts`. Each is a case in `image`, the review's three among them |
+| 5 | Section 10's "also when the data folder is `/data`" has no test; the review ran it by hand, and row 14 holds | Said in 7.5, with what the review saw. The plan's milestone 13 checks it again in its containers |
+| 6 | `packages.txt` holds 100 packages, not 102 | Corrected in 7.2, 7.5 and the pull request's description: 102 lines, two of them comments. The build after these changes listed 100 again |
+| 7 | The fetch of Alpine's index has no time limit, and a failure there throws away a finished build | Fixed: each index is fetched within `APK_INDEX_TIMEOUT`, 1 minute, body included (D147, D150; DESIGN.md 8.6). A build that fails there still fails, since `packages.txt` is part of a build (6.12): it is built again from the start, and what it built is removed by the next. Test in `image`, with an index that never comes |
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean clones of the branch at `a54859f`, which changes the code; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 577 tests: 536 pass, none fail. 41 skip themselves: 31 need the image (18 of milestone 0, 13 of this milestone) and 10 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 579 tests: 569 pass, none fail, in 112 seconds. The 10 root tests skip themselves. Boots of 1.9 to 2.5 seconds. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 526 pass, none fail. 51 skip themselves: 31 need the image, 10 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. The three new tests of `build-image` run there, the root test among them |
+| The new root test against the build code of `17d6b7b`, in the same container | Fails: the image's six files were written into the folder of root's the links led to |
+| The `image`, `runnerfiles`, `paths`, `limits`, `run`, `failures`, `cli` and `imports` tests, 16 times, 8 at once | No failure |
+| The two changed sandbox tests without the `kvm` group, so under emulation | Both pass; the VM was lost 7.7 seconds after it was made |
+| `scooter build-image`, as `agentw`, with `DATA_DIR` in a scratch folder | Gondolin's container build under rootless Docker, now into `.image-build/image`: 16.5 seconds, 527 MB, pi 1.5.2, and 100 packages in `packages.txt`. Afterwards the data folder held only `runner/image/`. The sandbox tests' `pi --version` and end to end pass on that image, with boots of 1.8 to 2.1 seconds |
+
+Not verified, besides what 7.5 lists: a native build as root with Gondolin's real builder (gate G2), which the root test stands in for with the fake builder. The test swaps its links in at one moment of the build, from inside the builder, and as root, not as the runner's user; what D151 leaves to a swap doesn't depend on the moment, since root takes no step in `runner/` but the two renames.
