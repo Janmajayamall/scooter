@@ -253,15 +253,15 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
 
   // Runs wacli with `--json` and returns the `data` part of its answer (13.1). Rejects when it
   // fails, without repeating what it said: its errors can name chats and files. `signal` stops it,
-  // and a call it stopped rejects with the code `ESTOPPED`.
+  // and a call it stopped rejects with the code `ESTOPPED`. One that ended well as the signal came
+  // is a success: a send that went out isn't sent again.
   async function wacli(args, { signal = null } = {}) {
     const result = await proc.run(WACLI, ['--json', ...args], { env, user, timeout: limits.WACLI_CALL_TIMEOUT, signal })
     const what = args.filter(arg => /^[a-z]+$/.test(arg)).slice(0, 2).join(' ')
     // The log shows the exit code and whether it timed out (`errorFields`), and nothing wacli wrote.
     const failure = (reason, code = 'EWACLI') => Object.assign(new Error(`wacli ${what}: ${reason}`), { code, exitCode: result.code, timedOut: result.timedOut })
-    if (signal?.aborted) throw failure('stopped', 'ESTOPPED')
     if (result.timedOut) throw failure('timed out')
-    if (result.code !== 0) throw failure(`exit code ${result.code}`)
+    if (result.code !== 0) throw signal?.aborted ? failure('stopped', 'ESTOPPED') : failure(`exit code ${result.code}`)
     let answer
     try {
       answer = JSON.parse(result.stdout)

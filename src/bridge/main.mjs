@@ -8,9 +8,9 @@
 //    the group `scooter-runner` (3.2). Not root, it is neither, and switching is skipped (10).
 // 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each give
 //    out the same `seq`, and the datastore would need repairing by hand (D29).
-// 3. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
-// 4. It removes a leftover `backup.lock`, which would otherwise keep the agent from running for
+// 3. It removes a leftover `backup.lock`, which would otherwise keep the agent from running for
 //    good (5.5): only the bridge takes it, and this is the only bridge.
+// 4. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
 // 5. It makes its channels: WhatsApp, and email when `EMAIL_IMAP_HOST` is set (5.6). It checks
 //    `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp (5.3).
 // 6. It starts the channels.
