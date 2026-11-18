@@ -295,7 +295,7 @@ test('image: build-image refuses while a runner runs, and a build of another pi 
   const { paths, build, fetch, log, proc } = prepared
   fs.mkdirSync(paths.runner, { recursive: true })
   const runner = await holdInstance(paths.runnerSocket, 'runner')
-  await assert.rejects(buildImage({ paths, proc, log, isRoot: false, build, fetch }), /build-image can't run while the runner does .*: stop the runner first/)
+  await assert.rejects(buildImage({ paths, proc, log, isRoot: false, build, fetch }), /build-image can't run while the runner, a rebuild or another build-image does .*: stop the runner first/)
   await runner.close()
   assert.equal(prepared.builds.length, 0)
 

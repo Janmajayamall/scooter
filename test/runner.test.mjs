@@ -614,7 +614,7 @@ test('startup: on a disk pi filled, the start frees what pi wrote before it make
 test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {
   const prepared = prepareTestRunner(t, { lines: fillerLines(3), start: START })
   await startTestRunner(t, prepared)
-  await assert.rejects(openRunner({ ...prepared, openSandbox: async () => prepared.sandbox }), /another runner is running on this data folder/)
+  await assert.rejects(openRunner({ ...prepared, openSandbox: async () => prepared.sandbox }), /another runner, rebuild or build-image is running on this data folder/)
 
   fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('reply_mode: quiet', 'reply_mode: chatty'))
   let err = ''

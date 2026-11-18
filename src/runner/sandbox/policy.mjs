@@ -278,28 +278,38 @@ function runNetwork({ policy, placeholders, netlog, ids, clock, log }) {
     if (method === undefined) return refuse(403, 'method not allowed', where)
     if (letOut >= limits.RUN_REQUESTS_MAX) return refuse(403, 'this run has made all the requests a run may', where)
 
-    let outgoing = request
-    if (toOpenRouter) {
-      const checked = await checkOpenRouter({ request, url, policy, placeholders, keys })
-      if (checked.request === undefined) return refuse(checked.status, checked.reason, where)
-      outgoing = checked.request
-    } else if (headersHold(request.headers, [...Object.values(placeholders), ...keys])) {
-      // Gondolin would refuse it too, after this hook, with no line in the log.
-      return refuse(403, 'the key, and its placeholder, go only to openrouter.ai', where)
-    }
-
-    // The line before the request goes out: a request that can't have one doesn't go.
-    const id = ids.next()
-    try {
-      netlog.write({ id, at: isoSeconds(clock.now()), event: 'request', ...where })
-    } catch (error) {
-      log.error('netlog.write_failed', { line: 'request', ...errorFields(error) })
-      return refusal(503, "the network log can't be written")
-    }
+    // The request is counted before its body is read, which waits on the VM, and given back if it
+    // doesn't go out: counted after, requests read at the same time would each pass the check
+    // above, and a run could make up to as many more as Gondolin handles at once (the review of
+    // milestone 8, smaller point 2).
     letOut += 1
-    outgoing.headers.set(MARKER_HEADER, id)
-    follow.expect(id)
-    return outgoing
+    let sent = false
+    try {
+      let outgoing = request
+      if (toOpenRouter) {
+        const checked = await checkOpenRouter({ request, url, policy, placeholders, keys })
+        if (checked.request === undefined) return refuse(checked.status, checked.reason, where)
+        outgoing = checked.request
+      } else if (headersHold(request.headers, [...Object.values(placeholders), ...keys])) {
+        // Gondolin would refuse it too, after this hook, with no line in the log.
+        return refuse(403, 'the key, and its placeholder, go only to openrouter.ai', where)
+      }
+
+      // The line before the request goes out: a request that can't have one doesn't go.
+      const id = ids.next()
+      try {
+        netlog.write({ id, at: isoSeconds(clock.now()), event: 'request', ...where })
+      } catch (error) {
+        log.error('netlog.write_failed', { line: 'request', ...errorFields(error) })
+        return refusal(503, "the network log can't be written")
+      }
+      outgoing.headers.set(MARKER_HEADER, id)
+      follow.expect(id)
+      sent = true
+      return outgoing
+    } finally {
+      if (!sent) letOut -= 1
+    }
   }
 
   // Nothing goes out on an error of the policy's own.

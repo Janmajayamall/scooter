@@ -60,7 +60,10 @@ export function modelOf(route) {
 // - `received`: what reached the upstream, each `{ method, url, headers, body, logged }`, where
 //   `logged` is the network log as it stood when the request arrived;
 // - `lines()`: the network log; `close()`: ends the run's network, as the sandbox does once the
-//   VM has closed; `paths`, `clock`, `log`, `entries`, `options` (the hook's options).
+//   VM has closed; `paths`, `clock`, `log`, `entries`, `options` (the hook's options);
+// - `isIpAllowed({ hostname, ip, family, port, protocol })`: whether Gondolin, with the policy's
+//   options, connects to `ip` for a request to `hostname` the hook let out, as it asks once it has
+//   looked the name up.
 export async function openPolicy(t, { model = modelOf('messages'), internet = false, zdr = true, answer } = {}) {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
@@ -108,6 +111,7 @@ export async function openPolicy(t, { model = modelOf('messages'), internet = fa
     lines,
     close,
     send: request => hooks.httpHooks.onRequest(request),
+    isIpAllowed: info => hooks.httpHooks.isIpAllowed(info),
     async forward(request, { fetch = globalThis.fetch } = {}) {
       const url = new URL(request.url)
       const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : Buffer.from(await request.arrayBuffer())

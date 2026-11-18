@@ -2053,7 +2053,7 @@ What the milestone left in the repository:
 ### 8.1 Decisions
 
 **D153. The policy is the sandbox's network.**
-*Choice:* `openGondolinSandbox` takes `policyNetwork({ paths, clock, log })` as its network unless a test gives another, and `refuseNetwork` (D141) is gone. For each run it makes a new placeholder for each secret, `scooter-openrouter-api-key-placeholder-<48 hex digits>`, gives it to Gondolin as the secret's `placeholder` and to the network as `placeholders`, so the hook knows what the VM sees; and calls the network's `close()` once the VM has closed, on every path. The VM's `maxHttpBodyBytes` is `MODEL_REQUEST_MAX_BYTES`: Gondolin refuses a longer body with 413 before the hook sees the request, which leaves no line, and nothing goes out.
+*Choice:* `openGondolinSandbox` takes `policyNetwork({ paths, clock, log })` as its network unless a test gives another, and `refuseNetwork` (D141) is gone. For each run it makes a new placeholder for each secret, `scooter-openrouter-api-key-placeholder-<48 hex digits>`, gives it to Gondolin as the secret's `placeholder` and to the network as `placeholders`, so the hook knows what the VM sees; and calls the network's `close()` once the VM has closed, on every path. The VM's `maxHttpBodyBytes` is `MODEL_REQUEST_MAX_BYTES`: Gondolin refuses a longer body with 413 before the hook sees the request, which leaves no line, and nothing goes out. Since milestone 9, 6.13 of DESIGN.md says so too (the review of milestone 8, smaller point 3).
 *Reason:* the plan's list for this milestone. Gondolin's own placeholder could only be read back once the hooks were made; giving one is plainer, and Gondolin checks it as its own.
 
 **D154. Hosts.**
@@ -2069,6 +2069,7 @@ What the milestone left in the repository:
 - `plugins` and `mcp_servers` are refused by name, so the log says so, though the allowlist would refuse them too.
 
 *Reason:* an allowlist from one model would refuse others a configured model could need, such as `interleaved-thinking-2025-05-14`, which `anthropic/claude-sonnet-4.5` sends; every value in the union is one pi sends, and none has OpenRouter fetch anything. Kinds of content are allowlisted so that a new one that could make OpenRouter, or the model's provider, fetch a URL fails closed. Message fields and roles aren't checked: 6.13 doesn't ask it, and none fetches. *Cost:* a thinking level milestone 0 didn't ask, or a model added to OpenRouter after pi 1.5.2, could send a field outside the union. Its first request is then refused, and runs pause with the policy's reason (D160).
+*Headers* (since milestone 9, for the review of milestone 8, smaller point 6): the headers other than the key's and `anthropic-beta` aren't allowlisted, and go to OpenRouter as the VM sent them. 6.13 asks no more, and none is known to make OpenRouter fetch anything: the ones it reads of an app's, `HTTP-Referer` and `X-Title`, only name the app on its dashboard, and neither can hold the key or its placeholder (D156). `Host` is written by the HTTP client from the URL the hook checked, whatever the VM sent, as the review saw with Node's undici and Gondolin's. An allowlist of pi's headers would have to be captured again with every pi, as the body's fields are, for nothing it is known to stop.
 
 **D156. The key goes only where pi sends it.**
 *Choice:* on `openrouter.ai`, the key's header for the route, `x-api-key` on the messages route and `authorization` on the chat route, must be exactly the placeholder, `Bearer <placeholder>` on the chat route; the other header must be absent; no other header may hold the placeholder, nor any the key itself. To any other host, no header may hold the placeholder or the key. Each is refused with 403 and its own reason.
@@ -2097,10 +2098,12 @@ What the milestone left in the repository:
 *Question:* the plan's rule: a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one read as pi's own failure; when the refused request is the pinned pi's own, that is nearer a setup error (the first review of milestone 4, point 6).
 *Choice:* the failure handling reads the last request to OpenRouter, or the last the policy refused there, whichever came later. A refusal before any request had gone to OpenRouter in the run is a setup error, "the network policy refused pi's request: <reason>"; a later one is pi's own failure, "the network policy refused a request: <reason>". What pi left, an answer cut short and a run that wrote too much still come first, as before.
 *Reason:* nothing the agent does can run before the model's first answer, which needs a request that went out, so a refusal before one is pi's own. pi asks the same way all run long (0.4, pi 6), so the policy refusing pi shows at its first request, and no try of the batch can mend it: pausing, with the reason in the notice, holds the messages without using their attempts. A later refusal may be the agent's, from a command it ran, and reading that as a setup error would pause runs for as long as the message that misled it is in the batch, as D156 is there to prevent. *Cost:* a pi whose later requests differ in shape from its first, which pi 1.5.2's don't, would use the items' attempts.
+*A request the agent makes itself* (since milestone 9, for the review of milestone 8, smaller point 1): the policy lets out any request shaped like pi's that carries the placeholder, whoever sends it, and the VM's environment holds the placeholder. So a misled agent can send one with `curl`, and the failure handling reads what came of it as OpenRouter's answer to pi: a request still waiting when pi is killed reads as an outage, and so would a 429 or a 402 that OpenRouter gave it. The batch is then tried every 30 minutes, or held as a setup error, for as long as the message that misled the agent is in it: the kind of case D156 and this decision close for a key of the agent's own and for a refusal, reached another way. Nothing tells pi's requests from the agent's, which both come from the VM with the placeholder. A fix is a choice for the owner, such as a limit on how many tries in a row one batch may end as an outage or a setup error, which a long outage would then make spend the messages' attempts, where 6.9 says it never does. Left as a cost: the plan's milestone 14 lists it among what isn't done, for the owner. The review gave it with a dummy key, as lines given to the failure handling, not in a VM.
 
 **D161. What one request, and one run, add to the log.**
 *Choice:* a path is cut at `NETLOG_PATH_MAX_CHARS`, 1,000 characters, a host at 253, a reason at `REASON_MAX_CHARS`, with what the VM chose, such as a field's name, at its end; a line the writer would make longer than `NETLOG_LINE_MAX_BYTES` is an error, and no request goes out without its line. One run may make `RUN_REQUESTS_MAX`, 1,000, requests that go out; past them the policy refuses. It writes its first `RUN_REFUSALS_LOGGED_MAX`, 100, refusals one by one, and counts the rest in one `unlogged` line when the run's network closes. `/status` counts those with the others.
 *Reason:* the plan's rule, from the fifth review of milestone 4: a line a reader skips is a request the failure handling doesn't see. A request that goes out has a line before it goes, so requests can't be counted instead of written; they are bounded instead. A run makes a request a turn: a few hundred in the longest run `agents.yaml` allows. So a run adds at most about a megabyte, where a misled one could have added hundreds. *Cost:* a run past 1,000 requests fails as pi's own failure.
+*Since milestone 9* (the review of milestone 8, smaller point 2): a request is counted when it passes the check, before its body is read, and given back if it is then refused. Counted once it went out, requests whose bodies were read at the same time each passed the check: with the limit at 2, eight sent at once all went out, and Gondolin handles up to 128 at once. Now the limit is exact.
 
 **D162. Three constants.** `NETLOG_PATH_MAX_CHARS`, `RUN_REQUESTS_MAX` and `RUN_REFUSALS_LOGGED_MAX` (D161). 8.6 of DESIGN.md lists them. The longest DNS name, 253, isn't one: it is a fact of DNS, as the socket path of D150 is of Linux.
 
@@ -2189,3 +2192,130 @@ Not verified:
 - **A name that resolves to a private address,** which Gondolin refuses after the hook, leaving a `request` line and a `not_sent` one: by Gondolin's source and the hook's test, not seen in a VM, which would need a name that resolves so, and a lookup outside the machine.
 - **The bytes of a TLS connection** as undici counts them for `sent` and `received`, against a packet count. The live check's figures are of the right size for pi's request and OpenRouter's answer.
 - **arm64 and macOS.** Nothing here knows the architecture; `node:diagnostics_channel` and undici's channels are the same on macOS.
+
+## Milestone 9: rebuild and backfill
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.10, 6.11, 6.13, 8.4 and section 10, to say what this milestone settled (9.3 here). It also settled the six smaller points of the review of milestone 8, and the point earlier reviews had left for this milestone (9.2).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/runner/replay.mjs` | Replayed batches, which a rebuild and a backfill share: one of the owner's days each, `Now:` the batch's own time, a session for each day, and removing a replay's sessions |
+| `src/runner/rebuild.mjs` | `scooter rebuild <agent>`: the tag, the reset, the replay with its own lane in memory, the one commit, and what it says on its output |
+| `src/runner/backfill.mjs` | A backfill's batch, the prompt's line, its skills, what it may change, its lane settled, and its summary |
+| `src/runner/batch.mjs` | Batches drawn from a lane, up to a `seq`; `fitBatch`, shared with replays |
+| `src/runner/run.mjs` | Replayed batches as runs: their sessions, skills and commit messages, silent, and a backfill's check of what it changed |
+| `src/runner/failures.mjs` | `settleLane`, for the live lane and a backfill's; `pauseAfterRun`; a change a backfill may not make, in the cause |
+| `src/runner/main.mjs` | A backfill's batches and its finishing in the loop; `holdRunnerFolder` and `readyAgentFolder`, shared with the rebuild |
+| `src/runner/git.mjs` | The staged changes, the last commit, a tag, and folding commits into one |
+| `src/common/instance.mjs`, `src/runner/sandbox/image.mjs` | Who holds `runner.sock`, named in the error, which has a code |
+| `src/runner/sandbox/policy.mjs` | `RUN_REQUESTS_MAX` exact for requests read at the same time (9.2) |
+| `src/cli.mjs` | `scooter rebuild` |
+| `test/replay`, `rebuild`, `backfill` | This milestone's tests, with a sandbox test of a rebuild's batch in a VM, and additions to `policy` for the review |
+| `test/support/pi-stub.mjs` | A backfill's batch: the file it may change and the day page; `UNSURE` and `OUTSIDE` |
+
+### 9.1 Decisions
+
+**D164. A replayed batch is of one of the owner's days: the local date of each item's `at`.**
+*Question:* 6.10 has a replayed batch's items "come from one of the owner's days (in `SCOOTER_TZ`)". Which day is a message's: the date of its `at` in the owner's zone, or the session's day, which changes at `SESSION_ROLLOVER_HOUR` (6.6)? And where does a retry, or a message an edit brings in, stand?
+*Choice:* a batch is drawn as a live one is (6.5): due retries first, then work items after its lane's cursor, at most `BATCH_MAX_ITEMS` and within `PROMPT_MAX_BYTES`, up to the `seq` the replay stops at. Every item it takes was sent on the local date of the first item's `at`, and it stops at the first sent on another date. So a batch is a run of items one after another, and a message caught up late, whose `at` is on an earlier day than those around it, is a batch of its own. A message that an edit or a deletion in the batch brings in, from the lane's retries or from what it gave up on, joins whatever its day, as it may take a batch past 20 (6.5), and is shown with its date.
+*Reason:* `Now:` is the batch's own time (D165), so that "today" in an old message means what it meant then. With the local date, every item a batch takes was sent "today" by its `Now:`. With the session's day, a message at 00:10 would share a batch with one at 23:50, and one of the two would be read against the other's date. A message brought in is the 6.5 rule against handling an edit before the message it changes, which would file the old text later; it is shown with its date, so "today" in it isn't misread.
+*Cost:* a message sent just after midnight is in the next day's session, where a live run would have had it in the day before's until `SESSION_ROLLOVER_HOUR`. A session is the agent's conversation, not where anything is filed.
+
+**D165. `Now:` is the time of the batch's newest item, by `at`.**
+*Choice:* the latest `at` among the batch's items. The header shows it; item times are shown against it, so the batch's items show only their time, and one brought in from another day its date too.
+*Reason:* 6.10. The latest, so that `Now:` is never before an item it shows.
+
+**D166. A replay's sessions.**
+*Choice:* each of the owner's days gets `<agent>-rebuild-<day>`, or `<agent>-backfill-<id>-<day>`, the day as D164 has it. With `session: none`, a replay runs without a session, as live runs do. A replay's sessions are removed when it is over: a rebuild's when it has finished, a backfill's when it finishes or a start drops it. Only names of the form `<prefix><date>.jsonl` go, so the backfill `people-1-2` keeps its own when `people-1`'s go.
+*Reason:* they serve the replay alone: no live run uses them. A rebuild of a year makes about 365, up to `SESSION_MAX_BYTES` each, and `agents/` is backed up (5.5).
+
+**D167. A rebuild holds `runner/runner.sock`, and refuses while `run.lock` is there.**
+*Question:* the plan's rules: `rebuild` refuses to start while `run.lock` exists, and can't tell whether an idle runner is up; a runner started during a rebuild removes the rebuild's `run.lock` and git's lock files, and throws away its uncommitted changes (D89); if `rebuild` holds `runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up (the first review of milestone 4, point 5).
+*Choice:* it holds the socket, as a runner and `build-image` do, so none of the three starts while another runs. Then it refuses while `run.lock` is there, as the plan says. Holding the socket, it knows no runner is running, so such a lock was left by one stopped by force: it says so, and to remove it. `holdInstance` names who holds the runner's socket, "runner, rebuild or build-image", and gives its error the code `EINSTANCE`, which the rebuild turns into a refusal that says to stop the runner first; `build-image`'s says the same.
+*Reason:* the plan's way, which settles the review's point. The lock's refusal stays, though only a leftover can meet it now: removing it would be a second way to do what a runner's start does, for a case that needs a runner killed with `SIGKILL` and not started again. *Cost:* after such a kill, the owner removes `run.lock` by hand, or starts and stops the runner, before a rebuild.
+
+**D168. A rebuild keeps its progress in memory, and sets `cursor` to its `seq` at the start.**
+*Question:* 6.10 resets `state.json` in step 3, and sets `cursor` to the `seq` the rebuild stops at in step 5, after the replay. Where is the replay's progress meanwhile, and what does a runner do that starts after a rebuild was cut short?
+*Choice:* step 3 resets the state with `cursor` and `commandSeq` both the rebuild's `seq`. The replay works in a state it keeps in memory, the live lane's fields of a state that is never saved, with its cursor from 0, and `performRun` settles that as it settles a live batch's (`stateFile` null). Once done, the state is written again with what the rebuild gave up on in `failed` (D170).
+*Reason:* with the cursor at 0 on disk, a runner started after a rebuild cut short, by a stop, a crash or a closed terminal, would give the agent all of history as new messages, with replies and ✅s to every old one. With it at the rebuild's `seq`, that runner goes on after it, and only the views are incomplete until the rebuild is run again. Keeping the progress on disk instead, to resume, would need a field of the state that `/status` and the runner know, and a runner that refuses to start until the rebuild is finished: more than 6.10 asks.
+*Cost:* a rebuild isn't resumed. Cut short, it starts from the beginning when run again, and spends again on OpenRouter what it had done. The plan's milestone 14 now has the README say to run it where closing a terminal doesn't stop it.
+
+**D169. A rebuild's commits: one per batch while it runs, folded into one `lifelog: rebuild`.**
+*Question:* 6.10 commits once, at the end, as `lifelog: rebuild`. A failed batch's clean-up puts back the last commit (6.9), which would then be the views before the rebuild.
+*Choice:* the emptied folders are committed first, `lifelog: rebuild, from empty views and memory`, and each batch as it succeeds, `lifelog: rebuild #1-#20`, the lowest and the highest `seq` of its items, so a failed batch's clean-up comes back to the last good one. At the end, the branch is set back to the tagged commit with the index and the files as they are (`git reset --soft`), and one commit is made, `lifelog: rebuild`.
+*Reason:* the clean-up needs a commit to come back to after each batch, and 6.10's history is one commit on the tagged one, whose difference from the tag is what the rebuild changed. *Cost:* the commits folded away stay in the repository until git's reflog lets them go, by default after 90 days: some megabytes for years of views. A rebuild cut short leaves its commits on the branch, the next rebuild's tag among them.
+
+**D170. A rebuild's failures, and what it says.**
+*Choice:* as the runner's (6.8, 6.9): an item not reported, or in a batch that failed for pi's own reasons, is tried again a minute later, and given up on after `MAX_ATTEMPTS`; one reported `FAILED` is given up on; a setup error or an outage pauses the rebuild until the next try (`pauseAfter`), and the items wait with their attempts as they were. A sandbox that can't run pi pauses it too (D82). It gives way to `backup.lock` before each batch and tries again every `POLL_INTERVAL`. Nothing goes to the outbox, no notice either; it says on its output what each batch did, why it paused and until when, and what it gave up on. What it gave up on goes into `failed` (the newest `FAILED_KEEP`), where an edit of the message brings it back into a live batch (6.5). `lastRun` is null afterwards, as a reset leaves it.
+*Reason:* 6.10 replays "silently: nothing goes to the outbox", and the person running it is at the terminal. Waiting out a setup error, rather than stopping, lets the owner mend the key without losing what the rebuild had done (D168).
+
+**D171. A rebuild counts every backfill of the config as done.**
+*Choice:* the reset's `backfillDone` holds the old list, the backfill in progress, which 6.10 drops, and every `backfill` entry of the config.
+*Reason:* 6.10 drops a backfill in progress "because the rebuild covers its view". Dropped without being counted done, the next start would begin it again from the start of the datastore (6.4), and an entry not started yet would begin too: each would run the whole history through a skill the rebuild already ran it through.
+
+**D172. The tag, and the rebuild's command.**
+*Choice:*
+- The tag is `before-rebuild-` and the start's UTC time to the second, written without `-` and `:`, which git refuses in a name: `before-rebuild-20261118T101500Z`. A name taken, which only two rebuilds in one second could make, fails the rebuild before it changes anything.
+- `scooter rebuild <agent>` takes one argument, the agent's name. It reads `runner.env`, as the runner does, since its batches need the key. It opens the Gondolin sandbox as the runner does, and readies the agent's folder as a start does (D89), so uncommitted changes there are thrown away. It stops on `SIGTERM` or `SIGINT`: the batch in progress is thrown away, as at a runner's stop.
+- Exit codes: 0 once it has rebuilt; 2 for a call or a configuration it can't start with (no such agent, `agents.yaml`, a runner running, `run.lock`, a sandbox that can't run as it is set up); 1 when it fails or is stopped.
+*Reason:* 8.4 and the exit codes of D30.
+
+**D173. A replayed message is shown as it is now.**
+*Question:* 6.5 shows every message as it is now, with its latest edit. In a replay, "now" could also be the batch's own time.
+*Choice:* as it is now: with its latest edit, even one sent on a later day, `(edited in #N)`, or `(deleted in #N)`. A rebuild reads the datastore once, when it starts, so for it "now" is then; a backfill's index is the runner's.
+*Reason:* the index holds a message as it is now, and an index as of each batch's time would be a second one to keep. The rebuilt views come out the same: the agent files the latest text, and the later edit, when its batch comes, changes nothing; a message deleted since is never filed. *Cost:* a replayed batch can show an edit or a deletion the owner made later than its `Now:`.
+
+**D174. A rebuild's prompt has no line of its own.**
+*Choice:* a rebuild's batch has the prompt of a live batch, with `Now:` the batch's time (D165). The agent answers as for a live batch; its texts and reactions go nowhere.
+*Reason:* 6.10 gives it none, where 6.11 gives a backfill's. The questions the agent asks again are followed, in the replay, by the owner's answers to the questions it asked the first time, which are in the datastore, so `memory/needs-review.md` comes out as a live run would have left it. Milestone 11's pass over `protocol.md` can add one if the model needs it.
+
+**D175. A backfill's lane, like the live one.**
+*Choice:* `settleLane`, in `failures.mjs`, is what a batch's outcome does to a lane's items, for the live lane and a backfill's alike: `{ cursor, retry, failed }`, with a backfill's `skipped` in the place of `failed`. So a backfill's item not reported is tried again a minute later; one reported `FAILED`, or given up on after `MAX_ATTEMPTS`, goes to `skipped`; an edit or deletion in a later batch brings a message back from its retries or `skipped`, starting again at attempt 1 from `skipped`. A setup error or an outage pauses every run, as after a live run (`pauseAfterRun`), and a batch that gets through ends a pause. A backfill's batch sends nothing, no notice either, and leaves `lastRun` alone, so a live failure after it is still the first of its row and sends its notice. The next backfill of the config starts at the next start, as 6.4 has it.
+*Reason:* 6.11's "handles them like the live ones (6.8, 6.9)", and the plan's rule that backfill batches don't change `lastRun`.
+
+**D176. What a backfill's batch may change.**
+*Choice:* once the check of 6.8 has passed, staging included, the runner lists what the batch staged against the last commit (`git diff --cached --name-only --no-renames HEAD -- views memory`), so a file added, changed, removed or moved. Each must be a file `writes` names, in a folder it names, or in `views/days/`, the day pages. The first that isn't fails the batch as pi's own failure, `changed views/expenses.csv, which the backfill may not change`, and the clean-up throws the batch away. The path is logged cut, as an unexpected file's is (D88).
+*Reason:* 6.11. Only git knows every change, so the check reads the staged changes, after the check of 6.8 has limited what git reads.
+
+**D177. A backfill's prompt and skills.**
+*Choice:* the prompt's first line is 6.11's, before the header every prompt has, with the backfill's skill and every path of `writes`: `Change only views/people.csv, views/people/ and the day pages.` pi gets the backfill's skill, and `day-pages` when the agent has it, in the agent's order, and the system prompt of live runs.
+*Reason:* 6.11 says the prompt starts with it.
+
+**D178. A backfill's summary.**
+*Choice:* one text, by `runner`, to `DEFAULT_CHANNEL`, also with `can_message: false`, as notices are (D86): `Backfill people-1 finished: people.csv has 143 rows, 12 marked ❓. Skipped: #1031, #1207.` It names each CSV file of `writes` by its path from `views/`, a folder's at any depth, in order; a write that isn't a CSV gives none; a CSV that isn't there says so; and a folder with none says so. A row is a record after the header, blank ones left out, read as CSV, so a field in quotes may hold a line break; a row with ❓ anywhere in it is marked. The file is read with the care of `readUntrustedFile`, up to `AGENT_FILES_MAX_BYTES`. Then the ID goes to `backfillDone`, and its sessions go. The summary is written before the state is saved, so a crash between the two sends it twice and never loses it.
+*Reason:* 6.11. A file is what the last commit holds then, which the check of 6.8 let through, but it is a file pi wrote.
+
+### 9.2 The reviews of the pull requests merged before this one
+
+Pull request 9, milestone 8, was approved by its review with six smaller points. Five are settled, and one is recorded as a cost:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A request the agent makes itself, with the placeholder, still decides the cause of a failure | Left, recorded as a cost under D160, as the review proposed, and in the plan's milestone 14, for the owner: nothing tells pi's requests from the agent's, and a limit on tries would have a long outage spend the messages' attempts, which 6.9 forbids |
+| 2 | `RUN_REQUESTS_MAX` isn't exact for requests read at the same time | Settled, the review's first way: counted before the body is read, and given back on a refusal (D161). Test in `policy`: eight at once with the limit at 2 let out two; on the code before, all eight |
+| 3 | A body over `MODEL_REQUEST_MAX_BYTES` gets 413 from Gondolin and leaves no line, which 6.13 doesn't say | Settled: a clause in 6.13 (D153) |
+| 4 | Section 10 says the ZDR fields override what pi sent | Settled: section 10 says a body with a `provider` of its own is refused, as 6.13 and D157 have it |
+| 5 | The sandbox test with internet access on shows less than its name says | Settled, the review's way: a test in `policy` asks Gondolin's `isIpAllowed`, built from the policy's options, about private and public addresses with internet access on and off; the sandbox test's name and comment say what it shows |
+| 6 | Headers other than the key's and `anthropic-beta` go out as the VM sent them | Settled: a line under D155 says they aren't allowlisted, and why |
+
+The points the reviews of milestones 0 to 7 left, as 8.3 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 4, first review, point 5 | A runner started during `rebuild` | Settled (D167): the rebuild holds `runner.sock`. Test in `rebuild`: a runner can't start during a rebuild's batch, and the rebuild's lock and commits are as they were |
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
+| Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Left, for milestone 12 |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
+
+### 9.3 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 6.10, 6.11 and the review of milestone 8 left open:
+- 6.10: the rebuild holds `runner.sock` and refuses while `run.lock` is there (D167); the tag's form (D172); `cursor` set at the reset, and every backfill counted done (D168, D171); the replay's failures and its output (D170); one commit, with the batches' folded into it, and `failed` (D169); a rebuild cut short is run again from the start; the owner's day of a batch, a message brought in, the sessions with `session: none` and their removal, and a message shown as it is now (D164, D166, D173).
+- 6.11: the next backfill starts at the next start, and one dropped isn't counted done; `skipped` and the messages it gives back, the pause, and `lastRun` (D175); the commit message's range; the summary's folders, and that it goes also with `can_message: false` (D178).
+- 6.13: a body longer than `MODEL_REQUEST_MAX_BYTES` gets 413 from Gondolin and leaves no line (9.2, point 3).
+- 8.4: `rebuild` runs with the runner's service stopped.
+- Section 10, Network policy: a body with a `provider` of its own is refused (9.2, point 4).
+
+ARCHITECTURE.md 5.5 says where the two live. The plan's milestone 14 has what this milestone leaves for the README (D167, D168), and the review's first point.
