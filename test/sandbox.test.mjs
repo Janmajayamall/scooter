@@ -18,6 +18,7 @@ import { overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { systemClock } from '../src/common/time.mjs'
 import { openRunner } from '../src/runner/main.mjs'
+import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { piMounts } from '../src/runner/run.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
 import { FUSE_MOUNT, gondolinFolders } from '../src/runner/sandbox/gondolin.mjs'
@@ -414,7 +415,10 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
   assert.equal(state.cursor, 1)
   assert.equal(state.lastRun.ok, true)
-  assert.equal(fs.readdirSync(paths.outbox).length, 1)
+  const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
+  // Under emulation the runner's first start also told the owner its VMs fell back to it (6.6).
+  const notices = runner.sandbox.accel === 'emulation' ? [{ type: 'text', by: 'runner', text: EMULATION_NOTICE }] : []
+  assert.deepEqual(outbox, [...notices, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' }])
   assert.equal(fs.readdirSync(paths.agentSessions('lifelog')).length, 1)
   // The VM is closed, and the request went to the fake model with the placeholder, not the key.
   assert.ok(entries.some(entry => entry.event === 'sandbox.vm_closed'))
