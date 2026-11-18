@@ -503,11 +503,24 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   child.stderr.setEncoding('utf8').on('data', chunk => (stderr += chunk))
   const events = () => stderr.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line).event)
 
-  // Another process may take the port between the check above and the bridge's start.
-  const early = exited.then(() => /EADDRINUSE/.test(stderr))
-  const started = waitFor(() => events().includes('whatsapp.caught_up') && stub.callsOf('sync').length > 0, 'the bridge to start')
-  if (await Promise.race([started.then(() => false), early])) return t.skip(`port ${limits.WEBHOOK_PORT} was taken`)
-  await started
+  // Waits for `check`. Another process, such as another copy of this test, may take the port
+  // between the check above and the bridge's start, or while a backup has the webhook closed; the
+  // bridge then stops, as it must without its webhook, and this resolves true. A wait that times
+  // out says what the bridge logged last, which holds no message's text.
+  async function portTakenBefore(check, what) {
+    const waiting = waitFor(check, what)
+    try {
+      if (await Promise.race([waiting.then(() => false), exited.then(() => /EADDRINUSE/.test(stderr))])) return true
+      await waiting
+      return false
+    } catch (error) {
+      error.message += `; the bridge's last log lines:\n${stderr.trim().split('\n').slice(-10).join('\n')}`
+      throw error
+    }
+  }
+  if (await portTakenBefore(() => events().includes('whatsapp.caught_up') && stub.callsOf('sync').length > 0, 'the bridge to start')) {
+    return t.skip(`port ${limits.WEBHOOK_PORT} was taken`)
+  }
   assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: '2099-01-01T00:00:01Z' })), 200)
   const log = path.join(dataDir, 'datastore')
   await waitFor(() => events().filter(event => event === 'intake.stored').length === 2, 'two lines')
@@ -516,7 +529,9 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   child.kill('SIGUSR1')
   await waitFor(() => events().includes('backup.finished'), 'the backup')
   assert.deepEqual(restic.commands(), ['backup', 'forget'])
-  await waitFor(() => stub.callsOf('sync').length === 2, 'sync to start again')
+  if (await portTakenBefore(() => stub.callsOf('sync').length === 2, 'sync to start again')) {
+    return t.skip(`port ${limits.WEBHOOK_PORT} was taken while the backup had the webhook closed`)
+  }
 
   child.kill('SIGTERM')
   assert.deepEqual(await exited, { code: 0, signal: null })

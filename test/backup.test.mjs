@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { BACKUPS_OFF, OFF_REPLY, backUp, createBackups, restoreArgs, runBackupInit, runCheck, runRestore, runSnapshots, snapshotBase } from '../src/bridge/backup.mjs'
+import { BACKUPS_OFF, OFF_REPLY, backUp, createBackups, createRestic, restoreArgs, runBackupInit, runCheck, runRestore, runSnapshots, snapshotBase } from '../src/bridge/backup.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
 import { createIds, ensureDir, listHandOffs } from '../src/common/files.mjs'
@@ -23,10 +23,12 @@ import { createProc } from '../src/common/proc.mjs'
 import { acquireRunLock } from '../src/runner/run.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
+import { createMailReaderStub } from './support/mail-reader.mjs'
+import { AUTHSERV, OWNER_ADDRESSES } from './support/mail-samples.mjs'
 import { createResticStub, realRestic } from './support/restic.mjs'
 import { isRoot, mayCreateUsers } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
-import { OWNER_NUMBER, createWacliStub, waitFor, webhookPayload } from './support/wacli.mjs'
+import { OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
 
 const SECOND = 1000
 const MINUTE = 60 * SECOND
@@ -45,6 +47,10 @@ const BACKUP = {
   restoreTarget: '/',
   env: { AWS_DEFAULT_REGION: 'auto', AWS_ACCESS_KEY_ID: 'key-id', AWS_SECRET_ACCESS_KEY: 'key-secret' },
 }
+
+// The mailbox's settings, for the bridge with email on. The reader is its stub, which reaches no
+// mailbox (`support/mail-reader.mjs`).
+const EMAIL = { host: 'imap.example.com', port: 993, user: 'scooter.inbox@example.com', password: 'app-password', ownerAddresses: OWNER_ADDRESSES, authservId: AUTHSERV, checkSeconds: 60 }
 
 function settingsFor(root, extra = {}) {
   return {
@@ -281,13 +287,16 @@ test('backups: restic backs up the folders of 5.5, leaves out the caches and wha
     'scooter',
     '--tag',
     'scooter',
+    '--group-by',
+    'host,tags',
     '--exclude',
     p.wacliCache,
     '--exclude',
     p.agentsDiscarded,
     '--exclude-caches',
   ])
-  assert.deepEqual(forget.args, ['--cache-dir', p.backupCache, 'forget', '--host', 'scooter', '--tag', 'scooter', '--keep-daily', '14', '--keep-weekly', '0', '--keep-monthly', '24', '--prune'])
+  // Scooter's snapshots are one group, whatever folders each holds (D195).
+  assert.deepEqual(forget.args, ['--cache-dir', p.backupCache, 'forget', '--host', 'scooter', '--tag', 'scooter', '--group-by', 'host,tags', '--keep-daily', '14', '--keep-weekly', '0', '--keep-monthly', '24', '--prune'])
   for (const call of [backup, forget]) {
     // The settings in its environment, never on its command line, and nothing else of the bridge's.
     assert.deepEqual(call.env, {
@@ -430,6 +439,27 @@ test('backups: a bridge that stops during a backup stops restic, starts nothing 
   assert.deepEqual([w.happened, w.stub.commands(), lockExists(w.paths.backupLock)], [[], [], false])
 })
 
+test('backups: a stop that comes as a backup ends is over only once that backup is told: its result kept and its reply written', async t => {
+  const h = harness(t)
+  let stop
+  const stopped = new Promise(resolve => (stop = resolve))
+  const update = h.state.update
+  // The bridge's stop comes as the result is kept, before the reply is written.
+  h.state.update = changes => {
+    const result = update(changes)
+    if (changes.lastBackup) stop(h.backups.stop())
+    return result
+  }
+  const order = []
+  const told = h.backups.request('command', { about: 5 }).then(() => order.push('told'))
+  // Resolves once the stop is over.
+  await stopped
+  order.push('stopped')
+  await told
+  assert.deepEqual(order, ['told', 'stopped'])
+  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: 'Backed up: snapshot abcd1234.', about: 5 }])
+})
+
 test('backups: a failure to start the writers again is fatal, and backup.lock goes all the same', async t => {
   let fatal = null
   const h = harness(t, {
@@ -567,6 +597,75 @@ test('backups: in the bridge, WhatsApp and delivery stop while restic runs and s
   assert.match(bridge.backups.statusLine(clock.now()), /^Backups: last 21:20, snapshot abcd1234\. Next Tue 10 Nov 03:30\.$/)
 })
 
+test('backups: in the bridge, with email on, the email reader stops before restic starts, mail/ is backed up, and the reader starts again', async t => {
+  const root = makeTestDir(t)
+  const wacli = createWacliStub(t, root)
+  wacli.fixtures({ paired: true, messages: [] })
+  const reader = createMailReaderStub(root)
+  const restic = createResticStub(t, root)
+  restic.fixtures({ hold: ['backup'] })
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * HOUR }))
+  const clock = createFakeClock(START)
+  const { log, events } = createTestLog({ clock })
+  const proc = createProc({ log, clock })
+  const settings = settingsFor(root, { email: EMAIL })
+  const bridge = await startBridge({ settings, clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc, emailReader: reader.reader })
+  atEnd(t, () => bridge.stop())
+  await waitFor(() => wacli.callsOf('sync').length === 1 && reader.calls().length === 1, 'sync and the reader to start')
+
+  const done = bridge.backups.request('signal')
+  await restic.holding('backup')
+  // The reader is gone before restic reads mail/.
+  assert.throws(() => process.kill(reader.calls()[0].pid, 0), { code: 'ESRCH' })
+  assert.ok(events().indexOf('email.stopped') < events().indexOf('backup.writers_stopped'))
+  assert.ok(restic.calls()[0].args.includes(bridge.paths.mail))
+  assert.equal(reader.calls().length, 1)
+
+  restic.release('backup')
+  assert.equal((await done).ok, true)
+  await waitFor(() => reader.calls().length === 2 && wacli.callsOf('sync').length === 2, 'the reader and sync to start again')
+  assert.ok(events().lastIndexOf('email.started') > events().indexOf('backup.step'))
+})
+
+test('backups: in the bridge, a download the backup cut short, and the messages after it, are stored after it, in order (D179)', async t => {
+  const root = makeTestDir(t)
+  const wacli = createWacliStub(t, root)
+  wacli.fixtures({ paired: true, messages: [], media: { P1: { as: 'hang' } } })
+  const restic = createResticStub(t, root)
+  atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * HOUR }))
+  const clock = createFakeClock(START)
+  const { log } = createTestLog({ clock })
+  const proc = createProc({ log, clock })
+  const bridge = await startBridge({ settings: settingsFor(root), clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
+  atEnd(t, () => bridge.stop())
+  await waitFor(() => wacli.callsOf('sync').length === 1, 'sync to start')
+  const lines = () => [...bridge.store.index.entries()].map(entry => entry.line)
+
+  // After the bridge's first start, which catch-up lists from while nothing is stored, and five
+  // minutes apart, past CATCHUP_OVERLAP.
+  const photoAt = '2026-11-09T15:51:00Z'
+  const textAt = '2026-11-09T15:56:00Z'
+  assert.equal(await wacli.postWebhook(webhookPayload({ ID: 'P1', Timestamp: photoAt, Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 9 } })), 200)
+  await waitFor(() => wacli.callsOf('media download').length === 1, 'the download to start')
+  assert.equal(await wacli.postWebhook(webhookPayload({ ID: 'T1', Timestamp: textAt, Text: 'coffee 150' })), 200)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  wacli.fixtures({
+    media: { P1: { content: 'the photo' } },
+    messages: [listRow({ MsgID: 'P1', Timestamp: photoAt, MediaType: 'image', MimeType: 'image/jpeg' }), listRow({ MsgID: 'T1', Timestamp: textAt, Text: 'coffee 150' })],
+  })
+  assert.equal((await bridge.backups.request('signal')).ok, true)
+  await waitFor(() => lines().length === 2, 'catch-up to bring both back')
+  assert.deepEqual(
+    lines().map(line => [line.seq, line.sourceId]),
+    [
+      [1, 'P1'],
+      [2, 'T1'],
+    ],
+  )
+  assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])
+  assert.deepEqual(restic.commands(), ['backup', 'forget'])
+})
+
 test('backups: in the bridge, a /backup waiting for a run doesn\'t hold back a /status sent after it, and replies once it is done', async t => {
   const root = makeTestDir(t)
   const wacli = createWacliStub(t, root)
@@ -612,7 +711,9 @@ function cli(t, extra) {
   const settings = settingsFor(root, extra)
   const clock = createFakeClock(START)
   const { log } = createTestLog({ clock })
-  const proc = createProc({ log, clock })
+  // As root, `restore` needs Scooter's users, which this machine may not have; a test below has
+  // what it does without them.
+  const proc = isRoot ? { ...createProc({ log, clock }), lookupUser: async () => null } : createProc({ log, clock })
   const run = async (command, args = [], more = {}) => {
     let out = ''
     let err = ''
@@ -737,6 +838,31 @@ test('backups: restore refuses a target that isn\'t empty without --force, and t
   void root
 })
 
+test('backups: as root, restore refuses until setup has made Scooter\'s users, whose names its files get as owners, and asks restic nothing', async t => {
+  const { root, stub, settings } = cli(t)
+  stub.fixtures({ snapshots: [snapshotOf('/var/lib/scooter')] })
+  const clock = createFakeClock(START)
+  const { log } = createTestLog({ clock })
+  const proc = createProc({ log, clock })
+  const restore = async lookupUser => {
+    let err = ''
+    const backup = { ...BACKUP, restoreTarget: path.join(root, 'restored') }
+    const code = await runRestore({ args: ['--force'], settings: { ...settings, backup }, stdout: { write: () => {} }, stderr: { write: text => (err += text) }, clock, log, proc: { ...proc, lookupUser } })
+    return { code, err }
+  }
+  // As root on a machine `setup` hasn't made ready: `lookupUser` says so, as `id` does.
+  const missing = await restore(async name => {
+    if (name === 'scooter-mail') throw new Error(`there is no user ${name} on this machine`)
+    return { uid: 0, gid: 0 }
+  })
+  assert.deepEqual(missing, { code: 2, err: "scooter restore: there is no user scooter-mail on this machine: run `scooter setup` first, which makes Scooter's users, so each file restored gets its owner\n" })
+  assert.deepEqual(stub.commands(), [])
+  // As root once they are there; and not root, when there are no owners to give.
+  assert.equal((await restore(async () => ({ uid: 0, gid: 0 }))).code, 0)
+  assert.equal((await restore(async () => null)).code, 0)
+  assert.deepEqual(stub.commands(), ['snapshots', 'restore', 'snapshots', 'restore'])
+})
+
 // ---------------------------------------------------------------------------------------------
 // The real round trip, when restic is installed (section 10)
 
@@ -746,7 +872,9 @@ test('backups: a real round trip with restic: init, back up, no plaintext, the w
   const root = makeTestDir(t)
   const clock = createFakeClock('2026-11-10T22:00:00Z')
   const { log, entries } = createTestLog({ clock })
-  const proc = createProc({ log, clock })
+  // As root, `restore` needs Scooter's users, which this machine may not have: the root test of
+  // owners by name below makes them.
+  const proc = isRoot ? { ...createProc({ log, clock }), lookupUser: async () => null } : createProc({ log, clock })
   const repository = path.join(root, 'repository')
   const settings = settingsFor(root, { backup: { repository, restoreTarget: path.join(root, 'restored'), env: {} } })
   const paths = makePaths(settings)
@@ -817,6 +945,36 @@ test('backups: a real round trip with restic: init, back up, no plaintext, the w
   assert.equal(fs.readFileSync(path.join(back.runnerImage, 'rootfs.ext4'), 'utf8'), 'an image of its own')
 })
 
+test('backups: with restic, Scooter\'s snapshots are one group whatever folders they hold, so forget keeps to the retention when a folder appears (D195)', withRestic, async t => {
+  const root = makeTestDir(t)
+  const clock = createFakeClock('2026-11-10T22:00:00Z')
+  const { log } = createTestLog({ clock })
+  const proc = createProc({ log, clock })
+  // One daily snapshot. restic 0.19 also keeps a group's oldest while it has fewer days than the
+  // policy keeps, which a retention of one day leaves out of the test.
+  const settings = settingsFor(root, { backup: { repository: path.join(root, 'repository'), env: {}, keepDaily: 1, keepWeekly: 0, keepMonthly: 0 } })
+  const paths = makePaths(settings)
+  fillDataFolder(paths)
+  ensureDir(paths.bridge)
+  // Email is off at first, so mail/ isn't backed up.
+  fs.rmSync(paths.mail, { recursive: true })
+  const quiet = { write: () => {} }
+  assert.equal(await runBackupInit({ args: [], settings, stdout: quiet, stderr: quiet, clock, log, proc }), 0)
+  const first = await backUp({ settings, paths, proc, log, clock })
+  // Then it is turned on, and the folders backed up change.
+  fs.mkdirSync(paths.mail)
+  fs.writeFileSync(paths.mailState, '{"next":5}\n')
+  const second = await backUp({ settings, paths, proc, log, clock })
+  const listed = await createRestic({ backup: settings.backup, paths, proc })(['snapshots', '--json'])
+  const shots = JSON.parse(listed.stdout)
+  // Both were made today, as restic dates them, and keep-daily keeps the newest of a day. By host
+  // and paths, restic would keep the first too, as the newest of its own group, and for good.
+  const day = shot => shot.time.slice(0, 10)
+  if (shots.length === 2 && day(shots[0]) !== day(shots[1])) return t.skip('the two backups fell on two days')
+  assert.deepEqual(shots.map(shot => shot.short_id), [second.snapshot])
+  assert.notEqual(first.snapshot, second.snapshot)
+})
+
 test('backups: as root, a restore gives each file its owner by name, on a machine where the user has another number', { skip: !mayCreateUsers ? 'needs root and SCOOTER_ROOT_TESTS=1' : realRestic === null ? 'restic is not installed' : false }, async t => {
   const root = makeTestDir(t)
   fs.chmodSync(root, 0o755)
@@ -824,10 +982,17 @@ test('backups: as root, a restore gives each file its owner by name, on a machin
   const { log } = createTestLog({ clock })
   const proc = createProc({ log, clock })
   const env = { PATH: process.env.PATH }
+  const addUser = async name => {
+    const add = await proc.run('useradd', ['--system', '--user-group', '--shell', '/usr/sbin/nologin', name], { env })
+    assert.equal(add.code, 0, add.stderr)
+    atEnd(t, () => proc.run('userdel', [name], { env }))
+  }
+  // Scooter's users, as `setup` makes them, without which a restore as root refuses.
+  for (const user of ['scooter-wacli', 'scooter-runner', 'scooter-mail']) {
+    if ((await proc.run('id', ['-u', '--', user], { env })).code !== 0) await addUser(user)
+  }
   const name = 'scooter-test-restore'
-  const add = await proc.run('useradd', ['--system', '--user-group', '--shell', '/usr/sbin/nologin', name], { env })
-  assert.equal(add.code, 0, add.stderr)
-  atEnd(t, () => proc.run('userdel', [name], { env }))
+  await addUser(name)
   const before = await proc.lookupUser(name)
 
   const settings = settingsFor(root, { backup: { repository: path.join(root, 'repository'), restoreTarget: path.join(root, 'restored'), env: {} } })

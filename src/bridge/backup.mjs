@@ -37,6 +37,11 @@ const RESTIC = 'restic'
 // and restores are only those. In Docker the bridge's container is called `scooter` too (8.3).
 const HOST = 'scooter'
 const TAG = 'scooter'
+// They are one group, whatever folders each holds. restic groups by host and paths unless told,
+// and the folders change when one first appears, such as `runner/log/` after the first run or
+// `mail/` when email is turned on (D185): `forget` would then keep the last snapshot of the old
+// folders for good, and `backup` would find no parent, and read every file again (D195).
+const GROUP = ['--group-by', 'host,tags']
 
 // What a backup holds (5.5), and what it leaves out: wacli's cache, and what the runner's clean-up
 // set aside and is removing (6.9). The cache restic keeps in the bridge's folder marks itself as
@@ -154,7 +159,7 @@ export async function backUp({ settings, paths, proc, log, clock = systemClock, 
   // A folder that isn't there, such as `mail/` with email off, is no part of the backup. restic
   // would say so, and exit with 3, as for a file it couldn't read.
   const folders = include.filter(folder => fs.existsSync(folder))
-  const saved = await step('backup', ['backup', ...folders, '--host', HOST, '--tag', TAG, ...exclude.flatMap(folder => ['--exclude', folder]), '--exclude-caches'])
+  const saved = await step('backup', ['backup', ...folders, '--host', HOST, '--tag', TAG, ...GROUP, ...exclude.flatMap(folder => ['--exclude', folder]), '--exclude-caches'])
   const snapshot = /^snapshot ([0-9a-f]+) saved$/m.exec(saved.stdout)?.[1] ?? null
   if (saved.code === 3 && snapshot !== null) {
     throw new ResticError('backup', saved, { snapshot, reason: "restic couldn't read some files, so the snapshot is incomplete" })
@@ -163,7 +168,7 @@ export async function backUp({ settings, paths, proc, log, clock = systemClock, 
   if (snapshot === null) throw new ResticError('backup', saved, { reason: "restic backup didn't say which snapshot it saved" })
 
   const keep = ['--keep-daily', String(backup.keepDaily), '--keep-weekly', String(backup.keepWeekly), '--keep-monthly', String(backup.keepMonthly)]
-  const forgot = await step('forget', ['forget', '--host', HOST, '--tag', TAG, ...keep, '--prune'])
+  const forgot = await step('forget', ['forget', '--host', HOST, '--tag', TAG, ...GROUP, ...keep, '--prune'])
   if (forgot.code !== 0) throw new ResticError('forget', forgot, { snapshot })
 
   const checked = backup.forceCheck || toLocal(startedAt, settings.timeZone).weekday === limits.RESTIC_CHECK_WEEKDAY
@@ -216,19 +221,32 @@ export class RestoreRefused extends Error {
   }
 }
 
+// Scooter's users, which `setup` makes (3.2), and whose names a backup's files have as owners.
+const USERS = ['scooter-wacli', 'scooter-runner', 'scooter-mail']
+
 // `restore`: the snapshot `snapshot`, or the latest of Scooter's, into `RESTORE_TARGET`. Each folder
 // the snapshot holds goes to the target joined with the path it was backed up from, so with `/`
-// back where it was. Refuses (`RestoreRefused`) a snapshot that isn't one of Scooter's backups;
-// while a bridge or a runner works on the data folder it would write into; and, without `force`, a
-// folder it would write into that isn't empty. Restored, each folder is the snapshot's and nothing
-// else: restic deletes what the snapshot doesn't hold, inside those folders only, and gives every
-// file its owner by name, so a machine whose users have other numbers gets them right. It is one
-// restore of the data folder the snapshot was made from, limited to the folders it holds, so the
-// folders between, `runner/` and `exchange/`, get the owners and modes they had then too: a
-// restore of each folder on its own would make each new one root's, 0700, which the runner can't
-// enter. Resolves with `{ id, time, root, said }`, `root` being where the data folder's folders
-// went.
+// back where it was. Refuses (`RestoreRefused`), as root, while Scooter's users aren't all there;
+// a snapshot that isn't one of Scooter's backups; while a bridge or a runner works on the data
+// folder it would write into; and, without `force`, a folder it would write into that isn't empty.
+// Restored, each folder is the snapshot's and nothing else: restic deletes what the snapshot doesn't
+// hold, inside those folders only, and gives every file its owner by name, so a machine whose users
+// have other numbers gets them right. It is one restore of the data folder the snapshot was made
+// from, limited to the folders it holds, so the folders between, `runner/` and `exchange/`, get the
+// owners and modes they had then too: a restore of each folder on its own would make each new one
+// root's, 0700, which the runner can't enter. Resolves with `{ id, time, root, said }`, `root` being
+// where the data folder's folders went.
 export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest', force = false }) {
+  // restic gives a file whose owner's name isn't a user here to root, and says nothing: the runner
+  // couldn't then read the agent's folder, nor wacli its own. That is a restore before `setup` on
+  // a new machine, so it comes after (D190). Not root, files stay the restoring user's anyway.
+  for (const name of USERS) {
+    try {
+      await proc.lookupUser(name)
+    } catch (error) {
+      throw new RestoreRefused(`${error.message}: run \`scooter setup\` first, which makes Scooter's users, so each file restored gets its owner`)
+    }
+  }
   const restic = createRestic({ backup, paths, proc })
   const listed = await restic(['snapshots', '--json', '--host', HOST, '--tag', TAG, snapshot])
   if (listed.code !== 0) throw new ResticError('snapshots', listed)
@@ -296,11 +314,15 @@ function backoff(n) {
 // progress, and resolves with its result once the replies are written; `trigger` is `command` for
 // `/backup`, whose reply is `about` its line, `scheduled` or `signal`. `ask(seq)` is what `/backup`
 // does: it returns the reply to give at once, or null when the reply comes once the backup ends.
-// `stop()` stops the schedule and any backup in progress. `statusLine(now)` is the line of
-// `/status`.
+// `stop()` stops the schedule and any backup in progress, and waits for their replies to be
+// written. `statusLine(now)` is the line of `/status`.
 export function createBackups({ settings, paths, proc, log, clock = systemClock, ids, state, runnerUser = null, quiesce, resume, onFatal = () => {} }) {
   const stopping = new AbortController()
+  // The backup in progress, which a request joins, if any.
   let current = null
+  // Every backup not yet told: the one in progress, and those whose result is being kept and
+  // whose replies are being written, which a request no longer joins.
+  const jobs = new Set()
   let loop = null
 
   // `exchange/locks/` is the runner's (3.2), and the bridge writes its lock there as root, so it
@@ -483,7 +505,16 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
       await settle(job, result)
       return result
     })()
+    // Until it is told, a stop waits for it too.
+    jobs.add(job.done)
+    const forget = () => jobs.delete(job.done)
+    job.done.then(forget, forget)
     return job.done
+  }
+
+  // Resolves once every backup asked for so far is over and told.
+  async function told() {
+    while (jobs.size > 0) await Promise.all(jobs)
   }
 
   async function schedule() {
@@ -530,14 +561,15 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
       return null
     },
 
+    // A backup that ended as the stop came is told too: its reply is written before this resolves.
     async stop() {
       stopping.abort()
       await loop
-      await current?.done
+      await told()
     },
 
-    // Resolves when the backup in progress, if any, is over and told. For tests.
-    idle: () => current?.done ?? Promise.resolve(),
+    // Resolves when every backup asked for so far is over and told. For tests.
+    idle: told,
 
     statusLine(now) {
       if (!settings.backup) return `Backups: off, because ${BACKUPS_OFF}.`

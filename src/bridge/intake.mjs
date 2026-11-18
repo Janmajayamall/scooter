@@ -22,8 +22,10 @@
 // - Duplicates, which the webhook and catch-up both deliver (4.4), are the store's to skip. A
 //   message already stored is recognized before its attachments are downloaded again.
 // - A download that its channel's stop cut short, for a backup or a shutdown, leaves the message
-//   unstored, rather than stored as `download failed`: the channel hands it over again when it
-//   starts, as WhatsApp's catch-up does (D179).
+//   unstored, rather than stored as `download failed`, and every record of that channel after it
+//   too, until the channel starts again: the channel hands them over again when it starts, as
+//   WhatsApp's catch-up does, from two minutes before the newest line it stored (D179). Had a
+//   later one been stored, catch-up would start after the message left.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -55,6 +57,9 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
   const ids = createIds(clock)
   let queue = Promise.resolve()
   let failed = null
+  // The channels whose stop cut a download short, leaving its message for them to hand over again,
+  // until they start again: nothing of theirs is stored meanwhile (D179).
+  const left = new Set()
 
   // The `at` of the newest incoming line from each channel, by `seq`. WhatsApp's catch-up starts
   // from it (5.2 step 7).
@@ -173,6 +178,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
       }
     } catch (error) {
       if (error.code !== 'ESTOPPED') throw error
+      left.add(record.source)
       return skip(record, 'message', 'its channel stopped during a download')
     } finally {
       for (const { file } of downloaded) fs.rmSync(file, { force: true })
@@ -187,6 +193,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     }
     const channel = channels.get(record.source)
     if (!channel) return skip(record, null, 'no such channel')
+    if (left.has(record.source)) return skip(record, null, 'its channel stopped during a download before it')
     const base = { dir: 'in', at: record.at ?? isoSeconds(clock.now()), source: record.source, trust: 'owner' }
 
     if (record.revoked) {
@@ -244,6 +251,14 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
 
     // Resolves when every record taken so far has been handled.
     idle: () => queue,
+
+    // Says that the channel `source` starts again: what it hands over from here on is stored again,
+    // after its stop left a message (D179). It takes its turn after the records taken before it,
+    // which are still left. The bridge calls it before it starts a channel it stopped.
+    started(source) {
+      queue = queue.then(() => left.delete(source))
+      return queue
+    },
 
     // The `at` of the newest incoming line from a channel, or null when there is none.
     newestIncomingAt: source => newestIn.get(source) ?? null,

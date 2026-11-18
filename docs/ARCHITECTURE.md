@@ -232,7 +232,7 @@ The bridge backs up with restic to an S3-compatible bucket: nightly at `BACKUP_T
 - **In:** the datastore, the agents' folders, wacli's folder without its cache, the bridge's and the email reader's state, the network log and the outbox.
 - **Out:** the env files, the VM image, the locks, caches, and what the runner's clean-up is removing (`agents/.discarded/`).
 - **Consistency:** the bridge takes `backup.lock`, waits for a run in progress to end, stops the channels, pauses delivery, backs up, and starts everything again. A run past its time is waited for while its runner still holds `runner/runner.sock`, at work after the run; a lock whose runner is gone is passed by (`docs/DECISIONS.md`, milestone 10).
-- **Restore** puts each folder back at the path it was backed up from, with owners by name, and makes each folder the snapshot's, deleting nothing outside those folders. It refuses to write into the data folder while either service runs on it.
+- **Restore** puts each folder back at the path it was backed up from, with owners by name, and makes each folder the snapshot's, deleting nothing outside those folders. It refuses to write into the data folder while either service runs on it, and, as root, to run before `setup` has made Scooter's users.
 
 ### 2.12 Configuration
 
@@ -407,7 +407,7 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 
 ### 4.4 Starting up
 
-**Bridge:** load `bridge.env`; read the datastore and rebuild the index; remove a leftover `backup.lock`; start the channels; send what was left in the outbox; then loop.
+**Bridge:** load `bridge.env`; remove a leftover `backup.lock`; read the datastore and rebuild the index; start the channels; send what was left in the outbox; then loop.
 
 **Runner:** load `runner.env`; validate `agents.yaml`; free what pi left, then create the agent's folder if it's new and throw away a run's uncommitted changes; check the image and pick the accelerator; remove a leftover `run.lock`; write `status.json`; run any `once` task and start any backfill; then loop.
 
@@ -447,7 +447,7 @@ The owner gets one notice for the first failure in a row, and one when items are
 ### 5.4 A backup
 
 1. The bridge takes `backup.lock`, then waits for `run.lock` to go, or for the runner that took it to be gone.
-2. It stops the channels, with wacli's calls in progress, and pauses delivery.
+2. It stops the channels, with wacli's calls in progress, and pauses delivery. A download the stop cut short leaves its message, and intake the ones after it, for catch-up.
 3. restic backs up, then prunes old snapshots; on Sundays it also checks the repository.
 4. The bridge starts the channels and delivery again, and releases the lock. Catch-up collects what arrived meanwhile.
 

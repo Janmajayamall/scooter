@@ -7,6 +7,7 @@
 // place folders in the spool themselves, as the reader writes them.
 
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
@@ -711,8 +712,22 @@ test('email: the reader runs with the mailbox\'s settings and nothing else of th
   for (const dir of [context.paths.mail, context.paths.mailSpool]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir)
   await waitFor(() => fs.existsSync(context.paths.mailState), 'the reader\'s position')
   if (!isRoot) assert.equal(call.uid, process.getuid())
-  // In production the reader is this Node, running src/mail/reader.mjs.
-  assert.deepEqual(DEFAULT_READER, { program: process.execPath, args: [fileURLToPath(new URL('../src/mail/reader.mjs', import.meta.url))] })
+  // In production the reader is this Node, running src/mail/reader.mjs, deaf to SIGUSR1.
+  assert.deepEqual(DEFAULT_READER, { program: process.execPath, args: ['--disable-sigusr1', fileURLToPath(new URL('../src/mail/reader.mjs', import.meta.url))] })
+})
+
+test('email: the reader\'s Node ignores SIGUSR1, the bridge\'s signal to back up, rather than open its debugger to local users (D196)', async t => {
+  // The reader's own Node options, before its file, with a program that waits in its place.
+  const options = DEFAULT_READER.args.slice(0, -1)
+  const child = spawn(DEFAULT_READER.program, [...options, '-e', 'process.stdout.write("ready\\n"); setTimeout(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'pipe'] })
+  atEnd(t, () => child.kill('SIGKILL'))
+  let stderr = ''
+  child.stderr.setEncoding('utf8').on('data', chunk => (stderr += chunk))
+  const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
+  await new Promise(resolve => child.stdout.once('data', resolve))
+  child.kill('SIGUSR1')
+  assert.deepEqual(await exited, { code: 0, signal: null })
+  assert.ok(!/Debugger listening/.test(stderr), stderr)
 })
 
 test('email: every wacli call is still without the mailbox\'s password, with email on', async t => {

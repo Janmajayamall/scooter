@@ -511,9 +511,53 @@ test('whatsapp: a stop stops a download in progress, its message is left for cat
   assert.equal(stub.callsOf('media download').length, 1)
 
   stub.fixtures({ media: { H1: { content: 'the photo' } }, messages: [listRow({ MsgID: 'H1', Timestamp: at, MediaType: 'image', MimeType: 'image/jpeg' })] })
+  bridge.intake.started('whatsapp')
   await whatsapp.start(record => bridge.intake.take(record))
   await waitFor(() => lines().length === 1, 'catch-up to bring it back')
   assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])
+})
+
+test('whatsapp: what came after a message a stop left is left too, until the channel starts again, so catch-up brings them all back, in order (D179)', async t => {
+  // The review's probe: a photo whose download hangs, and a text sent five minutes later while it
+  // does, past CATCHUP_OVERLAP. Had the text been stored, catch-up would start after the photo.
+  const photoAt = '2026-11-09T15:46:00Z'
+  const textAt = '2026-11-09T15:51:00Z'
+  const photo = { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 9 }
+  const context = await setup(t, { fixtures: { paired: true, messages: [], media: { P1: { as: 'hang' } } } })
+  const { stub, lines, synced, bridge, whatsapp, caughtUp } = context
+  await synced()
+  await caughtUp()
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'P1', Timestamp: photoAt, Media: photo })), 200)
+  await waitFor(() => stub.callsOf('media download').length === 1, 'the download to start')
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'T1', Timestamp: textAt, Text: 'coffee 150' })), 200)
+  // A command after it is left too, and answered once catch-up brings it back.
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'C1', Timestamp: textAt, Text: '/help' })), 200)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await whatsapp.stop()
+  await bridge.intake.idle()
+  assert.deepEqual(lines(), [])
+
+  const rows = [
+    listRow({ MsgID: 'P1', Timestamp: photoAt, MediaType: 'image', MimeType: 'image/jpeg' }),
+    listRow({ MsgID: 'T1', Timestamp: textAt, Text: 'coffee 150' }),
+    listRow({ MsgID: 'C1', Timestamp: textAt, Text: '/help' }),
+  ]
+  stub.fixtures({ media: { P1: { content: 'the photo' } }, messages: rows })
+  bridge.intake.started('whatsapp')
+  await whatsapp.start(record => bridge.intake.take(record))
+  await waitFor(() => lines().length === 3, 'catch-up to bring them back')
+  assert.deepEqual(
+    lines().map(line => [line.seq, line.kind, line.sourceId, line.at]),
+    [
+      [1, 'message', 'P1', photoAt],
+      [2, 'message', 'T1', textAt],
+      [3, 'command', 'C1', textAt],
+    ],
+  )
+  assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])
+  // The second catch-up listed from the bridge's first start, as nothing was stored before it.
+  const lists = stub.callsOf('messages list')
+  assert.equal(lists.at(-1).args[lists.at(-1).args.indexOf('--after') + 1], '2026-11-09T15:45:00Z')
 })
 
 test('whatsapp: not paired, it says to run pair and checks every minute; once paired, sync starts', async t => {

@@ -545,9 +545,9 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     // Stops sync, the webhook server and catch-up, and wacli's calls in progress: a list, a check
     // of the pairing, a download. Resolves once they have stopped and the messages they were
     // handing over have been taken. A download it stops, or one asked for once it has stopped,
-    // fails with `ESTOPPED`, and intake leaves its message for catch-up, which lists it again when
-    // the channel starts (D179). A stop takes at most `STOP_GRACE` for each call, rather than up to
-    // `WACLI_CALL_TIMEOUT` for each try of a download.
+    // fails with `ESTOPPED`, and intake leaves its message, and the ones after it, for catch-up,
+    // which lists them again when the channel starts (D179). A stop takes at most `STOP_GRACE` for
+    // each call, rather than up to `WACLI_CALL_TIMEOUT` for each try of a download.
     async stop() {
       if (!running) return
       const { server, supervisor, stopping, catchingUp } = running

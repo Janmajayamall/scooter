@@ -122,7 +122,8 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     const outbox = createOutbox({ paths, store, channels, defaultChannel: settings.defaultChannel, log, clock, owner: runnerUser, onFatal: reportFatal })
     // What a backup stops while restic reads (5.5, step 3): delivery, between two messages; then
     // the channels, which stop wacli's calls in progress, so a download a stop cut short leaves
-    // its message for catch-up (D179); then what intake was storing.
+    // its message for catch-up, and intake the messages after it (D179); then what intake was
+    // storing. Started again, a channel's messages are stored again.
     const stopped = []
     const backups = createBackups({
       settings,
@@ -142,7 +143,10 @@ export async function startBridge({ settings, clock = systemClock, log = createL
         await intake.idle()
       },
       resume: async () => {
-        for (const channel of stopped.splice(0)) await channel.start(take)
+        for (const channel of stopped.splice(0)) {
+          intake.started(channel.name)
+          await channel.start(take)
+        }
         outbox.resume()
       },
       onFatal: reportFatal,
