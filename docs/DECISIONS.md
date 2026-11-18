@@ -2099,6 +2099,7 @@ What the milestone left in the repository:
 *Choice:* the failure handling reads the last request to OpenRouter, or the last the policy refused there, whichever came later. A refusal before any request had gone to OpenRouter in the run is a setup error, "the network policy refused pi's request: <reason>"; a later one is pi's own failure, "the network policy refused a request: <reason>". What pi left, an answer cut short and a run that wrote too much still come first, as before.
 *Reason:* nothing the agent does can run before the model's first answer, which needs a request that went out, so a refusal before one is pi's own. pi asks the same way all run long (0.4, pi 6), so the policy refusing pi shows at its first request, and no try of the batch can mend it: pausing, with the reason in the notice, holds the messages without using their attempts. A later refusal may be the agent's, from a command it ran, and reading that as a setup error would pause runs for as long as the message that misled it is in the batch, as D156 is there to prevent. *Cost:* a pi whose later requests differ in shape from its first, which pi 1.5.2's don't, would use the items' attempts.
 *A request the agent makes itself* (since milestone 9, for the review of milestone 8, smaller point 1): the policy lets out any request shaped like pi's that carries the placeholder, whoever sends it, and the VM's environment holds the placeholder. So a misled agent can send one with `curl`, and the failure handling reads what came of it as OpenRouter's answer to pi: a request still waiting when pi is killed reads as an outage, and so would a 429 or a 402 that OpenRouter gave it. The batch is then tried every 30 minutes, or held as a setup error, for as long as the message that misled the agent is in it: the kind of case D156 and this decision close for a key of the agent's own and for a refusal, reached another way. Nothing tells pi's requests from the agent's, which both come from the VM with the placeholder. A fix is a choice for the owner, such as a limit on how many tries in a row one batch may end as an outage or a setup error, which a long outage would then make spend the messages' attempts, where 6.9 says it never does. Left as a cost: the plan's milestone 14 lists it among what isn't done, for the owner. The review gave it with a dummy key, as lines given to the failure handling, not in a VM.
+*The owner's answer* (2026-11-18, before milestone 14; 14.1): accepted as it is, "this is ok". Nothing changes. The README lists it among the known limits, with what takes a WhatsApp message's text out of what the agent is shown, its deletion (6.5); DESIGN.md section 9 has it among the accepted risks.
 
 **D161. What one request, and one run, add to the log.**
 *Choice:* a path is cut at `NETLOG_PATH_MAX_CHARS`, 1,000 characters, a host at 253, a reason at `REASON_MAX_CHARS`, with what the VM chose, such as a field's name, at its end; a line the writer would make longer than `NETLOG_LINE_MAX_BYTES` is an error, and no request goes out without its line. One run may make `RUN_REQUESTS_MAX`, 1,000, requests that go out; past them the policy refuses. It writes its first `RUN_REFUSALS_LOGGED_MAX`, 100, refusals one by one, and counts the rest in one `unlogged` line when the run's network closes. `/status` counts those with the others.
@@ -2386,6 +2387,36 @@ What the milestone left in the repository:
 *Reason:* the review's way. WhatsApp's catch-up runs as soon as the channel starts, from two minutes before the newest incoming line, and lists what came after it again, in order. A message stored after the one left would move that start past it, and it would never be stored: records queued behind a download needn't be close to it in time, since a download may take three tries of `WACLI_CALL_TIMEOUT` with what is sent meanwhile waiting, and after downtime wacli hands over within seconds a backlog that spans hours. With nothing of the channel stored after it, catch-up starts before the message left, and brings it and those after it. Catch-up itself hands its rows over one at a time, and stops between them on a stop. Email's download is a copy out of the spool, which is quick, and the spool keeps the email until it is stored (D137). *Not:* what pull request 11 had at first, the message left and the ones queued behind it stored, which lost the message for good when one of those was more than `CATCHUP_OVERLAP` newer (10.5).
 *Cost:* a message whose download a stop cut short, and those after it, are stored only when catch-up lists them, a few seconds after the channel starts again; a command among them is answered then.
 *Not changed:* catch-up and the webhook both hand records to intake while the channel runs, so a catch-up cut short between rows, by a stop or a crash, after the webhook stored a message more than `CATCHUP_OVERLAP` newer than the rows it hadn't listed yet, doesn't list them again. Only a row the webhook didn't hand over is lost so. It is so on `main`, and follows from where 5.2 step 7 starts catch-up; this milestone doesn't change it.
+*Closed in milestone 14* (the second review of milestone 10, smaller point 3; the owner's answer, "yes", 14.1).
+*Choice:* catch-up's start comes from what catch-up itself has finished listing, kept in the bridge's state, never from what the webhook stored (`catchUp` in `bridge/state.json`, `whatsapp.mjs`):
+- For each of the owner's chats, the state keeps the time of the newest of the owner's rows catch-up has listed there with every row before it handled: stored, skipped as a duplicate or for an unknown target, or dropped as 5.2 drops it. The next catch-up of that chat starts `CATCHUP_OVERLAP` before it, and never before the bridge's first start.
+- It is saved after each page and when the catch-up ends, done, failed or stopped. A crash keeps nothing in memory: the next start lists again from the last save, and stores nothing twice.
+- A row intake must be handed again holds it where it is: intake now says so of a record, `again: true`, for one a stop left (the first part of this decision), one that failed for a reason of the bridge's, such as a bug (`intake.failed`), and one the store stopped for. The rows after it are still handed over, and stored, and the next catch-up lists from before it again; `whatsapp.catchup_held` says so once a catch-up.
+- The bot's own rows don't move it: wacli stores a reply with the time it was sent, and after downtime a reply waiting in the outbox can go out before wacli has received the owner's messages from while it was down, whose times are older.
+- Every chat the owner has written from is listed, each from its own place: the chat replies go to, and any other an owner's message came from, such as an `@lid` one, which is listed from the first start the first time.
+- A state an older bridge wrote has no `catchUp`: it starts, as that bridge did, from the newest incoming WhatsApp line, in the chat it listed, and saves that at once.
+- As before, nothing from before the bridge's first start is imported, and what 5.2 drops on purpose stays dropped. The `left` of the first part stays, so that what came after a message a stop left is stored after it, in its order.
+
+*The kind of problem.* Every way something stored out of turn, or not stored, could move the start past a row that was never stored, and what became of it:
+
+| Way | On `main` | Now | Test |
+|---|---|---|---|
+| A stop between catch-up's rows, after the webhook stored a message more than `CATCHUP_OVERLAP` newer than the rows not listed yet (the review's case) | the rest passed for good | listed again when the channel starts | `whatsapp`, by a stop; fails on `main` |
+| The same, by a crash | the same | listed again from the last save | `whatsapp`, the state as it was on disk at the crash given to a new bridge; fails on `main` |
+| A message whose webhook never came, wacli waiting 5 seconds and never trying again, and a newer one stored before the next catch-up (found by reading the code, for the plan) | passed for good | listed by the next catch-up | `whatsapp`; fails on `main` |
+| A record intake failed on, for a bug or the disk | passed for good once a newer one was stored | catch-up holds before it, and lists it again | `intake` and `whatsapp` |
+| A download a stop cut short (the first part of this decision) | left, and nothing more of the channel stored | the same, and catch-up holds before it too | `whatsapp`, `backup`, as before |
+| The bot's own reply, stored by wacli before the owner's messages from downtime reach it | not a way on `main`, which counted incoming lines only; it would have been one had every listed row moved the start | doesn't move it | `whatsapp` |
+| The owner's newest message from another chat, such as an `@lid` one, making catch-up list that chat alone | a message the webhook missed in the other chat passed for good | every chat listed, each from its own place | `whatsapp`; fails on `main` |
+| An email, which says nothing of WhatsApp (row 10) | already left out | left out | as before |
+
+*Left, and why* (the plan's rule: what can't be closed with wacli as it is):
+- **A message that reaches wacli late.** `messages list` lists by the messages' own times, so a message that reaches wacli's store more than `CATCHUP_OVERLAP` after the owner's message with a later time was listed, and whose webhook was also lost, is never listed. The owner's messages reach wacli in their order, from one sender, so this needs a delay across the owner's own devices, or their clocks, of more than 2 minutes, and a lost webhook. wacli 0.26.0 keeps a journal of its store's changes in the order it records them, `messages changes`, which would close it (its source and its `docs/messages.md`, read on 2026-11-18): it holds no content, so each change needs a `messages show`, and it keeps 30 days. It isn't used: nothing here can run it against a paired store, and it would replace a catch-up the tests and gate G4 check with one nothing has seen. The README lists it among the known limits.
+- **A page of 500 rows in one second.** `--after` is strict, to the second, so a full page whose rows all share a second moves past that second. The owner's one chat can't make 500 messages in a second.
+
+*Reason:* the plan's way, which the owner's answer chose: "a catch-up that was cut short runs again from where it started". Only catch-up lists everything wacli holds; the webhook is best-effort. So what catch-up has handed over, in order, is the only thing that says nothing before it is missing.
+*Cost:* each catch-up lists the bot's rows since the owner's newest message again, and a chat seen for the first time from the first start, once; the state is written after a page that moved catch-up on. A row intake fails on every time, as a bug could make, holds catch-up there: each catch-up then lists from it, and says so, until the bug is mended.
+*Not verified:* how the real wacli stores and lists the owner's chat after downtime, with real sends and `@lid` IDs (gate G4).
 
 **D180. restic's environment, and its cache.**
 *Question:* 5.5 runs restic with its settings in its environment, and says nothing of what else restic needs.
@@ -3025,6 +3056,18 @@ What the milestone left in the repository:
 **D229. Not changed: how Docker restarts the runner** (found while settling D222).
 *Question:* the runner stops on an error and leans on its service manager to start it again (D93). D207 gave the native unit restarts after 1 minute, then about 5½, then 30, so that a fault that stays after pi has run, such as a disk too full to record the run, spends on OpenRouter at most twice an hour. Compose's `restart: unless-stopped` (8.3) restarts a container after a wait that doubles from 100 milliseconds up to a minute, and starts again from 100 milliseconds once the container has run 10 seconds, by Docker's documentation; this wasn't measured here. A runner that runs pi before it stops has run longer.
 *Found, and left:* such a fault would run pi again every 10 to 20 seconds in Docker. Compose's restart policy has no wait to set. What would settle it: the runner keeps its own waits between starts, in `runner/`, applied where its service manager doesn't wait; or the owner's choice of `restart: on-failure:<n>`, which stops after `n` failures. The plan's milestone 14 has it, among what isn't done, for the owner.
+*Measured* by the review of milestone 13, smaller point 1: under `restart: unless-stopped`, a container that ended with an error after 12 seconds was started again 0.2 seconds later, every time.
+*Closed in milestone 14* (the owner's answer, "ok", 14.1): the first of the two ways (`src/runner/restarts.mjs`).
+*Choice:*
+- **The waits** are the native unit's, as systemd works them out from `RestartSec=1min`, `RestartSteps=2` and `RestartMaxDelaySec=30min`: 1 minute after the first stop in a row, 1 minute × √30, 5 minutes 29 seconds, after the second, and 30 minutes after each from the third (`RUNNER_RESTART_WAITS`; a test holds them to the unit). They count from the stop, as systemd's do, or from the start before it when the stop couldn't be recorded, such as after a kill or a lost power.
+- **The record**, `runner/restarts.json`, the runner's own, mode 0600: how many starts in a row have ended other than by a stop the runner was asked for, when the latest started and stopped, and why. A start reads it, and, when it follows a stop on an error, waits until then, after the steps of a start that run nothing of pi's and before its loop; then it writes itself down as the next stop in a row, and runs nothing if it can't. So a start that ends in a crash, a kill or a lost power counts, though it could write nothing then; and on a disk too full to write the record, the runner stops before pi, so nothing is spent, and Docker's own backoff, up to a minute for a container that ran less than 10 seconds, paces its starts.
+- **What ends the waiting:** a stop the runner is asked for, by `SIGTERM` or `SIGINT`, makes the count 0: `docker compose restart runner`, `docker compose stop` then `up`, Docker restarting its daemon, and the machine's shutdown, as a start by hand or the machine's start does for systemd (D207). A run recorded since the start makes the next stop the first in a row: only a run that got through can, so a fault that stops every run, after pi and before the run is recorded, keeps counting.
+- **It never gives up:** the runner waits and runs again, every 30 minutes at most, as an outage does (4.7).
+- **The owner sees it:** the first wait in a row writes one notice, "⚠️ I stopped on an error (ENOSPC), so I wait until 21:31 before I go on, and longer if it happens again. Restarting the runner ends the wait.", and `status.json` gets `restart`, the stops, until when and why, which `/status` shows while the wait lasts. The reason is the error's code or name (`errorFields`), never its message, which can quote what was being read.
+- **Natively it keeps none:** the runner's unit sets `SCOOTER_RESTART_WAITS=systemd`, and the runner then keeps no record and no waits, so that `sudo systemctl restart scooter-runner` brings it back at once (D207). Anywhere else it keeps them, unless its environment says so.
+*Reason:* the plan's rules, from the owner's answer. The runner keeps them by default, and the unit turns them off, rather than the runner looking for `/.dockerenv`: "however the runner is started again" a fault that stays must not run pi more often, and the unit is Scooter's own file, which says so where systemd's waits are set. It isn't a setting of `runner.env`, which refuses it: it isn't the owner's to choose (8.6).
+*Cost:* in Docker a runner that stopped on an error waits at least a minute, also when a restart alone would have mended it; restarting it ends that. In development, a runner that stopped on an error waits at its next start, and Ctrl-C ends that wait too. A start that stops before it runs pi, such as on a damaged datastore, waits too, as natively. One more file in `runner/`, which backups don't hold.
+*Tests* in `restarts`: Docker played by starting the runner again at once after each stop, with a fault after pi, the outbox made a file: pi runs 1 minute after the first stop, about 5½ after the second, then every 30, with one notice and `status.json` saying so; a stop asked for during a wait ends it; a run recorded makes the next stop the first in a row again; with `SCOOTER_RESTART_WAITS=systemd` nothing is kept; a record that can't be written runs nothing. In `units`, the unit's setting, and the waits against the unit's. In `status`, the line of `/status`.
 
 ### 13.2 Facts found
 
@@ -3126,3 +3169,150 @@ Not verified:
 - **The moment `uaccess` leaves** on a desktop (D217): a VM starting while another VM's event resets the ACLs. The Linux machine has a seat session, but no root to install the rule; the root VM has none.
 - **A real WhatsApp pairing and a real bucket** in the containers (gate G4): `pair` showed a QR code that nobody scanned; the backup went to a repository in a folder.
 - **The install on the machine Scooter will live on**, which stays with the owner (section 6 of the plan).
+
+## Milestone 14: docs and final check
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Three choices the plan's rules for this milestone listed as the owner's were put to the owner after milestone 13 was merged, and answered before this milestone started (14.1): two gaps are closed here, D179's and D229's, and D160 stays as it is. Everything else was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.1, 5.2, 5.4, 6.3, 6.9, 8.3, 8.4, 8.5, 8.6 and sections 9 and 10 (14.4). The milestone settled the five smaller points of the review of milestone 13, and the points earlier reviews had left (14.3), and made the final check of the plan (14.5).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `README.md` | Installing and running Scooter, natively and in Docker, and "Check on the first real run" (D230) |
+| `bridge.env.example`, `runner.env.example` | Final: an example number, the app password, the key's guardrail as 6.13 gives it |
+| `src/bridge/channels/whatsapp.mjs`, `intake.mjs`, `state.mjs` | Catch-up from where it had got to, in each of the owner's chats, kept in the bridge's state (D179) |
+| `src/runner/restarts.mjs`, `main.mjs`, `status.mjs`; `src/common/runnerstatus.mjs`; `src/bridge/status.mjs`; `src/cli.mjs`; `deploy/systemd/scooter-runner.service` | The runner's own waits between starts, where its service manager doesn't wait, and `/status` saying so (D229) |
+| `src/runner/sandbox/gondolin.mjs`, `src/ops/doctor.mjs` | `doctor` closes its VM when it is stopped, and boots in `/tmp` when `TMPDIR` is too long a path (D231) |
+| `Dockerfile` | The app readable by every user, whatever the checkout's modes (D232) |
+| `src/bridge/outbox.mjs`, `src/common/limits.mjs`, `src/cli.mjs`, `test/live/data-mounts.mjs` | The review's three small things, and a stale line of `scooter help` (D233) |
+| `test/restarts.test.mjs` | This milestone's test of D229 |
+| `test/whatsapp.test.mjs`, `intake`, `status`, `runner`, `runnerfiles`, `units`, `doctor`, `sandbox`, `delivery`, `docker`, `limits`, `paths` | The cases of D179, D229 and the review's points |
+
+### 14.1 The questions for the owner, and the answers
+
+The plan's rules for this milestone listed three choices as the owner's. They were put to the owner on 2026-11-18, after milestone 13 was merged and before this milestone started, by the session that coordinates the milestone loop. The milestone didn't stop on them; they are recorded here, as the task asked.
+
+*The questions, as put to the owner:*
+1. Docker restarts (D229): "if a fault persists after pi has run, Docker restarts the runner at once and pi runs again each time, spending on OpenRouter. The reviewer measured 12 seconds from one start to the next. Natively, systemd waits up to 30 minutes. I would close this one before using Docker for real."
+2. A request the agent sends itself (D160): "a misled agent can make a failed run look like an OpenRouter outage, and the batch is then tried again every 30 minutes for as long as that message is in it."
+3. A catch-up cut short (D179, "Not changed"): "a stop or a crash during WhatsApp's catch-up can leave messages unstored for good. Backups stop the channel every night." The owner asked: "did you mean that potentially one could lose message history?" The reply was yes, in a narrow case: messages sent while Scooter was down or stopped can stay out of the datastore for good, though they stay in WhatsApp and in wacli's own store. It ended: "I would close it. It is the only one of the three that loses something from the record, and the fix is small: a catch-up that was cut short runs again from where it started."
+
+Then: "Run milestone 14 through the loop, with the fixes in it?"
+
+*The owner's answers, in the owner's words:*
+1. Docker restarts: "ok"
+2. A request the agent sends itself: "this is ok"
+3. A catch-up cut short: "yes"
+
+To running milestone 14 through the loop with the fixes in it: "Yes, both fixes".
+
+*What follows:* D229 and the gap D179 left are closed in this milestone, as the plan's rules for it say, written from these answers by the session that coordinates the loop; only the quoted words above are the owner's. D160 stays as it is, and the README lists it among the known limits. Each decision records what was done: D179, D229 and D160 in their own entries above.
+
+### 14.2 Decisions
+
+**D230. The README.**
+*Choice:* `README.md` covers what 11.7 lists and the plan's rules for this milestone give it, for Linux, in the order an owner meets them: how the parts fit; what is needed; the native install, from the prerequisites, with restic's and wacli's checksums (0.2; 13.1), to `doctor`; the Docker install; KVM in each case, with the udev rule for rootless Docker and the command that finds the uid; the bot number, the mailbox and its app password, the OpenRouter key and its guardrail, and the bucket; the env files; daily use, the commands, and copying the views out; the agent's instructions, adding a skill, and what an upgrade does to them; backups and restore; rebuilds and backfills; what to do when something goes wrong, `doctor`, its warning about emulation, and the runner's restarts; the security model, with what internet access means; the network log; the known limits; upgrading; development; and "Check on the first real run", gate G4's items as checkboxes.
+*Reason:* the plan. Each rule of the plan's milestone 14 for the README is in it; 14.5 ticks them off. Where it gives a command no milestone ran, it was run here: `docker compose cp` out of the data volume (with `docker cp`, which it wraps), `git reset` in the runner's container as `scooter-runner`, and `docker compose run -d`, whose container Docker doesn't restart (14.6).
+*Not verified:* the native install's steps as a whole on a fresh machine: G1 and G2 ran them in milestone 12, from the plan rather than from this text.
+
+**D231. `doctor`'s VM, when `doctor` is stopped, and a long `TMPDIR`** (the review of milestone 13, smaller points 2 and 3).
+*Choice:*
+- `doctor` takes `SIGTERM`, `SIGINT` and `SIGHUP` while it runs, and gives the boot check a signal, which closes the VM it started, as the runner's stop does a run's; the checks after it are left, and `doctor` says what stopped it and exits with 1.
+- The boot check makes its folder in the system's temporary folder, or in `/tmp` when a `TMPDIR` is too long a path for Gondolin's sockets there (`socketsFit`).
+*Reason:* the review's first way for each. A native `doctor` killed during the boot left a QEMU running; nothing else stops it (6.6). And the misleading fix came from a folder the owner's `TMPDIR` placed, which `/tmp` avoids, rather than a message that names it.
+*Tests:* in `doctor`, the signal given to the boot check, and no check after it; in `sandbox`, with the image, a boot check stopped during the boot leaves no QEMU and no folder, and one with a `TMPDIR` of over 100 characters boots.
+
+**D232. The image's app is readable by every user, whatever the checkout's modes** (the review of milestone 13, smaller point 4).
+*Choice:* after the copies, `RUN chmod -R a+rX,go-w /app`: readable by every user, folders passable, and writable by root alone.
+*Reason:* the review's way, without `COPY --chmod`, whose symbolic modes need a newer Dockerfile syntax than an octal one, which would make every file executable. `go-w` also covers a checkout made under umask 000, whose files every user could otherwise change in the image. *Cost:* one layer holding `/app` again, about 20 MB. *Test* in `docker`.
+
+**D233. Three small things, and a stale line** (the review of milestone 13, smaller point 5).
+*Choice:*
+- The 64 characters of a name the bridge logs is `LOGGED_NAME_MAX_CHARS`, in `limits.mjs` and 8.6.
+- `outbox.runner_outbox_taken` is logged once the runner's outbox is taken from again, not while it isn't there. Test in `delivery`, which fails on `main`.
+- `test/live/data-mounts.mjs` says that a check in the runner's container that kills a QEMU needs tini first, `--entrypoint tini` with `node …` as the command, and the README's development section says so. `docker run --entrypoint tini scooter:local -- node …` was run: Node's parent was tini, pid 1.
+- `scooter help` said `build-image` runs "in Docker, the runner container", which D220 changed: it now names its own container.
+
+**D234. 8.6 lists every constant of `limits.mjs`.**
+*Question:* found in the final check (14.5). `limits.mjs` had nine constants that 8.6 didn't list, each recorded here with its milestone: `WEBHOOK_PORT`, `WACLI_CALL_TIMEOUT`, `MEDIA_DOWNLOAD_RETRY_WAIT`, `ATTACHMENT_EXT_MAX_CHARS`, `MEMORY_MAX_BYTES`, `GIT_CALL_TIMEOUT`, `CONFIG_RANGES` and `SETTING_RANGES`.
+*Choice:* 8.6 lists them, with their values and what they do, and the two of this milestone, `RUNNER_RESTART_WAITS` and `LOGGED_NAME_MAX_CHARS`.
+*Reason:* 8.6 says every fixed number lives in `limits.mjs`, and the table is where the owner looks for them. Nothing changes in the code.
+
+### 14.3 The reviews of the pull requests merged before this one
+
+Pull request 14, milestone 13, was approved by its review with five smaller points. All five are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | How Docker restarts the runner (D229), measured: 12 seconds from one start to the next; to be put to the owner as a question | Put to the owner (14.1), who chose to close it: closed (D229), the runner keeping its own waits. Tests in `restarts`, `units` and `status` |
+| 2 | Natively, the VM `doctor` boots is left running if `doctor` is killed during the boot | Settled (D231), the review's first way: `doctor` closes it on `SIGTERM`, `SIGINT` and `SIGHUP`. Tests in `doctor`, and in `sandbox` with the image, which fails on `main` |
+| 3 | With a long `TMPDIR`, `doctor`'s boot check fails and blames the wrong thing | Settled (D231), the review's first way: `/tmp` when `TMPDIR` is too long a path. Test in `sandbox` |
+| 4 | An image built from a checkout made under umask 077 can't be read by the runner or the email reader | Settled (D232), the review's second way: a `chmod` after the copies. Test in `docker` |
+| 5 | Three small things: a number not in `limits.mjs`; `outbox.runner_outbox_taken` logged while the outbox isn't there; the live checks run with `--entrypoint node` | Settled (D233): `LOGGED_NAME_MAX_CHARS`; logged only once it is taken from, test in `delivery`, which fails on `main`; a note in the live check and the README |
+
+The points earlier reviews and milestones left, as 13.3 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Put to the owner (14.1), who accepted it, "this is ok": recorded under D160, in the README's known limits, and among section 9's accepted risks |
+| Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as the review allowed, a choice of what the runner says: the README says to look at the last commit after a crash, a reboot or a restore, and to run the rebuild again when it reads `lifelog: rebuild #…`, as the plan's rule for the README asks |
+| Milestone 10, second review, point 3 | The gap D179 leaves: a catch-up cut short | Put to the owner (14.1), who chose to close it: closed (D179), with every way of the same kind the plan asked to go through |
+
+### 14.4 Changes to DESIGN.md
+
+None changes section 2, or what Scooter does beyond what the owner's answers and the review asked:
+- 5.1, 5.2 step 7: the bridge's state keeps where catch-up has got to in each of the owner's chats, and catch-up starts from there, moved on only by what it lists itself, never by what the webhook stored, nor by the bot's own rows; every chat the owner wrote from is listed (D179).
+- 5.4, 6.3, 6.9: the runner's own waits between starts where its service manager doesn't wait, its notice, and `/status` and `status.json` saying so (D229).
+- 8.3: the runner's restarts in Docker; the app's modes in the image (D229, D232).
+- 8.4: `doctor` closes the VM it booted when it is stopped (D231).
+- 8.5: the runner's unit tells the runner that systemd keeps the waits (D229).
+- 8.6: `RUNNER_RESTART_WAITS` and `LOGGED_NAME_MAX_CHARS`, and the nine constants of `limits.mjs` the table didn't list (D234).
+- Section 9: a request the agent sends itself, among the accepted risks (D160).
+- Section 10: Intake's catch-up and the Runner's restart waits, as this milestone tests them.
+
+ARCHITECTURE.md 2.2, 5.2 and 6 say the same of catch-up and of the runner's restarts.
+
+### 14.5 The final check: DESIGN.md, section by section
+
+The plan's final check, step 1: DESIGN.md read again, section by section, each requirement against what was built, with the milestone or decision that built it. What isn't done is listed after the table.
+
+| DESIGN.md | What was built, and where |
+|---|---|
+| 1. Principles | Each is held by the sections below: the append-only datastore (4), the bridge and runner as the only parts that talk out (3.1, 6.13), the planner and protocol (6.4, 7.1), the sandbox (6.6), the owner's config (6.1, 8.5), quiet mode (6.8) |
+| 2. Decisions | All, as the table has them; the platforms' arm64 is unverified (D228), and macOS deferred (section 12) |
+| 3, 3.1, 3.2 | The two services and their users; no listening port but the webhook on loopback; the folders with their owners and modes, natively (`setup`, milestone 12) and in Docker (the image's `/data`, milestone 13), each held to `dataFolders` by a test; each service's env file alone |
+| 4. The datastore | Milestone 1: the layout, the line format, writing, recovery, duplicates (row 9), attachment names and the size limit |
+| 5. Channels | The channel functions, WhatsApp's and email's (milestones 2, 5, 6) |
+| 5.1 wacli | Milestone 2; its environment, the supervisor, the pairing check, `pair` (milestone 12). The webhook secret is on wacli's command line, which 0.6 found it takes no other way |
+| 5.2 Intake | Milestone 2; step 7 as changed here (D179) |
+| 5.3 Delivery | Milestone 5, with D205 and D226: order, pacing, chunks, the cut at `TEXT_MAX_CHARS`, `--no-preview`, retries and `SEND_ATTEMPTS`, the record in `bridge/sending/` |
+| 5.4 Commands | Milestones 5 and 10; `/status`'s line of the runner's restart waits (D229) |
+| 5.5 Backups | Milestone 10; restore in Docker (D223); natively at G2 |
+| 5.6 Email | Milestone 6 |
+| 6.1 to 6.5 | Milestones 3 and 11 |
+| 6.6 Running pi | Milestones 4 and 7; `q35` (D218). "Ignore the stderr line 'Warning: No project session found…'": nothing reads pi's stderr but its last line, for OpenRouter's error (`openRouterMessage`), and a run's outcome is its exit code |
+| 6.7, 6.8 | Milestone 4 |
+| 6.9 Failures | Milestones 4 and 8; the runner's restart waits (D229) |
+| 6.10, 6.11 | Milestone 9 |
+| 6.12 The VM image | Milestone 7; natively at G2, in Docker in milestone 13 (D220) |
+| 6.13 The network policy | Milestone 8 |
+| 7. The agent's instructions | Milestone 11 |
+| 8.1 Layout | As suggested, with `src/ops/` |
+| 8.2 Environment | Every variable is one `settings.mjs` knows, on its side, and each example explains it (a test); `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` too, which 8.2 names in a row |
+| 8.3 Docker | Milestone 13; the other architecture not built (below) |
+| 8.4 CLI | Every command, as `scooter help` lists them; `build-image`'s line corrected (D233) |
+| 8.5 Running natively | Milestone 12; the unit's restarts (D207, D229) |
+| 8.6 Constants | Every number in `limits.mjs`, which a test holds to its values, and now every one of them in the table (D234) |
+| 9. Security | Each control is built, and tested where 10 asks; the accepted risks, with D160 |
+| 10. Testing | Each required test, as each milestone's "what was run" lists it; this milestone's are in 14.6 |
+| 11. Development plan | Milestones 0 to 14 of the plan. 11.7's README (D230), and pi run for real in the sandbox with a dummy key (14.6); 11.8's checklist in the README as "Check on the first real run" |
+| 12. Out of scope | Nothing of it built; `AGENT_ACCEL=hvf` refused on Linux, as 6.6 says |
+| 14. Not verified yet | In the README as "Check on the first real run", gate G4's items |
+
+Not done, or not verified:
+- **Gate G4**, the first real run, with the owner's phone, accounts and keys: every item of section 14 not marked checked, in the README's "Check on the first real run". The install on the machine Scooter will live on stays with the owner too.
+- **arm64**, and building the image for the other architecture with `docker buildx`, which 11.5 asks where Docker can: the plan's machine has no arm64 emulation (D228). macOS, Docker Desktop, OrbStack and Colima are deferred (section 12).
+- **A WhatsApp message that reaches wacli late**, more than `CATCHUP_OVERLAP` after a later message of the owner's was listed, and whose webhook was lost: not closed with `messages list` (D179); in the README's known limits.
+- **A request the agent sends itself** can decide the cause of a failure: accepted by the owner (D160).
+- **The moment `uaccess` leaves** on a desktop with rootless Docker's udev rule (D217): unverified, and in the README.
+- **The README's native install as a whole**, as text, on a fresh machine: its steps were run at G1 and G2 in milestone 12.

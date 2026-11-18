@@ -197,7 +197,7 @@ A **record** is the normalized message of 5.2 step 3 without the fields only Wha
 - The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line. wacli 0.26.0 takes it no other way: `--webhook-secret` is a plain flag, and no variable of its environment sets it (`docs/DECISIONS.md`, 0.6, wacli 1). So it stays there, the one exception of 3.2. Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
 - Before starting sync, check `wacli --json --read-only auth status`. If it isn't authenticated, log that the owner should run `pair`, and check again every minute.
 - Other calls use `--json` and return the `data` part of the result (13.1). While sync runs, wacli passes these calls to it internally; no special handling is needed.
-- The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, the last backup (date, snapshot ID, result), and the `seq` of the newest command it has answered (5.4).
+- The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, the last backup (date, snapshot ID, result), the `seq` of the newest command it has answered (5.4), and where catch-up has got to in each of the owner's chats (5.2 step 7).
 
 ### 5.2 Intake
 
@@ -214,9 +214,11 @@ Steps 1–5 and 7 belong to the WhatsApp module. Step 6 belongs to the core, and
    - A reaction becomes a `reaction` with its `target`. Skip it if the target is unknown.
    - An edit becomes an `edit` with its `target` and the new text. A revoked message becomes a `delete` with its `target`. Skip either if the target is unknown.
    - WhatsApp text that is one of the commands in 5.4 becomes a `command`. An email is never a command.
-7. **Catch-up:** at startup and every 10 minutes, list the owner's chat with `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit 500`, and pass the rows through the same steps. Duplicate checks make this safe.
-   - Start 2 minutes before the `at` of the newest incoming WhatsApp line in the datastore. Lines from other channels don't count: an email that arrives while wacli is down says nothing about WhatsApp, and would move the start past the messages wacli missed.
-   - Before the first incoming WhatsApp line, start from the time of the bridge's first start (5.1), which on the very first start is the current time. Never import the chat's earlier history.
+7. **Catch-up:** at startup and every 10 minutes, list each of the owner's chats with `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit 500`, and pass the rows through the same steps. Duplicate checks make this safe.
+   - The bridge's state keeps where catch-up has got to in each chat: the time of the newest of the owner's rows it has listed there, with every row before it handled, stored, skipped as a duplicate, or dropped as the steps above drop it. Catch-up starts 2 minutes before that, and saves where it has got to after each page and when it ends. So a catch-up cut short, by a stop or a crash, runs again from where it started, whatever was stored meanwhile (`docs/DECISIONS.md`, D179).
+   - Only what catch-up itself lists moves it on, never what the webhook stored, nor a line from another channel: a message whose webhook never came, a stop or a crash between catch-up's rows, or an email that arrived while wacli was down would otherwise move the start past a message never stored, for good. Nor do the bot's own rows, which wacli stores with the time they were sent: after downtime a reply can go out before wacli has received the owner's messages from while it was down, which have older times. A row intake must be handed again, such as one whose download a stop cut short, holds catch-up where it is until it is stored.
+   - The chats are the one replies go to, and every other chat the owner has written from, such as an `@lid` one; a chat catch-up hasn't listed yet starts from the bridge's first start.
+   - Never before the time of the bridge's first start (5.1), which on the very first start is the current time: the chat's earlier history is never imported.
 
 ### 5.3 Delivery: the outbox
 
@@ -255,7 +257,7 @@ Commands come only from WhatsApp. They're logged as `command` lines and never gi
 
 | Command | Handled by | Effect |
 |---|---|---|
-| `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated, when the VM image was built, whether zero data retention is on, whether runs are paused and why, the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
+| `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated, when the VM image was built, whether zero data retention is on, whether runs are paused and why, whether the runner waits before it goes on after stopping on an error, until when and why (6.9), the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
 | `/backup` | bridge | Runs a backup now, or joins the one in progress, and replies with the snapshot ID or the error once it is over. The commands sent after it are answered meanwhile. |
 | `/help` | bridge | Lists the commands. |
 | `/new` | runner | Starts a fresh pi session for the rest of the day and replies "Started a fresh conversation." |
@@ -394,7 +396,7 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day in `SCOOTER_TZ`, because the session and the schedule follow that day.
 - **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context (6.5); commands never are (5.4).
 
-**`status.json`.** The bridge reads neither `/config` nor `runner.env`, so the runner tells it what `/status` needs from them (5.4). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, and each agent's `timeout_minutes` and `reads`.
+**`status.json`.** The bridge reads neither `/config` nor `runner.env`, so the runner tells it what `/status` needs from them (5.4). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, each agent's `timeout_minutes` and `reads`, and, where the runner keeps its own waits between starts, whether this start waits before it goes on, until when and why (6.9).
 
 ### 6.4 When the agent runs
 
@@ -551,6 +553,10 @@ Steps 1 and 2 read what pi left, so an error in either, such as a git command th
 - **The notice:** the first failure in a row sends the owner one notice ("⚠️ I couldn't process your last messages (<short reason>). I'll try again."); later failures send nothing until a run succeeds. The short reason is OpenRouter's error when it refused or failed a request, such as no endpoint meeting the data policy; otherwise it's pi's exit status, or "timed out". A setup error's notice also says that runs are paused until it's fixed.
 - **Items run out of attempts:** send one notice listing them, for example "⚠️ I gave up on #1051 ("coffee 120") after 4 attempts. Send it again if it matters."
 - Notices are outbox entries with `by: "runner"`, and go to `DEFAULT_CHANNEL` (5.3).
+- **The runner stops on an error** that isn't pi's, such as a damaged datastore or a state it can't save, and its service manager starts it again. A fault that stays after pi has run would then run pi, and spend on OpenRouter, at every start. So the starts wait 1 minute after the first stop in a row, about 5½ after the second, and 30 after each one from the third, OpenRouter's outage waits: natively systemd keeps them (8.5); where the service manager doesn't wait, as Docker's restart policy doesn't (8.3), the runner keeps the same waits itself (`docs/DECISIONS.md`, D229):
+  - It keeps how its starts ended in `/data/runner/restarts.json`. A start that follows a stop on an error waits from that stop, or from the start before it when the stop couldn't be recorded, such as after a kill, before anything can run pi; then it records itself as the next stop in a row, and runs nothing if it can't.
+  - A run recorded since the start makes the next stop the first in a row again. A stop the runner is asked for, by `SIGTERM` or `SIGINT`, ends the waiting: restarting the runner, by hand or with the machine, starts it at once, as a start by hand does natively.
+  - The first wait in a row sends the owner one notice, saying why and until when, such as "⚠️ I stopped on an error (ENOSPC), so I wait until 21:31 before I go on, and longer if it happens again. Restarting the runner ends the wait." `/status` says so while it waits (6.3). The reason is the error's code or name, never its message.
 
 ### 6.10 Rebuilding the views
 
@@ -801,7 +807,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
     - restic 0.19.1 from its GitHub release, checked against the checksum the release's `SHA256SUMS` gives, which the Dockerfile holds (`docs/DECISIONS.md`, 0.2);
     - the users `scooter-wacli` (10001), `scooter-runner` (10002) and `scooter-mail` (10003);
     - the data folder, `/data`, with the folders of 3.2 and their owners and modes: a new volume mounted there starts as a copy of it;
-    - the app and its dependencies, with `npm ci --omit=dev --ignore-scripts`.
+    - the app and its dependencies, with `npm ci --omit=dev --ignore-scripts`, readable by every user and writable by root alone, whatever modes the checkout gave it.
 
     The entrypoint is `tini -- node /app/src/cli.mjs`. pi isn't installed here; it lives in the VM image (6.12). `docs/DECISIONS.md`, D221, has the rest.
 - **`compose.yaml`**, with two services:
@@ -809,6 +815,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
   - `runner`: `command: ["runner"]`, `user: scooter-runner`, `env_file: runner.env`, `read_only: true` (a read-only root filesystem) with a `tmpfs` at `/tmp`, `./config` read-only at `/config`, and the KVM settings below.
 
   Both have one volume for the whole data folder at `/data` (3.2; `docs/DECISIONS.md`, D219), `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`. A third service, `build-image`, runs only when asked (below).
+- **Restarts:** Docker starts a container that ran longer than 10 seconds again at once, which a runner that ran pi always has. So the runner keeps its own waits between starts, those of the native unit (6.9; `docs/DECISIONS.md`, D229); `docker compose restart runner` ends one.
 - **The VM image:** build it after installing and after each upgrade (6.12), with `docker compose run --rm build-image`, with the runner stopped. It runs `build-image` in a container of its own, from the same image, as root and `privileged`: Gondolin's builder makes a chroot with `/proc` and `/dev` mounted in it, which neither the runner's container nor its root can do. Under rootful Docker that container is root on the host, as a native build is (row 8; section 9). It builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, in the one volume (`docs/DECISIONS.md`, D220).
 - **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so an arm64 host builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches. Only amd64 has been built (`docs/DECISIONS.md`, D228).
 - **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git. `restore` writes into the data folder with both services stopped: `docker compose stop`, then `docker compose run --rm bridge restore` (5.5; `docs/DECISIONS.md`, D223).
@@ -825,7 +832,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `bridge` | bridge | Runs the bridge (the service's default command) |
 | `runner` | runner | Runs the runner (the service's default command) |
 | `setup [--no-services]` | the host, as root | Natively: checks that the service users can run Node and read the code, which only root may change (8.5), creates the users and folders in 3.2, adds `scooter-runner` to the `kvm` group, copies the code's `config/` to `/etc/scooter/config` if it isn't there, writes `bridge.env` and `runner.env` from the examples if they don't exist, writes `/usr/local/bin/scooter`, and installs and enables the two services (8.5), without starting them. `--no-services` leaves the services out, where systemd doesn't run. Safe to repeat (`docs/DECISIONS.md`, milestone 12). |
-| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; that a VM boots from it with that accelerator, and how long it took; `agents.yaml`; folder owners and modes, and the env files'; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. It reports each with its fix, and exits with 1 when something must be fixed. It runs as `scooter-runner` alone where that user is there, and exits with 2 otherwise (`docs/DECISIONS.md`, D224). |
+| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; that a VM boots from it with that accelerator, and how long it took, closing that VM if `doctor` is stopped meanwhile; `agents.yaml`; folder owners and modes, and the env files'; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. It reports each with its fix, and exits with 1 when something must be fixed. It runs as `scooter-runner` alone where that user is there, and exits with 2 otherwise (`docs/DECISIONS.md`, D224). |
 | `build-image` | the host, as root; in Docker, a container of its own: `docker compose run --rm build-image` | Builds the VM image (6.12) |
 | `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
 | `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. Runs before `EMAIL_AUTHSERV_ID` is set, which it helps find. |
@@ -842,7 +849,7 @@ Scooter runs natively on Linux, on amd64 and arm64:
 - **The code:** in a folder owned by root that every service user can read, such as `/opt/scooter`, with Node installed system-wide. The service users must be able to run Node and read the code, which they can't inside someone's home folder. `setup` checks both.
 - **Install:** `sudo scooter setup` (8.4), the first time as `sudo node /opt/scooter/src/cli.mjs setup`, since it writes `/usr/local/bin/scooter`. It keeps the data in `/var/lib/scooter` (`DATA_DIR`), the settings and `config/` in `/etc/scooter/`, and installs two systemd services that start at boot and restart on failure, both with `KillMode=control-group` and `TZ=UTC` (`deploy/systemd/`):
   - `scooter-bridge.service`, as root, restarted after waits that grow from 5 seconds to 5 minutes;
-  - `scooter-runner.service`, as `scooter-runner`, with `SupplementaryGroups=kvm`, and with its home and temporary folder under the data folder's `runner/`, which the runner sets itself (6.6). It is restarted after 1 minute, then about 5, then every 30, OpenRouter's outage waits (6.9): a fault that stays after pi has run would otherwise run pi again every minute (`docs/DECISIONS.md`, D207).
+  - `scooter-runner.service`, as `scooter-runner`, with `SupplementaryGroups=kvm`, and with its home and temporary folder under the data folder's `runner/`, which the runner sets itself (6.6). It is restarted after 1 minute, then about 5, then every 30, OpenRouter's outage waits (6.9): a fault that stays after pi has run would otherwise run pi again every minute (`docs/DECISIONS.md`, D207). The unit tells the runner so, with `SCOOTER_RESTART_WAITS=systemd`, and the runner then keeps no waits of its own, so that a start by hand brings it back at once (D229).
 
   `/usr/local/bin/scooter` `exec`s Node, so Node is each service's main process. Then build the VM image with `sudo scooter build-image` (6.12), and check everything with `sudo -u scooter-runner scooter doctor`.
 - **KVM:** the runner needs read-write access to `/dev/kvm`. `setup` gives it through the `kvm` group, which Ubuntu's device rules leave alone (13.4). On a machine without the group, `setup` makes it when it installs the services, since the runner's unit names it (`docs/DECISIONS.md`, D225).
@@ -863,6 +870,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `RETRY_WAIT` | 1 minute | 6.8 | The wait before a message that failed for its own reasons is tried again |
 | `OUTAGE_RETRY_WAITS` | 1, 5 and 30 minutes, then every 30 | 6.9 | The waits between tries while OpenRouter is down |
 | `SETUP_RETRY_WAIT` | 30 minutes | 6.9 | The wait between tries after a setup error |
+| `RUNNER_RESTART_WAITS` | 1 minute, 1 minute × √30 (about 5½), 30 minutes | 6.9, 8.3 | The waits before a runner that stopped on an error goes on again, after one, two, and three or more stops in a row, where its service manager doesn't wait: the native unit's, as systemd works them out |
 | `FAILED_KEEP` | 100 | 6.8 | How many entries `failed` keeps |
 | `POLL_INTERVAL` | 1 second | 5.3, 5.6, 6.4 | How often the runner looks for new lines, and the bridge checks the outbox and the email spool |
 | `SEND_INTERVAL` | 5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam. wacli warns about sends closer together than 5 seconds (13.1) |
@@ -871,14 +879,18 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `OUTBOX_ENTRY_MAX_BYTES` | 1 MB | 5.3 | The largest outbox entry file the bridge reads; a text at its longest takes far less |
 | `SEND_RETRY_BACKOFF`, `SEND_ATTEMPTS` | 5 seconds, doubling up to 5 minutes; 8 | 5.3, 5.4 | The waits before a failed send, or a reply to a command that couldn't be written, is tried again, and the tries after which an entry no longer holds back the rest, so one that can never go out doesn't |
 | `WEBHOOK_MAX_BYTES` | 2 MB | 5.2 | The largest webhook body accepted from wacli |
-| `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back, how many rows |
-| `MEDIA_DOWNLOAD_RETRIES` | 2 | 5.2 | Retries for a failed media download |
+| `WEBHOOK_PORT` | 8787 | 5.1, 5.2 | Where wacli posts its webhooks, on loopback |
+| `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back before where it had got to, how many rows a page |
+| `MEDIA_DOWNLOAD_RETRIES`, `MEDIA_DOWNLOAD_RETRY_WAIT` | 2; 10 seconds | 5.2 | Retries for a failed media download, and the wait before each, enough for a reconnecting wacli to come back |
+| `WACLI_CALL_TIMEOUT` | 6 minutes | 5.1, 5.2 | The longest a wacli call other than `sync` may take, so one stuck download can't hold up every message after it; wacli stops its own after 5 |
 | `ATTACHMENT_MAX_BYTES` | 100 MB | 4.4, 5.6 | The largest attachment, or email, that's stored |
+| `ATTACHMENT_EXT_MAX_CHARS` | 10 | 4.4 | The longest extension a stored attachment's name takes from its original name; a longer one is no extension, and the MIME type decides |
 | `EMAIL_TEXT_MAX_CHARS` | 20,000 | 5.6 | Where an email's body is cut |
 | `EMAIL_SUBJECT_MAX_CHARS` | 1,000 | 5.3, 5.6 | Where an email's subject is cut, so the `✅ Email:` text is one message |
 | `EMAIL_HEADER_MAX_BYTES` | 256 KB | 5.6 | The most of an email's header block the sender check reads; one that doesn't end within it is skipped |
 | `EMAIL_PARSED_MAX_BYTES` | 1 MB | 5.6 | The largest `parsed.json` the bridge reads from the spool |
 | `ATTACHMENT_NAME_MAX_CHARS` | 255 | 5.6 | The longest original file name of an email's attachment: the reader cuts a longer one, and the bridge refuses a `parsed.json` with one |
+| `LOGGED_NAME_MAX_CHARS` | 64 | 5.3 | The most of a name the bridge logs of one it leaves in a folder another user controls, such as the runner's outbox; its length is logged beside it |
 | `SPOOL_RETRY_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.6 | The waits before a spool folder the store couldn't take is tried again |
 | `EMAIL_CHECK_COUNT`, `EMAIL_CHECK_TIMEOUT` | 5; 2 minutes | 8.4 | How many messages `email-check` lists, and how long its run of the reader may take |
 | `STATUS_FILE_MAX_BYTES` | 4 MB | 5.4, 5.5 | The largest file of the runner's, or of the email reader's, that the bridge reads for `/status`, and the largest `run.lock` it reads before a backup |
@@ -895,6 +907,8 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `RUN_REQUESTS_MAX`, `RUN_REFUSALS_LOGGED_MAX` | 1,000; 100 | 6.13 | The most requests one run may make that go out, and the most refusals the log takes from it one by one; the rest are counted in one line, so what a run adds to the log is bounded |
 | `SESSION_MAX_BYTES` | 100 MB | 6.6 | The largest session file copied back from a run. The whole session goes to the model on every request, so a larger one couldn't be sent anyway |
 | `ANSWER_MAX_TEXTS` | 25 | 6.7 | The most texts one answer sends, so a misled run can't flood the owner's chat |
+| `MEMORY_MAX_BYTES` | 64 KB | 6.5 | The most of each memory file that goes into the system prompt, so one that grew without bound can't make every run's request too large |
+| `GIT_CALL_TIMEOUT` | 1 minute | 6.2, 6.8 | The longest a git command of the runner may take |
 | `AGENT_FILES_MAX_BYTES` | 100 MB | 6.8 | The most `views/` and `memory/` may hold together after a run. git reads every byte of a file to add it, and pi can make a file of any size in an instant |
 | `AGENT_FILES_MAX_COUNT` | 20,000 | 6.8 | The most files and folders `views/` and `memory/` may hold together after a run. Some of git's work grows faster than their number |
 | `REASON_MAX_CHARS` | 200 | 6.8, 6.9 | The longest reason kept in `state.json` or quoted in a notice: the agent's own, or OpenRouter's error |
@@ -904,6 +918,7 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `SANDBOX_STDOUT_MAX_BYTES`, `SANDBOX_STDERR_MAX_BYTES` | 1 MB; 64 KB | 6.6 | The start of pi's stdout, its answer, and the end of its stderr, where OpenRouter's error is, that the sandbox keeps. An answer cut here fails the run |
 | `RUN_WRITE_MAX_BYTES`, `RUN_NAMES_MAX_COUNT` | 1 GB; 100,000 | 6.6 | The most one run may write, and the most files, folders and links it may make, through the VM's writable mounts, so a misled run can't fill the disk the bridge writes on |
 | `APK_INDEX_TIMEOUT` | 1 minute | 6.12 | The longest `build-image` waits for Alpine's index of one repository when it writes `packages.txt`. It holds `runner.sock` meanwhile, so no runner starts |
+| `CONFIG_RANGES`, `SETTING_RANGES` | `timeout_minutes` 1 to 120; `BATCH_SECONDS` 1 to 600, `SESSION_ROLLOVER_HOUR` 0 to 23, `EMAIL_IMAP_PORT` 1 to 65535, `EMAIL_CHECK_SECONDS` 10 to 3600, `RESTIC_KEEP_DAILY` 1 to 3650, `RESTIC_KEEP_WEEKLY` 0 to 520, `RESTIC_KEEP_MONTHLY` 0 to 1200 | 6.1, 8.2 | The values a number in `agents.yaml`, or a numeric setting, may take; one outside stops the service at startup |
 | `DOCTOR_TIMEOUT`, `DOCTOR_RESPONSE_MAX_BYTES` | 30 seconds; 32 MB | 8.4 | The longest `doctor` waits for OpenRouter's list of the endpoints that keep no data, and the most of it it reads; the list was 1.2 MB on 2026-11-18 |
 
 ## 9. Security
@@ -926,6 +941,7 @@ Accepted risks:
 - OpenRouter and the model provider see the content of messages while they process them. With zero data retention (6.13) neither keeps it afterwards, except that OpenRouter screens every request for child sexual abuse material and may keep what it flags (13.3).
 - With internet access on, a misled run can send the owner's data to any public website, and even an ordinary lookup tells a website what was looked up. The log shows when, which host and path, and how much, not what.
 - A malicious document can still mislead the agent into misfiling things, editing its memory, or telling the owner something wrong. Git history shows what changed.
+- A request the agent sends itself, with the placeholder, in the shape of pi's, passes the network policy, and the runner reads what came of it as OpenRouter's answer to pi: nothing tells the two apart. So a misled agent can make a failed run look like an outage or a setup error, and its batch is then tried every 30 minutes, without using its attempts, for as long as the message that misled it is in it (6.9; `docs/DECISIONS.md`, D160). The owner accepted this on 2026-11-18.
 - A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner. There it would reach the OpenRouter key and the agent's folders, but not the bridge's secrets, because the runner is its own unprivileged user, apart from the bridge.
 - Gondolin is pre-1.0 (13.4). Its next version moves the policy hooks into a separate program, so upgrading it means porting the policy and running its tests again.
 - On a native install the bridge runs as root, so that it can start wacli and the email reader as their own users. A flaw in the bridge would then expose the whole machine, not just one container. Running the bridge as its own user, with systemd starting wacli and the email reader, is a possible later change.
@@ -967,7 +983,7 @@ Required tests, at least:
   - Replies, reactions, edits and deletions mapped to `seq` numbers.
   - The same edit, deletion or reaction delivered twice is stored once.
   - Commands logged.
-  - Catch-up after a gap, without duplicates, starting from the newest incoming WhatsApp line even when emails arrived meanwhile; no history imported on the first start.
+  - Catch-up after a gap, without duplicates, from where catch-up itself had got to: a catch-up cut short between its rows, by a stop or by a crash, after the webhook stored a newer message, lists the rest when the bridge starts again; a message whose webhook never came is listed though a newer one was stored; the bot's own rows, and emails, don't move it on; every chat the owner wrote from is listed; a row intake must be handed again holds it; no history imported on the first start.
 - **Email:**
   - The reader against a fake mailbox: headers first, whole messages only from the owner's addresses, the `n:*` quirk, IDLE with the periodic check, errors and backoff.
   - The position: kept across restarts, nothing imported the first time, and a `UIDVALIDITY` change handled without duplicates.
@@ -1000,6 +1016,7 @@ Required tests, at least:
     - It sends nothing until its summary, its progress survives a restart, and removing its entry drops it.
   - No run while a backup holds its lock; when both locks appear at once, the runner gives way; and `run.lock` records when its run must be over.
   - `status.json` holds what `/status` shows about the runner's settings. The emulation notice goes out when the accelerator changes to emulation, and not again at the next start.
+  - Started again at once after each stop, as Docker starts it, a fault that stays after pi has run runs pi 1 minute after the first stop, about 5½ after the second, then every 30; the first wait sends one notice, and `status.json` says so; a stop the runner is asked for ends the waiting, and a run recorded makes the next stop the first in a row; with `SCOOTER_RESTART_WAITS=systemd` it keeps no waits; and a start that can't record itself runs nothing.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
 - **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again, and an entry the runner's user swaps for a link once the bridge has taken it leads the bridge to write nothing where the link leads. Entries wait while their channel can't send; a failed send is tried again, no longer holds back the rest after `SEND_ATTEMPTS`, and is given up on once a later entry's message goes and it fails again; an outage of any length gives up on nothing, and the entries then go in order; a text over `TEXT_MAX_CHARS` is cut, and U+0000 in one is replaced; an outbox that is a link makes the bridge remove nothing it leads to, and still lets the bridge's own entries go; a name in it that isn't an entry's ID is left; and the bridge removes only `entry.json` from a runner's entry.

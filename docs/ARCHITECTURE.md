@@ -107,7 +107,7 @@ wacli is a third-party, unofficial program. It runs as `scooter-wacli` with a mi
 - supervises `wacli sync --follow`, restarting it with backoff, and waits for pairing when the session isn't authenticated;
 - serves the webhook on `127.0.0.1:8787`, accepting only bodies signed with a secret that's new on every start;
 - normalizes payloads, and drops everything that isn't the owner's one-to-one chat: other senders, groups, broadcasts, stickers, empty messages and the bot's own echoes;
-- catches up at startup and every 10 minutes by listing the owner's chat, so nothing depends on the webhook, which is best-effort;
+- catches up at startup and every 10 minutes by listing the owner's chats, so nothing depends on the webhook, which is best-effort. Where catch-up has got to in each chat is kept in the bridge's state, and moves on only by what catch-up itself lists and intake has handled, so a catch-up cut short, a webhook that never came or a message stored out of turn can't make it pass a message that was never stored (`docs/DECISIONS.md`, D179);
 - sends text and reactions, and downloads media through `wacli/staging`.
 
 **Boundaries.** Everything wacli says is input to check. wacli never touches the datastore. Non-owner traffic stops in this module and never reaches the core. Every text is sent with wacli's link previews off, so a link in a reply, which the agent wrote, makes wacli fetch nothing (5.3).
@@ -436,6 +436,8 @@ The runner throws away the run's session changes and its uncommitted changes: it
 
 The owner gets one notice for the first failure in a row, and one when items are given up on.
 
+An error that stops the runner itself, such as a state it can't save, has its service manager start it again: natively systemd waits 1 minute, about 5½, then 30 between starts; where the service manager doesn't wait, as in Docker, the runner keeps the same waits itself, in `runner/restarts.json`, and `/status` shows them, so a fault that stays after pi has run can't run pi every few seconds (`docs/DECISIONS.md`, D207, D229).
+
 ### 5.3 Delivery
 
 1. The bridge takes outbox entries in order, one message every 5 seconds.
@@ -471,6 +473,7 @@ What the two share, the batches of one day, their time and sessions, is in `src/
 | KVM | the `kvm` group, through `SupplementaryGroups` | `/dev/kvm` passed in: by group on rootful Docker, by a udev rule for the runner's host uid on rootless, each a Compose file of its own | the developer's `kvm` group |
 | The VM image | `sudo scooter build-image` | `docker compose run --rm build-image`, a privileged container of its own | `scooter build-image`, with Docker or Podman |
 | VMs die with the runner | `KillMode=control-group` | the runner is the container's main process | not guaranteed |
+| Waits between the runner's starts | systemd's (`RestartSec`, `RestartSteps`) | the runner's own: Docker's restart policy doesn't wait | the runner's own, after a stop on an error |
 
 In every mode there are no published ports.
 
