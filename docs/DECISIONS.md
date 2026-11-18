@@ -2546,3 +2546,36 @@ Not verified:
 - **A native restore** (milestone 12, gate G2), as root, with the services of `setup`. The root test restores with a user whose number changed, in a container.
 - **A backup during a real run**, with the runner packing its repository past its time: the tests hold the socket and `run.lock` themselves.
 - **arm64 and macOS.** Nothing here knows the architecture; restic's arguments are the same, and Unix sockets and `lstat` are the same on macOS.
+
+### 10.5 The review of this milestone
+
+The review of the pull request, at `6006dd8`, found the milestone's "done when" met, asked for one change, and noted seven smaller points. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must 1 | A stop of the WhatsApp channel can lose a message for good: intake left the message whose download the stop cut short, and stored the records queued behind it, so catch-up, from two minutes before the newest of those, never listed it again | Fixed (D179), the review's way: once a stop has left a message of a channel, intake stores nothing more of that channel until the bridge says it starts again, which it does before it starts a channel a backup stopped. D179's reason and DESIGN.md 5's row for `stop()` say so, and ARCHITECTURE.md 5.4. Tests: in `whatsapp`, the review's probe, a photo whose download hangs, then a text and a command five minutes later, then a stop: nothing is stored, and once the channel starts, catch-up lists from the bridge's first start and stores all three, in order, the photo with its file; in `backup`, the same through a backup the bridge makes, which also checks that the bridge says the channel starts again; in `intake`, with another channel's message stored meanwhile. A gap of the same kind that is on `main` too, a catch-up cut short between its rows after the webhook stored a newer message, is recorded under D179 and not changed |
+| 1 | `systemctl kill -s USR1 scooter-bridge` signals every process of the unit, and the email reader's Node opens its debugger on it | Fixed (D196), both of the review's ways: the reader runs with `--disable-sigusr1`, which leaves no moment before a listener would be added; the plan's milestone 14 says `--kill-whom=main`, and its milestone 12 that the unit's main process is Node. Test in `email`: Node, started with the reader's options and signalled, neither opens its debugger nor exits; without them it opens it |
+| 2 | `forget` keeps old snapshots for good when the set of folders changes | Fixed (D195), the review's first way, `--group-by host,tags`, and on `backup` too, which picks its parent the same way. DESIGN.md 5.5 has both commands. Tests in `backup`: the arguments; and with the real restic, a backup without `mail/`, then one with it, the same day, of which `forget` with one daily snapshot keeps only the second |
+| 3 | A restore as root on a machine without Scooter's users makes every file root's, and says nothing | Fixed (D190): as root, `restore` refuses until the three users are there, and says to run `setup` first; the plan's milestones 12 and 14 say that `setup` comes first. DESIGN.md 5.5 and 8.4, ARCHITECTURE.md 2.11. Test in `backup`, with a `lookupUser` that answers as `id` does without the user: exit code 2, and nothing asked of restic. The root test of owners by name makes Scooter's users first, as `setup` will |
+| 4 | No test runs a backup with email on | A test in `backup`, the review's shape: the reader is gone before restic starts, `mail/` is among restic's folders, and the reader starts again after. It passes on `6006dd8`, as the review found |
+| 5 | One failure in 88 repeated runs: `scooter bridge` as a process timed out waiting for sync to start again after the backup | The test of `6006dd8`, with a listener put on port 8787 while restic held the backup, fails just so: the bridge can't listen again, stops, and the test waits for sync. The test now skips when the bridge stops because another process took the port then, as it already did at the start, and a wait that times out shows the bridge's last log lines, which hold no message's text. That the review's failure was this isn't confirmed: 48 runs below didn't meet it |
+| 6 | A `/backup` whose backup ends as the bridge stops may get no reply | Fixed (D187), the review's way: the backups' stop waits for every backup asked for to be told, not for the one in progress only. Test in `backup`: a stop that comes as a backup's result is kept is over only once its reply is written; on `6006dd8` it was over first |
+| 7 | ARCHITECTURE.md 4.4 has the bridge read the datastore before it removes a leftover `backup.lock` | Corrected to `main.mjs`'s order |
+
+Facts found:
+- **restic 0.19.1** groups snapshots by host and paths unless given `--group-by`, in `forget` and in `backup`'s choice of a parent. `forget` also keeps a group's oldest snapshot while the group holds fewer days than `--keep-daily` asks for ("oldest daily snapshot"), so of two snapshots on one day, `--keep-daily 7` keeps both, and `--keep-daily 1` the newer. As root, `restore --ownership-by-name` gives a file whose owner's name isn't a user there to root, and exits with 0 (the review's probe, in the root container).
+- **Node 22.23.2** with `--disable-sigusr1` ignores `SIGUSR1` altogether: it opens no debugger, doesn't exit, and calls no listener of the program's. Without it and without a listener, it opens its debugger on `127.0.0.1:9229`.
+- **systemd 255**: `systemctl kill` signals every process of the unit unless given `--kill-whom` ("If omitted, defaults to all").
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `124e5d6`, which holds all the changes; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 708 tests: 663 pass, none fail. 45 skip themselves, as before: 34 need the image, 10 need root, 1 needs root and `SCOOTER_ROOT_TESTS=1`. The real restic tests run |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 710 tests: 699 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 708 tests, 653 pass, none fail, 55 skip. All 31 backup tests pass as root, the round trip, the grouping and the restore by name among them |
+| The `backup`, `whatsapp`, `intake`, `bridge`, `email`, `status`, `rebuild` and `delivery` tests, 48 times, 8 at once | No failure. `scooter bridge` as a process skipped itself 14 times for the port: 11 times in use at its start, 3 times taken as the bridge started |
+| The new tests against the code of `6006dd8` | Each fails there, but the test with email on, which passes, as the review found |
+| By hand, restic alone: one snapshot of a folder, then four of it and another, a day apart each (`--time`), then `forget --keep-daily 2 --dry-run` | By host and paths it keeps three, the first among them; with `--group-by host,tags`, the newest two. The test in `backup` can't date its snapshots, so it shows the same within one day |
+
+Nothing is left unverified beyond what 10.4 lists.
