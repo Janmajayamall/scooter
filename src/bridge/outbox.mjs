@@ -27,11 +27,16 @@
 // - **Failures.** While the entry's channel isn't ready, such as wacli waiting to be paired, the
 //   entry waits, and so do the ones after it. A send that fails is tried again after a wait that
 //   doubles, from `SEND_RETRY_BACKOFF.first` to its `max`; from the middle try on, a text goes
-//   without its quote, in case the quoted message is what the channel can't find. After
-//   `SEND_ATTEMPTS` failed tries made while the channel was ready, the entry is given up on and
-//   logged, so that one which can never go out doesn't hold back every reply after it. A look at
-//   the outbox that fails for another reason, such as a full disk, is tried again after the same
-//   waits.
+//   without its quote, in case the quoted message is what the channel can't find. An entry that
+//   has failed `SEND_ATTEMPTS` times while the channel was ready no longer holds back the ones after
+//   it: it is still tried first, at every look, but when it fails the look goes on to the next. It
+//   is given up on, and logged, only when a message of a later entry has gone out since, which
+//   shows that the channel works, and its own try after that fails too; a message going out past
+//   it starts the look over, so that try comes next. So an outage, during which nothing goes out,
+//   gives up on nothing, and the entries then go in order: the channel says it is ready while
+//   wacli reconnects, and only a send shows that it isn't. An entry with nothing behind it holds
+//   nothing back, and is tried again after the longest wait. A look at the outbox that fails for
+//   another reason, such as a full disk, is tried again after the same waits.
 // - **Pausing.** `pause()` stops it between two messages, for a backup (5.5), and `resume()`
 //   starts it again.
 //
@@ -44,7 +49,7 @@ import path from 'node:path'
 import { listHandOffs, readUntrustedFile, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
-import { ENTRY_FILE, SENDING_FILE, checkOutboxEntry, checkSendingFile, orderedEntry } from '../common/outbox.mjs'
+import { ENTRY_FILE, SENDING_FILE, checkOutboxEntry, checkSendingFile, cutText, orderedEntry } from '../common/outbox.mjs'
 import { isoSeconds, systemClock } from '../common/time.mjs'
 
 // ---------------------------------------------------------------------------------------------
@@ -145,8 +150,10 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
   const message = messageOf(index, entry.target)
   if (message === null || message.dir !== 'in') return { action: 'drop', reason: "not one of the owner's messages" }
   if (message.source === 'email') {
+    // Made here, after the entry was written, from a subject the datastore holds: cut as an entry's
+    // text is. Intake already cuts a subject at `EMAIL_SUBJECT_MAX_CHARS` (5.6).
     const subject = (message.subject ?? '').replace(/\s+/g, ' ').trim() || '(no subject)'
-    return { action: 'text', channel: fallback, text: `${entry.emoji} Email: ${subject}`, quote: null }
+    return { action: 'text', channel: fallback, text: cutText(`${entry.emoji} Email: ${subject}`), quote: null }
   }
   const channel = channels.get(message.source)
   if (!channel?.canReact || message.sourceId === undefined) return { action: 'drop', reason: "its channel can't react" }
@@ -169,11 +176,17 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   let lastSend = -Infinity
   let paused = false
   let broken = false
-  // When the next try may be made, after a failed send or a failed look.
+  // When the next look may be made, after a look that failed.
   let retryAt = -Infinity
   let lookFailures = 0
-  // The failed tries of the message in flight: `{ id, part, failures }`.
-  let trouble = null
+  // The failed tries of each entry's message in flight, by entry ID: `{ part, failures, due }`,
+  // `due` being when it may be tried again.
+  const troubles = new Map()
+  // The entries that had failed `SEND_ATTEMPTS` times when a message of a later entry went out:
+  // their next failure gives them up.
+  const lastChance = new Set()
+  // How many messages have gone out, so a look can tell whether an entry sent any.
+  let sends = 0
   // The channel whose entries are waiting until it is ready, so that is logged once.
   let waitingFor = null
   let round = Promise.resolve()
@@ -235,21 +248,29 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   }
 
   // A send failed. Counts it when the channel is still ready, so a link that went down doesn't
-  // use up the entry's tries, and gives the entry up after `SEND_ATTEMPTS`. Returns `wait`, or
-  // `next` once it has been given up on.
+  // use up the entry's tries, and gives the entry up when it was its last chance. Returns `wait`;
+  // `pass` once it has failed `SEND_ATTEMPTS` times, to go on with the entries after it; or `next`
+  // once it has been given up on.
   function failed({ id, dir, entry, route, part, parts, error }) {
-    if (trouble?.id !== id || trouble.part !== part) trouble = { id, part, failures: 0 }
+    let trouble = troubles.get(id)
+    if (trouble?.part !== part) {
+      trouble = { part, failures: 0, due: -Infinity }
+      troubles.set(id, trouble)
+    }
     if (route.channel.ready()) trouble.failures += 1
     const fields = { entry: id, type: entry.type, part, parts: parts.length, channel: route.channel.name, failures: trouble.failures }
     log.warn('outbox.send_failed', { ...fields, ...errorFields(error) })
-    if (trouble.failures >= limits.SEND_ATTEMPTS) {
+    trouble.due = clock.now() + backoff(trouble.failures)
+    if (lastChance.has(id)) {
       log.error('outbox.given_up', { ...fields, by: entry.by })
+      lastChance.delete(id)
+      troubles.delete(id)
       remove(dir)
-      trouble = null
       return 'next'
     }
-    retryAt = clock.now() + backoff(trouble.failures)
-    return 'wait'
+    if (trouble.failures < limits.SEND_ATTEMPTS) return 'wait'
+    if (trouble.failures === limits.SEND_ATTEMPTS) log.warn('outbox.passed_over', { ...fields, by: entry.by })
+    return 'pass'
   }
 
   // The wait after the `n`th failure in a row.
@@ -258,8 +279,9 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     return Math.min(first * factor ** Math.max(0, n - 1), max)
   }
 
-  // Sends one entry, or what is left of it. Returns `next` when it is done with, and `wait` when it
-  // must wait: for its channel, for a try after a failed send, or for a pause or a stop.
+  // Sends one entry, or what is left of it. Returns `next` when it is done with, `wait` when it
+  // must wait: for its channel, for a try after a failed send, or for a pause or a stop; and `pass`
+  // when it failed and no longer holds back the entries after it.
   async function deliver(id, signal) {
     const dir = path.join(paths.outbox, id)
     const loaded = load(dir)
@@ -291,7 +313,8 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
       writeSending(dir, entry, sent)
       const part = sent + 1
       // From the middle try on, a text goes without its quote.
-      const tries = trouble?.id === id && trouble.part === part ? trouble.failures : 0
+      const trouble = troubles.get(id)
+      const tries = trouble?.part === part ? trouble.failures : 0
       const quoted = route.action === 'text' && part === 1 && route.quote !== null && tries < Math.ceil(limits.SEND_ATTEMPTS / 2)
       let sourceId
       try {
@@ -304,13 +327,24 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
         if (signal.aborted) return 'wait'
         return failed({ id, dir, entry, route, part, parts, error })
       }
-      trouble = null
+      troubles.delete(id)
+      lastChance.delete(id)
+      sends += 1
       if (sourceId === null) log.warn('outbox.no_id', { entry: id, channel: route.channel.name })
 
       let result = null
       let storeError = null
       try {
-        result = await store.append(outLine(route, entry, parts, part, sourceId, quoted))
+        const line = outLine(route, entry, parts, part, sourceId, quoted)
+        result = await store.append(line)
+        // The store holds a line with that ID already: the channel gave the ID of something else,
+        // such as the message reacted to. The message went out all the same, and the record keeps
+        // it, without the ID (4.2 makes it optional).
+        if (!result.stored) {
+          log.warn('outbox.id_taken', { entry: id, part, channel: route.channel.name, reason: result.reason })
+          const { sourceId: _, ...withoutId } = line
+          result = await store.append(withoutId)
+        }
       } catch (error) {
         storeError = error
       }
@@ -333,12 +367,39 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     return 'next'
   }
 
-  // One look at the outbox: the entries in order, until one has to wait.
+  // One look at the outbox: the entries in order, until one has to wait. When a message goes out
+  // past entries that failed and were passed over, the channel works: each of them gets one last
+  // try, and the look starts over so that it comes next.
   async function look(signal) {
     if (paused || broken || clock.now() < retryAt) return
-    for (const id of listHandOffs(paths.outbox)) {
+    const ids = listHandOffs(paths.outbox)
+    for (const id of troubles.keys()) if (!ids.includes(id)) troubles.delete(id)
+    for (const id of lastChance) if (!ids.includes(id)) lastChance.delete(id)
+    const passed = []
+    for (const id of ids) {
       if (paused || broken || signal.aborted) break
-      if ((await deliver(id, signal)) === 'wait') break
+      // Waiting for its next try: one passed over waits on its own, and one not yet holds back the
+      // entries after it.
+      const trouble = troubles.get(id)
+      if (trouble && clock.now() < trouble.due) {
+        if (trouble.failures < limits.SEND_ATTEMPTS) break
+        passed.push(id)
+        continue
+      }
+      const before = sends
+      const outcome = await deliver(id, signal)
+      if (outcome === 'pass') {
+        passed.push(id)
+        continue
+      }
+      if (sends > before && passed.length > 0) {
+        for (const other of passed) {
+          lastChance.add(other)
+          troubles.get(other).due = -Infinity
+        }
+        break
+      }
+      if (outcome === 'wait') break
     }
     lookFailures = 0
   }

@@ -4,12 +4,14 @@
 // them yet, or they can't be read.
 
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { BACKUPS_NOT_BUILT } from '../src/bridge/main.mjs'
 import { statusText } from '../src/bridge/status.mjs'
 import { writeFileAtomic } from '../src/common/files.mjs'
+import { limits } from '../src/common/limits.mjs'
 import { formatNetworkLogLine } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createFakeChannel } from './support/fake-channel.mjs'
@@ -69,7 +71,7 @@ function setup(t) {
     fs.mkdirSync(paths.networkLogDir, { recursive: true })
     fs.appendFileSync(paths.networkLog(date), entries.map(formatNetworkLogLine).join(''))
   }
-  return { paths, status, write, netlog }
+  return { root, paths, status, write, netlog }
 }
 
 const request = (id, at, host = 'openrouter.ai') => ({ id, at, event: 'request', host, method: 'POST', path: '/api/v1/messages' })
@@ -162,7 +164,7 @@ test('status: an agent that hasn\'t run, and files that can\'t be read, are said
   assert.match(status(), /^lifelog: its state\.json can't be read \(not a state\)\.$/m)
   // A folder where a day of the network log should be.
   fs.mkdirSync(paths.networkLog('2026-11-09'), { recursive: true })
-  assert.match(status(), /^Network log: it can't be read \(EISDIR\)\.$/m)
+  assert.match(status(), /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
   write(paths.runnerStatus, '{"accel": "warp"}')
   const text = status()
   assert.match(text, /^Runner: its status\.json can't be read \(not a status\)\.$/m)
@@ -171,4 +173,33 @@ test('status: an agent that hasn\'t run, and files that can\'t be read, are said
   // An agent's name that isn't one is no path to read.
   write(paths.runnerStatus, { ...STATUS, agents: { '../../etc': STATUS.agents.lifelog } })
   assert.match(status(), /^Runner: its status\.json can't be read \(not a status\)\.$/m)
+})
+
+test('status: the runner\'s files are read without following a link or waiting on a FIFO, as files another user controls', t => {
+  const { status, write, paths, root } = setup(t)
+  write(paths.runnerStatus, STATUS)
+  write(paths.agentState('lifelog'), '{}')
+  // As the runner's user could leave them: a FIFO for status.json, a link to a file the runner
+  // can't read for state.json, and a FIFO for the day's network log.
+  fs.rmSync(paths.runnerStatus)
+  execFileSync('mkfifo', [paths.runnerStatus])
+  const secret = path.join(root, 'secret.json')
+  fs.writeFileSync(secret, JSON.stringify({ cursor: 0 }))
+  fs.rmSync(paths.agentState('lifelog'))
+  fs.symlinkSync(secret, paths.agentState('lifelog'))
+  fs.mkdirSync(paths.networkLogDir, { recursive: true })
+  execFileSync('mkfifo', [paths.networkLog('2026-11-09')])
+  const started = Date.now()
+  const text = status()
+  assert.ok(Date.now() - started < 1000)
+  assert.match(text, /^Runner: its status\.json can't be read \(EUNTRUSTED\)\.$/m)
+  assert.match(text, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
+  // With status.json back, the link in place of state.json is said to be unreadable too.
+  fs.rmSync(paths.runnerStatus)
+  write(paths.runnerStatus, STATUS)
+  assert.match(status(), /^lifelog: its state\.json can't be read \(EUNTRUSTED\)\.$/m)
+  // And one too large to be the runner's.
+  fs.rmSync(paths.agentState('lifelog'))
+  write(paths.agentState('lifelog'), ' '.repeat(limits.STATUS_FILE_MAX_BYTES + 1))
+  assert.match(status(), /^lifelog: its state\.json can't be read \(EFBIG\)\.$/m)
 })

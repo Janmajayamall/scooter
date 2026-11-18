@@ -10,11 +10,12 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { HELP_TEXT, BACKUP_NOT_BUILT } from '../src/bridge/commands.mjs'
+import { BACKUP_NOT_BUILT, HELP_TEXT, createCommands } from '../src/bridge/commands.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
-import { listHandOffs } from '../src/common/files.mjs'
+import { openStore } from '../src/bridge/store.mjs'
+import { createIds, listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
@@ -23,6 +24,7 @@ import { createTestLog } from './support/log.mjs'
 import { createMailReaderStub } from './support/mail-reader.mjs'
 import { AUTHSERV, OWNER_ADDRESSES, appleMailAudio, gmailPlain } from './support/mail-samples.mjs'
 import { isRoot } from './support/root.mjs'
+import { line, writeDatastore } from './support/runner.mjs'
 import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
@@ -341,6 +343,41 @@ test('bridge: a command is answered once, also across a restart, and one left un
   await bridge.commands.idle()
   assert.equal(entries(), 2)
   assert.equal(bridge.state.get().commandSeq, 1)
+})
+
+test('bridge: a reply to a command that can\'t be written is tried again after waits that grow, without another command', async t => {
+  // The review of milestone 5, point 7.
+  const root = makeTestDir(t)
+  const paths = makePaths(bridgeSettings(root))
+  const clock = createFakeClock('2026-11-09T15:45:00Z')
+  const { log, entries } = createTestLog({ clock })
+  writeDatastore(paths, [line.command(1, '2026-11-09T15:44:00Z', '/help')])
+  fs.mkdirSync(paths.bridge, { recursive: true })
+  const store = openStore({ paths, clock, log })
+  const state = openBridgeState({ paths, clock, log })
+  const commands = createCommands({ store, state, paths, ids: createIds(clock), log, clock, status: async () => 'status' })
+  atEnd(t, () => commands.stop())
+  // The outbox can't be written, as on a full disk: a file where its folder should be.
+  fs.mkdirSync(paths.exchange, { recursive: true })
+  fs.writeFileSync(paths.outbox, 'not a folder')
+  await commands.handle()
+  const failures = () => entries.filter(entry => entry.event === 'bridge.command_failed').map(entry => entry.failures)
+  assert.deepEqual(failures(), [1])
+  await clock.advance(5 * SECOND)
+  await commands.idle()
+  assert.deepEqual(failures(), [1, 2])
+  assert.equal(state.get().commandSeq, 0)
+  // The disk is back: the next try, 10 seconds later, writes the reply.
+  fs.rmSync(paths.outbox)
+  await clock.advance(9 * SECOND)
+  assert.deepEqual(listHandOffs(paths.outbox), [])
+  await clock.advance(SECOND)
+  await commands.idle()
+  assert.equal(listHandOffs(paths.outbox).length, 1)
+  assert.equal(state.get().commandSeq, 1)
+  // Stopped, it tries nothing more.
+  await commands.stop()
+  assert.deepEqual(clock.sleeping(), [])
 })
 
 test('bridge: the state records the first start, and keeps it', async t => {

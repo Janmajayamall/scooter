@@ -9,9 +9,13 @@
 // back where the command was sent (5.3).
 //
 // It runs when intake has stored a command, and once at startup for any the bridge didn't get to.
+// A reply that can't be written, as on a full disk, is tried again after a wait that doubles,
+// as a failed look at the outbox is (`SEND_RETRY_BACKOFF`), without waiting for another command.
 
+import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
+import { systemClock } from '../common/time.mjs'
 
 export const HELP_TEXT = [
   'Commands:',
@@ -32,8 +36,12 @@ export const BACKUP_NOT_BUILT = "Backups aren't built into this version of Scoot
 // - `paths`, `ids`: for the outbox (`writeOutboxEntry`); `ids` is the bridge's one generator.
 // - `status()`: the reply to `/status` (`status.mjs`).
 // - `backup()`: the reply to `/backup`.
-export function createCommands({ store, state, paths, ids, log, status, backup = async () => BACKUP_NOT_BUILT }) {
+export function createCommands({ store, state, paths, ids, log, clock = systemClock, status, backup = async () => BACKUP_NOT_BUILT }) {
   let queue = Promise.resolve()
+  let failures = 0
+  // The wait before the next try, after a failure, which `stop()` cuts short.
+  let retrying = null
+  let stopped = false
 
   async function reply(command) {
     if (command === '/status') return status()
@@ -55,15 +63,50 @@ export function createCommands({ store, state, paths, ids, log, status, backup =
     }
   }
 
+  // The wait after the `n`th failure in a row.
+  function backoff(n) {
+    const { first, factor, max } = limits.SEND_RETRY_BACKOFF
+    return Math.min(first * factor ** Math.max(0, n - 1), max)
+  }
+
+  function handle() {
+    if (stopped) return queue
+    queue = queue
+      .then(handlePending)
+      .then(() => {
+        failures = 0
+      })
+      .catch(error => {
+        failures += 1
+        log.error('bridge.command_failed', { failures, ...errorFields(error) })
+        if (retrying) return
+        const wait = new AbortController()
+        retrying = wait
+        clock.sleep(backoff(failures), { signal: wait.signal }).then(
+          () => {
+            retrying = null
+            handle()
+          },
+          () => {},
+        )
+      })
+    return queue
+  }
+
   return {
     // Handles the commands not handled yet, after what is already under way. Never rejects: a
-    // failure is logged, and the next call tries the same commands again.
-    handle() {
-      queue = queue.then(handlePending).catch(error => log.error('bridge.command_failed', errorFields(error)))
-      return queue
-    },
+    // failure is logged, and the same commands are tried again after a wait, or at the next call.
+    handle,
 
     // Resolves when what was asked for so far is done.
     idle: () => queue,
+
+    // Tries nothing more, and resolves when what is under way is done.
+    async stop() {
+      stopped = true
+      retrying?.abort()
+      retrying = null
+      await queue
+    },
   }
 }

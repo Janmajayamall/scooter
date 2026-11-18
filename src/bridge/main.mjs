@@ -85,7 +85,7 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     const channels = new Map()
     const ids = createIds(clock)
     const status = async () => statusText({ now: clock.now(), settings, paths, channels, index: store.index, backups: BACKUPS_NOT_BUILT })
-    const commands = createCommands({ store, state, paths, ids, log, status })
+    const commands = createCommands({ store, state, paths, ids, log, clock, status })
     const intake = createIntake({ store, channels, paths, log, clock, onFatal: reportFatal, onCommand: () => commands.handle() })
     const whatsapp = createWhatsApp({
       settings,
@@ -130,7 +130,7 @@ export async function startBridge({ settings, clock = systemClock, log = createL
           await outbox.stop()
           for (const channel of channels.values()) await channel.stop()
           await intake.idle()
-          await commands.idle()
+          await commands.stop()
           await instance.close()
           log.info('bridge.stopped')
         })()),

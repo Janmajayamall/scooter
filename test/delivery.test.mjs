@@ -253,33 +253,83 @@ test('delivery: entries wait while their channel isn\'t ready, and so do the one
   )
 })
 
-test('delivery: a failed send is tried again after waits that double, without its quote from the middle try on, and given up on after SEND_ATTEMPTS', async t => {
+test('delivery: a failed send is tried again after waits that double, without its quote from the middle try on, passed over after SEND_ATTEMPTS, and given up on once another goes and its next try fails', async t => {
   const { write, drain, whatsapp, entries, out } = setup(t)
-  whatsapp.failNext(...Array.from({ length: limits.SEND_ATTEMPTS }, () => ({ code: 'EWACLI' })))
+  // Eight failures, then one that works, then the last try of the first entry fails too.
+  whatsapp.failNext(...Array.from({ length: limits.SEND_ATTEMPTS }, () => ({ code: 'EWACLI' })), null, { code: 'EWACLI' })
   const failing = await write({ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 })
   await write({ type: 'text', by: 'runner', text: 'the next one' })
   await drain()
 
-  const tries = whatsapp.sends.filter(send => send.failed)
-  assert.equal(tries.length, limits.SEND_ATTEMPTS)
-  // Quoted for the first half of the tries, and not after.
   assert.deepEqual(
-    tries.map(send => send.quoteId),
-    ['WA1', 'WA1', 'WA1', 'WA1', null, null, null, null],
+    whatsapp.sends.map(send => [send.text, send.quoteId, send.failed ?? false]),
+    [
+      ...Array.from({ length: 4 }, () => ['Work or personal?', 'WA1', true]),
+      ...Array.from({ length: 4 }, () => ['Work or personal?', null, true]),
+      ['the next one', null, false],
+      // Its last try, once a message of another entry has shown that the channel works.
+      ['Work or personal?', null, true],
+    ],
   )
   // Each wait at least the one before it doubled, from 5 seconds, up to 5 minutes.
+  const tries = whatsapp.sends.slice(0, limits.SEND_ATTEMPTS)
   const gaps = tries.slice(1).map((send, n) => send.at - tries[n].at)
   const waits = [5, 10, 20, 40, 80, 160, 300].map(seconds => seconds * SECOND)
   gaps.forEach((gap, n) => assert.ok(gap >= waits[n] && gap < waits[n] + 2 * SECOND, `wait ${n + 1}: ${gap} ms`))
-  // Given up on and logged, and the next entry went.
-  const given = entries.filter(entry => entry.event === 'outbox.given_up')
-  assert.deepEqual(given.map(entry => [entry.entry, entry.failures, entry.by]), [[failing, limits.SEND_ATTEMPTS, 'lifelog']])
+  // Passed over, then given up on, each logged.
+  assert.deepEqual(
+    entries.filter(entry => ['outbox.passed_over', 'outbox.given_up'].includes(entry.event)).map(entry => [entry.event, entry.entry, entry.failures, entry.by]),
+    [
+      ['outbox.passed_over', failing, limits.SEND_ATTEMPTS, 'lifelog'],
+      ['outbox.given_up', failing, limits.SEND_ATTEMPTS + 1, 'lifelog'],
+    ],
+  )
   assert.deepEqual(
     out().map(entry => entry.text),
     ['the next one'],
   )
   // Nothing of the text is in the log.
   assert.ok(!JSON.stringify(entries).includes('personal'))
+})
+
+test('delivery: an outage gives up on nothing: entries passed over wait, and all go, in order, once sends work again', async t => {
+  const { write, drain, whatsapp, clock, entries, out, waiting } = setup(t)
+  whatsapp.failAll({ code: 'EWACLI' })
+  for (const text of ['one', 'two', 'three', 'four', 'five', 'six']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+  // The case of the review of milestone 5: every send fails for an hour, the channel ready.
+  for (let n = 0; n < 3600; n++) await clock.advance(SECOND)
+  assert.equal(waiting().length, 6)
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
+  assert.ok(entries.filter(entry => entry.event === 'outbox.passed_over').length >= 1)
+  // Each entry is tried SEND_ATTEMPTS times, with waits that grow, and then every five minutes,
+  // while the next ramps up: about 60 tries in the hour, never two within SEND_INTERVAL.
+  assert.ok(whatsapp.sends.length > 40 && whatsapp.sends.length < 80, `${whatsapp.sends.length} tries`)
+  whatsapp.sends.slice(1).forEach((send, n) => assert.ok(send.at - whatsapp.sends[n].at >= limits.SEND_INTERVAL))
+
+  whatsapp.failAll(null)
+  await drain()
+  assert.deepEqual(
+    out().map(entry => entry.text),
+    ['one', 'two', 'three', 'four', 'five', 'six'],
+  )
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
+})
+
+test('delivery: an entry passed over with nothing behind it holds nothing back, and is tried again every five minutes', async t => {
+  const { write, drain, whatsapp, clock, entries, out } = setup(t)
+  whatsapp.failAll({ code: 'EWACLI' })
+  await write({ type: 'text', by: 'lifelog', text: 'alone', replyTo: 1 })
+  for (let n = 0; n < 3600; n++) await clock.advance(SECOND)
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
+  const tries = whatsapp.sends.length
+  assert.ok(tries > limits.SEND_ATTEMPTS && tries < limits.SEND_ATTEMPTS + 12, `${tries} tries`)
+  whatsapp.failAll(null)
+  await drain()
+  // Without its quote, as from the middle try on.
+  assert.deepEqual(
+    out().map(entry => [entry.text, entry.replyTo]),
+    [['alone', undefined]],
+  )
 })
 
 test('delivery: a failure that leaves the channel not ready isn\'t counted against the entry', async t => {
@@ -372,6 +422,47 @@ test('delivery: a message the channel gives no ID for is logged without one', as
   await drain()
   assert.equal(out()[0].sourceId, undefined)
   assert.ok(events().includes('outbox.no_id'))
+})
+
+test('delivery: a message whose ID the store already holds is logged without one, and the next goes', async t => {
+  const { write, drain, whatsapp, out, entries } = setup(t)
+  // As a channel that answered with the ID of the message it reacted to (the review of milestone
+  // 5, point 4): the reaction went out, and is recorded.
+  whatsapp.idsNext('WA1', 'WA2')
+  await write({ type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
+  await write({ type: 'text', by: 'lifelog', text: 'about the lunch', about: 2 })
+  await write({ type: 'text', by: 'lifelog', text: 'and one more', about: 2 })
+  await drain()
+  assert.deepEqual(
+    out().map(line => [line.kind, line.sourceId, line.text ?? line.emoji]),
+    [
+      ['reaction', undefined, '✅'],
+      ['message', undefined, 'about the lunch'],
+      ['message', 'WHATSAPP-OUT-1', 'and one more'],
+    ],
+  )
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'outbox.id_taken').map(entry => entry.reason),
+    ['duplicate', 'duplicate'],
+  )
+})
+
+test('delivery: an entry with U+0000 in its text is refused at once, not tried SEND_ATTEMPTS times', async t => {
+  const context = setup(t, { started: false })
+  const { paths, whatsapp, entries } = context
+  fs.mkdirSync(path.join(paths.outbox, '20261109T150000000-0001'), { recursive: true })
+  fs.writeFileSync(path.join(paths.outbox, '20261109T150000000-0001', ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'a\u0000b' }))
+  await context.write({ type: 'text', by: 'runner', text: 'the next one' })
+  context.start()
+  await context.drain(10)
+  assert.deepEqual(
+    sendsOf(whatsapp).map(send => send.text),
+    ['the next one'],
+  )
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'outbox.refused').map(entry => entry.reason),
+    ["entry.json: text can't hold U+0000"],
+  )
 })
 
 test('delivery: when the store takes no more lines, the message counts as sent and the bridge is told', async t => {

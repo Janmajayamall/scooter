@@ -41,8 +41,11 @@ export const textLength = text => {
   return count
 }
 
-// `text`, or, when it is longer than `TEXT_MAX_CHARS`, as much of it as fits before `CUT_NOTE`.
-export function cutText(text) {
+// `text` as it can be sent: U+0000 in it replaced by U+FFFD, since no program takes a command-line
+// argument that holds one, and wacli takes a text as one (5.3); and, when it is longer than
+// `TEXT_MAX_CHARS`, as much of it as fits before `CUT_NOTE`.
+export function cutText(given) {
+  const text = given.replaceAll('\0', '\ufffd')
   if (textLength(text) <= limits.TEXT_MAX_CHARS) return text
   const keep = limits.TEXT_MAX_CHARS - textLength(CUT_NOTE)
   let kept = ''
@@ -68,10 +71,14 @@ const FIELDS = {
 // What is wrong with an entry, as a list of short statements that name fields and never repeat
 // their values. An empty list means it is well formed.
 //
-// - `text`: `by`, a `text` that isn't empty and at most `TEXT_MAX_CHARS` long, and at most one of
-//   `replyTo` (the message it answers, quoted) and `about` (the newest message it answers, not
-//   quoted). With neither, it is something Scooter says on its own.
-// - `react`: `by`, the `target` it reacts to, and an `emoji` that isn't empty.
+// - `text`: `by`, a `text` that isn't empty, at most `TEXT_MAX_CHARS` long and without U+0000, and
+//   at most one of `replyTo` (the message it answers, quoted) and `about` (the newest message it
+//   answers, not quoted). With neither, it is something Scooter says on its own.
+// - `react`: `by`, the `target` it reacts to, and an `emoji` that isn't empty, without U+0000.
+//
+// A text or an emoji with U+0000 in it could never be sent: it would be tried `SEND_ATTEMPTS`
+// times, holding back the entries after it, so the bridge refuses it at once. `writeOutboxEntry`
+// writes none.
 export function checkOutboxEntry(entry) {
   if (!isObject(entry)) return ['not an object']
   if (!ENTRY_TYPES.includes(entry.type)) return [`type must be one of ${ENTRY_TYPES.join(', ')}`]
@@ -90,12 +97,14 @@ export function checkOutboxEntry(entry) {
   if (entry.type === 'text') {
     need('text', value => typeof value === 'string' && value.trim() !== '', "a string that isn't empty")
     if (typeof entry.text === 'string' && textLength(entry.text) > limits.TEXT_MAX_CHARS) problems.push(`text must be at most ${limits.TEXT_MAX_CHARS} characters`)
+    if (typeof entry.text === 'string' && entry.text.includes('\0')) problems.push("text can't hold U+0000")
     allow('replyTo', isSeq, 'a seq')
     allow('about', isSeq, 'a seq')
     if (entry.replyTo !== undefined && entry.about !== undefined) problems.push('replyTo and about can\'t both be given')
   } else {
     need('target', isSeq, 'a seq')
     need('emoji', isName, "a string that isn't empty")
+    if (typeof entry.emoji === 'string' && entry.emoji.includes('\0')) problems.push("emoji can't hold U+0000")
   }
   return problems
 }
@@ -123,8 +132,8 @@ export function orderedEntry(entry) {
 }
 
 // Writes an entry into the outbox and returns its ID. `ids` is a generator from `createIds`
-// (`files.mjs`), one per process. A text longer than `TEXT_MAX_CHARS` is cut (`cutText`). Throws
-// if the entry isn't well formed.
+// (`files.mjs`), one per process. A text is made one that can be sent (`cutText`): U+0000 replaced,
+// and cut at `TEXT_MAX_CHARS`. Throws if the entry isn't well formed.
 //
 // The outbox folder is made, 0700, if it is missing, as in development. An installed Scooter makes
 // it in `setup`, owned by the runner's user, so that both services can write there (3.2).
