@@ -18,8 +18,8 @@
 // Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, asks the planner what
 // is next (`nextAction`), and does it. One thing at a time, so runs never overlap.
 //
-// `src/cli.mjs` runs `runRunner` once there is a sandbox to give it: the Gondolin VM, in milestone
-// 7 (D94 of `docs/DECISIONS.md`). The tests give the fake one.
+// `scooter runner` (`src/cli.mjs`) runs `runRunner` with the Gondolin sandbox
+// (`sandbox/gondolin.mjs`). The tests give the fake one.
 
 import { createIds, ensureDir } from '../common/files.mjs'
 import { holdInstance } from '../common/instance.mjs'
@@ -39,6 +39,7 @@ import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
 import { loadProtocol } from './prompt.mjs'
 import { performRun } from './run.mjs'
+import { SandboxSetupError } from './sandbox/index.mjs'
 import { loadState, saveState, startupState } from './state.mjs'
 import { emulationNotice, runnerStatus, writeRunnerStatus } from './status.mjs'
 import { nextAction } from './triggers.mjs'
@@ -234,7 +235,9 @@ export async function startRunner(options) {
 }
 
 // `scooter runner`: runs the runner until SIGTERM or SIGINT. Exits with 2 for a bad `agents.yaml`,
-// and with 1 if it can't start or can't go on. `openSandbox` opens the sandbox its runs go through.
+// or a sandbox that can't run as it is set up (no VM image, one for another pi, a forced
+// accelerator that isn't there), and with 1 if it can't start or can't go on for another reason.
+// `openSandbox` opens the sandbox its runs go through.
 export async function runRunner({ settings, stderr, openSandbox, clock = systemClock }) {
   const log = createLog({ component: 'runner', clock })
   let runner
@@ -248,7 +251,7 @@ export async function runRunner({ settings, stderr, openSandbox, clock = systemC
     log.error('runner.start_failed', errorFields(error))
     // For the person starting it. What can fail here names a path, a file and a line, or a field.
     stderr.write(`scooter runner: ${error.message}\n`)
-    return 1
+    return error instanceof SandboxSetupError ? 2 : 1
   }
   const handlers = new Map()
   const outcome = await new Promise(resolve => {

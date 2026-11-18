@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { overrideLimits } from '../src/common/limits.mjs'
 import { readLock } from '../src/common/locks.mjs'
 import { actFull, holds } from './support/full-disk.mjs'
 import { skipIfRoot } from './support/root.mjs'
@@ -281,6 +282,30 @@ test('run: a file or a folder the runner can\'t read, a name git refuses, a file
       assert.equal(sandbox.runs.length, 2)
     })
   }
+})
+
+test('run: an answer longer than the sandbox keeps fails the run as pi\'s own failure, and its files are thrown away', async t => {
+  t.after(overrideLimits({ SANDBOX_STDOUT_MAX_BYTES: 16 * 1024 }))
+  const { runner, clock, paths, state, outbox, git } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 LONGANSWER')])
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: "pi's answer was too long" }])
+  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (pi's answer was too long). I'll try again." }])
+})
+
+test('run: a run the sandbox stopped for writing too much fails as pi\'s own failure, and what it wrote is thrown away', async t => {
+  const { runner, clock, paths, state, git, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+  sandbox.wroteTooMuch = true
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'pi wrote more than a run may' }])
+  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+
+  sandbox.wroteTooMuch = false
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
 })
 
 test('run: empty folders don\'t fail the run, and are removed, so views and memory hold nothing the commit doesn\'t', async t => {

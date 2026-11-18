@@ -109,6 +109,10 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         // keeps the message until it is stored: nothing of it is stored now, and the channel hands
         // it over again, with its files (5.6).
         if (error.bridgeSide && channel.keepsUntilStored) throw error
+        // From such a channel any other failure is the message's own, such as a file missing from
+        // the mail spool, which the reader wrote whole before it handed the folder over: another
+        // try would find the same, and hold up every message behind it meanwhile.
+        if (channel.keepsUntilStored) return { error: MEDIA_ERRORS.downloadFailed }
       }
     }
     return { error: MEDIA_ERRORS.downloadFailed }

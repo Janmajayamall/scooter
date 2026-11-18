@@ -802,7 +802,11 @@ test('whatsapp: sends go to the chat the owner last wrote from', async t => {
 
 test('whatsapp: entries wait while wacli isn\'t paired, and go once it is', async t => {
   const context = await setup(t, { fixtures: { paired: false, messages: [] } })
-  const { stub, clock, paths } = context
+  const { stub, clock, paths, events } = context
+  // The pairing check has had its answer, so its next look is a minute from now. Waiting for any
+  // sleep could find the outbox's instead, and then, under load, the clock was moved before the
+  // check's minute began, and nobody moved it again (the second review of milestone 6, point 4).
+  await waitFor(() => events().includes('whatsapp.not_paired'), 'the pairing check')
   await clock.whenSleeping()
   const ids = createIds(clock)
   await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'runner', text: 'a notice' } })

@@ -73,6 +73,8 @@ test('sandbox: a run\'s spec is checked, and a secret is the sandbox\'s to set',
     [{ mounts: [{ path: '/data', writable: 'yes', hide: [] }] }, 'mounts[0].writable must be true or false'],
     [{ mounts: [{ path: '/data', writable: false, hide: ['../etc'] }] }, 'mounts[0].hide must list paths inside the mount'],
     [{ mounts: [{ path: '/data', writable: false, hide: ['/sessions'] }] }, 'mounts[0].hide must list paths inside the mount'],
+    // A writable mount hides nothing: the real sandbox would let the VM make the path again.
+    [{ mounts: [{ path: '/data', writable: true, hide: ['sessions'] }] }, 'mounts[0].hide must be empty: only a read-only mount hides paths'],
     [{ timeoutMs: 0 }, 'timeoutMs must be a whole number of milliseconds'],
     [{ policy: { ...spec.policy, internet: 'off' } }, 'policy.internet must be true or false'],
     [{ policy: { ...spec.policy, secrets: { KEY: 'sk' } } }, 'policy.secrets.KEY must be { hosts, value }'],

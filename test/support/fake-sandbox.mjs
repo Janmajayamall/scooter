@@ -8,12 +8,14 @@
 // do is make the read-only mounts read-only: the real VM's tests show that (milestone 7).
 //
 // The stub gets the spec's environment, the secrets' placeholders, and a few `PI_STUB_*` variables
-// of its own, which it leaves out of what it records.
+// of its own, which it leaves out of what it records. Its output is kept as the real sandbox keeps
+// it (`createOutput`). A test sets `wroteTooMuch` to have a run end as one the real sandbox stopped
+// for writing too much.
 
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { GUEST_HOME, checkRunSpec } from '../../src/runner/sandbox/index.mjs'
+import { GUEST_HOME, checkRunSpec, createOutput } from '../../src/runner/sandbox/index.mjs'
 
 const STUB = new URL('./pi-stub.mjs', import.meta.url).pathname
 
@@ -52,6 +54,9 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
     // Every spec it was given, with the environment pi got: the spec's, and the placeholders.
     runs,
 
+    // Set to true for the next runs to end as the real sandbox ends a run that wrote too much.
+    wroteTooMuch: false,
+
     async run(spec, { signal } = {}) {
       const problems = checkRunSpec(spec)
       if (problems.length > 0) throw new Error(`the fake sandbox was given a bad spec: ${problems.join('; ')}`)
@@ -77,7 +82,21 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
           signal,
         })
         const stopped = result.timedOut || signal?.aborted === true
-        return { code: stopped ? null : result.code, signal: result.signal, stdout: result.stdout, stderr: result.stderr, timedOut: result.timedOut }
+        // Kept as the real sandbox keeps it: the start of stdout and the end of stderr.
+        const output = createOutput()
+        output.add('stdout', result.stdout)
+        output.add('stderr', result.stderr)
+        const kept = output.result()
+        const wroteTooMuch = this.wroteTooMuch === true
+        return {
+          code: stopped || wroteTooMuch ? null : result.code,
+          signal: result.signal,
+          stdout: kept.stdout,
+          stderr: kept.stderr,
+          stdoutCut: kept.stdoutCut,
+          timedOut: result.timedOut,
+          wroteTooMuch,
+        }
       } finally {
         fs.rmSync(vm, { recursive: true, force: true })
       }

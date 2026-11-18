@@ -621,9 +621,9 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
 
     // Saves the record's `n`th attachment at `target`: the whole message for the first, then the
     // parts, copied out of the spool with care, since the reader owns it. A file in the spool that
-    // is missing, isn't one to copy, or is too large is the email's own; any other failure is on
-    // the bridge's side, such as a full disk, and says so (`bridgeSide`): the email then stays in
-    // the spool, and is tried again (5.6).
+    // is missing (`ENOENT` on it), isn't one to copy, or is too large is the email's own; any other
+    // failure is on the bridge's side, such as a full disk or a bridge out of file descriptors, and
+    // says so (`bridgeSide`): the email then stays in the spool, and is tried again (5.6).
     async download(record, n, target) {
       const dir = folders.get(record)
       if (dir === undefined || !Number.isSafeInteger(n) || n < 1 || n > record.attachments.length) throw new Error('no such attachment')
@@ -631,7 +631,8 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
       try {
         await copyUntrustedFile(source, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
       } catch (error) {
-        if (!(error.code === 'EUNTRUSTED' || error.code === 'EFBIG' || error.path === source)) error.bridgeSide = true
+        const emailsOwn = error.code === 'EUNTRUSTED' || error.code === 'EFBIG' || (error.code === 'ENOENT' && error.path === source)
+        if (!emailsOwn) error.bridgeSide = true
         throw error
       }
     },

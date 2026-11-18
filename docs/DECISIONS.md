@@ -1670,7 +1670,7 @@ Before an entry behind ones passed over is tried, those are tried again, in orde
 - What isn't the reader's in the spool, and what isn't a folder in the spool or the outbox, is left where it is, and logged once while it stays: the bridge never removes what that user couldn't remove itself. An outbox entry is taken whoever owns it, as before, since the bridge's own entries are root's.
 - A folder the bridge is done with is removed by the names its writer gives the files in one (`removeHandOff`): `message.eml`, `parsed.json` and `part-<n>` in the spool; `entry.json`, `sending.json`, and what a write of `sending.json` cut short leaves, in the outbox. Each is unlinked, which neither follows a link nor removes a folder, and then the folder is removed, which happens only once it is empty. One that holds anything else is left, and logged once (`email.not_removed`, `outbox.not_removed`).
 - In wacli's staging folder the bridge unlinks only names that start with an ID, as it names its downloads (`startsWithId`), at a start and after each download. Anything else there, a folder wacli left in a download's place among it, is wacli's, and stays, counted in `whatsapp.staging_kept`. This changes D35, and milestone 2's test, which removed every name there, folders and all.
-*Reason:* the review's way, for all three folders. Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a gap between the check and the removal stays, and a link swapped in there is followed. Removing by known names limits what it can reach to files of those names, which nothing else of Scooter's or the system's has, and to empty folders, which are all `rmdir` removes. A name starting with an ID is also an outbox entry's, which is a folder, and `unlink` refuses a folder.
+*Reason:* the review's way, for all three folders. Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a gap between the check and the removal stays, and a link swapped in there is followed. Removing by known names limits what it can reach to files of those names, which nothing else of Scooter's or the system's has, and to empty folders, which are all `rmdir` removes. A name starting with an ID is also an outbox entry's, which is a folder, and `unlink` refuses a folder; and a download waiting in `bridge/incoming/`, named `<id>-<n>`, which is in the bridge's own folder, emptied at every start, and empty whenever staging is cleared, so a link in staging's place leads to none of them (added in milestone 7, for the second review of milestone 6, smaller point 7).
 *Cost:* the same gap remains for what the bridge writes into the outbox. It writes `sending.json` into an entry's folder before each message (D101), and hands its own entries off there; a link swapped in between its read and its write would steer that write, as root, into the folder the link leads to, under that name. Only the runner's user can make the swap, and an escape from pi's VM is needed to reach it (section 9). The plan's milestone 12, which checks what each user can reach, now says to settle it, for example by keeping `sending.json` in `bridge/`. What is left in place stays until its owner removes it; a well-behaved reader, wacli or runner leaves nothing of the kind.
 
 **D137. An email whose files the bridge can't copy, for a reason of its own, stays in the spool** (the review of this milestone, must-fix 2).
@@ -1683,6 +1683,7 @@ Before an entry behind ones passed over is tried, those are tried again, in orde
 *Question:* `readUntrustedFile` refuses a file with more than one name, so that a hard link can't make root read someone else's file. A file its writer replaced by a rename just after the bridge opened it has no name left, and was refused the same way. The reader writes its `state.json` so, and the runner its `status.json` and `state.json`, which `/status` reads since D132. So `/status` would now and then say one couldn't be read, and a test failed on it, once in about 30 runs.
 *Choice:* a file found with no name when it is looked at is opened again, once. Found so again, it is refused, as `a file replaced as it was opened, twice`.
 *Reason:* the review's way. A file with no name isn't a hard link to anything; the check is for a second name. By a script reading a file a million times while another thread replaced it: as fast as the thread could, 101,759 reads were refused before and 293 now; with a replacement every millisecond, 1 now. The reader replaces its file about once a minute.
+*Corrected in milestone 7* (the second review of milestone 6, smaller point 5): the second open mostly doesn't find the new file on ext4. The review's runs of the same kind of script gave 270 refused of a million as fast as the thread could, and 19, not 1, with a replacement every millisecond; with a writer that sleeps between writes, as the reader and the runner do, 60 of 61 replacements were seen without a name at the first open, and 56 again at the second, 2 microseconds later. On ext4 a name can still lead to the old file, with no name left, for the moment the rename takes; on tmpfs the second open nearly always finds the new one. It costs little: the window is microseconds a minute, only `/status` reads then, a refusal is the safe side, and no test leans on it. The comment in `files.mjs` says so.
 
 ### 6.2 The reviews of the pull requests merged before this one
 
@@ -1807,3 +1808,223 @@ Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `353
 | The new tests against `c941a93`, the root tests in `node:24-trixie` | Each fails, but for those named above. The outage test: 7 of its 30 lengths out of order. The root test with the link: the bridge removed `mail/` itself, the link with it |
 
 Not verified, besides what 6.4 lists: a swap timed into the gap between a check and a removal (D136), which no hermetic test can time. The tests show what a link in place does, and what `removeHandOff` reaches through one.
+
+## Milestone 7: sandbox and VM image
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.6, 6.9, 6.12, 8.6, and sections 9, 10 and 14, to say what this milestone settled (7.4 here). The review of the pull request asked for one change and noted seven smaller points; 7.6 says what became of each (D151, D152).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/runner/sandbox/gondolin.mjs` | The real sandbox: the runner's home and temporary folder, the image and the accelerator checked at its start, one VM per run with the mounts and environment of 6.6, closed on every path, and the limits on what a run may take |
+| `src/runner/sandbox/accel.mjs` | `AGENT_ACCEL` |
+| `src/runner/sandbox/image.mjs` | The build file and its pin of pi, the image's record and the runner's check of it, `packages.txt`, and `scooter build-image`, which builds in `.image-build/` beside the runner's folder (D151) |
+| `src/runner/sandbox/index.mjs` | `SandboxSetupError`, and `createOutput`, the output both sandboxes keep |
+| `src/cli.mjs`, `src/runner/main.mjs` | `scooter runner` with the Gondolin sandbox, and `scooter build-image`; a sandbox that can't run as it is set up exits with 2 |
+| `src/runner/run.mjs`, `src/runner/failures.mjs` | A cut answer, or a run that wrote too much, fails as pi's own failure |
+| `src/common/settings.mjs`, `limits.mjs`, `paths.mjs` | `loadFolders`, for `build-image`; eight constants; `imageStaging` |
+| `src/bridge/channels/email.mjs`, `src/bridge/intake.mjs`, `src/common/files.mjs` | The smaller points of the second review of milestone 6 (7.3) |
+| `test/support/` | The sandbox with the test image and the fake model's network, a process that holds a VM for the test of a killed runner, and a small image as Gondolin writes one, for `build-image`'s tests, with a stand-in for its file system for those that need no e2fsprogs |
+| `test/sandbox`, `image`, `accel` | This milestone's tests, with additions to `run`, `failures`, `limits`, `email` and `whatsapp` |
+
+### 7.1 Decisions
+
+**D139. One VM per run, and how it ends.**
+*Choice:* `openGondolinSandbox` is the runner's `openSandbox`. Its `run(spec)` makes a VM from `runner/image/` with the spec's mounts, boots it within `VM_START_TIMEOUT`, and runs `env -i <the spec's environment> <argv>` in the spec's folder (0.5, VM 2). `env` finds a program named without a path, such as `pi`, on the spec's `PATH`, so the image's layout stays the sandbox's business (D79). The VM is closed when the program exits, at the timeout, when the runner stops (its `signal`), and when the run writes too much (D146), and in every case before `run` returns. A VM that doesn't boot in time makes `run` reject, which the runner counts as a setup error, "the VM couldn't start" (D82). A run ended by a limit has `code: null`, even when the program ended at the same moment.
+*Reason:* the plan's list for this file, with what milestone 0 found: closing the VM is what stops the program, since aborting the command doesn't (13.4; 0.5, VM 3).
+*Also:* Gondolin's `autoStart: false` makes `start()` fail at once with "sandbox is stopped" in 0.14.0 (7.2), so the VM is made with the default, which begins booting at once, and `start()` waits for it.
+*When a run ends* (the review of this milestone, smaller point 2): Gondolin's command settles once the program has exited and its output has closed, not when it exits. A process the program leaves running with its stdout or stderr open holds the run until that process ends, or until the timeout, which then fails the run as timed out and counts an attempt: `sh -c 'sleep 15 & echo done'` took 16.9 seconds in the review. pi's tools run their commands with pipes of pi's own, by the review's reading, so what a tool leaves running doesn't hold pi's output, and pi itself exits with its answer.
+*The log* (the review, smaller point 1): `sandbox.vm_closed` says how the VM ended, in `ended`: `timeout`, `stopped` or `writes` when the sandbox ended it; `exited` when the program did; `lost` when the command failed under the program, as when its QEMU was killed, which is also logged as `sandbox.vm_lost` with the error's name and code (`errorFields`: Gondolin's message can quote the guest's output, so it isn't logged); and `not_started` when it never booted. A lost VM's run has `code: null`, as the sandbox interface says, and the runner records it as "pi was stopped", pi's own failure.
+
+**D140. The runner sets its own home and temporary folder, and Gondolin's list of VMs goes in the temporary folder.**
+*Question:* row 16 puts the runner's home and temporary folder under `runner/`; who sets them, and where Gondolin's files go.
+*Choice:* the sandbox, when it opens, sets `HOME` to `runner/home`, `TMPDIR` to `runner/tmp` and `XDG_CACHE_HOME` to `runner/home/.cache` in the runner's own environment, and `GONDOLIN_SESSIONS_DIR` to `runner/tmp/sessions`, then loads Gondolin. The certificate authority stays in the home folder, given to each VM as `mitmCertDir`, so it lasts from one start to the next. The temporary folder is emptied at every open, before any VM. The sandbox refuses to open when a socket's path there would pass 107 bytes, and says the data folder needs a shorter path.
+*Reason:* the runner then works the same however it was started, as a service, by hand, or in a container, and the folder it empties is the one Gondolin uses. Gondolin reads the temporary folder at each VM, and fixes its list of running VMs when it loads, so the module loads only after. The list holds a socket for each VM, named by a UUID: under `home/.cache/gondolin/sessions` its path passed 107 bytes with a data folder of 33 bytes, such as one under a home folder on the Linux machine, which `scooter runner` met at its first start; under `tmp/` it has 51 bytes more room than that and is emptied with the rest. The runner's programs get environments of their own (D25), so they see none of these.
+
+**D141. Until milestone 8, the VMs reach nothing.**
+*Question:* the network policy is milestone 8's, and this milestone builds `scooter runner`.
+*Choice:* the sandbox takes the network as `network(policy)`, which gives the options of Gondolin's `createHttpHooks` apart from the secrets. Its default, `refuseNetwork`, allows no host: every request is refused before it goes out, DNS is answered inside the runner with made-up addresses, and the key, registered as the policy's secret, is swapped in nowhere. The tests give the scripted fake model as the network (`fakeModelNetwork`). Milestone 8 makes the policy the default.
+*Reason:* the simplest option that keeps principles 2 and 4 and the zero data retention of section 2: a runner with no policy sends nothing. *Cost:* until milestone 8, `scooter runner` runs pi, which exits with 1 at once when OpenRouter can't be reached, and with no network log the run is pi's own failure: every message's attempts are used up and it ends in `failed`. So it isn't to be run on real messages before milestone 8. It was run once by hand, on a dummy message (7.5).
+
+**D142. `AGENT_ACCEL`, by opening `/dev/kvm`.**
+*Choice:* KVM can be used when the runner can open `/dev/kvm` for reading and writing and it is a character device. `auto` takes it, or else emulation, and logs `sandbox.emulation` with the reason; `kvm` and `emulation` are taken as they are; a forced KVM that can't be used, and `hvf`, stop the runner with an error that says how to enable it, natively and in Docker, and points at `doctor`. Gondolin is always told which (`accel`), so it never chooses by itself.
+*Reason:* 6.6 and ARCHITECTURE.md decision 43. Opening the device is what QEMU does: an ACL or Ubuntu's device rules, which reset per-user ACLs (13.4), can let a permission check pass where the open fails. *Not covered:* a device that opens where the hypervisor itself doesn't work, as in a VM without nested virtualization; then every VM fails to start, runs pause as setup errors (D82), and the log says why.
+
+**D143. The image's record, and the runner's check at startup.**
+*Choice:* beside Gondolin's files, `scooter-image.json` holds `builtAt` (the manifest's build time, to the second), `pi` (from pi's `package.json` in the image), `alpine`, `arch`, and `zones`, every file under the image's `/usr/share/zoneinfo`. At startup the sandbox reads the build file's pin (D144) and refuses to open, before anything of Gondolin runs, when the image is missing, isn't whole, has no record, holds another pi, was built for another architecture, or doesn't know `SCOOTER_TZ`. Each error says what to do. A `SandboxSetupError` makes `scooter runner` exit with 2, as a bad `agents.yaml` does (D30).
+*Reason:* 6.12. The zone settles a point the review of milestone 1 left for this milestone (7.3): `SCOOTER_TZ` is checked against the image's own zone files, case and all, which is what pi's C library looks up, so `Asia/KOLKATA` stops the runner where it used to pass. The record is written at build time, so the runner needs neither `debugfs` nor a VM to check it.
+
+**D144. pi's pin, read strictly.**
+*Choice:* the build file's `postBuild.commands` must name `@earendil-works/pi-coding-agent` exactly once, counting every mention with or without a version, a path among them, and that once as `@earendil-works/pi-coding-agent@<x.y.z>`, with an exact version, in a command that begins `npm install` and has `--ignore-scripts`, and no other word about scripts, such as `--ignore-scripts=false` or `--no-ignore-scripts`, which npm would take last. That command is plain words, letters, digits and `@/._=:+,-` apart by spaces, so the shell reads it as that one command: no `;`, `&` or `|`, newline, quote, `$`, backquote or redirection. Otherwise `build-image` and the runner refuse, naming the command. The build file must not name `arch` or `container`, which `build-image` chooses (D5).
+*Reason:* the plan's rule: the runner reads the version from there, strictly. A range or `latest` would let two builds hold different pis under one pin; a command without `--ignore-scripts` would run pi's packages' code as root in a native build (row 8). Counting only mentions with a version, and looking only for the word `--ignore-scripts`, let pass a second install of pi without either, `… ; echo --ignore-scripts`, and `… && node /usr/local/bin/pi --version`, each of which runs pi's code as root in a native build (the review of this milestone, smaller point 4). The build file is the owner's, so this guards against a slip, not an attacker: the other commands are still the owner's to choose.
+
+**D145. `scooter build-image`.**
+*Choice:*
+- **Method.** As root, Gondolin's native build; otherwise its container build with Docker, else Podman; otherwise it stops, saying it needs root, or Docker or Podman (row 8). The build file goes to Gondolin as it is, with the machine's architecture and the method added.
+- **What it reads.** Only `DATA_DIR` and `CONFIG_DIR`, from `runner.env` or the environment (`loadFolders`), checked as the runner's settings are. It runs as root natively, and needs no key or other setting.
+- **One at a time.** It holds `runner/runner.sock` while it builds (D90), so it refuses while a runner runs, and no runner starts during it. As root it refuses when `runner/` doesn't exist, rather than make the runner's folder as root; `setup` makes it.
+- **Beside the runner's folder.** It builds into `.image-build/image/` in the data folder, records the image (D143) and its packages (D147) there, checks that the pi in it is the pinned one, gives it to `scooter-runner` when root, and then renames it in place of `runner/image/`, which it first renames out into `.image-build/old` and removes there. Leftovers of a build cut short are removed at the next. Until the review of this milestone it built in `runner/image.new/`, in the runner's own folder (D151).
+- **Reading the image.** pi's `package.json`, the zone files, Alpine's repositories and its record of the base packages are read out of `rootfs.ext4` with `debugfs`, from e2fsprogs, which 8.3 and 8.5 already need for the build: no mount, no root, and nothing in the image runs. `debugfs` is looked for in `/usr/sbin` and `/sbin` too, which a user's `PATH` may lack.
+- **Exit codes.** 2 for a fault in how it is set up or called (the build file, no method, no `debugfs`, a runner running), 1 for a build that fails.
+
+*Reason:* 6.12, row 8 and the plan's rules for this milestone. Holding the socket keeps a running runner from booting an image it didn't check at its start.
+
+**D146. What a run may write.**
+*Question:* the plan: pi can fill the disk while it runs, through `views/`, `memory/` or `run/session/`, and the bridge's writes could fail meanwhile; if Gondolin can cap what a writable mount takes, use it.
+*Choice:* Gondolin 0.14.0 has no quota, but every write, open, folder and hard link made through a mount passes its file system hooks, and the sandbox uses them. Each writable mount counts, for the run, the bytes written and the names made (files, folders, symbolic and hard links) against `RUN_WRITE_MAX_BYTES`, 1 GB, and `RUN_NAMES_MAX_COUNT`, 100,000. A symbolic link passes the hooks by, so the provider counts it itself. The write or name that passes either is refused with ENOSPC, as is everything after, and the VM is closed; the result says `wroteTooMuch`, and the run fails as pi's own failure, "pi wrote more than a run may", whatever the network log says, since the VM was closed in the middle of whatever pi was doing. The clean-up then frees what it wrote (D88).
+*Reason:* bytes written and names made bound the blocks and the inodes a run can take, whatever it removes again; counting the space a file takes would let a run rewrite a file without end. The limits leave room for what a run legitimately leaves several times over: at most 100 MB and 20,000 names in `views/` and `memory/` (D88) and a session of 100 MB (D87). The rest of what a VM writes isn't on the host's disk: `/tmp` and `/root` are in its memory, and its own disk is a copy-on-write overlay that can't grow past the image's size. *Cost:* a run that rewrites a large view many times could reach the limit; a year of views is about 1 MB. The hooks see writes in pieces of at most 60 KB, so what passes the limit is at most that much.
+
+**D147. `packages.txt`.**
+*Question:* 6.12 has `build-image` write the installed versions, and Gondolin's builder unpacks Alpine's packages without recording them (0.5).
+*Choice:* the base system's packages are those `/lib/apk/db/installed` records in the image. The others are resolved, right after the build, against the APKINDEX of each repository the image's `/etc/apk/repositories` lists, the way Gondolin 0.14.0's builder resolves them: the first repository's record of a name wins, names are also found through what packages provide, dependencies are followed with their version constraints dropped, and a conflict (`!name`) is taken as a dependency, as Gondolin takes it. A version so resolved replaces the base system's. The file says which index it used, and when.
+*Reason:* no other source records the versions; reading what the image has can't. Each index is fetched within `APK_INDEX_TIMEOUT`, 1 minute, its body included, or the build fails (the review of this milestone, smaller point 7): `build-image` holds `runner.sock` meanwhile, so no runner can start, and the index, a couple of megabytes, comes in seconds. A build that fails there is built again from the start; what it built is left in `.image-build/`, and removed by the next. *Cost:* the index is fetched again about a second after Gondolin fetched it in the build, and Alpine updates it a few times a week, so a package updated in between would be listed at its new version. The native build keeps Gondolin's index for up to a day in root's cache, which could make that gap longer there. The resolution reimplements Gondolin's, about 25 lines, which an upgrade of Gondolin must be checked against (the plan's risk table).
+
+**D148. What the sandboxes keep of pi's output.**
+*Choice:* `createOutput` keeps the first `SANDBOX_STDOUT_MAX_BYTES`, 1 MB, of stdout and the last `SANDBOX_STDERR_MAX_BYTES`, 64 KB, of stderr, as they arrive, and says `stdoutCut`. Both sandboxes use it; the fake one on what its process printed. A run whose answer was cut fails as pi's own failure, "pi's answer was too long", when pi exited with 0; a run that failed otherwise keeps its own cause.
+*Reason:* the plan's rule for this milestone. With `-p` pi prints its answer alone, a few kilobytes; 25 texts of 14,000 characters (D85, D99) are under 1.4 MB at the very most, and an answer near the limit is already one the runner wouldn't send whole. stderr's end holds OpenRouter's error, which the notice quotes (D82).
+
+**D149. The VMs' size, and how long one may take to boot.**
+*Choice:* `VM_MEMORY_BYTES`, 2 GB, and `VM_CPUS`, 2, which milestone 0's checks used, pi 8 with images included; `VM_START_TIMEOUT`, 1 minute, or the run's own timeout when that is shorter.
+*Reason:* Gondolin's default start limit is 2 minutes (0.5), which a VM that never starts would spend at every try, and which the review of milestone 0 noted held no test (7.3). A VM boots in about 2 seconds with KVM and 6 under emulation (13.4), so a minute leaves room for a loaded machine and a VM inside a VM (G3).
+
+**D150. Eight constants.**
+`VM_MEMORY_BYTES`, `VM_CPUS` and `VM_START_TIMEOUT` (D149); `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (D148); `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` (D146); and, after the review of this milestone, `APK_INDEX_TIMEOUT` (D147). 8.6 of DESIGN.md lists them. The longest socket path, 107 bytes, isn't one: it is a fact of Linux, as the path lengths of D95 are.
+
+**D151. As root, `build-image` changes the runner's folder only by two renames** (the review of this milestone, must-fix).
+*Question:* `runner/` belongs to `scooter-runner`, which can put a link anywhere in it at any moment. `build-image`, as root, built in `runner/image.new/`, wrote the image's record and `packages.txt` there, gave that folder and every name in it to `scooter-runner`, set its mode, and removed the old image by its path. The review renamed `image.new` aside during a build, as root in a container with the tests' fake builder, and put a link to another folder in its place: root wrote into that folder, gave it to the runner's user with every name in it, a file of root's with mode 0600 among them, and set its mode to 0700. With `/etc/scooter` as the folder, `bridge.env` becomes the runner's user's; with `/etc`, so does the machine. Gondolin's native builder writes into `image.new` as root for the whole build too, by its path. Section 9 says an escape from pi's VM reaches the runner's user and not the bridge's secrets, and D136 holds the bridge to that; this broke it on a native install at every rebuild. It takes code running as `scooter-runner` outside the service, which `KillMode=control-group` would end, such as from that user's crontab, while the owner runs `sudo scooter build-image`.
+*Choice:*
+- It builds the image, reads it, records it and gives it to `scooter-runner` in `.image-build/` in the data folder (`paths.imageStaging`): beside `runner/`, so on the same file system, and made 0700 by the user who builds. Natively the data folder is root's, so nobody but root reaches it. As root it refuses a data folder that isn't root's or that another user can write, and a `.image-build` that isn't a folder of root's.
+- In `runner/` it then makes two renames and nothing else: whatever is at `runner/image`, a link included, out to `.image-build/old`, and the new image in. A rename follows no link at either end, and puts a folder only where nothing is or an empty folder is; anything else in the way fails the build, with the new image left in `.image-build/` for the next build to remove. It also holds `runner/runner.sock`, as before: binding the socket and removing it reach only that name, in a folder whose user could remove it anyway.
+- The old image is removed in `.image-build/` as a handed-over folder is (D136): a link or a file in the image's place is unlinked; a folder has each of its names unlinked, which follows no link and removes no folder, and is then removed, which happens only once that empties it. A process of the runner's user that was inside the old image, as its working folder, can still change what it holds after the rename, though no path leads it there any more, and nobody but root can rename it. Gondolin's image is a flat folder. What can't be removed is logged (`image.old_left`) and stays where only root reaches it, and the next build refuses, saying to look at it and remove it.
+- Without root, in development and for the container build, it builds the same way, with no other user to guard against.
+*Reason:* the review's way. Node has no calls relative to a folder it has open, so a check before each step would leave the gap D136 records; building where the runner's user can't reach leaves it no step to turn. A root test with the fake builder is the review's case: during the build, the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, the image is in place, the runner's user's and 0700, and what that user left is as it left it. On the code before, the image's files were written into that folder.
+*Cost:* in Docker, the data folder may not be one file system with `runner/`, and is read-only in the runner's service; the plan's milestone 13 now says to settle it. The tests that build without e2fsprogs read the image through a stand-in (`readFakeImage`), so the root test, which the plan's root container can run, doesn't read the image with `debugfs`; the tests that do still need e2fsprogs.
+
+**D152. A writable mount hides nothing** (the review of this milestone, smaller point 3).
+*Choice:* `checkRunSpec` refuses a writable mount with paths in `hide`, for both sandboxes. The real sandbox shadows paths only in a read-only mount, and through a writable one the VM could make a hidden path again. `piMounts` never asks for it.
+*Reason:* the review's first way, the smaller one: a line, where shadowing in a writable mount would need tests of its own for what the VM can make there.
+
+### 7.2 Facts found
+
+On the Linux machine, with Gondolin 0.14.0, QEMU 8.2.2 and the test image of 0.2:
+- `VM.create({ autoStart: false })` and then `start()` fails at once with "sandbox is stopped". With the default, `create` begins the boot and `start()` waits for it.
+- `touch` on a file of a read-only mount succeeds in the guest and changes nothing on the host: its time stays as it was. Writing, appending, removing and `chmod` are refused, as 0.5 found.
+- A symbolic link made through a mount passes Gondolin's file system hooks by (`SandboxVfsProvider.symlink`); writes, opens, folders and hard links pass them. A guest's write reaches the host in pieces of at most 60 KB (`MAX_RPC_DATA`), and `copy_file_range` and `fallocate` go through the same writes, or make holes.
+- With every request refused, pi 1.5.2 exits with 1 after about a second, and makes no further try.
+- `scooter build-image`, with Gondolin's container build under rootless Docker, built the image in 18 seconds: 527 MB, with the versions milestone 0 recorded (0.1), and 100 Alpine packages in `packages.txt`, a file of 102 lines with its two lines of comment (corrected after the review of this milestone, smaller point 6). The image's zone folder holds 603 files.
+- Killing a VM's QEMU while a command runs makes Gondolin's command reject at once, with a plain `Error`, which has no code (after the review, smaller point 1).
+- A VM booted from it in 1.8 to 2.3 seconds with KVM, in the sandbox tests, and in 1.9 seconds under `scooter runner`.
+
+### 7.3 The reviews of the pull requests merged before this one
+
+Pull request 7, milestone 6, was approved by its second review with eight smaller points:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A failure to open the spool's file is always taken as the email's own, the bridge's too: `EMFILE` stored the email without its files | Settled, the review's way: `ENOENT` on the spool's file, `EUNTRUSTED` and `EFBIG` are the email's own, anything else the bridge's, and the email stays whole in the spool (D137). Test in `email`, with `open` failing with `EMFILE`; it fails on the code before |
+| 2 | A file missing from the spool is tried three times, 10 seconds apart, while intake waits | Settled, the review's way: from a channel that keeps its messages, a failure that isn't the bridge's isn't tried again. Test in `email`: three parts listed and none there, each tried once, and the email stored at once; on the code before, the test waits on the retries for good |
+| 3 | The outbox must belong to `scooter-runner`, and in rootless Docker the runner is the container's root | Settled as the review proposed: a rule under the plan's milestone 13, which builds that variant |
+| 4 | A test of milestone 5 fails under load: `clock.whenSleeping()` could find the outbox's sleep, not the pairing check's | Settled, the review's way: the test waits for `whatsapp.not_paired`, which is logged just before the check sleeps |
+| 5 | D138's figures don't hold for a writer like the reader, on ext4 | Settled: D138 and the comment in `files.mjs` say so, with the review's figures |
+| 6 | Section 10's "a folder in it that is a link" has no test at the channel's level | Settled: the test of bad spool folders in `email` has a link to a folder laid out as a spool folder, which is left, with nothing in it read or removed |
+| 7 | D136 says nothing else of Scooter's is named with an ID but outbox entries | Settled: D136 names the downloads in `bridge/incoming/`, and why nothing follows |
+| 8 | The description says "Seven constants" where D129 has eight | Left: D129, the record, has it right, and the merged pull request's description is kept as it was reviewed |
+
+The points the reviews of milestones 0 to 5 left, as 6.2 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 0, point 6 | The VM tests' 2-minute start limit, Gondolin's default, held by no test | Settled (D149): the sandbox sets its own limit, `VM_START_TIMEOUT`, and a sandbox test shows a VM that doesn't boot within it failing the run, and leaving nothing |
+| Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Settled (D143): the runner refuses a `SCOOTER_TZ` that isn't one of the image's zone files. Test in `image` |
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
+| Milestone 4, first review, points 4, 5 and 6 | `RestartSec`; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8 |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
+
+### 7.4 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 6.6 and 6.12 left open:
+- 6.6: the VM's start limit; what a run may take from the runner, its output and what it writes (D146, D148); the runner sets its own home and temporary folder, and Gondolin's list of VMs is in `tmp/sessions/` (D140).
+- 6.9: a cut answer, and a run that wrote too much, are pi's own failures.
+- 6.12: the build file says what is in the image, not how it is built; `packages.txt` and how its versions are known (D147); `scooter-image.json` (D143); `build-image` reads only the two folders and holds `runner.sock` (D145); the runner also refuses an image for another architecture or one that doesn't know `SCOOTER_TZ`, and exits with 2.
+- 8.6: the seven constants of D150.
+- Section 9: filling the disk, as a control.
+- Section 10, Sandbox: a VM that doesn't boot in time, the limits on writes and output, and an unknown zone.
+- Section 14: the container build by `build-image` was run.
+
+After the review of this milestone (7.6):
+- 6.12: `build-image` builds in `.image-build/` beside `runner/`, and as root changes the runner's folder only by two renames (D151).
+- 8.6: `APK_INDEX_TIMEOUT`, the eighth constant of D150.
+- Section 9: the accepted risk of a native build says it builds where only root can write, so a link the runner's user puts in its folder leads it nowhere (D151).
+- Section 10, Sandbox: the root test of D151.
+
+ARCHITECTURE.md 2.7 says the same, and 3.3 has D151 beside D136. The plan's milestones 8, 12 and 13 have what this milestone leaves for them, and milestone 13 the second review of milestone 6's point 3. `runner.env.example` says how `SCOOTER_TZ` is checked and what `build-image` reads.
+
+### 7.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean clones of the branch at `63c93b7`, the last commit that changes code or tests:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 573 tests: 534 pass, none fail. 39 skip themselves: 18 of milestone 0 and 12 of this milestone need the image, and 9 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 575 tests: 566 pass, none fail, in 114 seconds. The 9 root tests skip themselves. The fastest of three boots: 1.9 seconds. No QEMU left |
+| `test/sandbox.test.mjs` with KVM, three more times | 14 pass each time; the fastest boots 1.8 to 1.9 seconds |
+| `test/sandbox.test.mjs` without the `kvm` group, so under emulation, at `3790c3e` | 13 of 14 pass, in 3 minutes 24 seconds; boots of 5.7 to 6.6 seconds. The end-to-end test expected only the ✅ in the outbox, where under emulation the runner's first start also sends the emulation notice (D92). `63c93b7` expects it there, and the test then passes under emulation |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone at `3790c3e` | Node 24.22.3: 523 pass, none fail. 50 skip themselves: 30 need the image, 4 wacli, 4 `mke2fs`, which that image lacks, 2 run `scooter bridge` as a process, and 10 are about a file root can read anyway. `63c93b7` changes one assertion of a test that skips there |
+| The `email`, `whatsapp`, `intake`, `run`, `failures`, `image`, `accel`, `limits`, `cli` and `imports` tests, 16 times, 8 at once | No failure, and no test folder left behind |
+| The new tests for the second review of milestone 6, against the code of `3b305b3` | The `EMFILE` case stores the email without its files; the missing parts wait on their retries for good |
+| `scooter build-image`, as `agentw`, with `DATA_DIR` in a scratch folder | Gondolin's container build under rootless Docker: 18 seconds, 527 MB, `scooter-image.json` with pi 1.5.2 and 603 zones, and `packages.txt` with 100 packages at the versions of 0.1. `runner/runner.sock` gone afterwards. The sandbox tests' `pi --version` and end to end pass on that image |
+| `scooter runner`, with that image and the `kvm` group, started and stopped with SIGTERM | `sandbox.opened` with KVM, `status.json` written, and a clean stop. With a message in the datastore it ran two batches a minute apart, each VM up in 1.8 to 2.1 seconds and closed a second later: pi exited with 1, every request refused (D141). No QEMU left |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| A VM boots from the built image and runs `pi --version` | `sandbox.test.mjs`, with the boot time under 3 seconds with KVM |
+| The mounts: read-only except `views/`, `memory/` and `run/session/`; `sessions/` isn't there, and a link made in a writable folder doesn't lead to it; at the host's paths | `sandbox.test.mjs`: writing, appending, removing and `chmod` refused; `sessions/` not there, not makeable, not through a link from beside it or by its full path, nor under Gondolin's mount point; `/data`, the runner's and the exchange's folders and the config not there. With the data folder at `/data`, by the review's hand, not a test: below |
+| Nothing survives between runs: files outside the mounts, background processes | `sandbox.test.mjs`: `/root`, `/tmp`, `/var/tmp`, `/etc`, and a `setsid sleep` |
+| From inside the VM: another host, DNS to an outside resolver, UDP and private addresses refused; the environment holds only the placeholder | `sandbox.test.mjs`, with the default network and with the fake model's: HTTPS and HTTP to another host, the metadata address, the host's loopback, a LAN address and a private one, against a server of the test's on every address of the host, which nothing reaches; DNS through `8.8.8.8` answered with a made-up address; UDP to the host, which receives nothing; the environment exactly the spec's and the placeholder |
+| `AGENT_ACCEL`: `auto` picks the fastest and says which; a forced one that isn't there stops the runner | `accel.test.mjs`, with the device given; `sandbox.test.mjs`, `auto` and `emulation` |
+| A timeout closes the VM; stopping the runner's process group leaves no QEMU | `sandbox.test.mjs`: the timeout and a stop, with QEMU gone and `runner/tmp` empty; a process holding a VM, killed with its group |
+| A missing image, or one built for another pi version, stops the runner | `image.test.mjs`: `scooter runner`'s exit code and message for each, and the check's other cases |
+| Beyond section 10 | `sandbox.test.mjs`: the limits on writes and names, the output kept, a VM that doesn't boot in time, `runner/tmp` emptied at start; `image.test.mjs`: the pin, `build-image` with a fake builder, `packages.txt`; `run.test.mjs`, `failures.test.mjs`: a cut answer and a run that wrote too much |
+
+The milestone's "done when":
+- *The sandbox tests pass, and a VM boots in under 3 seconds*: all of `sandbox.test.mjs`, with KVM, whose first test asserts the fastest of three boots under 3 seconds: 1.8 to 2.0 seconds.
+- *One batch end to end through the real sandbox with the scripted fake model*: the last test of `sandbox.test.mjs`. The runner, with the Gondolin sandbox, runs pi on a message; the fake model has pi `read` the message's line in the datastore, which the next request shows by its WhatsApp ID, and `write` `views/expenses.csv`; the runner commits it as `lifelog: #1`, with the ✅, the state and the session.
+
+Not verified:
+- **The data folder at `/data`** (row 14), by a test: the sandbox mounts at the host's paths, and this machine has no root to put the data there. Milestone 0's VM 1 showed mounts under `/data` working once Gondolin's mount point is moved, which the sandbox always does, and the mounts test shows `/data` isn't mounted. The review of this milestone ran it by hand (smaller point 5): the sandbox in a rootless Docker container without a network, with the data folder at `/data` and the image `build-image` made, booted in 4.6 seconds under emulation. The mounts sat at `/data/agents/lifelog` and `/data/datastore`, read-only but for the three folders; `sessions/` wasn't there, through a link or under `/run/gondolin-vfs` either; `/data` held only `agents` and `datastore`, and wasn't itself a mount; and `/data/runner`, `/data/exchange` and `/config` weren't there. So row 14 holds. The plan's milestone 13 checks it again in its containers.
+- **The network policy and OpenRouter:** milestone 8. Nothing leaves a VM here.
+- **A native build as root** (gate G2), and `build-image` in the runner container (milestone 13).
+- **`packages.txt` against the files Gondolin unpacked**, one by one. Its versions agree with what milestone 0 found in the image.
+- **KVM in Docker** (gate G3), **arm64** and **macOS**. The architecture is named in `machineArch` and `qemuProgram` alone.
+
+### 7.6 The review of this milestone
+
+The review of the pull request, at `17d6b7b`, found the milestone's "done when" met, asked for one change, and noted seven smaller points. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which section 9 says an escape from pi's VM can't reach | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and 3.3, and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
+| 1 | A VM that is lost is logged as one whose program exited, and its error is dropped; one that never started too | Fixed (D139): `sandbox.vm_closed` says `lost` or `not_started` in `ended`, and a lost VM also logs `sandbox.vm_lost`, with the error's name and code, but not its message, which can quote the guest's output (`errorFields`). Gondolin's error then is a plain `Error` (7.2). Sandbox tests: QEMU killed a second into a run, with KVM and under emulation; and the test of a VM that doesn't boot in time looks for `not_started` |
+| 2 | A run ends when the program's output closes, not when it exits | A line in D139, as the review said |
+| 3 | `hide` on a writable mount is accepted and ignored | Fixed (D152), the review's first way: `checkRunSpec` refuses it. Case in `runnerfiles` |
+| 4 | The pin isn't as strict as D144 says: a second install of pi without a version, `… ; echo --ignore-scripts`, and `… && node /usr/local/bin/pi --version` pass | Fixed (D144), the review's way and a little further: every mention of the package counts, with or without a version, a path among them; the install command must be plain words, which also refuses a newline, `$(…)`, a backquote, a quote and a redirection; and no other word about scripts, such as `--ignore-scripts=false` or `--no-ignore-scripts`. Each is a case in `image`, the review's three among them |
+| 5 | Section 10's "also when the data folder is `/data`" has no test; the review ran it by hand, and row 14 holds | Said in 7.5, with what the review saw. The plan's milestone 13 checks it again in its containers |
+| 6 | `packages.txt` holds 100 packages, not 102 | Corrected in 7.2, 7.5 and the pull request's description: 102 lines, two of them comments. The build after these changes listed 100 again |
+| 7 | The fetch of Alpine's index has no time limit, and a failure there throws away a finished build | Fixed: each index is fetched within `APK_INDEX_TIMEOUT`, 1 minute, body included (D147, D150; DESIGN.md 8.6). A build that fails there still fails, since `packages.txt` is part of a build (6.12): it is built again from the start, and what it built is removed by the next. Test in `image`, with an index that never comes |
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean clones of the branch at `a54859f`, which changes the code; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 577 tests: 536 pass, none fail. 41 skip themselves: 31 need the image (18 of milestone 0, 13 of this milestone) and 10 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 579 tests: 569 pass, none fail, in 112 seconds. The 10 root tests skip themselves. Boots of 1.9 to 2.5 seconds. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 526 pass, none fail. 51 skip themselves: 31 need the image, 10 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. The three new tests of `build-image` run there, the root test among them |
+| The new root test against the build code of `17d6b7b`, in the same container | Fails: the image's six files were written into the folder of root's the links led to |
+| The `image`, `runnerfiles`, `paths`, `limits`, `run`, `failures`, `cli` and `imports` tests, 16 times, 8 at once | No failure |
+| The two changed sandbox tests without the `kvm` group, so under emulation | Both pass; the VM was lost 7.7 seconds after it was made |
+| `scooter build-image`, as `agentw`, with `DATA_DIR` in a scratch folder | Gondolin's container build under rootless Docker, now into `.image-build/image`: 16.5 seconds, 527 MB, pi 1.5.2, and 100 packages in `packages.txt`. Afterwards the data folder held only `runner/image/`. The sandbox tests' `pi --version` and end to end pass on that image, with boots of 1.8 to 2.1 seconds |
+
+Not verified, besides what 7.5 lists: a native build as root with Gondolin's real builder (gate G2), which the root test stands in for with the fake builder. The test swaps its links in at one moment of the build, from inside the builder, and as root, not as the runner's user; what D151 leaves to a swap doesn't depend on the moment, since root takes no step in `runner/` but the two renames.

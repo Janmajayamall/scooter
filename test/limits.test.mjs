@@ -66,6 +66,16 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     EMAIL_CHECK_COUNT: 5,
     EMAIL_CHECK_TIMEOUT: 2 * MINUTE,
     STATUS_FILE_MAX_BYTES: 4 * MB,
+    // Milestone 7: docs/DECISIONS.md, milestone 7.
+    VM_MEMORY_BYTES: 2048 * MB,
+    VM_CPUS: 2,
+    VM_START_TIMEOUT: MINUTE,
+    SANDBOX_STDOUT_MAX_BYTES: MB,
+    SANDBOX_STDERR_MAX_BYTES: 64 * 1024,
+    RUN_WRITE_MAX_BYTES: 1024 * MB,
+    RUN_NAMES_MAX_COUNT: 100000,
+    // Milestone 7, after its review.
+    APK_INDEX_TIMEOUT: MINUTE,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
@@ -84,6 +94,11 @@ test('limits: a text at its longest is a few chunks, and its entry far under wha
   assert.equal(limits.TEXT_MAX_CHARS, 4 * limits.CHUNK_CHARS)
   // A character JSON writes longest is a control character, as six bytes.
   assert.ok(limits.TEXT_MAX_CHARS * 6 + 1024 < limits.OUTBOX_ENTRY_MAX_BYTES)
+})
+
+test('limits: a run may write what the runner accepts after it several times over', () => {
+  assert.ok(limits.RUN_WRITE_MAX_BYTES >= 4 * (limits.AGENT_FILES_MAX_BYTES + limits.SESSION_MAX_BYTES))
+  assert.ok(limits.RUN_NAMES_MAX_COUNT >= 4 * limits.AGENT_FILES_MAX_COUNT)
 })
 
 test('limits: the prompt fits in one command-line argument', () => {

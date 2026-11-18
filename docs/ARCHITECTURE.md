@@ -177,6 +177,8 @@ Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter b
 - **Environment:** a short fixed list, with a placeholder where the key would be.
 - **Acceleration:** KVM when the runner can open `/dev/kvm`, otherwise emulation, which is announced. A forced accelerator that can't be used stops the runner.
 - **Lifetime:** the runner closes the VM when pi exits or the timeout passes. Nothing inside it survives.
+- **Limits:** the sandbox keeps the start of pi's answer and the end of its errors, and closes the VM of a run that writes more, or makes more files, than a run may, so nothing pi does can stop the runner or fill the disk the bridge writes on (6.6).
+- **The image:** `build-image` builds it, natively as root or in a container, in a folder beside the runner's, records what it holds beside it, and renames it into the runner's folder when it is complete. The runner refuses to start with a missing image, one built for another pi, or one that doesn't know the owner's time zone (6.12).
 
 The runner reaches it through one small interface: run this command, with these mounts, this environment, this timeout and this policy, and return the exit code and output. Tests use a fake that runs a stub of pi as a local process.
 
@@ -294,6 +296,8 @@ Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
 | `config` | root; readable by `scooter-runner` | no | reads | sees only the run's copy | no | no |
 
 The bridge, as root, takes what it needs out of three folders other users control: `mail/spool/`, `wacli/staging/` and `exchange/outbox/`. It uses each only while it is that user's folder and not a link, reads every file without following a link, and removes only the names it knows, a folder only once that empties it. So a link put in a folder's place can't turn its removals on anything else (`docs/DECISIONS.md`, D136).
+
+`build-image`, as root on a native install, builds the VM image in `.image-build/`, a folder of root's beside `runner/`, and gives it to `scooter-runner` there. In `runner/`, which that user controls, it only holds its socket and renames the old image out and the new one in, so a link put there leads it nowhere (`docs/DECISIONS.md`, D151).
 
 ### 3.4 Network
 

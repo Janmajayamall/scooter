@@ -155,6 +155,32 @@ const values = {
   // each of its 20 items and a few lines besides. The rest are dropped and counted in the log, so
   // a misled run can't flood the owner's chat (6.7).
   ANSWER_MAX_TEXTS: 25,
+  // pi's VMs: their memory and how many processors they get (6.6). pi, its tools and the files it
+  // reads run in the memory, and so do the VM's `/tmp` and `/root`, which can each take half of it.
+  VM_MEMORY_BYTES: 2 * 1024 * MB,
+  VM_CPUS: 2,
+  // The longest a VM may take to boot before the sandbox gives up on it, and the run is a setup
+  // error, "the VM couldn't start" (6.9). A VM boots in about 2 seconds with KVM and 6 under
+  // emulation; Gondolin's own limit is 2 minutes, which a VM that never starts would spend at
+  // every try.
+  VM_START_TIMEOUT: 1 * MINUTE,
+  // The most of pi's output the sandbox keeps: the start of stdout, which is pi's answer, and the
+  // end of stderr, where OpenRouter's error is (6.6, 6.9). With `-p` pi prints only its answer, a
+  // few kilobytes, and nothing else bounds it. An answer cut here fails the run as pi's own failure.
+  SANDBOX_STDOUT_MAX_BYTES: 1 * MB,
+  SANDBOX_STDERR_MAX_BYTES: 64 * KB,
+  // The most one run may write through the VM's writable folders, `views/`, `memory/` and
+  // `run/session/`, in bytes written and in names made (files, folders and links). The bridge
+  // writes on the same disk, so a run that writes more is stopped, its VM closed, and the run
+  // fails as pi's own failure; the runner then frees what it wrote (6.6, 6.9). A run leaves at most
+  // `AGENT_FILES_MAX_BYTES` and `AGENT_FILES_MAX_COUNT` in the two folders and a session of
+  // `SESSION_MAX_BYTES`; these leave room for rewriting them several times over.
+  RUN_WRITE_MAX_BYTES: 1024 * MB,
+  RUN_NAMES_MAX_COUNT: 100000,
+  // The longest `build-image` waits for Alpine's index of one repository, body and all, when it
+  // writes `packages.txt` after a build (6.12). It holds `runner/runner.sock` meanwhile, so no
+  // runner can start, and an index of a couple of megabytes comes in seconds.
+  APK_INDEX_TIMEOUT: 1 * MINUTE,
   // The values a number in `agents.yaml` may take, lowest and highest (6.1). A run can't be given
   // less than a minute, and a slip of the hand can't keep a backup waiting for hours (5.5).
   CONFIG_RANGES: {
