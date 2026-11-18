@@ -148,14 +148,16 @@ async function readBody(response, maxBytes) {
 
 // Asks OpenRouter for its list of the endpoints that keep no data. Returns `{ status, endpoints }`,
 // `endpoints` being null when the answer isn't the list; or `{ error }` when OpenRouter can't be
-// reached, within `DOCTOR_TIMEOUT`.
-export async function fetchZdrEndpoints({ fetch = globalThis.fetch } = {}) {
-  const signal = AbortSignal.timeout(limits.DOCTOR_TIMEOUT)
+// reached, within `DOCTOR_TIMEOUT`. `stop`, a signal, ends the wait sooner, as `doctor`'s stop does.
+export async function fetchZdrEndpoints({ fetch = globalThis.fetch, stop = null } = {}) {
+  const timeout = AbortSignal.timeout(limits.DOCTOR_TIMEOUT)
+  const signal = stop === null ? timeout : AbortSignal.any([timeout, stop])
   let response
   try {
     response = await fetch(ZDR_ENDPOINTS_URL, { signal, headers: { accept: 'application/json' } })
   } catch (error) {
-    return { error: signal.aborted ? `no answer within ${limits.DOCTOR_TIMEOUT / 1000} seconds` : (error.cause?.code ?? error.code ?? error.message) }
+    if (stop?.aborted) return { error: 'doctor was stopped' }
+    return { error: timeout.aborted ? `no answer within ${limits.DOCTOR_TIMEOUT / 1000} seconds` : (error.cause?.code ?? error.code ?? error.message) }
   }
   let endpoints = null
   try {
@@ -252,7 +254,10 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
 
   checks.push(envFileCheck(envDir))
 
-  const zdr = await fetchZdrEndpoints({ fetch })
+  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too (the review of
+  // milestone 14, smaller point 6): `runDoctor`'s handlers have taken the signals' own ending away.
+  const zdr = await fetchZdrEndpoints({ fetch, stop: signal })
+  if (signal?.aborted) return checks
   checks.push(...openRouterChecks(zdr, { model, zdrOn: settings.zdr }))
   return checks
 }

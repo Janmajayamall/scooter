@@ -24,8 +24,8 @@
 //   error's code or name, or null when it couldn't record one. Null otherwise; a status an older
 //   runner wrote has none.
 //
-// The runner writes it atomically at startup. The bridge reads it for `/status`, which is why its
-// format is here.
+// The runner writes it atomically at startup, and again without `restart` when it is stopped
+// during that wait. The bridge reads it for `/status`, which is why its format is here.
 
 import { SOURCES } from './datastore/line.mjs'
 import { readJsonFile, readUntrustedFile } from './files.mjs'

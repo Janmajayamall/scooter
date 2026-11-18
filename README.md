@@ -146,7 +146,7 @@ pi's VMs run fast only if the runner can open `/dev/kvm`. `doctor` says which ca
   echo "COMPOSE_FILE=compose.yaml:compose.kvm-rootless.yaml" >> .env
   # As the user that runs Docker: the host uid of scooter-runner.
   docker run --rm --entrypoint awk scooter:local '$1 <= 10002 && 10002 < $1 + $3 { print $2 + 10002 - $1 }' /proc/self/uid_map
-  # As root, with that number in place of <uid>:
+  # As root, with that number in place of <uid>; setfacl and getfacl come with the acl package (apt install acl):
   echo 'SUBSYSTEM=="misc", KERNEL=="kvm", RUN+="/usr/bin/setfacl -m u:<uid>:rw $devnode"' > /etc/udev/rules.d/99-scooter-kvm.rules
   udevadm control --reload && udevadm trigger --action=change --name-match=kvm
   getfacl /dev/kvm     # lists user:<uid>:rw-
@@ -187,11 +187,16 @@ Keep the account's own prompt logging off. Put the key in `OPENROUTER_API_KEY` i
 Make a bucket at Cloudflare R2 or Backblaze B2, and a key for it. In `bridge.env`:
 
 ```sh
-RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/scooter   # R2
-RESTIC_REPOSITORY=b2:<bucket>:scooter                                                   # B2
-RESTIC_PASSWORD='a long random password'
-AWS_ACCESS_KEY_ID=...            # R2; or B2_ACCOUNT_ID and B2_ACCOUNT_KEY for B2
+# R2:
+RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/scooter
+AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
+# Or B2:
+# RESTIC_REPOSITORY=b2:<bucket>:scooter
+# B2_ACCOUNT_ID=...
+# B2_ACCOUNT_KEY=...
+# Either way:
+RESTIC_PASSWORD='a long random password'
 ```
 
 Keep `RESTIC_PASSWORD` in a password manager too: the env files aren't backed up, and without the password no backup can be read. Then, once: `sudo scooter backup-init` (`docker compose run --rm bridge backup-init`).
@@ -250,7 +255,7 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
   2. Add `skills/<name>` to the agent's `skills` in `agents.yaml`.
   3. Add a line for its view to the list in `prompts/lifelog.md`: `- books.csv: books read or started (skill: books)`.
   4. To file the messages from before the skill was added, add a `backfill` entry (see [Backfills](#backfills)).
-- **Upgrades:** the protocol the agent follows ships with the runner, and changes with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
+- **Upgrades:** the protocol the agent follows ships with the runner, and changes with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
 
 ## Backups and restore
 
@@ -283,7 +288,18 @@ docker compose run --rm build-image        # on a new machine
 docker compose up -d
 ```
 
-`restore` refuses while either service runs, and refuses a data folder that isn't empty unless given `--force`. With `--force`, each folder the backup holds becomes the backup's: restic deletes what the backup doesn't hold inside those folders, and nothing outside them. To look at a backup without touching the data, restore it somewhere else: `RESTORE_TARGET=/tmp/look scooter restore` puts it under `/tmp/look/var/lib/scooter/…`. After a restore, look at the last commit of the agent's folder (see [Rebuilds](#rebuilds)).
+`restore` refuses while either service runs, and refuses a data folder that isn't empty unless given `--force`. With `--force`, each folder the backup holds becomes the backup's: restic deletes what the backup doesn't hold inside those folders, and nothing outside them. After a restore, look at the last commit of the agent's folder (see [Rebuilds](#rebuilds)).
+
+To look at a backup without touching the data, restore it somewhere else, with `RESTORE_TARGET`; the services can keep running:
+
+```sh
+# Natively, into /tmp/look/var/lib/scooter/…; sudo takes the variable only after it:
+sudo RESTORE_TARGET=/tmp/look scooter restore [snapshot]
+
+# Docker, into the container's own /tmp, then copied out to ./look, as your files:
+docker compose run --name scooter-look -e RESTORE_TARGET=/tmp/look bridge restore [snapshot]
+docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look
+```
 
 ## Rebuilds and backfills
 
@@ -341,6 +357,7 @@ docker compose run --rm runner doctor      # Docker
 
 - Natively systemd keeps these waits, and counts the restarts until the service is started by hand or the machine starts again. After you have fixed the cause, `sudo systemctl restart scooter-runner` brings it back at once.
 - In Docker the runner keeps them itself, since Docker would start it again at once. The first wait sends you a notice ("⚠️ I stopped on an error (ENOSPC), so I wait until …"), and `/status` says until when and why. `docker compose restart runner` ends the wait.
+- A start that stops before it gets that far, such as on a mistake in `agents.yaml`, a missing VM image or a damaged datastore, runs nothing of pi's, and keeps no wait and sends no notice. Natively systemd waits as after any stop. In Docker, Docker starts it again by its own restart policy, whose waits are a minute at most, and `docker compose ps` shows the runner restarting.
 
 The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker compose logs runner` in Docker. They hold IDs, kinds, sizes and timings, never the text of your messages.
 
@@ -396,19 +413,22 @@ Lines of one request share its `id`. No line holds a header, a body or a query s
 
 ```sh
 # Natively:
+sudo systemctl stop scooter-runner
 cd /opt/scooter && sudo git pull && sudo npm ci --omit=dev --ignore-scripts
+sudo git diff ORIG_HEAD HEAD -- config/    # what the upgrade changed in config/: merge it into /etc/scooter/config (below)
 sudo scooter setup                         # takes up a changed unit or command; your files stay
-sudo scooter build-image                   # when config/image/build.json changed
+sudo scooter build-image                   # from /etc/scooter/config/image/build.json, once merged
 sudo systemctl restart scooter-bridge scooter-runner
 
 # Docker:
-git pull
+git pull                                   # changes ./config, or meets your edits there as a conflict to merge
 docker compose build
-docker compose stop runner && docker compose run --rm build-image    # when config/image/build.json changed
+docker compose stop runner && docker compose run --rm build-image
 docker compose up -d
 ```
 
-Then merge what changed in the repository's `config/` into yours, natively (see [The agent's instructions](#the-agents-instructions)).
+- **Natively, merge before `build-image`.** The runner and `build-image` read your copy of the config, `/etc/scooter/config`, which `git pull` doesn't change. So merge into it what the upgrade changed in the repository's `config/`, and `image/build.json` above all: it pins pi's version, and the new version's network policy and protocol are written for that pi. An image of an older pi can have its requests refused, which pauses runs as a setup error (6.9). If you never changed your `build.json`, copying it is the merge: `sudo cp /opt/scooter/config/image/build.json /etc/scooter/config/image/build.json`, which keeps your copy's owner and mode. The prompt and skills are yours to merge as you see fit (see [The agent's instructions](#the-agents-instructions)).
+- **`build-image` after each upgrade**, with the runner stopped, natively and in Docker: the image holds pi at its pinned version and Gondolin's own programs for the VM, and an upgrade can change either.
 
 ## Development
 
@@ -439,5 +459,6 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] A real batch runs end to end in the sandbox, with your key.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
 - [ ] wacli: how an edit and a deletion of yours arrive, `FromMe` and `Chat` included (`docs/DECISIONS.md`, D42 and 3.3); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (0.8 says how to tell); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
+- [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli (`docs/DECISIONS.md`, D179): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case D179 leaves (see [Known limits](#known-limits)).
 - [ ] Email: IDLE with the app password, over TLS; the `Authentication-Results` header and its `dmarc=` result, as `email-check` shows them; your own mail passes DMARC; a forwarded booking and an audio attachment are parsed.
 - [ ] A backup to the real bucket, and a restore of it into an empty folder.

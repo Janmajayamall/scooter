@@ -143,12 +143,19 @@ test('restarts: a stop asked for ends the waiting, and a run recorded makes the 
   assert.equal(control.record().stops, 2)
 
   // Waiting about 5½ minutes, it is stopped, as `docker compose restart runner` stops it.
+  const startedAt = isoSeconds(clock.now())
   runner = await control.start()
   await clock.whenSleeping()
   assert.ok(clock.sleeping().some(ms => ms > 5 * MINUTE))
+  assert.equal(readRunnerStatus(paths.runnerStatus).restart.stops, 2)
   await runner.stop()
   assert.equal(control.record().stops, 0)
   assert.equal(control.piRuns.length, 2)
+  // Stopped, it no longer waits, so `/status` doesn't say it does, as `docker compose stop runner`
+  // would leave it (the review of milestone 14, smaller point 8); the rest of status.json stays.
+  const status = readRunnerStatus(paths.runnerStatus)
+  assert.equal(status.restart, null)
+  assert.equal(status.startedAt, startedAt)
 
   // So the next start doesn't wait; the fault is gone, and the run is recorded.
   control.fault = false

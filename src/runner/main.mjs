@@ -219,6 +219,17 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       datastore,
       restarts,
       tick,
+      // A start stopped while it waited (D229) no longer waits, and `/status` mustn't go on saying
+      // it does until the next start: `status.json` loses its `restart` (the review of milestone 14,
+      // smaller point 8). As best it can: the stop goes on if it can't be written.
+      endRestartWait() {
+        if (status.restart === null) return
+        try {
+          writeRunnerStatus(paths, { ...status, restart: null })
+        } catch (error) {
+          log.error('runner.status_not_saved', errorFields(error))
+        }
+      },
       get state() {
         return state
       },
@@ -248,13 +259,17 @@ export async function startRunner(options) {
     reportFatal(error)
   }
 
+  // Whether this start is still waiting before it goes on (`restarts.mjs`).
+  let waiting = false
   const loop = (async () => {
     if (restarts) {
+      waiting = true
       try {
         await restarts.wait({ signal: stopping.signal })
       } catch {
         return
       }
+      waiting = false
       // Recorded as the next stop in a row before anything can run pi; if it can't be, nothing runs.
       try {
         restarts.begin()
@@ -295,6 +310,7 @@ export async function startRunner(options) {
         await loop
         // Asked to stop, it ends the waits; after a failure, which `fail` recorded, it doesn't.
         restarts?.stopped()
+        if (waiting) runner.endRestartWait()
         await runner.close()
         log.info('runner.stopped')
       })()),
