@@ -3316,3 +3316,45 @@ Not done, or not verified:
 - **A request the agent sends itself** can decide the cause of a failure: accepted by the owner (D160).
 - **The moment `uaccess` leaves** on a desktop with rootless Docker's udev rule (D217): unverified, and in the README.
 - **The README's native install as a whole**, as text, on a fresh machine: its steps were run at G1 and G2 in milestone 12.
+
+### 14.6 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, Docker 29.7.1 rootless with Compose 5.3.1. `25766da` holds all the code and tests, `c753450` the documents; the commit after it records this section and nothing else.
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, on a clean clone of the branch from GitHub at `c753450` | 774 tests: 725 pass, none fail. 49 skip themselves: 37 need the image, 8 need root, and 4 need root and `SCOOTER_ROOT_TESTS=1` |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, on the same clone | 776 tests: 764 pass, none fail, in 117 seconds. The 12 that need root skip themselves. Boots with KVM: 2.1 to 2.2 seconds, and 1.6 for `doctor`'s boot check. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clean clone at `c753450`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 774 tests, 711 pass, none fail. 63 skip themselves: 37 need the image, 14 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 1 Docker. This milestone's tests all run there, and pass |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'node test/live/openrouter.mjs'`, with the network, from the working tree at `25766da`'s code | "all as it should be", exit code 0: on each route pi's request, about 24 KB, went through the policy to OpenRouter, which answered 401; the runner took it as a setup error, paused runs and counted no attempt; `curl https://example.com/` in a VM was refused. No QEMU left |
+| The new tests against the code of `main` | The tests of D179 that change what is stored fail against `main`'s `whatsapp.mjs`: the review's case by a stop (`--after` 15:57, past R3), by a crash, the webhook that never came, and the chat switch (R3, M1 and A1 never stored); the bot's rows and the held row fail on `catchUp`, which `main` hasn't. The intake test fails on `again`, the delivery test on `outbox.runner_outbox_taken` logged while the outbox was missing, and the sandbox test of the boot check, with the image, on a boot `main` doesn't stop. The tests of D229 need `restarts.mjs` |
+| The new tests of `restarts`, 3 times | No failure |
+
+**D229 in Docker**, by hand, on the Linux machine's rootless Docker, from the working tree at `25766da`'s code: `docker compose -p scooter14 build`, then `run --rm build-image` (14 seconds, 527 MB); `runner.env` with a well-formed key OpenRouter doesn't know and `AGENT_ACCEL=emulation`; a message stored with the bridge's store; and, as the fault that stays after pi has run, the volume's `exchange/outbox` made a file, so the notice of the run's setup error can't be written and the runner stops before the run is recorded. Then `up -d runner`:
+
+| When (UTC) | What the runner's log said |
+|---|---|
+| 14:52:41 | Started. The VM booted at 14:52:53, pi's request got 401, and at 14:53:03 `runner.failed` with `ENOTDIR` |
+| 14:53:04 | Docker started it again at once; `runner.restart_waiting`, 1 stop, until 14:54:03. Its notice couldn't be written either, and that was logged |
+| 14:54:07 | The VM booted after the wait; at 14:54:23 the same stop |
+| 14:54:23 | Started again at once; waiting, 2 stops, until 14:59:51, 5 minutes 28 seconds after the stop. `status.json` held `restart: {"stops": 2, "until": "2026-11-18T14:59:51Z", "reason": "ENOTDIR"}`, and `runner/restarts.json` was `scooter-runner`'s, 0600 |
+| 14:54:31 | `docker compose -p scooter14 restart runner`: `runner.stopping` on `SIGTERM`, during the wait. The next start didn't wait: the VM booted at 14:54:45, and at 14:54:55 the same stop, the first in a row again, waiting until 14:55:55 |
+
+Then `down -v`; no QEMU of `agentw` was left. Also by hand in Docker: `docker run --entrypoint tini scooter:local -- node …` gives Node tini as its parent (D233); `docker cp` copies a folder out of a named volume, from a container stopped; `docker compose run -d` makes a container with no restart policy; and `git reset --hard <tag>`, run as `scooter-runner` in a runner's container with `--entrypoint git`, resets the agent's repository in the volume (D230).
+
+The tests the plan asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| D179: the review's case by a stop and by a crash, and each further case found | `whatsapp.test.mjs`: the stop, the crash, the webhook that never came, the bot's rows, every chat, the row held; `intake.test.mjs`: a record that fails for a bug is handed again |
+| D229: the choice, with a test | `restarts.test.mjs`; `units.test.mjs`, the unit's setting and the waits against systemd's; `status.test.mjs` and `runnerfiles.test.mjs`, `/status` and `status.json` |
+| The final check | 14.5, and the runs above |
+
+Beyond those: the review's points in `doctor`, `sandbox`, `docker` and `delivery`; the constants in `limits`, the path in `paths`.
+
+Not verified:
+- **Gate G4**, with the owner's phone, accounts and keys, and the install on the machine Scooter will live on (14.5).
+- **arm64** (D228), and macOS, deferred.
+- **The real wacli's catch-up after downtime**, and the case D179 leaves: the tests run the wacli stub.
+- **The restart notice in Docker**: the check's fault was an outbox that can't be written, so the notice couldn't be; the test shows it in the runner's own outbox.
+- **The README's native install as a whole**, on a fresh machine: its steps ran at G1 and G2 (12.5). No root VM was started for this milestone: none of its work is a gate of G1 to G3.
