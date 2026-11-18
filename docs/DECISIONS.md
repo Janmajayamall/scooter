@@ -2407,6 +2407,7 @@ What the milestone left in the repository:
 *Choice:* past that time, the backup goes ahead only when no runner holds `runner/runner.sock`; while one does, it is at work, and the backup waits on, logging `backup.run_overdue` once. Only a socket counts, not a link to one. Before that time nothing changes: the lock is its run's. A `run.lock` whose time can't be read is past it.
 *Reason:* every holder of `run.lock` holds the socket for as long as it lives: the runner and a rebuild (D90, D167). The socket answers only while its holder runs, in another container too, and it can't be mistaken for a process that got the same pid, which is why the services hold one (D48); the pid in `run.lock` would mean nothing in the bridge's container. A connection is queued by the system, so a runner whose own work keeps it from taking one, a long removal for one, still answers.
 *Cost:* a runner that hangs while it holds `run.lock` holds backups back for as long. Nothing of the runner's after a run is unbounded but by what pi could write, which `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` bound. The runner's user can hold backups back anyway, with a `run.lock` whose time is far ahead.
+*A bound* (added in milestone 11, for the second review of milestone 10, smaller point 2): the socket answers while its queue has room. Each check leaves a connection in the queue until the holder takes it, and Node makes the queue 511 long, so a holder whose thread takes no connection for 512 checks, about 8.5 minutes of the bridge's checks once a second past the run's time, answers no more, and the backup goes ahead. The review's probe showed it: yes 512 times, then no, with `EAGAIN`. So a runner that hangs holds backups back for about 8.5 minutes past `run.lock`'s time and its 2 minutes, not "for as long". Nothing the runner does after a run blocks its thread that long: packing is a child process, and what the clean-up removes is bounded by `RUN_NAMES_MAX_COUNT`, and out of the backup (D185). `instance.mjs` says so where the check is.
 
 **D184. `exchange/locks/` as the bridge uses it.**
 *Choice:* the bridge makes `exchange/locks/` at startup, if it is missing, as the runner's, 0700, as it makes the outbox (D108). It takes and removes `backup.lock` there only while the folder is the runner's and not a link (`checkOwnFolder`, D136), and reads `run.lock` as it reads the runner's other files: without following a link, without waiting on a FIFO, a regular file of at most `STATUS_FILE_MAX_BYTES` (D132). At startup it removes a leftover `backup.lock` (5.5), logged as `bridge.lock_removed`; it is the only one that takes it, and holds the bridge's socket.
@@ -2579,3 +2580,114 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | By hand, restic alone: one snapshot of a folder, then four of it and another, a day apart each (`--time`), then `forget --keep-daily 2 --dry-run` | By host and paths it keeps three, the first among them; with `--group-by host,tags`, the newest two. The test in `backup` can't date its snapshots, so it shows the same within one day |
 
 Nothing is left unverified beyond what 10.4 lists.
+
+## Milestone 11: the agent's instructions
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.5, 6.1, 7.1, 7.2, 7.3 and section 10, to say what this milestone settled (11.3 here). It also settled the three smaller points of the second review of milestone 10, and the point milestone 9 left for this one (11.2).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `config/agents.yaml` | The default config: the example of 6.1 (D199) |
+| `config/prompts/lifelog.md` | The agent's prompt (7.2), with the CSV rules and the memory files (D200) |
+| `config/skills/*/SKILL.md` | The six skills of 7.3: `expenses`, `runs`, `meals`, `travel`, `people` and `day-pages` (D201) |
+| `config/image/build.json` | Unchanged: it was final (D203) |
+| `src/runner/protocol.md` | The last pass against the parser (D202) |
+| `src/runner/config.mjs` | A skill's `SKILL.md` checked at startup (D197) |
+| `src/bridge/backup.mjs` | `restore` refuses a link at `runner/` or `exchange/` (D198) |
+| `src/common/instance.mjs` | The bound of the socket's queue, said (D183) |
+| `test/instructions.test.mjs` | This milestone's tests, which read the files against DESIGN.md and the protocol against the parser |
+| `test/config.test.mjs`, `backup.test.mjs`, `sandbox.test.mjs` | A skill's `SKILL.md`; the link at `runner/` or `exchange/`; one batch through the real sandbox with the files of `config/` |
+| `test/live/openrouter.mjs` | The live check, now with the files of `config/` |
+
+### 11.1 Decisions
+
+**D197. A skill's `SKILL.md` gives its folder's name and a description, and the runner checks both at startup.**
+*Question:* 6.1 checks only that each skill's folder has a `SKILL.md`, and 7.3 says it starts with frontmatter that has `name` and `description`. pi 1.5.2 reads the frontmatter as YAML and offers the model each skill by its name and description, with the path of its file (pi 1). It leaves out a skill whose description is missing or empty, or whose frontmatter isn't YAML, and takes the name from the frontmatter, only warning when it isn't the folder's or isn't of the Agent Skills format's form (`dist/core/skills.js` in pi's package). The runner, the prompt's list of views and a backfill's `skill` name a skill by its folder.
+*Choice:* the runner's validation reads each skill's frontmatter as pi does, a first line `---` and YAML up to the next line that starts `---`, a byte-order mark and Windows line breaks allowed, and refuses, naming the skill's field (`agents.lifelog.skills[1] names skills/runs, whose SKILL.md has no description, …`): no frontmatter; frontmatter that isn't YAML, or isn't a map; no `name`, or one other than the folder's; a name pi doesn't take, which is at most 64 lowercase letters, digits and single hyphens between them; no `description`, or an empty one; and one longer than 1,024 characters. Other keys, such as `license`, are left alone.
+*Reason:* an owner who adds a skill and forgets its description would otherwise have a runner that starts and an agent that never sees the skill, and nothing would say so; a name other than the folder's would have pi offer the model `expense-tracking` where the prompt says `(skill: expenses)`. 6.1's rule is that any error stops the runner with a message that names the field. The two numbers are pi's, not tuning numbers, so they stay beside the check in `config.mjs`, as Gondolin's socket limits stay in `gondolin.mjs`.
+*Cost:* a skill folder named as pi only warns about, such as `Receipts` or `receipts_old`, is refused.
+
+**D198. `restore` refuses a link at `runner/` or `exchange/`** (the second review of milestone 10, smaller point 1).
+*Question:* restic replaces a link at a folder it restores, or inside one, but follows one at a folder between. The review's probe, with `runner` and `exchange` links to folders elsewhere and `restore --force`, had restic delete a file in `<elsewhere>/log/`, write the snapshot's log there, and empty `<elsewhere>/outbox/`. Natively the data folder is root's and only root can write it (D151, the plan's milestone 12), so the runner's user can't put those links there, but `restore` didn't rest on anything that said so.
+*Choice:* before restic restores, `restore` looks at each folder between the data folder and the folders it restores, which are `runner/` and `exchange/`, without following a link, and refuses with 2 when one is a link, saying restic would write and delete where it leads, or when it isn't a folder. One that isn't there is fine: restic makes it. Only the `snapshots` listing has been asked of restic then.
+*Reason:* the review's first way. It costs a `lstat` for each, and leaves nothing resting on how the data folder was set up, which in Docker (milestone 13), or with a `RESTORE_TARGET` elsewhere, isn't `setup`'s.
+*Not changed:* the data folder itself, and the folders above it, may be links: where the data lives is the owner's choice, as `RESTORE_TARGET` is.
+
+**D199. The default `config/agents.yaml` is the example of 6.1.**
+*Choice:* 6.1's example as it stands, with its comments, the commented `once` and `backfill` entries among them, under a two-line comment that says what the file is. So the evening check-in at 21:30 is on. One comment says the paths are "relative to this config folder", where 6.1 says `/config`, which is the folder's name in Docker only.
+*Reason:* 6.1 specifies the file, and the owner edits it. The check-in is a message the bot sends on its own every evening, where the bot is quiet by default (principle 6), but 6.1 has it, so it stays, and the plan's milestone 14 has the README say how to remove it.
+
+**D200. What the prompt adds to 7.2.**
+*Question:* 7.2 gives the list of views and the rules for every view. It leaves open how the five CSV files are written, where a guess's ❓ goes in a row, and where a note that fits no view goes.
+*Choice:* `config/prompts/lifelog.md` has 7.2's list and rules word for word, and adds:
+- a paragraph: read a view's skill before changing the view; a view that isn't there yet starts with its skill's header; what is filed goes on its day's page too; what fits no view goes under Notes on its day's page; a message with nothing to keep is reported done;
+- the CSV rules, for every view: the skill's header exactly; dates `YYYY-MM-DD` and times `HH:MM` on a 24-hour clock; plain numbers, with a `.` and no signs, units or separators; quoting as RFC 4180 has it; rows sorted by date and time, a row without a time after the others of its date; names written the same way every time;
+- a guess is marked in the row's `note`, which starts with ❓ and says what was guessed;
+- for a scanned PDF, `pdftoppm` to make the page images 7.2 says to read;
+- the two memory files and their lines (7.4), shown at the end of the system prompt (6.5).
+*Reason:* every CSV of 7.3 has a `note` column, so a guess can be marked without making a number unreadable to whoever adds up a column, and the backfill's summary (D178) counts a row with ❓ anywhere in it. `pdftoppm` is in the image, with `pdftotext` (D203). The rest is what a model would otherwise choose differently from one run to the next, in files that people read, and that a later assistant will read (section 12).
+
+**D201. What the skills settle that 7.3 leaves open.**
+*Choice:* each skill holds what 7.3 gives it word for word, its view, its header, the categories and the day page's template, then a line for each column, and how to file what the owner sends. Inside that, choices of their own:
+- `expenses`: `amount` is the grand total as shown, a refund negative; `currency` an ISO code; `payment` never more of a card's number than its last four digits. A split: `amount` the whole bill and `split` who shared it and the owner's part (`with Sam, half`), or, when someone else paid, `amount` the owner's part and `payment` `owed to Sam`; settling up changes the row it settles. `Transport` is getting around where the owner is, `Travel` a trip's tickets and stays.
+- `runs`: kilometres, miles converted and said so in `note`; `duration` as `MM:SS` or `H:MM:SS`, the moving time when both are shown; pace as `M:SS` per kilometre; whole beats per minute and metres.
+- `meals`: five kinds, `breakfast`, `lunch`, `dinner`, `snack` and `drink`; `est_kcal` rounded to tens, written with `~` on the page; a number the owner gives is used, and its source noted; a person mentioned with a meal stays in its `note`.
+- `travel`: times as the ticket prints them, local where each leg departs and arrives; a stay is a row with `mode` `stay`, check-in as `date`, the place as `carrier` and check-out as `arrive`; a cab across town is only an expense; a change updates the row, and a cancellation keeps it, with `cancelled` in `note`.
+- `people`: 7.3's rules, and a missing length is a row with `minutes` empty, marked ❓.
+- `day-pages`: the page follows the views, and one left empty is removed; the totals one per currency, the home currency first and the others after it in brackets, each with a `+`; a sign for each kind of travel, and a "Booked:" line on the day of booking; ❓ after the part guessed; the links' form, with an example the test checks against the paths.
+*Reason:* 7.3 says what each skill contains, and these are the choices within it. Each keeps a row readable by a person, and each column one kind of value.
+*Not verified:* how a real model follows them (11.4).
+
+**D202. The last pass over `protocol.md` against the parser.**
+*Question:* the plan asks for a last pass over `protocol.md` against the parser (`answer.mjs`), and D174 left it to this milestone to give a rebuild's prompt a line of its own if the model needs one.
+*Found:* the protocol said what each line means, and not five things pi and the parser do:
+1. pi prints only the model's last message (0.4, pi 5), so what the model writes before or between tool calls, report lines included, reaches no one.
+2. An instruction is read only at the start of a line, after trimming, in capitals with its colon. `**DONE: 1050**`, `- DONE: 1050`, `done: 1050` and `DONE 1050` are text, sent to the owner.
+3. A range, `DONE: 1050-1053`, isn't read, and a `REPLY_TO` line with anything after its number is dropped, the text after it then going out as a plain message.
+4. A `NO_REPLY` line anywhere drops all the answer's text.
+5. One answer sends at most `ANSWER_MAX_TEXTS` texts, and in quiet mode a message a `REPLY_TO` answers gets no reaction.
+
+*Choice:* the protocol says all five, with an example answer, and two more things: the time after `Now:` is the one to count "today" from, not the machine's clock; and what the agent makes for itself, such as a converted photo, goes in `$HOME` or `/tmp`, since everything left in `views/` and `memory/` is committed. A test parses the example and checks each claim against `parseAnswer` and `answerEntries`, the number against `ANSWER_MAX_TEXTS`, and the prompt's section names against `prompt.mjs`. 7.1 has the first and the `Now:` rule.
+*Reason:* left unsaid, each of the five can make a well-meant answer send the owner its own report lines, or send nothing. A rebuild's batch differs from a live one only in that `Now:` is in the past (D165, D174), while the VM's clock gives the real time, so the line about `Now:` is what a rebuild needs, and it holds for live runs too. So a rebuild's prompt gets no line of its own.
+*Not verified:* that a real model follows the protocol (11.4).
+
+**D203. `config/image/build.json` is final as it was.**
+*Question:* the plan asks for the final build file.
+*Checked:* against 6.12, and against what the prompt and the protocol tell the agent to run. The image has Node, pi 1.5.2, poppler's `pdftotext` and `pdftoppm`, libheif's `heif-convert`, git, ripgrep, fd, `tzdata`, `curl`, and busybox's `sort`, `awk` and `sed`, read out of the test image's file system with `debugfs`; the sandbox test runs `command -v` in a VM for the six programs the instructions name (11.4). Alpine 3.23.8 was still the newest release of 3.23 on 2026-11-18, by Alpine's `latest-releases.yaml`, so D6's reason holds. pi stays at 1.5.2, whose requests the policy's allowlists are (D155).
+*Choice:* no change.
+*Reason:* nothing the instructions use is missing, and a change would mean building and checking a new image for nothing.
+
+**D204. The instructions' tests read DESIGN.md.**
+*Choice:* `test/instructions.test.mjs` takes what the files must hold word for word from `docs/DESIGN.md` itself: 6.1's example, line for line; 7.2's list of views; and 7.3's table of skills, its five headers and ten categories, and the day page's template.
+*Reason:* "each CSV header matches 7.3" is then checked against 7.3, not against a copy in the test that could drift from both. *Cost:* a change of wording in those parts of DESIGN.md fails the test until the files follow, which is the point.
+
+### 11.2 The reviews of the pull requests merged before this one
+
+Pull request 11, milestone 10, was approved by its second review with three smaller points. All three are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A forced restore follows a link at `runner/` or `exchange/` | Settled (D198), the review's first way. Test in `backup`: each of the two as a link, then as a file, is refused with 2 and nothing restored, and the folder a link led to keeps its file; a link at `agents/`, which restic replaces, doesn't stop it. It fails on `main` |
+| 2 | D183's reason holds for the first 511 checks only | Settled by recording the bound, as the review proposed: under D183, and where `instance.mjs` checks |
+| 3 | The gap D179 leaves isn't handed on | Settled: a rule in the plan's milestone 14, among what isn't done, for the owner, beside D160's |
+
+The points earlier reviews and milestones left, as 10.2 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 9, D174 | A line of its own for a rebuild's prompt, if the model needs one | Settled (D202): none; the protocol's line about `Now:` |
+| Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Left, for milestone 12 |
+| Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
+| Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
+
+### 11.3 Changes to DESIGN.md
+
+None changes what Scooter does beyond what section 7 and the review left open:
+- 5.5: `restore` refuses while `runner/` or `exchange/` is a link (D198); section 10's Backups says so.
+- 6.1: a skill's `SKILL.md` gives its folder's name and a description, as pi takes them (D197); 7.3's first sentence and section 10's Config say so.
+- 7.1: only the last message is read, the instruction lines at the start of their own lines, and `Now:` is "today" (D202).
+- 7.2: the CSV files, and where a guess's ❓ goes (D200).
+
+ARCHITECTURE.md 2.11 says the same of `restore`. The plan's milestone 14 has what this milestone leaves for the README, and the review's third point.

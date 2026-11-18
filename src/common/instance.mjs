@@ -14,7 +14,10 @@ import net from 'node:net'
 export const RUNNER_SOCKET_HOLDERS = 'runner, rebuild or build-image'
 
 // Whether something listens on the Unix socket `file`. A connection is made into the socket's
-// queue by the system, so a holder whose own work keeps it from taking connections still answers.
+// queue by the system, so a holder whose own work keeps it from taking connections still answers,
+// while the queue has room: Node makes it 511 long, and each check leaves a connection in it until
+// the holder takes it. So a holder that takes none for 512 checks, which the bridge makes once a
+// second while a run is past its time, is taken for gone (D183).
 function connects(file) {
   return new Promise(resolve => {
     const socket = net.connect(file)

@@ -277,6 +277,23 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
       throw new RestoreRefused(`${full.join(', ')} ${full.length === 1 ? "isn't" : "aren't"} empty: restore into an empty folder, or add --force to replace what is there with the snapshot`)
     }
   }
+  // restic replaces a link at a folder it restores, or inside one, but follows one at a folder
+  // between, `runner/` or `exchange/`, and writes, and with `--force` deletes, where it leads. A
+  // native data folder is root's, so no other user can put one there (D151), but `restore` doesn't
+  // rest on that (D198).
+  for (const between of new Set(held.folders.filter(folder => folder.includes('/')).map(folder => path.posix.dirname(folder)))) {
+    const at = path.join(root, between)
+    let stat = null
+    try {
+      stat = fs.lstatSync(at)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    if (stat?.isSymbolicLink()) {
+      throw new RestoreRefused(`${at} is a link: restic would write where it leads, and with --force delete there. Remove the link, or restore into another RESTORE_TARGET`)
+    }
+    if (stat !== null && !stat.isDirectory()) throw new RestoreRefused(`${at} isn't a folder: remove it, or restore into another RESTORE_TARGET`)
+  }
   // Every service user passes through the data folder to reach its own (D49).
   ensureDir(root, { mode: 0o755 })
   const args = ['restore', `${shot.id}:${held.base}`, '--target', root, ...held.folders.flatMap(folder => ['--include', `/${folder}`]), '--delete', '--ownership-by-name']
