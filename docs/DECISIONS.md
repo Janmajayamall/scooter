@@ -2694,7 +2694,7 @@ ARCHITECTURE.md 2.11 says the same of `restore`. The plan's milestone 14 has wha
 
 ### 11.4 What was run to verify the milestone, and what wasn't verified
 
-Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `0d19ccd`, which holds all the files and code; the commit after it changes only this section:
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `0d19ccd`, which holds all the files and code. `949f30b` changes one sentence of the protocol's example answer, so that the item it reports `FAILED` is told why rather than asked about; `npm ci && npm test` and the run with the image and KVM were run again from a clean clone there, with the same counts:
 
 | Command | Result |
 |---|---|
