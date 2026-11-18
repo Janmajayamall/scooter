@@ -1,7 +1,7 @@
 export const meta = {
   name: 'scooter-milestone-loop',
   description: 'Build Scooter v2 one milestone at a time: implement, open a pull request, review, fix, merge',
-  whenToUse: 'Run from a checkout of this repository on the Linux machine, with gh signed in. Covers milestones 0 to 13 of docs/plans/active/v2-linux-implementation.md.',
+  whenToUse: 'Run from a checkout of this repository on the Linux machine, with gh signed in. Covers milestones 0 to 14 of docs/plans/active/v2-linux-implementation.md.',
   phases: [
     { title: 'Progress' },
     { title: 'Milestone 0: check the tools' },
@@ -18,6 +18,7 @@ export const meta = {
     { title: "Milestone 11: the agent's instructions" },
     { title: 'Milestone 12: native install' },
     { title: 'Milestone 13: Docker' },
+    { title: 'Milestone 14: docs and final check' },
   ],
 }
 
@@ -40,7 +41,8 @@ export const meta = {
 // each one picks the work up from the branch, the pull request's description and its reviews.
 //
 // Args, all optional:
-//   from, to    first and last milestone to run (default 0 and 13; 14 needs the owner, so it isn't run)
+//   from, to    first and last milestone to run (default 0 and 14). Until 2026-11-18 the loop stopped at 13;
+//               that day the owner said to run 14 through it too. Gate G4, after it, stays with the owner.
 //   maxRounds   reviews per milestone before the loop stops and asks (default 3)
 //   merge       false leaves approved pull requests for the owner to merge (default true)
 //   question    the question that stopped the last run, as the loop returned it
@@ -69,6 +71,7 @@ const NAMES = [
   "the agent's instructions",
   'native install',
   'Docker',
+  'docs and final check',
 ]
 const LAST = NAMES.length - 1
 const title = n => `Milestone ${n}: ${NAMES[n]}`
@@ -84,7 +87,7 @@ if (!Number.isInteger(cfg.maxRounds) || cfg.maxRounds < 1) {
   throw new Error('maxRounds must be a whole number, 1 or more')
 }
 if (cfg.to > LAST) {
-  log(`Milestones after ${LAST} need the owner. Stopping at ${LAST}.`)
+  log(`The plan ends at milestone ${LAST}. Stopping there.`)
   cfg.to = LAST
 }
 
