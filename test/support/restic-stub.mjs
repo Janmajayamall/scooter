@@ -79,11 +79,12 @@ function answer() {
 }
 
 if ((fixtures.hold ?? []).includes(command)) {
-  fs.writeFileSync(path.join(control, `holding-${command}`), String(process.pid))
+  // Ready for the signal before it says it holds, which is when a test may send it.
   process.on('SIGTERM', () => {
     fs.writeFileSync(path.join(control, `stopped-${command}`), '')
     process.exit(130)
   })
+  fs.writeFileSync(path.join(control, `holding-${command}`), String(process.pid))
   const wait = setInterval(() => {
     if (!fs.existsSync(path.join(control, `release-${command}`))) return
     clearInterval(wait)
