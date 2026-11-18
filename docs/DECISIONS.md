@@ -3375,3 +3375,17 @@ The review of the pull request, at `c7d3722`, found the milestone's checks and r
 | 6 | `doctor` ignores Ctrl-C after the boot check, and waits up to `DOCTOR_TIMEOUT` for OpenRouter | Fixed (D231): the signal that closes the boot check's VM also ends the wait for OpenRouter's answer, and no check of OpenRouter is made then. Test in `doctor`, which hangs on `c7d3722` |
 | 7 | D234 says nine constants and names eight | Eight, by a script over `main`'s `limits.mjs` and 8.6: corrected in D234, 14.4 and the pull request's description |
 | 8 | `/status` goes on saying the runner waits when it was stopped during the wait and not started again | Fixed (D229): a stop during the wait writes `status.json` again without `restart`, as best it can. DESIGN.md 6.3 says so. Test in `restarts`, which fails on `c7d3722` |
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, Docker 29.7.1 rootless. `bab810c` holds all the changes; the commit after it changes only this section.
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, on a clean clone of the branch from GitHub at `bab810c` | 775 tests: 726 pass, none fail. 49 skip themselves, as in 14.6 |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, on the same clone | 777 tests: 765 pass, none fail, in 114 seconds. The 12 that need root skip themselves. No QEMU left |
+| The two new tests against `c7d3722`'s `main.mjs` and `doctor.mjs` | The test in `restarts` fails on `restart` still in `status.json`; the test in `doctor` waits on OpenRouter's answer, and the file's tests after it are cancelled |
+| `git diff ORIG_HEAD HEAD -- config/` in a scratch repository, after a `git pull` that brought a change to `config/`, then after one that brought nothing | The change, then nothing: a pull with nothing new leaves no older diff behind |
+| The README's Docker command for `RESTORE_TARGET`, by hand: a Compose project of the check's own from `compose.yaml` and the image built from the working tree, a local restic repository mounted into the bridge's container, `backup-init`, then `up -d bridge` and `kill -s SIGUSR1 bridge` | The backup finished, snapshot `923ba6bb`. With the bridge still running, `docker compose run --name scooter-look -e RESTORE_TARGET=/tmp/look bridge restore` restored it into `/tmp/look/data`, exit code 0; the container had no restart policy; `docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look` gave a folder of the user's own, every file readable. Then `down -v` |
+
+Not verified:
+- **The README's native upgrade**, as a whole, and `sudo RESTORE_TARGET=… scooter restore`: no root on the machine, and no root VM was started for this, as none of it is a gate of G1 to G3. That `sudo` takes a variable after it, and drops one before, is how `sudoers` treats the environment, with Ubuntu's default rule, which allows any command.
+- **The root tests** weren't run again: no change here touches what only root does.
