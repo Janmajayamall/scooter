@@ -373,6 +373,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Rules:**
 - **Locks and the wait:** rows 6 and 7.
 - **What milestone 5 left for this one** (`docs/DECISIONS.md`, milestone 5). `/backup`'s reply is `BACKUP_NOT_BUILT`, given to `createCommands` as `backup()`, and `/status`'s line about backups is `BACKUPS_NOT_BUILT`, both in `src/bridge/`. Delivery has `pause()` and `resume()` (`src/bridge/outbox.mjs`). Commands are answered one at a time, so a `/backup` that waits for its backup holds back a `/status` sent after it.
+- **What milestone 6 left for this one** (`docs/DECISIONS.md`, milestone 6). The email channel's `stop()` stops the reader and waits for the spool folder it is taking; `start()` starts both again. The reader's position and the spool folders not yet taken are in `mail/`, which the backup holds, so a restore hands over nothing twice that the datastore's `Message-ID`s don't catch.
 - **`agents/.discarded/`** holds what the runner's clean-up set aside, and only until it has removed it (6.9; `docs/DECISIONS.md`, D88). Backups can leave it out.
 - **Work past `run.lock`'s time** (`docs/DECISIONS.md`, D96, the fourth review of milestone 4). The time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it (5.5). But the runner still holds the lock while it packs the repository (`git gc --auto`) and while its clean-up removes what pi left, and neither has a time limit. After a run that used most of its time, a backup could read `.git` during a repack. Settle how a backup tells a runner still at work from one that is gone, for example by the pid `run.lock` holds.
 
@@ -520,8 +521,8 @@ Then check, and correct the code where reality differs:
 - a receipt photo ends up in `expenses.csv`, read through pi's `read` tool;
 - a real batch runs end to end in the sandbox;
 - the messages route accepts the `provider` fields; ZDR-only routing works for the model, and how much latency it adds;
-- wacli: how an edit and a deletion arrive, `FromMe` and `Chat` included, for the owner's own edit and deletion (`docs/DECISIONS.md`, D42 and 3.3); `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID; a text with a link in it, sent with `--no-preview`, arrives without a preview, and wacli fetches nothing for it (`docs/DECISIONS.md`, 0.8, says how to tell);
-- email: IDLE with the app password; the `Authentication-Results` header and its `dmarc=` result; the owner's own mail passes DMARC; `postal-mime` on a forwarded booking and on an audio attachment;
+- wacli: how an edit and a deletion arrive, `FromMe` and `Chat` included, for the owner's own edit and deletion (`docs/DECISIONS.md`, D42 and 3.3); `send react --sender` in a one-to-one chat; owner matching when messages come from an `@lid` ID; a text with a link in it, sent with `--no-preview`, arrives without a preview, and wacli fetches nothing for it (`docs/DECISIONS.md`, 0.8, says how to tell); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether `SEND_ATTEMPTS` and dropping the quote from the fifth try on fit those failures; and what the two return as `id` (`docs/DECISIONS.md`, milestone 6, the review of milestone 5);
+- email: IDLE with the app password, over TLS; the `Authentication-Results` header and its `dmarc=` result, as `email-check` shows them; the owner's own mail passes DMARC; `postal-mime` on a forwarded booking and on an audio attachment;
 - a backup to the real bucket, and a restore into an empty folder.
 
 ## 7. Where each unverified item gets verified
@@ -541,9 +542,9 @@ The items of section 14 of DESIGN.md:
 | Building the VM image natively on Linux | G2, as root. Milestone 0 covers the container build |
 | Building the VM image in the runner container | Milestone 13 |
 | The runner container with a read-only root file system | Milestone 13 |
-| `wacli send react --sender`; edits and deletions; `@lid` owners | G4 |
+| `wacli send react --sender`; edits and deletions; `@lid` owners; how sends fail, and the IDs they return | G4 |
 | A text with a link, sent with `--no-preview`: no preview, and nothing fetched | G4. Milestone 0 (wacli 3) covers wacli's documentation, its source and the flag |
-| `imapflow` with an app password; the `Authentication-Results` header; DMARC on the owner's mail; `postal-mime` on real mail | G4. Milestone 6 covers samples |
+| `imapflow` with an app password; the `Authentication-Results` header; DMARC on the owner's mail; `postal-mime` on real mail | G4. Milestone 6 covers samples, and imapflow against an IMAP server of the tests' own, without TLS |
 | The webhook secret from wacli's environment | Milestone 0 (wacli 1) |
 | `docker compose build` | Milestone 13, for amd64 |
 | The image on arm64; Docker Desktop, OrbStack and Colima | Not verifiable on this machine; the macOS runtimes are deferred |

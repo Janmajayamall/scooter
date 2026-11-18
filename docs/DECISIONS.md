@@ -1541,3 +1541,201 @@ Not verified:
 - **`/backup`:** a placeholder until milestone 10, which also uses delivery's `pause()`.
 - **The bridge under systemd or Compose:** milestones 12 and 13. `scooter bridge` runs as a process in one test, without an outbox entry.
 - **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `O_NONBLOCK` and `git prune` exist on macOS.
+
+## Milestone 6: email
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, 5.4, 5.6, 8.2, 8.4, 8.6, section 10 and section 14, to say what this milestone settled (6.3 here).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/mail/reader.mjs` | The email reader, `node src/mail/reader.mjs run`: the position, headers first, the whole message only from an owner's address, the `n:*` quirk, IDLE and the periodic look, a `UIDVALIDITY` change, and `newest` for `email-check` |
+| `src/mail/imap.mjs` | The mailbox adapter over `imapflow`: seven functions, and nothing that changes the mailbox |
+| `src/mail/parse.mjs` | Parsing with `postal-mime`, HTML to text, and the reader's loose check of `From` |
+| `src/mail/spool.mjs` | The spool writer and the position file |
+| `src/bridge/channels/email.mjs` | The email channel: the reader's environment and supervision, the spool consumer and its checks, the sender check, the record, the skip log and its counts, `status()`, and `email-check` |
+| `src/bridge/main.mjs`, `intake.mjs`, `src/common/settings.mjs`, `src/cli.mjs` | The channel started with email on; an email's files only with its whole message first; `EMAIL_AUTHSERV_ID` checked by the bridge, not the settings; `email-check` built |
+| `src/common/files.mjs`, `limits.mjs` | `readUntrustedFile` with an owner, and `readUntrustedStart`; seven constants |
+| `src/bridge/outbox.mjs`, `commands.mjs`, `status.mjs`, `src/common/outbox.mjs`, `agentstate.mjs`, `runnerstatus.mjs`, `netlog.mjs` | The smaller points of the review of milestone 5 (6.2) |
+| `test/support/` | The fake mailbox, a small IMAP server, the reader's stub, and sample emails as Gmail, Apple Mail and Outlook send them |
+| `test/mail-reader`, `mail-imap`, `mail-parse`, `email` | This milestone's tests, with additions to `bridge` (end to end), `delivery`, `routing`, `outbox`, `status`, `settings`, `limits`, `failures` and `whatsapp` |
+
+It also settled the smaller points of the review of milestone 5 (6.2).
+
+### 6.1 Decisions
+
+**D114. The mailbox is an adapter of seven functions, tested two ways.**
+*Question:* section 10 has the reader reach the mailbox through a small adapter, so its tests use a fake mailbox; nothing then tests the adapter itself before gate G4.
+*Choice:* `src/mail/imap.mjs` gives `open`, `list(from)`, `header(uid)`, `source(uid)`, `search({ since })`, `newest(count)`, `news({ signal })` and `close`, each one IMAP command or two through imapflow, and holds no logic of the reader's. The reader's tests use `test/support/fake-mailbox.mjs`, with the same functions and a fake clock. The adapter's own test runs it, imapflow for real, against `test/support/imap-server.mjs`, a small IMAP server on a Unix socket in the test's folder, which imapflow reaches through its `transport` option: the commands it sends (EXAMINE, `UID FETCH … BODY.PEEK[…]`, `UID SEARCH SINCE`), `n:*`, IDLE and `EXISTS`, a lost connection, a wrong password; and the reader on top of it. TLS and a real provider are G4's.
+*Reason:* the adapter is the part G4 would otherwise be the first to run. *Cost:* the test server is only as faithful as its author; imapflow's commands are what it answers.
+
+**D115. Any error with the mailbox ends the reader, and the bridge's restart is the backoff.**
+*Choice:* the reader connects, opens `INBOX` and keeps looking; a failed connection, login or command, or a lost connection, rejects, and the reader exits with code 1. The bridge's supervisor starts it again after `RESTART_BACKOFF` (5.6), which is how it reconnects with backoff. SIGTERM ends it with 0, after it has saved `connected: false` and logged out. The position moves only after a folder is renamed, so a reader that ends in the middle of an email hands it over again.
+*Reason:* one place for backoff, and one way to start: every connection is a fresh process.
+
+**D116. The reader fetches the whole message when any `From` header names an owner's address; the bridge decides.**
+*Question:* 5.6 has the reader fetch the whole message "only if `From` is one of `EMAIL_OWNER_ADDRESSES`", and the bridge's sender check decides. If the two read `From` differently, an email the check would keep could arrive with its headers only.
+*Choice:* the reader's test is looser than the check by construction: a `From` header, unfolded the same way, that contains an owner's address, in any case. Everything the check keeps passes it. A message over `ATTACHMENT_MAX_BYTES` isn't fetched (5.6); its headers go over, and one that passes the check is stored without its body, with `media` `too large, not downloaded`, so the agent can tell the owner. Mail that isn't the owner's is never fetched whole.
+*Reason:* the check is Scooter's own code in the bridge (5.6); the reader's test only saves fetching strangers' mail.
+
+**D117. The spool folder's format.**
+*Choice:* `src/mail/spool.mjs` writes it, and `email.mjs` checks it, field by field, refusing any other: `parsed.json` is `{ uid, uidValidity, arrivedAt, size, fetched, parsed, subject, text, attachments }`, each attachment `{ name, mime, bytes }` in the order of `part-1`, `part-2`…. `fetched` is `whole` or `headers`; `parsed` is false for an email postal-mime couldn't parse, which then has no subject, text or attachments. The reader keeps the subject and the text to one character past where the bridge cuts them, so the bridge can tell that a cut is due, and an attachment's name to 255 characters; a MIME type that isn't `type/subtype` is `application/octet-stream`. An email whose description would pass `EMAIL_PARSED_MAX_BYTES`, as with thousands of attachments, is handed over unparsed. The bridge never takes a file name from `parsed.json`: it reads `part-<n>` by position, and the store names the stored file (4.1).
+*Reason:* 5.6, with sizes bounded on both sides, so a well-behaved reader never writes what the bridge refuses.
+
+**D118. The position.**
+*Choice:* `state.json` is `{ uidValidity, next, newest, parsing, connected, checkedAt }`, written atomically, mode 0600. `newest` is when the newest message handed over arrived, which a `UIDVALIDITY` change needs (5.6). There, `next` becomes the lowest UID the server gives for `SINCE` the day before `newest`, a date in UTC a day early, since `SINCE` takes a date in the server's own zone, and everything from it on is handed over again; the bridge skips what it holds by `Message-ID`. Before anything was handed over, `next` is the new `UIDNEXT`. A position that can't be read, which only something other than the reader makes, is logged as `mail.position_unreadable`, and the reader starts from `UIDNEXT`, as the first time. `connected` and `checkedAt` are for `/status`; `checkedAt` is written after every look.
+*Cost:* an email without a `Message-ID` is stored again after a renumbering, as `imap-<the new UIDVALIDITY>-<UID>`.
+
+**D119. A message the reader was parsing when it ended is handed over unparsed.**
+*Question:* 5.6 hands over raw a message that postal-mime fails on, so it can't hold up the ones after it. A message that ends the reader instead, killed at `STOP_GRACE` or out of memory, would end it at every start.
+*Choice:* the reader records `parsing: <uid>` before it parses a whole message, and clears it once the folder is renamed. A start that finds it set for the next message hands that message over unparsed, with `mail.parse_failed`.
+*Cost:* a reader stopped while parsing, which a backup's stop could do to a large email, hands that one over unparsed: its `.eml` is kept, and the agent is told it couldn't be read.
+
+**D120. HTML to text is Scooter's own, and takes time in step with its length.**
+*Question:* postal-mime gives an HTML-only email no text: it fills `text` only from a plain part, and its HTML converter isn't exported.
+*Choice:* `htmlToText` in `parse.mjs`: one pass that finds each `<` and `>` once; comments, `head`, `script`, `style`, `template` and `title` dropped with what they hold; a line break at `br` and at block elements, a blank line around paragraphs, headings and rules; "- " before a list item; a space between table cells; spaces run together; character references decoded: numeric ones, the XML five, all of Latin-1's names and HTML 4's punctuation and symbols. A tag, a comment or a script that never ends drops the rest. A test holds inputs that would take a careless parser time in the square of their length.
+*Reason:* the HTML is a stranger's at worst, and the reader runs every email through it, so one email mustn't hold up the rest.
+
+**D121. Every attachment postal-mime finds is a part, an image shown in the body included.**
+*Choice:* the reader hands over every attachment, `related` inline images among them.
+*Reason:* Apple Mail sends a photo as an image the HTML body shows inline; leaving inline images out would lose it. *Cost:* a forwarded newsletter's logos are attachments too.
+
+**D122. The sender check's reading of the headers.**
+*Choice:* `email.mjs` reads the header block from the first `EMAIL_HEADER_MAX_BYTES` of `message.eml`, as UTF-8, up to the first empty line, unfolding continuation lines. A block that doesn't end there, a line that is neither a header (printable ASCII without a colon, then a colon) nor a continuation, makes the email unreadable, and it is skipped. Then:
+- `From`: exactly one header. Its value is walked as RFC 5322 has it, quoted strings and nested comments passed over: an address in `<…>` with nothing after it but spaces and comments, or else a bare address. A `,` outside them is several addresses, a `:` or `;` a group, either is skipped. The address is compared, in lower case, with `EMAIL_OWNER_ADDRESSES`, exactly.
+- `Authentication-Results`: the first, after unfolding (the plan's rule). Comments are dropped, then it is split at `;` outside quoted strings. Its first token is the server, compared with `EMAIL_AUTHSERV_ID` without regard to case. It must hold exactly one `dmarc=` result, and that `pass`.
+- The log line is `email.skipped` with `uid`, `sender` (the address, when there is one, at most 254 characters) and `reason`, which names the rule; never the subject or the body.
+*Reason:* 5.6 and the plan's rule, with what is ambiguous made precise.
+
+**D123. `Message-ID` and `Date` are read by the bridge, from the raw headers.**
+*Choice:* the `sourceId` is the one `Message-ID` that reads as `<…>` of printable ASCII, without the brackets, else `imap-<UIDVALIDITY>-<UID>`. `at` is the one `Date` of RFC 5322's form, `[Mon, ]9 Nov 2026 21:12[:28] +0530`, comments dropped, with its zone: `+hhmm`, `-hhmm` or one of the names RFC 5322 gives. Anything else, a date without a zone among them, is the arrival time.
+*Reason:* the bridge needs both even for an email postal-mime couldn't parse, and a date without a zone would be read in the bridge's own, which code never depends on (8.2).
+
+**D124. The record of an email.**
+*Choice:* its attachments are the whole message, `{ type: 'email', mime: 'message/rfc822' }`, then the parts, each typed `image`, `audio`, `video` or `document` by its MIME type, for a `media` object should it fail. An email that couldn't be parsed adds `{ type: 'email', error: 'could not be parsed' }`, which intake turns into its `media`, as a location's is (D40). One fetched without its body has the whole message as too large. The text is cut at `EMAIL_TEXT_MAX_CHARS` characters, then `[The rest of this email was too long to keep here. The whole email is in its .eml file.]`; the subject at `EMAIL_SUBJECT_MAX_CHARS`, then ` […]`. Intake keeps an email's files only if the first, the whole message, was stored: the agent's prompt names an email's first file as the whole email (D71), and without it the store would give the first part that name.
+*Reason:* 5.6, in the record's own shape (D34), so intake stays the same for both channels.
+
+**D125. The spool consumer.**
+*Choice:* every `POLL_INTERVAL`, the folders in order. A folder is taken only if it is a folder, and the reader's when the bridge knows its user; `parsed.json` and `message.eml` are read with `readUntrustedFile` and `readUntrustedStart`, which now take an owner, and the parts are copied with `copyUntrustedFile`, all without following a link, as regular files with one name, belonging to `scooter-mail`. A folder that isn't one, or whose files aren't, is logged as `email.refused`, with the reason, and deleted. A skipped email is counted and deleted; a stored or duplicate one is deleted. When intake fails for a reason of the bridge's own, the folder stays and the spool is looked at again after `SPOOL_RETRY_BACKOFF`; when the store has stopped, the consumer stops with the bridge.
+*Reason:* 5.6, with D35's care for a folder another user controls: the reader could leave a link to a file it can't read.
+
+**D126. The reader's environment and process.**
+*Choice:* `HOME` is `mail/`, `TZ=UTC`, `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, and the six mailbox settings; not `EMAIL_AUTHSERV_ID`, which only the bridge reads. It runs as `node src/mail/reader.mjs run`, Node being the bridge's own, in `mail/` as its working folder. Its stderr joins the bridge's: its log lines are Scooter's own, through `log.mjs`, and imapflow logs nothing (`logger: false`).
+*Reason:* 5.6 lists the variables; a fixed `PATH` and `LANG` give the reader nothing of the bridge's own environment.
+
+**D127. What `/status` says of email.**
+*Choice:* `Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory; within 24 hours of the bridge's start the line says `since the bridge started, 21:20` instead.
+*Reason:* counting skips that aren't stored anywhere else needs a record of them; one in memory is the simplest, and the line says what it covers.
+
+**D128. `email-check` runs before `EMAIL_AUTHSERV_ID` is set.**
+*Question:* 8.2 makes `EMAIL_AUTHSERV_ID` required for email, and gate G4 runs `email-check` to find it; with the settings as D19 had them, `email-check` couldn't start without it.
+*Choice:* the settings no longer require it; the bridge refuses to start with email on and without it, saying to run `email-check`, and exits with 2 (D30). `email-check` runs the reader's `newest` mode as `scooter-mail`, with the reader's environment, at most `EMAIL_CHECK_TIMEOUT`, and prints each of the newest `EMAIL_CHECK_COUNT` messages with its UID, when it arrived, its `From` address, the server of its topmost `Authentication-Results`, and whether it would be kept, or why not. Without `EMAIL_AUTHSERV_ID` it says how to choose it. It exits with 2 when email is off, and 1 when the reader couldn't read the mailbox, after the reader's log lines.
+*Reason:* that is what the command is for (8.4), and the bridge still never runs the check without the setting.
+
+**D129. Seven constants.**
+`EMAIL_SUBJECT_MAX_CHARS`, 1,000 (D124; the review of milestone 5, point 6); `EMAIL_HEADER_MAX_BYTES`, 256 KB (D122); `EMAIL_PARSED_MAX_BYTES`, 1 MB (D117); `SPOOL_RETRY_BACKOFF`, 5 seconds doubling up to 5 minutes (D125); `EMAIL_CHECK_COUNT`, 5, and `EMAIL_CHECK_TIMEOUT`, 2 minutes (D128); and `STATUS_FILE_MAX_BYTES`, 4 MB (D127, D132). 8.6 of DESIGN.md lists them. The longest address and message ID the check reads, 254 and 995 characters, aren't constants: they are facts of RFC 5321 and 5322, as D95 has the path lengths.
+
+**D130. An entry that has failed `SEND_ATTEMPTS` times no longer holds back the others; it is given up on only once another's message has gone out** (the review of milestone 5, point 1).
+*Question:* D102 gave an entry up after 8 failed tries made while its channel was ready. But WhatsApp's `ready()` is true while sync runs, connected or not, so in an outage every send fails while ready, and each entry was deleted after about 10 minutes. The runner has the rule this lacked: an outage never uses up a message's attempts (6.9).
+*Choice:* each entry keeps its own failed tries and its own next try. After `SEND_ATTEMPTS`, it is logged as `outbox.passed_over`: it is still tried first, after its own wait, which by then is the longest, but when it fails the look goes on to the next entry. When a message of a later entry goes out, the channel works: each entry passed over gets one last try, and the look starts over so that it comes next. If that try fails, the entry is given up on, logged as `outbox.given_up` with all its failures, and removed. So an outage, during which nothing goes out, gives up on nothing, and once it ends the entries go in order. An entry with nothing behind it holds nothing back, and is tried every 5 minutes. The review's way, trying the next entry before giving one up, is this rule; the last try is added so that an entry that failed only because of an outage the next one outlasted isn't given up.
+*Cost:* during an outage each entry is tried at its own pace, at most once every 5 minutes once its waits have grown, and each failure is logged. A message that went out past one passed over arrives before it.
+
+**D131. U+0000 in a text is written as U+FFFD, and an entry that holds one is refused** (the review of milestone 5, point 2).
+*Choice:* `cutText`, which `writeOutboxEntry` applies to every text, replaces U+0000 with U+FFFD, which keeps a text of nothing else from being empty; `checkOutboxEntry` refuses a text or an emoji with U+0000, so the bridge drops an entry not written that way at once. The `✅ Email:` text goes through `cutText` too.
+*Reason:* no program takes a command-line argument with U+0000 in it, so `wacli send text` never started; the entry held the outbox for its 8 tries, and an answer's 25 texts could hold it for hours.
+
+**D132. `/status` reads the runner's files as files another user controls** (the review of milestone 5, point 3).
+*Choice:* `readAgentState` and `readRunnerStatus` take `maxBytes`, and with it read with `readUntrustedFile`; the bridge passes `STATUS_FILE_MAX_BYTES`, and the runner reads its own files as before. `scanNetworkLog` opens each day's file without following a link and without waiting on a FIFO, and reads it only if it is a regular file; the runner's failure handling reads it the same way, and counts one that isn't as no answer (D110). What can't be read is said to be so, with the code, `EUNTRUSTED` for these.
+*Reason:* the bridge reads them as root, and the runner's user writes them: a FIFO in place of `status.json` kept `/status`, and the bridge's one thread, waiting.
+
+**D133. An `out` line whose ID the datastore already holds is logged without it** (the review of milestone 5, point 4).
+*Choice:* when the store says an `out` line is a duplicate, the bridge logs `outbox.id_taken` and appends the line without its `sourceId`, which 4.2 makes optional. What `send text` and `send react` return as `id` is now an item of gate G4 and of section 14 of DESIGN.md.
+*Reason:* if wacli answered a reaction with the ID of the message reacted to, every ✅ would go out and none would be recorded.
+
+**D134. A text is at most four chunks, four to eight messages** (the review of milestone 5, point 5).
+*Choice:* the documents say so: DESIGN.md 5.3 and 8.6, ARCHITECTURE.md 5.3, and `limits.mjs`. D98 keeps each piece at least half full, so a text of `TEXT_MAX_CHARS` can take eight. D99's cost becomes: an answer can send 25 texts of up to eight messages each, about seventeen minutes of sending.
+*Reason:* the cheaper fix; filling pieces further would cut texts in the middle of a paragraph more often.
+
+**D135. A reply to a command that couldn't be written is tried again after a wait** (the review of milestone 5, point 7).
+*Choice:* `createCommands` takes the clock. After a failure, such as a full disk, it tries the same commands again after a wait that doubles from 5 seconds to 5 minutes (`SEND_RETRY_BACKOFF`, as a failed look at the outbox has it), without waiting for another command. `stop()` ends the wait; the bridge calls it when it stops.
+
+### 6.2 The reviews of the pull requests merged before this one
+
+Pull request 6, milestone 5, was approved by its review with seven smaller points. All seven are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | A send that fails while wacli is up uses up the entry's tries, whatever the cause | Settled (D130), the review's way with a last try. G4 in the plan and section 14 of DESIGN.md now list how sends fail when wacli can't reach WhatsApp, and whether `SEND_ATTEMPTS` and the dropped quote fit. Tests in `delivery`: an hour of failures with six entries gives up on none and sends them in order; one alone is tried every 5 minutes; one that fails after another went is given up on |
+| 2 | A text with U+0000 can never be sent, and holds back the outbox | Settled (D131). Tests in `outbox` and `delivery` |
+| 3 | `/status` reads three of the runner's files as root without care | Settled (D132). Test in `status`: a FIFO for `status.json` and for the day's log, a link for `state.json`, and one too large, each said to be unreadable, at once |
+| 4 | The outbox doesn't notice when the store skips an `out` line as a duplicate | Settled (D133), storing the line without its ID, and G4 now asks what the IDs are. Test in `delivery` |
+| 5 | "Four chunks" isn't the most a text takes | Settled (D134), in the documents |
+| 6 | The `✅ Email:` text isn't cut | Settled both ways the review gave: intake cuts an email's subject at `EMAIL_SUBJECT_MAX_CHARS` (D124), and routing cuts the text (D131). Tests in `email` and `routing` |
+| 7 | A command whose reply couldn't be written waits for the next command | Settled (D135). Test in `bridge` |
+
+The points the reviews of milestones 0 to 4 left stay with the milestones that own them, as 5.2 has them:
+
+| From | Point | For |
+|---|---|---|
+| Milestone 0, point 6 | The VM tests' 2-minute start limit | Milestone 7 |
+| Milestone 1, point 3 | A zone name wrong in its later letters passes | Milestone 7 |
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Milestone 10. The email channel's `stop()` waits for the spool folder it is taking, which is quick; the plan's milestone 10 now says so |
+| Milestone 4, first review, points 4, 5 and 6 | `RestartSec`; a runner started during `rebuild`; a refused request that reads as pi's own failure | Milestones 12, 9 and 8 |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Milestone 10 |
+
+### 6.3 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 5.6 left open and what the review of milestone 5 asked:
+- 5.3: a passed-over entry, given up on only after another's message goes (D130); U+0000 (D131); an `out` line without a taken ID (D133); four to eight messages (D134); the `✅ Email:` text cut.
+- 5.4: how `/status` reads the runner's files (D132), and a command's reply tried again (D135).
+- 5.6: the reader's loose check of `From`, and an email too large to fetch stored without its body (D116); its errors end it (D115); `newest` in the position, and where a renumbering starts (D118); the parse a reader ended in (D119); inline images (D121); the spool's description (D117); the consumer's checks and retries (D125); the sender check's rules (D122); a `Date` without a zone (D123); the subject cut (D124).
+- 8.2 and 8.4: `email-check` runs without `EMAIL_AUTHSERV_ID`, and the bridge doesn't (D128).
+- 8.6: the seven constants of D129, and `TEXT_MAX_CHARS` and `SEND_RETRY_BACKOFF` as D130, D134 and D135 have them.
+- Section 10, Delivery: passing over and giving up, an outage, U+0000.
+- Section 14: how wacli's sends fail, and the IDs they return; imapflow over TLS.
+
+ARCHITECTURE.md 2.3 and 5.3 say the same. The plan's G4 and section 7 have the new items, and its milestone 10 what this milestone left for it. `bridge.env.example` says how to find `EMAIL_AUTHSERV_ID`.
+
+### 6.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `f813cf1`, the last commit that changes code:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, Node 22.23.2 | 498 tests: 472 pass, none fail. 26 skip themselves: 18 need the image and 8 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 490 pass, none fail, in 110 seconds. The 8 root tests skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 466 pass, none fail. 32 skip themselves: 18 need the image, 4 need wacli, 2 run `scooter bridge` as a process, which as root needs the users `setup` makes, and 8 are about a file or folder root can read or write anyway, the email one among them. The email root test runs: the reader as its own user, its folders its own, and the bridge refusing a spool folder and a `parsed.json` that aren't the reader's |
+| The `email`, `mail-reader`, `mail-imap`, `mail-parse`, `delivery`, `bridge`, `routing`, `status` and `outbox` tests, 32 times, 8 at once | No failure |
+| The `whatsapp`, `failures`, `settings`, `limits`, `files` and `intake` tests, 16 times, 8 at once | No failure, and no test folder left behind |
+| The new tests for the review of milestone 5, against the code of `e81edec`, before the fixes | Each fails: the command's reply isn't tried again; the entry is given up on after 8 tries, and in the outage entries are given up on; the out line with a taken ID is missing; the U+0000 entry is tried 8 times; the `✅ Email:` text isn't cut; the network log that is a folder is read; and `/status` with a FIFO for `status.json` never returns, as the review found, until the run was stopped |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| The reader against a fake mailbox: headers first, whole messages only from the owner's addresses | `mail-reader.test.mjs`, the calls the fake records; `mail-imap.test.mjs`, the commands imapflow sends to a server of the tests' own |
+| The `n:*` quirk | `mail-reader.test.mjs`; `mail-imap.test.mjs`, where the server answers `50:*` with the newest |
+| IDLE with the periodic check | `mail-reader.test.mjs`, a message announced and one IDLE missed, found at the next look; `mail-imap.test.mjs`, `EXISTS` during IDLE |
+| Errors and backoff | `mail-reader.test.mjs`: a refused connection, a lost one, a fetch that fails part-way, each ending the reader with the position as it was; `email.test.mjs`: the reader started again after 5 seconds, with `/status` saying so; `mail-imap.test.mjs`: a wrong password |
+| The position: kept across restarts, nothing imported the first time, a `UIDVALIDITY` change without duplicates | `mail-reader.test.mjs`, the change from the day before the newest; `email.test.mjs`, the duplicate `Message-ID` skipped |
+| The spool: a folder counts only once renamed; a bad `parsed.json` refused; file names the bridge's own; a duplicate `Message-ID` skipped; an email that couldn't be parsed stored with its `.eml` and an error, and the ones after it still arrive | `email.test.mjs`; `mail-reader.test.mjs` for the reader's side, and a message the reader ended while parsing |
+| The sender check: another `From`, several `From` headers or addresses, no `Authentication-Results`, another server's on top, `dmarc=fail`, a forged header below the provider's | `email.test.mjs`, as functions on the samples and through the spool |
+| Parsing samples as Gmail, Apple Mail and Outlook send them, HTML-only mail included | `mail-parse.test.mjs`: Gmail's plain mail and forwarded booking with its e-ticket, Apple Mail's voice memo, Outlook's HTML-only receipt in Latin-1 |
+| The datastore line: `subject`, the 20,000-character cut, `<seq>.eml` first, attachment names | `email.test.mjs` |
+| An email is never a command | `email.test.mjs`, through the spool; `intake.test.mjs` |
+| Least privilege, for the reader's environment | `email.test.mjs`: exactly its ten variables, no password on its command line, nothing else of the bridge's; wacli's calls without the mailbox's settings; as root, the reader as its own user |
+| Delivery and Routing, the email end-to-end case | `bridge.test.mjs`, below |
+
+Beyond section 10: the reader's settings, `newest`, a description too large, its logs; HTML to text and its time; `email-check`; `/status`'s email line; a folder the store can't take tried again; the bridge refusing to start without `EMAIL_AUTHSERV_ID`.
+
+The milestone's "done when":
+- *Sample emails from the fake mailbox end up as the right lines and attachments, and mail that fails the sender check isn't stored*: in `email.test.mjs`, the samples become the lines and files they should, and spoofed, strangers' and unreadable mail is logged and not stored; and in `bridge.test.mjs`, from the stub's fake mailbox through the real reader to the datastore.
+- *An end-to-end test goes from an email to an unquoted reply on WhatsApp*: the test "emails go through the reader, the bridge and the runner…" in `bridge.test.mjs`. The reader's stub runs the real reader, as a process the bridge starts, against a fake mailbox; two emails become lines with their `.eml` and attachment; the runner, with the fake sandbox and the pi stub, asks about one and files the other; and the bridge sends the question to WhatsApp without `--reply-to`, and the ✅ as `✅ Email: Call with Sam`, each logged as an `out` line.
+
+Not verified:
+- **A real mailbox** (gate G4): imapflow over TLS with an app password, the provider's IDLE, the `Authentication-Results` header it writes and its `dmarc=` result on the owner's mail, and `email-check`'s report on them. The tests run imapflow against a server of their own, without TLS.
+- **postal-mime on mail the owner's apps sent** (gate G4). The samples are written by hand, in the shape each app writes mail, not captured from the apps.
+- **The reader as `scooter-mail` under systemd or Compose:** milestones 12 and 13. As root in a container, it ran as made-up IDs.
+- **Delivery's new rule against a paired wacli** (gate G4): how sends fail when wacli can't reach WhatsApp, and the IDs they return.
+- **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW` and `O_NONBLOCK` exist on macOS.

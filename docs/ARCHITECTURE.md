@@ -120,7 +120,9 @@ The email reader, `src/mail/reader.mjs`, is a separate program that runs as `sco
 - parses each message, and writes it as a folder in `mail/spool/`;
 - keeps its position (`UIDVALIDITY` and the next UID) in `mail/state.json`.
 
-`src/bridge/channels/email.mjs` supervises the reader and takes the spool folders in order. It treats them as untrusted: it validates `parsed.json`, enforces size limits and picks file names itself. Then it applies the **sender check**, which is Scooter's own code reading the raw headers, and writes the line or logs the skip.
+`src/bridge/channels/email.mjs` supervises the reader and takes the spool folders in order. It treats them as untrusted: it validates `parsed.json`, enforces size limits, reads every file only if it is the reader's and without following a link, and picks file names itself. Then it applies the **sender check**, which is Scooter's own code reading the raw headers, and writes the line or logs the skip. It also runs `scooter email-check`, which has the reader list the mailbox's newest messages and stores nothing.
+
+The reader reaches the mailbox through a small adapter over `imapflow`, `src/mail/imap.mjs`, so its own logic is tested against a fake mailbox. Any error with the mailbox ends the reader, and the bridge's restart with backoff is how it reconnects.
 
 **Boundaries.** Email only comes in. The reader never deletes, moves or flags mail. It gets the mailbox settings and nothing else. An email is never a command, an edit, a deletion or a reaction.
 
@@ -431,9 +433,9 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 1. The bridge takes outbox entries in order, one message every 5 seconds.
 2. It finds the channel from the line the entry points at. A reply goes to that line's channel if it can send; everything else goes to `DEFAULT_CHANNEL`.
-3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks, and a text is at most four of them: a longer one is cut when it is written. Every text goes out with wacli's link previews off.
+3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks, and a text is at most four chunks long, four to eight messages: a longer one is cut when it is written. Every text goes out with wacli's link previews off.
 4. After a crash, an entry still marked as sending is sent again, from the first chunk not recorded as sent.
-5. An entry waits while its channel can't send. A send that fails is tried again, with waits that double; after 8 tries the entry is given up on and logged, so it can't hold back the rest.
+5. An entry waits while its channel can't send. A send that fails is tried again, with waits that double; after 8 tries the entry no longer holds back the rest, and is given up on and logged once a later entry's message has gone out and it fails again. An outage, during which nothing goes out, gives up on nothing.
 
 ### 5.4 A backup
 
