@@ -86,8 +86,10 @@ The paths in this document are as they appear in Docker, under `/data`. Natively
 | `mail` | read-write, as the email reader | — | the email reader's position and its spool |
 | `config` | — | read-only | `agents.yaml`, prompts, skills and the VM image's build file. In Docker, a bind mount of `./config`. |
 
+In Docker one volume holds the whole data folder, at `/data` in both containers, so that `build-image` and `restore` work in it as natively. What each service reads and writes is then kept by the owners and modes below, as it is natively (`docs/DECISIONS.md`, D219).
+
 Scooter uses four Unix users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user, and on Ubuntu its group can write the system's mail spool (13.3). Sharing an account would share its files and its environment too.
-- In Docker the image defines them with the uids 10001, 10002 and 10003, so they match across volumes.
+- In Docker the image defines them with the uids 10001, 10002 and 10003, so the data volume's files are theirs in every container. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included (8.3; `docs/DECISIONS.md`, D217).
 - Natively, `setup` creates them as system users (8.4). It lets the system choose their uids, and everything refers to them by name.
 - `scooter-runner` is also in the host's `kvm` group (8.3, 8.5).
 
@@ -156,7 +158,7 @@ An email with an attachment:
 ### 4.3 Writing
 
 - Only the bridge writes to the datastore. All writes, incoming and outgoing, go through one queue in the bridge, so `seq` order matches the order of lines in the files.
-- For each line: take the next `seq`; copy any attachments into the day folder under a temporary name (they come from wacli's staging folder or the email spool, which are on other volumes) and rename them to their final names (4.1); then append the line with a single `write` call followed by `fsync`.
+- For each line: take the next `seq`; copy any attachments into the day folder under a temporary name (they come from wacli's staging folder or the email spool, which other users own, and which may be on other file systems) and rename them to their final names (4.1); then append the line with a single `write` call followed by `fsync`.
 - On startup, read every `log.jsonl` in date order. If the last line of the newest file is incomplete, truncate it. Rebuild the in-memory index (`seq` to line, and `(source, sourceId)` to `seq`) and work out the next `seq`. An attachment whose `seq` has no line is left over from a crash and may be overwritten.
 - Never rewrite or delete a line. Edits, deletions and reactions are new lines that point at the original.
 - Directories are 0750 and files 0640, owned by root with group `scooter-runner`, so only root and the runner can read them (3.2). pi sees the datastore through a read-only mount in its VM (6.6).
@@ -464,6 +466,7 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
   - `auto`, the default, uses the fastest one available: KVM, otherwise emulation. The runner logs which one at startup, and `/status` shows it. Falling back to emulation also sends the owner one notice, since runs become much slower (13.4). The notice goes out when the accelerator changes to emulation, not at every start, or a runner that keeps restarting would message the owner each time.
   - `kvm` or `emulation` forces one. If a forced accelerator can't be used, the runner stops with an error that says how to enable it (8.3, 8.5), rather than quietly using another.
   - `hvf`, Apple's hypervisor, is a known value kept for macOS (section 12). On Linux it can't be used, so it stops the runner like any other forced accelerator that isn't there.
+- **The machine:** QEMU's `q35` on x86_64, with KVM as under emulation. Gondolin 0.14.0 would give KVM `microvm`, which hangs in the guest kernel's APIC setup under nested KVM with 2 processors (`VM_CPUS`), as in a VM of a cloud provider, where `q35` boots; on the machine itself `q35` boots sooner too. On arm64, Gondolin's `virt` (`docs/DECISIONS.md`, D218).
 - **The command**, run in the VM in `/data/agents/lifelog`:
   ```
   pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --offline \
@@ -598,7 +601,7 @@ How it's built and checked:
 - `build-image` reads only `DATA_DIR` and `CONFIG_DIR`, from `runner.env`. It holds `runner/runner.sock` while it builds, so it doesn't run while a runner does, and no runner starts during it.
 - It builds the image in `.image-build/` in the data folder, beside `runner/` and not in it, records it, and gives it to `scooter-runner` there. Then it renames the old image out of `runner/image/` into that folder, renames the new one in, and removes the old one. `scooter-runner` owns `runner/` and could put a link anywhere in it, so as root `build-image` changes nothing there but by those two renames, which follow no link. Natively the data folder is root's, and `build-image` refuses to build as root in one that another user can write (`docs/DECISIONS.md`, D151).
 - `build-image` (8.4) builds it into `/data/runner/image/`. It needs `cpio`, `lz4` and `e2fsprogs`, which the Docker image includes. In the prototype the build took 16 seconds and the image was about 530 MB (13.4).
-- **Who builds it:** Gondolin's builder runs the build's install commands in a chroot, which needs root (13.4). So natively `build-image` runs as root, and hands the finished image to `scooter-runner`. Without root, it uses Gondolin's container build when Docker or Podman is available, and otherwise stops, saying which of the two it needs.
+- **Who builds it:** Gondolin's builder runs the build's install commands in a chroot, which needs root (13.4). So natively `build-image` runs as root, and hands the finished image to `scooter-runner`. Without root, it uses Gondolin's container build when Docker or Podman is available, and otherwise stops, saying which of the two it needs. In Docker it runs in a container of its own, `docker compose run --rm build-image`, as root and privileged, since the chroot needs `/proc` and `/dev` mounted in it, which the runner's container may not do (8.3; `docs/DECISIONS.md`, D220).
 - **What a native build runs as root:** a chroot doesn't contain root, so the build runs as little as it can there: Gondolin's builder, then Alpine's shell, npm and git inside the image's folder. Gondolin unpacks Alpine's packages itself and runs none of their scripts. pi is installed with `npm install --ignore-scripts`, as Scooter's own packages are (8.3), and the build's commands never run pi or anything else npm installed, so no code from pi's packages runs as root on the host. pi's installed version is read from its `package.json`. The build runs only when the owner starts it, never in a service. pi 1.5.2 works without its install scripts (`docs/DECISIONS.md`, 0.4, pi 8). If a later pi doesn't, stop and ask the owner.
 - At startup the runner refuses to run if the image is missing, was built for a different pi version than the pinned one or for another architecture, or doesn't know `SCOOTER_TZ`, written as the tz database writes it. It says what to do, and exits with code 2. `/status` shows when the image was built.
 
@@ -794,24 +797,25 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 
 - **`Dockerfile`**, with two stages:
   - `golang:1.27-trixie` builds wacli from source (13.1).
-  - `node:24-trixie-slim` is the runtime. It installs `ca-certificates curl bzip2 git tini tzdata cpio lz4 e2fsprogs` and QEMU for the image's architecture (`qemu-system-x86` or `qemu-system-arm`), plus:
-    - restic 0.19.1 from its GitHub release, checked against the release's `SHA256SUMS`;
+  - `node:24-trixie-slim` is the runtime. It installs `ca-certificates curl bzip2 git tini tzdata cpio lz4 e2fsprogs`, QEMU for the image's architecture (`qemu-system-x86` or `qemu-system-arm`) and `qemu-utils`, for `qemu-img`, plus:
+    - restic 0.19.1 from its GitHub release, checked against the checksum the release's `SHA256SUMS` gives, which the Dockerfile holds (`docs/DECISIONS.md`, 0.2);
     - the users `scooter-wacli` (10001), `scooter-runner` (10002) and `scooter-mail` (10003);
+    - the data folder, `/data`, with the folders of 3.2 and their owners and modes: a new volume mounted there starts as a copy of it;
     - the app and its dependencies, with `npm ci --omit=dev --ignore-scripts`.
 
-    The entrypoint is `tini -- node /app/src/cli.mjs`. pi isn't installed here; it lives in the VM image (6.12).
+    The entrypoint is `tini -- node /app/src/cli.mjs`. pi isn't installed here; it lives in the VM image (6.12). `docs/DECISIONS.md`, D221, has the rest.
 - **`compose.yaml`**, with two services:
   - `bridge`: `command: ["bridge"]`, `hostname: scooter`, `env_file: bridge.env`.
-  - `runner`: `command: ["runner"]`, `env_file: runner.env`, `read_only: true` (a read-only root filesystem) with a `tmpfs` at `/tmp`, and the KVM settings below.
+  - `runner`: `command: ["runner"]`, `user: scooter-runner`, `env_file: runner.env`, `read_only: true` (a read-only root filesystem) with a `tmpfs` at `/tmp`, `./config` read-only at `/config`, and the KVM settings below.
 
-  Both have the volumes from section 3.2, `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`.
-- **The VM image:** build it after installing and after each upgrade (6.12), with `build-image` in the runner container. The build needs root there, which the service doesn't always have, and may need more privileges than the service gets. So the exact command, such as `docker compose run --rm --user root runner build-image`, is settled when this is first tried (section 14).
-- **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so an arm64 host builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches.
-- **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git.
+  Both have one volume for the whole data folder at `/data` (3.2; `docs/DECISIONS.md`, D219), `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`. A third service, `build-image`, runs only when asked (below).
+- **The VM image:** build it after installing and after each upgrade (6.12), with `docker compose run --rm build-image`, with the runner stopped. It runs `build-image` in a container of its own, from the same image, as root and `privileged`: Gondolin's builder makes a chroot with `/proc` and `/dev` mounted in it, which neither the runner's container nor its root can do. Under rootful Docker that container is root on the host, as a native build is (row 8; section 9). It builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, in the one volume (`docs/DECISIONS.md`, D220).
+- **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so an arm64 host builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches. Only amd64 has been built (`docs/DECISIONS.md`, D228).
+- **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git. `restore` writes into the data folder with both services stopped: `docker compose stop`, then `docker compose run --rm bridge restore` (5.5; `docs/DECISIONS.md`, D223).
 
-**KVM in Docker.** pi's VMs only run fast if the runner container can open the host's `/dev/kvm`. `doctor`, run in the runner container, says which case applies (8.4).
-- **Rootful Docker on Linux**, the usual install: give the runner `devices: ["/dev/kvm:/dev/kvm"]`, `user: scooter-runner`, and `group_add` with the host's `kvm` group id (`getent group kvm`). Access goes through the group, which Ubuntu's device rules leave alone (13.4).
-- **Rootless Docker on Linux:** the host's `kvm` group never reaches a rootless container (13.4), so the user that runs Docker needs access of its own. A one-off `setfacl` doesn't last, because Ubuntu's device rules reset it whenever a VM starts or stops; the README gives the udev rule that keeps it. Then give the runner `devices: ["/dev/kvm:/dev/kvm"]` and no `user:`, so it runs as the container's root, which is that user on the host.
+**KVM in Docker.** pi's VMs only run fast if the runner container can open the host's `/dev/kvm`. The runner runs as `scooter-runner` in each case. `compose.yaml` alone is the third case below; each of the other two is a file added to it, named in `COMPOSE_FILE` in a `.env` file beside it (`docs/DECISIONS.md`, D222). `doctor`, run in the runner container, says which case applies (8.4).
+- **Rootful Docker on Linux**, the usual install, `compose.kvm.yaml`: it gives the runner `devices: ["/dev/kvm:/dev/kvm"]`, and `group_add` with the host's `kvm` group id (`getent group kvm`), `KVM_GID` in `.env`. Access goes through the group, which Ubuntu's device rules leave alone (13.4).
+- **Rootless Docker on Linux**, `compose.kvm-rootless.yaml`: the host's `kvm` group never reaches a rootless container (13.4), and rootless Docker gives `scooter-runner` a uid of its own on the host, from the range `/etc/subuid` gives the user that runs Docker. That uid needs access of its own. A one-off `setfacl` doesn't last, because Ubuntu's device rules reset it whenever a VM starts or stops; the README gives the udev rule that keeps it, which `compose.kvm-rootless.yaml` holds, with the command that finds the uid. Then the runner gets `devices: ["/dev/kvm:/dev/kvm"]` (`docs/DECISIONS.md`, D217).
 - **A host without KVM, or a container that can't open it:** pi's VMs run under emulation: about 11 seconds more per run, and pi and its tools about ten times slower (13.4). `AGENT_ACCEL=auto` falls back to it with a warning.
 
 ### 8.4 CLI
@@ -821,14 +825,14 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `bridge` | bridge | Runs the bridge (the service's default command) |
 | `runner` | runner | Runs the runner (the service's default command) |
 | `setup [--no-services]` | the host, as root | Natively: checks that the service users can run Node and read the code, which only root may change (8.5), creates the users and folders in 3.2, adds `scooter-runner` to the `kvm` group, copies the code's `config/` to `/etc/scooter/config` if it isn't there, writes `bridge.env` and `runner.env` from the examples if they don't exist, writes `/usr/local/bin/scooter`, and installs and enables the two services (8.5), without starting them. `--no-services` leaves the services out, where systemd doesn't run. Safe to repeat (`docs/DECISIONS.md`, milestone 12). |
-| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; `agents.yaml`; folder owners and modes, and the env files'; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. It reports each with its fix, and exits with 1 when something must be fixed. |
-| `build-image` | the host, as root; in Docker, the runner container | Builds the VM image (6.12) |
+| `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; that a VM boots from it with that accelerator, and how long it took; `agents.yaml`; folder owners and modes, and the env files'; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. It reports each with its fix, and exits with 1 when something must be fixed. It runs as `scooter-runner` alone where that user is there, and exits with 2 otherwise (`docs/DECISIONS.md`, D224). |
+| `build-image` | the host, as root; in Docker, a container of its own: `docker compose run --rm build-image` | Builds the VM image (6.12) |
 | `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
 | `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. Runs before `EMAIL_AUTHSERV_ID` is set, which it helps find. |
 | `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5). `restore` restores the latest snapshot unless one is named, needs the bridge and the runner stopped to write into the data folder, and, as root, Scooter's users, which `setup` makes |
 | `rebuild <agent>` | runner, with its service stopped | Section 6.10 |
 
-Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`. Sending `SIGUSR1` to the bridge starts a backup immediately.
+Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`, and build the VM image with `docker compose run --rm build-image`. Sending `SIGUSR1` to the bridge starts a backup immediately: in Docker, `docker compose kill -s SIGUSR1 bridge`.
 
 ### 8.5 Running natively
 
@@ -841,7 +845,7 @@ Scooter runs natively on Linux, on amd64 and arm64:
   - `scooter-runner.service`, as `scooter-runner`, with `SupplementaryGroups=kvm`, and with its home and temporary folder under the data folder's `runner/`, which the runner sets itself (6.6). It is restarted after 1 minute, then about 5, then every 30, OpenRouter's outage waits (6.9): a fault that stays after pi has run would otherwise run pi again every minute (`docs/DECISIONS.md`, D207).
 
   `/usr/local/bin/scooter` `exec`s Node, so Node is each service's main process. Then build the VM image with `sudo scooter build-image` (6.12), and check everything with `sudo -u scooter-runner scooter doctor`.
-- **KVM:** the runner needs read-write access to `/dev/kvm`. `setup` gives it through the `kvm` group, which Ubuntu's device rules leave alone (13.4).
+- **KVM:** the runner needs read-write access to `/dev/kvm`. `setup` gives it through the `kvm` group, which Ubuntu's device rules leave alone (13.4). On a machine without the group, `setup` makes it when it installs the services, since the runner's unit names it (`docs/DECISIONS.md`, D225).
 - **The config:** before each run, the runner copies the prompt and skills into `run/config/`, so pi only ever sees that run's copy, never `/config` itself.
 - **Development:** the code and its tests run natively without `setup`, as an ordinary user (section 10).
 
@@ -925,7 +929,8 @@ Accepted risks:
 - A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner. There it would reach the OpenRouter key and the agent's folders, but not the bridge's secrets, because the runner is its own unprivileged user, apart from the bridge.
 - Gondolin is pre-1.0 (13.4). Its next version moves the policy hooks into a separate program, so upgrading it means porting the policy and running its tests again.
 - On a native install the bridge runs as root, so that it can start wacli and the email reader as their own users. A flaw in the bridge would then expose the whole machine, not just one container. Running the bridge as its own user, with systemd starting wacli and the email reader, is a possible later change.
-- A native build of the VM image also runs as root on the host: Gondolin's builder, then Alpine's shell, npm and git in a chroot, which doesn't contain root (6.12). No code from pi's packages runs there, and the build runs only when the owner starts it. It builds in a folder only root can write, and changes the runner's folder only by renaming the image in and the old one out, so a link the runner's user puts there leads it nowhere (`docs/DECISIONS.md`, D151).
+- A native build of the VM image also runs as root on the host: Gondolin's builder, then Alpine's shell, npm and git in a chroot, which doesn't contain root (6.12). No code from pi's packages runs there, and the build runs only when the owner starts it. It builds in a folder only root can write, and changes the runner's folder only by renaming the image in and the old one out, so a link the runner's user puts there leads it nowhere (`docs/DECISIONS.md`, D151). In Docker it runs in a privileged container of its own, which under rootful Docker is root on the host just the same (D220).
+- In Docker, one volume holds the whole data folder, as natively one folder does, so the services' containers are kept apart from each other's folders by the owners and modes of 3.2 alone, not also by read-only mounts: the bridge, as root, could write `runner/`, which it only reads (`docs/DECISIONS.md`, D219).
 - wacli is unofficial, so WhatsApp could ban the bot number. The owner must also open WhatsApp Business at least every two weeks, or the linked device is logged out.
 - The mailbox's provider keeps the emails sent to Scooter. Anyone who controls the owner's email account can give Scooter instructions, as with their WhatsApp.
 - Node has no calls relative to a folder it has open, so a user who controls one of the folders above can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, and empty folders. The bridge writes nothing in those folders, but `backup.lock` in `exchange/locks/`, which only the runner's user controls, and which an escape from pi's VM is needed to reach: a swap there can steer where the bridge makes it (5.5), under that name (`docs/DECISIONS.md`, D136, D205). Where root makes a folder in a folder another user owns, it sets the folder's owner and mode through what it opened, so a link swapped in leads it nowhere (D206).
@@ -971,7 +976,7 @@ Required tests, at least:
   - Parsing sample emails as Gmail, Apple Mail and Outlook send them, HTML-only mail included.
   - The datastore line: `subject`, the 20,000-character cut, `<seq>.eml` first, and attachment names.
   - An email is never a command.
-- **Least privilege:** the folders Scooter creates get the owners and modes in 3.2, and `setup` makes the users and folders, as root, without services; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
+- **Least privilege:** the folders Scooter creates get the owners and modes in 3.2, and `setup` makes the users and folders, as root, without services, and the kvm group with them where there is none; the Docker image's users, data folder and Compose files are those 3.2 and 8.3 give; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
 - **Runner:**
   - Batching after the quiet period, and the batch's two limits: 20 items, and the prompt's size, with an over-long item shown cut.
   - Cursor, retry and failed transitions with an injected clock (a 1-minute wait between attempts; 4 attempts).
@@ -997,7 +1002,7 @@ Required tests, at least:
   - `status.json` holds what `/status` shows about the runner's settings. The emulation notice goes out when the accelerator changes to emulation, and not again at the next start.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
-- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again, and an entry the runner's user swaps for a link once the bridge has taken it leads the bridge to write nothing where the link leads. Entries wait while their channel can't send; a failed send is tried again, no longer holds back the rest after `SEND_ATTEMPTS`, and is given up on once a later entry's message goes and it fails again; an outage of any length gives up on nothing, and the entries then go in order; a text over `TEXT_MAX_CHARS` is cut, and U+0000 in one is replaced; an outbox that is a link makes the bridge remove nothing it leads to.
+- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again, and an entry the runner's user swaps for a link once the bridge has taken it leads the bridge to write nothing where the link leads. Entries wait while their channel can't send; a failed send is tried again, no longer holds back the rest after `SEND_ATTEMPTS`, and is given up on once a later entry's message goes and it fails again; an outage of any length gives up on nothing, and the entries then go in order; a text over `TEXT_MAX_CHARS` is cut, and U+0000 in one is replaced; an outbox that is a link makes the bridge remove nothing it leads to, and still lets the bridge's own entries go; a name in it that isn't an entry's ID is left; and the bridge removes only `entry.json` from a runner's entry.
 - **Routing:** `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that can't send stops the bridge at startup.
 - **Network policy:**
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.
@@ -1019,7 +1024,7 @@ Required tests, at least:
   - A missing image, or one built for another pi version, stops the runner, and so does a `SCOOTER_TZ` the image doesn't know.
   - As root, `build-image` builds outside the runner's folder, and links the runner's user puts in that folder during the build lead it nowhere: nothing they lead to is written, given away or removed. This one needs root, not QEMU.
 - **Backups:** lock coordination with a restic stub: a backup waits for a run to finish, goes ahead once `run.lock` is 2 minutes past its time and no runner holds its socket, waits on while one does, and a leftover `backup.lock` is removed at startup; the channels and delivery stop while restic runs, and start again after; restic gets only the backup settings; the schedule across a daylight-saving change; and `/backup` replies, without holding back the commands after it. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target; and, as root, a restore gives files their owners by name. A restore refuses a `runner/` or an `exchange/` that is a link.
-- **Config:** each validation error names the field, a skill whose `SKILL.md` doesn't give its folder's name and a description is one, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, wrong folder modes) with its fix.
+- **Config:** each validation error names the field, a skill whose `SKILL.md` doesn't give its folder's name and a description is one, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, a VM that doesn't boot, wrong folder modes) with its fix, and runs only as the runner's user where that user is there.
 
 ## 11. Development plan
 
@@ -1176,13 +1181,13 @@ Checked in a prototype on an Ubuntu 24.04 server on 2026-11-15.
   - a per-user ACL on `/dev/kvm` let a rootless container's root, which is the host user, open it. But Ubuntu's udev rules (the `uaccess` tag) reset per-user ACLs on `/dev/kvm` whenever any VM is created or destroyed, so the ACL was gone as soon as a VM started;
   - access through the `kvm` group isn't affected by those resets.
 
-  Rootful Docker with `devices` and `group_add` wasn't tried.
+  Rootful Docker with `devices` and `group_add` wasn't tried in the prototype. Milestone 13 tried it, and rootless Docker with the udev rule, at gate G3 (`docs/DECISIONS.md`, 13.5).
 
 ## 14. Not verified yet
 
 Check these during implementation where you can, and put the rest in the README as "Check on the first real run":
 
-Milestone 0 settled five of them on the Linux machine, marked "Checked" below: the fields and `anthropic-beta` values pi sends, and that it needs no other path; `--skill` with `--no-skills`; pi installed with `--ignore-scripts`; `--no-mcp` with `-p`; and the webhook secret. `docs/DECISIONS.md`, 0.4 to 0.6, says what was run and what was found.
+Milestone 0 settled five of them on the Linux machine, marked "Checked" below: the fields and `anthropic-beta` values pi sends, and that it needs no other path; `--skill` with `--no-skills`; pi installed with `--ignore-scripts`; `--no-mcp` with `-p`; and the webhook secret. `docs/DECISIONS.md`, 0.4 to 0.6, says what was run and what was found. Milestones 12 and 13 checked the native and the Docker installs, marked so below.
 
 - The model reads photos through pi's `read` tool (send a receipt, then check `expenses.csv`).
 - The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused. *Checked: captured for every model, and pi needs no other path (pi 6).*
@@ -1190,11 +1195,11 @@ Milestone 0 settled five of them on the Linux machine, marked "Checked" below: t
 - A real batch end to end, with the owner's key, in the sandbox.
 - Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13). *Milestone 8's live check sent them on both routes with a dummy key, and OpenRouter answered 401, which it decides before it reads the body, so this stays open.*
 - That ZDR-only routing works for the configured model, and how much latency it adds.
-- KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3).
-- Building the VM image natively, as root (6.12), and in the runner container, where the build may need more privileges than the service has (8.3). *`scooter build-image` with Gondolin's container build, under rootless Docker, was run in milestone 7.*
+- KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3). *Checked at gate G3, in a VM: both reach KVM, and a VM boots in the runner's container in about 2 seconds (`docs/DECISIONS.md`, 13.5).*
+- Building the VM image natively, as root (6.12), and in the runner container, where the build may need more privileges than the service has (8.3). *`scooter build-image` with Gondolin's container build, under rootless Docker, was run in milestone 7; natively as root at gate G2 (`docs/DECISIONS.md`, 12.5); and in Docker, in a privileged container of its own, under rootless and rootful Docker, in milestone 13 (D220).*
 - That pi and its tools work when pi was installed with `npm install --ignore-scripts` (6.12, 13.2). *Checked: they do (pi 8).*
 - That `--no-mcp` works together with `-p` (6.6). *Checked: it does (pi 4).*
-- The runner container with a read-only root filesystem (8.3).
+- The runner container with a read-only root filesystem (8.3). *Checked in milestone 13: it runs pi in its VMs (`docs/DECISIONS.md`, 13.5).*
 - `wacli send react --sender` in a one-to-one chat.
 - That a text with a link, sent with `wacli send text --no-preview`, arrives without a preview, and that wacli fetches nothing for it (5.3, 13.1).
 - How wacli reports edits and deletions (13.1).
@@ -1205,6 +1210,6 @@ Milestone 0 settled five of them on the Linux machine, marked "Checked" below: t
 - That mail from the owner's address passes DMARC, which needs its domain to publish a DMARC record.
 - `postal-mime` on real emails from the owner's mail apps, including a forwarded booking and an audio attachment.
 - Whether wacli can take its webhook secret from the environment instead of its command line (5.1). *Checked: it can't (wacli 1).*
-- `docker compose build`, and the Docker image on both `amd64` and `arm64`.
+- `docker compose build`, and the Docker image on both `amd64` and `arm64`. *Checked on amd64, under rootless and rootful Docker, in milestone 13; arm64 can't be checked on the plan's machine (`docs/DECISIONS.md`, D228).*
 
 With macOS, later (section 12): Gondolin natively on a Mac with Apple's hypervisor; the launchd services; building the VM image on a Mac; and the stack under Docker Desktop, OrbStack and Colima, including the `./config` bind mount.
