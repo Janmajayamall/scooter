@@ -29,6 +29,7 @@ import { createFakeModel } from './support/fake-model.mjs'
 import { createTestLog } from './support/log.mjs'
 import { line, writeConfig, writeDatastore } from './support/runner.mjs'
 import { fakeModelNetwork, openTestSandbox, sandboxSkipReason } from './support/sandbox.mjs'
+import { toolResults } from './support/vm.mjs'
 import { KEY, runnerSettings } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
@@ -511,6 +512,72 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   )
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'request').map(entry => `${entry.method} ${entry.host}${entry.path}`))], ['POST openrouter.ai/api/v1/messages'])
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'response').map(entry => entry.status))], [200])
+})
+
+// The text of a recorded request's system prompt: a field of its own on the messages route, which
+// is a string or a list of parts.
+function systemPromptOf(request) {
+  const { system } = request.body
+  return typeof system === 'string' ? system : system.map(part => part.text ?? '').join('\n')
+}
+
+test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the protocol, the prompt and the six skills, reads one, and files a message by it", options, async t => {
+  const prepared = prepare(t)
+  const { paths, settings, log } = prepared
+  // The repository's own config folder, as `setup` copies it and Docker mounts it.
+  fs.rmSync(paths.configDir, { recursive: true })
+  fs.cpSync(new URL('../config', import.meta.url), paths.configDir, { recursive: true })
+  fs.rmSync(paths.agents, { recursive: true })
+
+  const skills = path.join(paths.agentRunConfig('lifelog'), 'skills')
+  const header = 'date,time,merchant,description,amount,currency,category,payment,split,note,source'
+  const page = '# Monday 9 November 2026\n\n## Expenses: ₹150\n| time  | what | amount | category | original |\n|-------|------|--------|----------|----------|\n| 21:20 | Blue Tokai coffee | ₹150 | Food & drink | |\n'
+  const model = createFakeModel([
+    { tool: 'read', args: { path: `${skills}/expenses/SKILL.md` } },
+    { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node' } },
+    { tool: 'write', args: { path: 'views/expenses.csv', content: `${header}\n2026-11-09,21:20,Blue Tokai,coffee,150,INR,Food & drink,,,,#1\n` } },
+    { tool: 'write', args: { path: 'views/days/2026/11/2026-11-09.md', content: page } },
+    { text: 'NO_REPLY\nDONE: 1' },
+  ])
+  const runner = await openRunner({
+    settings: { ...settings, batchSeconds: 1 },
+    clock: systemClock,
+    log,
+    openSandbox: async options => openTestSandbox(t, { ...prepared, ...options, network: await fakeModelNetwork(t, model, options) }),
+  })
+  atEnd(t, () => runner.close())
+  let outcome
+  for (let n = 0; n < 20 && outcome === undefined; n++) {
+    outcome = (await runner.tick()).outcome
+    if (outcome === undefined) await sleep(200)
+  }
+  assert.deepEqual(outcome, { ok: true, cause: null })
+
+  // The system prompt: the protocol, then the agent's prompt, then the memory, and pi's list of the
+  // six skills, each at its copy in run/config/, with the description its SKILL.md gives.
+  const [first, second, third] = model.modelRequests
+  const system = systemPromptOf(first)
+  const at = ['# How you work with Scooter', '# You are lifelog', '# Your memory'].map(heading => system.indexOf(heading))
+  assert.ok(at[0] >= 0 && at[1] > at[0] && at[2] > at[1], JSON.stringify(at))
+  const offered = [...system.matchAll(/<skill>\s*<name>(.*?)<\/name>\s*<description>(.*?)<\/description>\s*<location>(.*?)<\/location>/gs)]
+  assert.deepEqual(
+    offered.map(([, name, , location]) => [name, location]),
+    ['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages'].map(name => [name, `${skills}/${name}/SKILL.md`]),
+  )
+  for (const [, name, description] of offered) {
+    const own = /^description: (.*)$/m.exec(fs.readFileSync(new URL(`../config/skills/${name}/SKILL.md`, import.meta.url), 'utf8'))[1]
+    assert.equal(description.replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&'), own, name)
+  }
+  // pi read the skill from its copy, and the programs the instructions name are in the image.
+  assert.equal(toolResults(second.body)[0].text, fs.readFileSync(new URL('../config/skills/expenses/SKILL.md', import.meta.url), 'utf8'))
+  assert.equal(toolResults(third.body)[1].text.trim().split('\n').length, 6, toolResults(third.body)[1].text)
+
+  // What pi wrote, committed, and the ✅.
+  const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
+  assert.equal(await git('log', '-1', '--format=%s', '--name-only'), 'lifelog: #1\n\nviews/days/2026/11/2026-11-09.md\nviews/expenses.csv\n')
+  assert.equal(await git('status', '--porcelain'), '')
+  const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
+  assert.deepEqual(outbox.filter(entry => entry.by === 'lifelog'), [{ type: 'react', by: 'lifelog', target: 1, emoji: '✅' }])
 })
 
 test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
