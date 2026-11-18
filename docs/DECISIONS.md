@@ -2114,7 +2114,7 @@ On the Linux machine, with Gondolin 0.14.0, Node 22.23.2 and, in the plan's root
 - undici publishes `undici:request:create` in the request's constructor, with its headers as a list of names and values, which it writes when the request has a connection: taking a header out there keeps it off the wire, with Node's own undici 6.28.0 and 7.30.2 and with Gondolin's 6.29.1. A connection refused gives `undici:request:error` with `ECONNREFUSED`; a body cancelled after the status gives it with an `AbortError`, whose code is a number. `fetch` refuses a port on the Fetch standard's list of bad ones, such as 1 or 9, before it makes a request at all.
 - By Gondolin's source: with an `onRequest` hook of the caller's, every HTTP(S) request reaches the hook before any lookup or check of an address, and Gondolin follows a redirect itself, handing each hop to the hook again, with the headers of the hop before, the key among them. It refuses a request whose body is longer than `maxHttpBodyBytes` before the hook, and substitutes a placeholder anywhere in any header of a request to the secret's hosts, after the hook. An answer the hook gives itself is read whole before the VM gets it.
 - HTTPS from the VM to a private address given as a number, `10.0.0.1`, `169.254.169.254` or the host's own on the LAN, is refused by Gondolin before the hook sees anything of it.
-- OpenRouter answered pi's first request on each route, with a well-formed key it doesn't know and the `provider` fields of ZDR, with 401 "User not found." in 100 to 260 ms. It decides that before the body, so the run doesn't show the messages route takes the fields (section 14). pi's first request was about 15.8 KB on the connection, the answer 1.2 KB.
+- OpenRouter answered pi's first request on each route, with a well-formed key it doesn't know and the `provider` fields of ZDR, with 401 "User not found." in 70 to 440 ms, over three runs. It decides that before the body, so the run doesn't show the messages route takes the fields (section 14). pi's first request was about 15.8 KB on the connection, the answer 1.2 KB.
 - pi 1.5.2's real requests pass the policy, on the messages route, in the sandbox's end-to-end test, and on both routes in the live check.
 
 ### 8.3 The reviews of the pull requests merged before this one
@@ -2153,3 +2153,39 @@ None changes what Scooter does beyond what 6.13 and the plan left open:
 - Section 14: the live check sent the ZDR fields on the messages route and got 401, which doesn't settle the item.
 
 ARCHITECTURE.md 2.8 says the same in a few words. `runner.env.example` says what `AGENT_INTERNET` leaves refused either way, and where the log is.
+
+### 8.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean clones of the branch at `92b014a`, which holds all the code and tests; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 644 tests: 601 pass, none fail. 43 skip themselves: 33 need the image (18 of milestone 0, 15 of the sandbox) and 10 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 646 tests: 636 pass, none fail, in 114 seconds. The 10 root tests skip themselves. Boots of 1.9 to 2.7 seconds. No QEMU left |
+| `test/sandbox.test.mjs` with KVM, twice more | All pass each time; the fastest boots 1.8 seconds |
+| The changed sandbox tests without the `kvm` group, so under emulation | All 5 pass, the network's two cases among them, in 71 seconds |
+| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 590 pass, none fail. 54 skip themselves: 33 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. The policy's tests run there, with Node 24's undici 7.30.2 |
+| The `policy`, `failures`, `status`, `runner`, `image`, `limits`, `run` and `imports` tests, 16 times, 8 at once | No failure |
+| The `policy`, `runner` and `failures` tests under `strace -f -e trace=connect,sendto,sendmsg` | They connect to `127.0.0.1` and a Unix socket of their own, and to nothing else |
+| `SCOOTER_TEST_IMAGE=… sg kvm -c 'node test/live/openrouter.mjs'`, the live check, three times, the last from the clean clone | Both routes, each time: pi's first request passed the policy and reached the real OpenRouter, which answered 401 "User not found." in 70 to 440 ms; the log has its request, its status and its end; the runner took it as a setup error, paused runs, counted no attempt, and its reason is "OpenRouter: User not found."; `curl https://example.com/` in a VM of the same sandbox was refused by the policy, its only line. No QEMU left |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder | `policy.test.mjs`: the first and last request of each fixture session, through the hook and Gondolin's own handling of the key, to a fake upstream that gets the key, the body with ZDR and not the policy's header. `sandbox.test.mjs`: pi's real requests in a VM, through the policy, to the fake model |
+| Each refusal: another model, `:online`, a tool not `function` or a server tool, `plugins`, `mcp_servers`, an unknown field or `anthropic-beta` value, media by URL, another path or method on `openrouter.ai`, another host with internet off, plain HTTP with it on | `policy.test.mjs`, 29 cases, each with its status, its reason in the log, and nothing let out; `sandbox.test.mjs`, from inside a VM |
+| A body with a duplicated key goes out only as the hook's own encoding | `policy.test.mjs`, both orders |
+| The placeholder is replaced only on requests to `openrouter.ai` | `policy.test.mjs`: seven cases of the key or its placeholder where pi doesn't send it, and a request elsewhere that goes as it was, with no key |
+| ZDR on and off, on both routes; a refusal for no ZDR endpoint pauses runs with that reason | `policy.test.mjs`; `runner.test.mjs` (milestone 4) |
+| The `request` line before the request goes out; streamed responses not held back; `/status`'s counts | `policy.test.mjs`: the upstream finds the line already there, and the status is in the log and the first event at the client while the answer goes on; `status.test.mjs`, with an `unlogged` line |
+| Beyond section 10 | `policy.test.mjs`: the allowlists against the catalog, what came of a request with no answer, never sent or cut by the end of the run, the bounds, a header of the VM's own with the policy's name, and Gondolin's own undici; `failures.test.mjs` and `runner.test.mjs`: a refusal at OpenRouter, first and later; `sandbox.test.mjs`: internet on, a VM that doesn't boot within the run's time, and a 401 through the real sandbox taken as a setup error; `image.test.mjs`: the pin, and `build-image` where it can't write |
+
+The milestone's "done when": the policy tests pass, and on the Linux machine pi in a VM reached OpenRouter's chat endpoints with a dummy key, on both routes, while `https://example.com` was refused; OpenRouter answered 401, and the runner treated it as a setup error (the live check, above).
+
+Not verified:
+- **Whether the messages route takes the ZDR fields,** and ZDR-only routing for the model: OpenRouter answers a key it doesn't know before it reads the body. Gate G4, with the owner's key (section 14).
+- **A redirect from OpenRouter,** which Gondolin would follow and hand to the hook again: by Gondolin's source, and a hook test with the key in a header as the next hop would carry it, not seen.
+- **A name that resolves to a private address,** which Gondolin refuses after the hook, leaving a `request` line and a `not_sent` one: by Gondolin's source and the hook's test, not seen in a VM, which would need a name that resolves so, and a lookup outside the machine.
+- **The bytes of a TLS connection** as undici counts them for `sent` and `received`, against a packet count. The live check's figures are of the right size for pi's request and OpenRouter's answer.
+- **arm64 and macOS.** Nothing here knows the architecture; `node:diagnostics_channel` and undici's channels are the same on macOS.
