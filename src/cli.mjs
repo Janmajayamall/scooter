@@ -50,14 +50,15 @@ export const COMMANDS = {
     usage: 'doctor',
     where: 'runner',
     summary: 'Check what the runner needs, and change nothing',
-    // Its checks of the config, the image and the accelerator are the runner's own code, which
-    // `src/ops` doesn't import (ARCHITECTURE.md 4.2).
+    // Its checks of the config, the image, the accelerator and a VM's boot are the runner's own
+    // code, which `src/ops` doesn't import (ARCHITECTURE.md 4.2).
     load: async () => {
-      const [{ runDoctor }, config, image, accel] = await Promise.all([
+      const [{ runDoctor }, config, image, accel, gondolin] = await Promise.all([
         import('./ops/doctor.mjs'),
         import('./runner/config.mjs'),
         import('./runner/sandbox/image.mjs'),
         import('./runner/sandbox/accel.mjs'),
+        import('./runner/sandbox/gondolin.mjs'),
       ])
       const runner = {
         loadConfig: config.loadConfig,
@@ -67,8 +68,9 @@ export const COMMANDS = {
         checkImage: image.checkImage,
         qemuProgram: image.qemuProgram,
         kvmProblem: accel.kvmProblem,
+        bootCheck: gondolin.bootCheck,
       }
-      return ({ settings, env, stdout }) => runDoctor({ settings, env, stdout, runner })
+      return ({ settings, env, stdout, stderr }) => runDoctor({ settings, env, stdout, stderr, runner })
     },
   },
   'build-image': {

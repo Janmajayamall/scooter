@@ -40,6 +40,10 @@ export function findProgram(program, searchPath = process.env.PATH ?? '') {
 
 const USER_NAME = /^[a-z_][a-z0-9_-]*$/
 
+// Whether this process runs in a Docker container, where the commands that set or fix things
+// differ from a native install's (8.3).
+export const inDocker = () => fs.existsSync('/.dockerenv')
+
 // Returns `run`, `supervise` and `lookupUser`, which share one log, one clock, and the one warning
 // about not being root.
 export function createProc({ log, clock = systemClock, isRoot = () => process.getuid?.() === 0 }) {

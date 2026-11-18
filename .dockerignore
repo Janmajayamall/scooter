@@ -1,0 +1,5 @@
+# Only what the Dockerfile copies goes to the build: no env file, data, node_modules or .git.
+*
+!package.json
+!package-lock.json
+!src/

@@ -299,6 +299,9 @@ export function removeHandOff(dir, isKnown) {
 // folder. Nothing else Scooter keeps is named so.
 export const startsWithId = name => /^\d{8}T\d{9}-\d{4}/.test(name)
 
+// Whether `name` is exactly one that `createIds` makes, as an outbox entry's folder is named.
+export const isId = name => /^\d{8}T\d{9}-\d{4}$/.test(name)
+
 // The path of `name` in the folder `parent`, as bytes. Walking a folder by the bytes of its names
 // reaches every name as it is on disk: one that isn't UTF-8 doesn't survive a round trip through a
 // string.

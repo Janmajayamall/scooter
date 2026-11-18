@@ -252,6 +252,10 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   // `restarting` (sync exited and waits to start again).
   let link = 'stopped'
   let running = null
+  // Called once the first check of the pairing since the channel started has its answer, or has
+  // failed. Catch-up waits for it: an unpaired wacli has nothing to list, and only fails (the review
+  // of milestone 12, smaller point 7; D227).
+  let pairingChecked = () => {}
 
   // Runs wacli with `--json` and returns the `data` part of its answer (13.1). Rejects when it
   // fails, without repeating what it said: its errors can name chats and files. `signal` stops it,
@@ -295,10 +299,12 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       if (paired) {
         if (link === 'unpaired') log.info('whatsapp.paired')
         link = 'linked'
+        pairingChecked()
         return
       }
       if (link !== 'unpaired') log.warn('whatsapp.not_paired', { hint: 'run `scooter pair` to link the bot\'s number' })
       link = 'unpaired'
+      pairingChecked()
       await clock.sleep(limits.AUTH_CHECK_INTERVAL, { signal })
     }
   }
@@ -457,7 +463,11 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     log.info('whatsapp.caught_up', counts)
   }
 
-  async function catchUpLoop(onRecord, signal) {
+  async function catchUpLoop(onRecord, signal, checked) {
+    await new Promise(resolve => {
+      checked.then(resolve)
+      signal.addEventListener('abort', resolve, { once: true })
+    })
     for (;;) {
       // Not paired, there is nothing to list, and the store wacli would read may not exist.
       if (link !== 'unpaired') {
@@ -528,6 +538,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       const url = `http://127.0.0.1:${server.address().port}${WEBHOOK_PATH}`
       // wacli takes the secret only on its command line (0.6, wacli 1).
       const args = ['sync', '--follow', '--webhook', url, '--webhook-secret', secret, '--webhook-allow-private']
+      const checked = new Promise(resolve => (pairingChecked = resolve))
       const supervisor = proc.supervise(WACLI, args, {
         env,
         user,
@@ -537,7 +548,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
         },
       })
       const stopping = new AbortController()
-      const catchingUp = catchUpLoop(onRecord, stopping.signal)
+      const catchingUp = catchUpLoop(onRecord, stopping.signal, checked)
       running = { server, supervisor, stopping, catchingUp }
       log.info('whatsapp.started', { address: server.address().address, port: server.address().port })
     },

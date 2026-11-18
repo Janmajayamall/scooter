@@ -780,15 +780,15 @@ test('whatsapp: a catch-up that fails is tried again at the next one, and not wh
   await caughtUp()
   assert.deepEqual(context.lines().map(line => line.sourceId), ['C1'])
 
-  // Not paired: no list, and so no failure every ten minutes.
+  // Not paired: no list, and so no failure, neither at startup, where catch-up waits for the first
+  // check of the pairing (D227), nor every ten minutes.
   const unpaired = await setup(t, { fixtures: { paired: false } })
-  // The catch-up at startup runs while the first check is still asking, and fails.
   await waitFor(() => unpaired.events().includes('whatsapp.not_paired'), 'the pairing check')
-  await waitFor(() => unpaired.events().includes('whatsapp.catchup_failed'), 'the catch-up at startup')
-  const lists = unpaired.stub.callsOf('messages list').length
+  await new Promise(resolve => setTimeout(resolve, 100))
   await untilNextCatchUp(unpaired.clock)
   await new Promise(resolve => setTimeout(resolve, 100))
-  assert.equal(unpaired.stub.callsOf('messages list').length, lists)
+  assert.equal(unpaired.stub.callsOf('messages list').length, 0)
+  assert.equal(unpaired.events().includes('whatsapp.catchup_failed'), false)
 })
 
 // ---------------------------------------------------------------------------------------------

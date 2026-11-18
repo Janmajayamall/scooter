@@ -2927,3 +2927,202 @@ Not verified:
 - **`pair` against WhatsApp**, and the bridge with a paired wacli (gate G4). The tests run the wacli stub; in G2 wacli was unpaired.
 - **The units on another systemd.** `RestartSteps` needs 254; on an older one the runner restarts every minute (D207).
 - **The install on the machine Scooter will live on**, which stays with the owner (section 6 of the plan), and **arm64**.
+
+## Milestone 13: Docker
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 3.2, 4.3, 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `Dockerfile`, `.dockerignore` | The image (D221) |
+| `compose.yaml` | The two services, the one data volume, and `build-image`'s container (D219, D220, D222) |
+| `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | KVM under rootful and under rootless Docker; `compose.yaml` alone is the third case, without KVM (D217, D222) |
+| `src/runner/sandbox/gondolin.mjs` | QEMU's `q35` machine (D218), and `bootCheck`, for `doctor` (D224) |
+| `src/runner/sandbox/image.mjs` | `build-image` in the runner's container says which container builds (D220) |
+| `src/ops/doctor.mjs`, `src/cli.mjs` | A VM's boot, the runner's user, and the fixes in Docker (D224) |
+| `src/ops/setup.mjs` | The kvm group, with services (D225) |
+| `src/bridge/outbox.mjs`, `src/common/files.mjs` | The runner's outbox: names that are IDs, `entry.json` alone, and the bridge's own entries while it is refused (D226) |
+| `src/bridge/channels/whatsapp.mjs` | Catch-up waits for the first check of the pairing (D227) |
+| `src/common/proc.mjs`, `src/bridge/main.mjs` | `inDocker`, which `doctor` and `build-image` ask; a comment (13.3) |
+| `test/docker.test.mjs` | This milestone's tests: the Dockerfile and the Compose files against `setup.mjs`, 8.3 and 0.2, and `docker compose config` where Docker is installed |
+| `test/live/data-mounts.mjs` | A live check, run by hand in the runner's container: a run's mounts with the data folder at `/data` (row 14) |
+| `test/delivery.test.mjs`, `doctor`, `setup`, `image`, `sandbox`, `whatsapp` | The review's points, the boot check and the machine |
+
+### 13.1 Decisions
+
+**D217. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included** (the plan's rule for this milestone, the outbox's owner in rootless Docker; the second review of milestone 6, smaller point 3).
+*Question:* 8.3 ran the runner as the container's root under rootless Docker, with no `user:`, because only the user that runs Docker could be given `/dev/kvm`. The runner then makes its folders, the outbox among them, as uid 0, and the bridge, which takes the runner's entries only while the outbox is `scooter-runner`'s (D136), looks that user up as 10002 and refuses the outbox for good. Which user owns the runner's folders there, and how does the bridge know?
+*Choice:* `scooter-runner`, because the runner runs as `scooter-runner` under rootless Docker too, as under rootful Docker and natively; the bridge knows it as it always has, by its name, 10002 in the image. Rootless Docker gives each uid of a container a uid of its own on the host, from the range `/etc/subuid` gives the user that runs Docker: 10002 is that range's start plus 10001, 175537 on the Linux machine, whose range starts at 165536. The udev rule `compose.kvm-rootless.yaml` gives, and the README will, lets that uid read and write `/dev/kvm` with an ACL, set again at each of the device's events: `SUBSYSTEM=="misc", KERNEL=="kvm", RUN+="/usr/bin/setfacl -m u:<uid>:rw $devnode"`. The uid comes from Docker's own map, as the user that runs Docker: `docker run --rm --entrypoint awk scooter:local '$1 <= 10002 && 10002 < $1 + $3 { print $2 + 10002 - $1 }' /proc/self/uid_map`.
+*Reason:* the runner is its own unprivileged user everywhere (3.2; ARCHITECTURE.md decision 14), and the bridge's checks hold as they are, with no setting and no second case: nothing in the code changes. The runner as the container's root would be, on the host, the user that runs Docker and its daemon; it would make its files root's, which a later switch to another variant would leave the runner unable to write; and it would make one volume for the whole data folder (D219) unsafe, since the container's root reads every folder in it. An ACL for one host uid is the narrowest grant there is.
+*Cost:* the owner works out a uid with the command above and writes it in the rule; a change of the Docker user's range needs the rule again. systemd's `uaccess`, which Ubuntu gives `/dev/kvm`, sets the users' ACLs afresh at the device's events while a seat has an active session, as on a desktop, which is what 13.4 saw on the Linux machine; the rule's `setfacl` then puts this one back, so a VM starting in that moment, milliseconds after another VM of the machine started or stopped, could fail to start, a setup error that pauses runs for 30 minutes. A server has no seat session, and in the root VM the ACL stayed through every VM (13.5). `MODE="0666"` on `/dev/kvm`, systemd's own default, would leave no such moment, and would give every user of the machine KVM, which Ubuntu chose not to; the owner may choose it. DESIGN.md 8.3 now runs the rootless runner as `scooter-runner`, and gives that uid, not the Docker user, the access of its own.
+
+**D218. pi's VMs run on QEMU's `q35` machine on x86_64** (the plan's rule for this milestone, Scooter's VMs inside the root VM; 12.2).
+*Question:* at gate G2 no VM of Scooter's booted in the root VM: under nested KVM, QEMU's `microvm`, which Gondolin 0.14.0 gives x86_64 with KVM, hangs in the guest kernel's APIC setup with 2 processors. Gate G3 needs a VM to boot in a container in that VM, and the owner may run Scooter in a VM of their own, such as a cloud server.
+*Choice:* the sandbox gives Gondolin `machineType: "q35"` on x86_64, with KVM as under emulation, where Gondolin already chose it; on arm64 Gondolin's own `virt` stands (`machineType()` in `gondolin.mjs`).
+*Reason:* the simplest of the plan's three ways: one option, no probe of which machine boots, and nothing asked of the machine Scooter runs on. On the Linux machine itself `q35` boots sooner than `microvm` with KVM: 1.0 to 1.35 seconds, the fastest of three boots in three runs of the sandbox test, against 1.8 to 2.2 for `microvm` in two runs just before. In the root VM, nested, it booted in 2.0 to 2.5 seconds in the runner's container, under rootful and rootless Docker (13.5). The sandbox tests ran again on the machine with it, all passing.
+*Cost:* `q35` has firmware and a PCI bus that `microvm` hasn't: QEMU needs SeaBIOS and iPXE's ROMs, which Debian's `qemu-system-x86` brought into the image without its recommendations, and Ubuntu's into the native install.
+
+**D219. In Docker, one volume holds the whole data folder** (the plan's rules for this milestone: `build-image` in Docker, and `restore` in Docker).
+*Question:* 3.2 gave each folder a volume of its own, mounted read-only where a service only reads it. `build-image` builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, which must be one file system, and, as root, refuses a `/data` another user can write (D151); with a volume for each folder, `/data` is the container's own file system, read-only in the runner's. And `restore` writes `runner/log/`, which the bridge's container couldn't.
+*Choice:* one named volume, `data`, at `/data` in the bridge's container, the runner's and `build-image`'s, as the plan's example has it. The image's `/data` holds the folders of 3.2 with their owners and modes, those `setup` gives a native install (`dataFolders`), and a new named volume starts as a copy of it, as Docker makes one: `/data` root's, 0755, and each folder its user's. Who reads and writes what is then kept by those owners and modes, as natively: the runner, as `scooter-runner` (D217), reads the datastore by its group and can't read the bridge's, wacli's or the email reader's folder; wacli and the email reader read only their own.
+*Reason:* it settles the plan's three rules at once: the image is renamed within one file system; `restore` runs in a container of the bridge's as natively (D223); and the bridge reaches `runner/runner.sock` in the same volume. A Docker install is then the native install's layout, which `setup`'s and `doctor`'s checks, `setup`'s root test and G2 have checked.
+*Cost:* the read-only mounts were a second wall in Docker. Now the bridge, as root, could write `runner/`, which it only reads, as it can natively, and the runner's container sees the names of the bridge's, wacli's and the email reader's folders, not what they hold. A bind mount of a host folder in the volume's place starts empty, not as a copy of the image's `/data`, and the runner can't make its folders in a `/data` of root's: the README should say to keep the named volume, or to make the folders with their owners first.
+
+**D220. In Docker, `build-image` runs in a container of its own: `docker compose run --rm build-image`, as root and privileged** (the plan's rule for this milestone; 8.3 left the command to when it was first tried).
+*Question:* as root in the runner's container if the builder's chroot works there, otherwise as a one-off with the privileges it needs (row 8).
+*Found:* it doesn't work in the runner's container. As `scooter-runner` the build needs root, or a container runtime, which the container doesn't have. As root (`docker compose run --rm --user root runner build-image`), Gondolin's native builder can't make its cache under the read-only root file system, and the mount of `/proc` its chroot needs is refused there without `CAP_SYS_ADMIN` (13.2).
+*Choice:* a service of its own in `compose.yaml`, `build-image`, from the same image, which only `docker compose run` starts (its profile): `user: root`, `privileged: true`, the data volume and `./config` read-only, and no env file: it reads only `DATA_DIR` and `CONFIG_DIR`, which `compose.yaml` sets. It builds natively, as root, as `sudo scooter build-image` does: in `/data/.image-build/`, given to `scooter-runner`, then renamed into `/data/runner/image/` (D151). In the runner's container `build-image` now says to use it, with exit code 2.
+*Reason:* the privileges Gondolin's own container build takes, `--privileged`, on a container that runs only the build, only when the owner starts it, and is removed afterwards; the runner's service keeps none of them. Fewer, such as `CAP_SYS_ADMIN` with Docker's masks of `/proc` and AppArmor's profile lifted, weren't tried: they differ between rootful and rootless Docker, for a container that runs nothing else.
+*Cost:* under rootful Docker a privileged container is root on the host, with its devices: the build runs Gondolin's builder, then Alpine's shell, npm and git in a chroot, which is what row 8 accepts of a native build as root, and section 9 says so of Docker too. Under rootless Docker it is the user that runs Docker, with no root on the host. The build took 14 to 17 seconds, and the image was 527 MB (13.5).
+
+**D221. The image.**
+*Choice:* 8.3's two stages. `golang:1.27-trixie` builds wacli 0.26.0 with 13.1's command. `node:24-trixie-slim` installs 8.3's packages without their recommendations, QEMU for `TARGETARCH` (`qemu-system-x86` or `qemu-system-arm`), and `qemu-utils`, for `qemu-img`, which Gondolin runs and `doctor` checks. restic 0.19.1 is checked against the checksums milestone 0 took from the release's `SHA256SUMS` (0.2), written in the Dockerfile for each architecture, rather than against a `SHA256SUMS` fetched beside it, which would only say that the two came from the same place. The users are made as `setup` makes them (D212), at 10001 to 10003; the data folder as D219 says; the app is root's, installed with `npm ci --omit=dev --ignore-scripts`; `TZ=UTC`; and the entry point is `tini -- node /app/src/cli.mjs`, with `help` when no command is given. `.dockerignore` lets only `package.json`, the lock file and `src/` into the build, so no env file or data folder is copied in. A test holds the users, the folders and restic's checksums to `setup.mjs` and this file.
+*Reason:* 8.3. tini passes a signal on to Node, the service's main process, so `docker compose kill -s SIGUSR1 bridge` starts a backup (D196); as the container's first process it takes every process of the container with it when it ends, so the runner's QEMU doesn't outlive the runner's container (6.6; 13.5).
+*Found:* the image is 775 MB, with QEMU 10.0.13 and Node 24.22.3. It built in 28 seconds on the Linux machine, wacli's stage in 12.
+
+**D222. `compose.yaml`, and the KVM cases as files of their own.**
+*Choice:* `compose.yaml` has 8.3's two services, from the image it builds, `scooter:local`, each with `restart: unless-stopped`, `no-new-privileges`, `stop_grace_period: 30s`, log rotation of 10 MB × 3 in Docker's `json-file` driver, `DATA_DIR=/data` and `CONFIG_DIR=/config`, its own env file, and no port. The bridge has `hostname: scooter`; the runner `user: scooter-runner`, `read_only: true` with a `tmpfs` at `/tmp`, and `./config` read-only. Alone, it runs pi's VMs under emulation, the third case. The other two are added by naming them in `COMPOSE_FILE` in a `.env` file beside it, which every `docker compose` command there reads: `compose.kvm.yaml`, for rootful Docker, gives the runner `/dev/kvm` and the host's kvm group by its id, `KVM_GID` in `.env`, and stops with a message saying so when that isn't set; `compose.kvm-rootless.yaml`, for rootless Docker, gives it `/dev/kvm`, and holds D217's udev rule. The project is named `scooter`, so the volume is `scooter_data`.
+*Reason:* the plan asks for the three cases as documented variants. Files of their own let the owner choose one without editing a file git tracks, which an upgrade's `git pull` would otherwise meet as a conflict, and a test reads each. git ignores `.env`, as it does the env files.
+*Not changed:* how Docker restarts the runner (D229).
+
+**D223. Backups and restore in Docker** (the plan's rule for this milestone).
+*Choice, and what was found:*
+- The bridge tells a runner at work from one that is gone by connecting to `runner/runner.sock` (D183). In the one volume (D219), from the bridge's container to the runner's, the socket answers, and `restore`, in a container of its own, found the bridge's (13.5).
+- `restore` runs as natively, in a container of the bridge's: `docker compose stop`, then `docker compose run --rm bridge restore [snapshot] [--force]`. It refuses while either service runs, by their sockets, and writes `runner/log/` with the rest, each file to its owner by name (D190), which the image's users make the same uids in every container.
+- The bridge's `hostname: scooter` holds in the containers `docker compose run` makes of it too, so restic's locks and its snapshots name the host `scooter` in every one (5.5).
+- `docker compose kill -s SIGUSR1 bridge` reaches the bridge through tini, and starts a backup (D196).
+*Reason:* the plan's rules. One volume makes Docker's restore the native one.
+
+**D224. `doctor` boots a VM, and runs as the runner's user** (the review of milestone 12, smaller points 2 and 7).
+*Choice:*
+- After the image's check, when QEMU and the image are there and the accelerator can be used, `doctor` boots one VM from the image as a run does, with the accelerator the runner would use, runs `true` in it, and reports how long the boot took; or that it didn't boot, with the fix: nested virtualization for a machine that is itself a VM, or `AGENT_ACCEL=emulation`, or building the image again. The runner's own code does it (`bootCheck` in `gondolin.mjs`), which `src/cli.mjs` hands to `doctor`. Gondolin's home and temporary folder, and the network log, are then a folder of its own in the system's temporary folder, removed afterwards: nothing in the data folder changes, and a runner at work keeps its own folders. The VM sees an empty folder, and reaches no host.
+- Where `scooter-runner` is a user of the machine, `doctor` refuses to run as another, with exit code 2, and says how to run it: `sudo -u scooter-runner scooter doctor`, or in Docker `docker compose run --rm runner doctor`, which runs as that user. Without that user, as in development, it runs as whoever runs it.
+- Its fixes in Docker name the KVM files (D222), `docker compose run --rm build-image` (D220), and the command that sets a folder's owner and mode in a container of the bridge's.
+*Reason:* the review's ways. Opening `/dev/kvm`, which is what 8.4 asks, said "KVM" in the root VM of G2, where no VM booted (D142's "not covered"); and as root, `doctor` reported a fault that wasn't one, and every check saw what root sees.
+*Cost:* `doctor` takes a VM's boot longer: 1 to 2 seconds with KVM, 4 to 5 under emulation (13.5).
+
+**D225. With services, `setup` makes the kvm group when there is none** (the review of milestone 12, smaller point 1).
+*Choice:* `setup`, when it installs the services, makes a system group `kvm` on a machine that has none, then puts `scooter-runner` in it. Without services it makes none, and says pi's VMs will run under emulation, as before (D212).
+*Reason:* the runner's unit names the group (`SupplementaryGroups=kvm`), and systemd refuses to start a unit whose group isn't there (216/GROUP, the review's probe). With the group and no `/dev/kvm`, the runner starts, and falls back to emulation, which `doctor` explains.
+
+**D226. What the bridge takes from the runner's outbox** (the review of milestone 12, smaller points 3, 4 and 5).
+*Choice:*
+- It takes only folders named as `createIds` names them (`isId`), and leaves any other name, logged once, with its first 64 characters and its length. Its record of an entry is named after the entry (D205), so a name of 240 characters made the record's name too long for the system, and every look failed.
+- It removes only `entry.json` from an entry's folder there; in its own outbox, also its `sending.json` and what a write of it cut short left. A folder holding an older bridge's `sending.json` is then left once sent, and logged once, as D205's cost says.
+- While the runner's outbox isn't one to take from, a link or another user's folder, the bridge's own entries still go, `/status`'s reply among them. None of the runner's is taken meanwhile, not even one the bridge has a record of, whose removal would reach through the link. That is logged once, and once again when the outbox can be taken from.
+*Reason:* the review's ways for points 3 and 4, and the choice it offered for point 5. The look no longer fails, with waits that grow, for something only the runner's user can do.
+
+**D227. Catch-up waits for the first check of the pairing** (the review of milestone 12, smaller point 7).
+*Choice:* catch-up, which ran as soon as the channel started, waits for the answer to the first check of the pairing since that start, and then lists only while wacli is paired, as before.
+*Reason:* with an unpaired wacli, every start of the channel, nightly after the backup among them, logged `whatsapp.catchup_failed` beside `whatsapp.not_paired`. *Cost:* a paired channel's first catch-up comes after one `auth status`, a fraction of a second later.
+
+**D228. arm64 isn't verified** (the plan's rule for this milestone).
+*Choice:* the image builds for the machine's architecture by `TARGETARCH`: QEMU's package, restic's file and checksum, and wacli from source; an architecture other than amd64 or arm64 stops the build, saying so. `machineArch`, `qemuProgram` and `machineType` choose by Node's `process.arch`, and the VM image's build file names no architecture (D5).
+*Not verified:* nothing has built or run the image on arm64. The Linux machine has no arm64 emulation for Docker or for QEMU (section 3 of the plan), nor has the root VM. Whether the arm64 image holds everything Gondolin's `virt` machine needs, without the packages' recommendations, is unknown until then. restic's arm64 checksum is the release's (0.2), and wacli's source builds for both (13.1).
+
+**D229. Not changed: how Docker restarts the runner** (found while settling D222).
+*Question:* the runner stops on an error and leans on its service manager to start it again (D93). D207 gave the native unit restarts after 1 minute, then about 5½, then 30, so that a fault that stays after pi has run, such as a disk too full to record the run, spends on OpenRouter at most twice an hour. Compose's `restart: unless-stopped` (8.3) restarts a container after a wait that doubles from 100 milliseconds up to a minute, and starts again from 100 milliseconds once the container has run 10 seconds, by Docker's documentation; this wasn't measured here. A runner that runs pi before it stops has run longer.
+*Found, and left:* such a fault would run pi again every 10 to 20 seconds in Docker. Compose's restart policy has no wait to set. What would settle it: the runner keeps its own waits between starts, in `runner/`, applied where its service manager doesn't wait; or the owner's choice of `restart: on-failure:<n>`, which stops after `n` failures. The plan's milestone 14 has it, among what isn't done, for the owner.
+
+### 13.2 Facts found
+
+- **Gondolin's native build in the runner's container**, as root: under the read-only root file system it can't make its cache, `ENOENT: … mkdir '/root/.cache/gondolin/sandbox-helpers'`, and `mount -t proc` there is refused, `permission denied`. As root in a privileged container, under rootless and rootful Docker, it builds (D220).
+- **`q35` boots sooner than `microvm`** with KVM on the Linux machine, and boots under nested KVM, where `microvm` hangs (D218).
+- **Rootless Docker's uids:** container uid 10002 is host uid 175537 on the Linux machine, the range of `/etc/subuid` starting at 165536; `/dev/kvm` in a container is the host's device, shown as `65534:65534`, and opens by the host's permissions for that uid (D217).
+- **A new named volume** mounted at `/data` starts as a copy of the image's `/data`, owners and modes kept, under rootless Docker too (D219).
+- **`docker compose run`** gives a one-off container of the bridge its `hostname`, `scooter`.
+- **Ubuntu 24.04 in the root VM** restricts unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns = 1`): rootless Docker needs an AppArmor profile for `rootlesskit`, which Docker's documentation gives. The build containers of rootless Docker there timed out asking 10.0.2.3, the root VM's resolver on QEMU's user-mode network, for names; `"dns"` in the Docker user's `daemon.json` set others. Neither is Scooter's, but an owner of rootless Docker on Ubuntu 24.04 meets the first.
+
+### 13.3 The reviews of the pull requests merged before this one
+
+Pull request 13, milestone 12, was approved by its review with seven smaller points. All seven are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | Without a kvm group, the runner's unit can't start, though `setup` says its VMs will run under emulation | Settled (D225), the review's first way: with services, `setup` makes the group. Test in `setup`, with a machine without one |
+| 2 | `sudo scooter doctor`, as root, reports a failure that isn't one | Settled (D224), the review's first way: where `scooter-runner` is there, `doctor` runs as it alone, and says how. Test in `doctor`; and in the runner's container as root, exit code 2 (13.5) |
+| 3 | The bridge names its record after whatever a folder in the runner's outbox is called | Settled (D226), the review's way: only names that are IDs. Test in `delivery`, with the review's 240 characters; it fails on `main` |
+| 4 | In the runner's outbox the bridge still removes `sending.json` | Settled (D226): a predicate for each outbox, so the code says what 5.3 and D205 say. Test in `delivery`; it fails on `main` |
+| 5 | A broken runner's outbox still holds back the bridge's own entries | Settled (D226), the choice the review offered: they go. Test in `delivery`, which also shows a record of a runner's entry left alone meanwhile; it fails on `main` |
+| 6 | Stale words | Settled: the comment in `main.mjs`, `RUNNER_CHECKS` in `doctor.mjs`, and section 14 of DESIGN.md, which now says G2 built the image natively |
+| 7 | For milestone 13: `doctor` says KVM where no VM boots; catch-up fails while wacli is unpaired | Settled: `doctor` boots a VM (D224), and `q35` boots under nested KVM (D218); catch-up waits for the pairing's first check (D227). Tests in `doctor`, `sandbox` and `whatsapp`; the last fails on `main` |
+
+The points earlier reviews and milestones left, as 12.3 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 6, second review, point 3 | The outbox's owner in rootless Docker | Settled (D217): the runner runs as `scooter-runner` there too |
+| Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
+| Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
+| Milestone 10, 10.4 | Backups in Docker: the socket across containers, and `restore` | Run (D223; 13.5) |
+
+### 13.4 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 8.3 left open and the review asked:
+- 3.2: in Docker one volume holds the data folder, and the owners and modes keep each user to its folders, as natively; the runner is `scooter-runner` in every Docker setup (D217, D219). 4.3: where attachments are copied from.
+- 6.6: pi's VMs run on `q35` on x86_64 (D218).
+- 6.12: in Docker, `build-image` runs in a container of its own, privileged (D220).
+- 8.3: the image (D221); one volume, the runner's user, `build-image`'s container, and the KVM files, with the udev rule for scooter-runner's uid under rootless Docker (D217, D219, D220, D222); `restore` in Docker (D223).
+- 8.4: `build-image` in Docker; `doctor` boots a VM and runs as the runner's user (D224).
+- 8.5: `setup` makes the kvm group when it installs the services (D225).
+- 13.4: rootful Docker with `devices` and `group_add` was tried at G3.
+- Section 9: `build-image`'s container under rootful Docker is root on the host, as a native build is; in Docker, the folders are kept apart by their owners and modes (D219, D220).
+- Section 10: Least privilege, Delivery and Config, as this milestone tests them; the Docker files' test.
+- Section 14: KVM in a container, building the image in Docker and natively, the read-only root file system and `docker compose build` were checked; arm64 wasn't (D228).
+
+ARCHITECTURE.md 6 says the same of Docker. The plan's milestone 14 has what this milestone leaves for the README, and D229 among what isn't done.
+
+### 13.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, Docker 29.7.1 rootless with Compose 5.3.1. `462daa1` holds all the code and tests; the commits after it change the documents only.
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, on a clean clone of the branch from GitHub at `462daa1` | 758 tests: 710 pass, none fail. 48 skip themselves: 36 need the image, 8 need root, and 4 need root and `SCOOTER_ROOT_TESTS=1`. `docker compose config` reads each combination of the Compose files |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 760 tests: 748 pass, none fail, in 116 seconds. The 12 that need root skip themselves. Boots with KVM on `q35`: 1.4 to 1.9 seconds under the suite's load. No QEMU left |
+| The sandbox test's boot, `microvm` then `q35`, with KVM | `microvm`: 1.8 to 2.2 seconds in two runs; `q35`: 1.0 to 1.35 in three (D218) |
+| The root-test command of section 3 of the plan, on a second clean clone at `462daa1`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 758 tests, 696 pass, none fail. 62 skip themselves: 36 need the image, 14 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 1 Docker. `setup`'s root test runs, and passes |
+| The new tests against the code of `main` | The three of `delivery` fail against `main`'s `outbox.mjs`, and that of `whatsapp` against its `whatsapp.mjs`. Those of `doctor`, `setup` and the sandbox need functions `main` hasn't |
+
+**The checks of the plan on the Linux machine**, with rootless Docker, from the working tree at `462daa1`, with dummy env files (an owner's number, and a well-formed key OpenRouter doesn't know):
+
+| Check | What was run | What happened |
+|---|---|---|
+| `docker compose build` succeeds | `docker compose build` | 28 seconds the first time, wacli's stage 12; 775 MB. restic's checksum `OK`. QEMU 10.0.13 |
+| The VM image | `docker compose run --rm build-image` | 14 seconds, 527 MB, pi 1.5.2, into `/data/runner/image`. As root in the runner's container: refused (13.2); as `scooter-runner`: exit code 2, saying to use `build-image`'s container |
+| Both services start | `docker compose up -d` | Both up. The runner opened the sandbox under emulation (`kvm: ENOENT`), wrote `status.json`, and sent the emulation notice, which the bridge took from the outbox, `scooter-runner`'s, and held for the pairing. The bridge waited for `pair`, with no `whatsapp.catchup_failed` (D227) |
+| `doctor` reports emulation, and why | `docker compose run --rm runner doctor` | Exit code 0: `warn accelerator: emulation, since KVM can't be used`, with the fix naming `compose.kvm.yaml` and `compose.kvm-rootless.yaml`; `VM boot: a VM booted in 4.3 seconds, with emulation`; the folders, the env files (none, the settings in the environment), OpenRouter and its 6 endpoints that keep no data. With `--user root`: exit code 2, saying to run it as `scooter-runner` |
+| wacli and the email reader run as their users | `docker compose run -d --rm bridge pair`, then `docker top`; the bridge as a one-off with email on, towards an address that never answers, then `docker top` | `wacli auth` ran as uid 10001, and showed a QR code, which nobody scanned; the reader, `node --disable-sigusr1 /app/src/mail/reader.mjs run`, as uid 10003 |
+| …and can't read the other folders | Node, as `scooter-wacli` and as `scooter-mail` in the bridge's container, reading `datastore`, `agents`, `agents/lifelog/state.json`, `exchange`, `exchange/outbox`, `runner`, `runner/status.json`, `bridge`, `bridge/state.json`, and the other's folder | `EACCES` for every one; each reads its own. As `scooter-runner`: the datastore read, `bridge/`, its state, `wacli/` and `mail/` refused |
+| The runner with its read-only root file system | A message stored with the bridge's store, then the runner's log | The runner ran pi in a VM, booted in 4.4 seconds under emulation; pi's request reached `openrouter.ai/api/v1/messages`, which answered 401; the run was a setup error, runs paused, no attempt counted, and the notice went to the outbox. The network log had its three lines. `/app` and `/etc` refused a write; `/tmp` took one |
+| pi reaches OpenRouter, and `https://example.com` is refused | `docker compose run --rm -v ./test:/app/test:ro -v ./config:/app/config:ro -e SCOOTER_TEST_IMAGE=/data/runner/image --entrypoint node runner /app/test/live/openrouter.mjs` | `all as it should be`, exit code 0: on both routes OpenRouter answered 401, the runner took it as a setup error and counted no attempt, and `curl https://example.com/` in a VM was refused by the policy |
+| The mounts with the data under `/data` (row 14) | With the runner stopped, `docker compose run --rm -v ./test:/app/test:ro --entrypoint node runner /app/test/live/data-mounts.mjs` | Every line ok: in the VM `/data` held `agents` and `datastore` alone, and wasn't a mount; `runner`, `exchange`, `bridge`, `wacli`, `mail` and `/config` weren't there; `sessions/` wasn't there and couldn't be made; the datastore and the agent's folder were read-only; `run/session/` took a write |
+| Backups in Docker (D223) | A local restic repository mounted into the bridge's container by a Compose file of the check's own; `backup-init`; `docker compose kill -s SIGUSR1 bridge`; `snapshots`; `restore` with the services up, then stopped, without and with `--force` | The signal reached the bridge through tini: it stopped WhatsApp, backed up (`backup` and `forget`, exit codes 0), started it again, snapshot `5950bedf`, made by `root@scooter`. `restore` refused while the bridge ran, naming its socket, and a folder that wasn't empty, both with 2; `--force` restored the snapshot, `runner/log/` with it, its file `scooter-runner`'s, and removed a file made since. From the bridge's container, `runner/runner.sock` answered while the runner ran |
+
+**Gate G3**, in a throwaway Ubuntu 24.04 VM on the Linux machine: the official cloud image, checked against its `SHA256SUMS`, on a fresh 40 GB disk, with KVM, `-cpu host` (an Intel Core Ultra 7 155H, nested virtualization on), 4 processors and 8 GB, user-mode networking, SSH on `127.0.0.1` only; SSH answered 10 seconds after the start. Docker 29.10.0 and Compose 5.8.0 from Docker's own repository, with its rootless extras. The code was cloned from the pull request's branch at `462daa1`, and built there.
+
+| Case | What was run | What happened |
+|---|---|---|
+| Rootful Docker: `devices`, `user` and `group_add` | `.env` with `COMPOSE_FILE=compose.yaml:compose.kvm.yaml` and `KVM_GID=993`; `sudo docker compose build` (39 seconds); `sudo docker compose run --rm build-image` (16 seconds); `up -d`; `doctor`; a message stored | The runner, uid 10002 with the group 993, opened the sandbox with KVM. `doctor`: every check ok, `KVM`, `a VM booted in 2.1 seconds, with KVM`, exit code 0. The run: its VM up in 2.35 seconds with KVM, pi's request answered 401, a setup error. QEMU ran as uid 10002. Killing a runner's container while its VM booted left no QEMU |
+| Rootless Docker, with the udev rule | A user of its own with rootless Docker, `COMPOSE_FILE=compose.yaml:compose.kvm-rootless.yaml`, `AGENT_ACCEL=kvm`; `docker compose build` (31 seconds); the uid by the command of `compose.kvm-rootless.yaml`, 175537; the rule, `udevadm trigger`; `build-image` (17 seconds); `up -d`; `doctor`; a message stored | `getfacl /dev/kvm` listed `user:175537:rw-`. The runner, `scooter-runner` with no other group, opened the sandbox with KVM. `doctor`: every check ok, `a VM booted in 2.0 seconds, with KVM`, exit code 0. The run: its VM up in 2.46 seconds with KVM, 401, a setup error; the outbox was `scooter-runner`'s, and the bridge took the notice. The ACL stayed through every VM. With it removed, `doctor` failed the forced KVM, with the fix of D224, and `udevadm trigger` put it back. Killing a runner's container while its VM booted left no QEMU |
+
+The 3-second mark isn't a pass mark there (section 6 of the plan): nested, the boots took 2.0 to 2.5 seconds, under 3 anyway. Under emulation in the root VM, `doctor`'s boot took 4.3 seconds. The VM was then shut down and its disk deleted; no QEMU of `agentw` was left.
+
+The tests the plan asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| The checks of the milestone, on the Linux machine | By hand, above; the Docker files themselves in `docker.test.mjs`, which reads them against `setup.mjs`, 8.3 and 0.2, and has `docker compose config` read each combination |
+| The mounts with the data under `/data` (row 14) | `test/live/data-mounts.mjs`, run in the runner's container |
+| Gate G3 | Above |
+
+Beyond those: the review's points, in `delivery`, `doctor`, `setup` and `whatsapp`; the boot check and `q35`, in `sandbox`; `build-image` in the runner's container, in `image`.
+
+Not verified:
+- **arm64** (D228), and Docker Desktop, OrbStack and Colima, deferred with macOS.
+- **Docker's restart waits** for a runner that keeps stopping (D229): from Docker's documentation, not measured.
+- **The moment `uaccess` leaves** on a desktop (D217): a VM starting while another VM's event resets the ACLs. The Linux machine has a seat session, but no root to install the rule; the root VM has none.
+- **A real WhatsApp pairing and a real bucket** in the containers (gate G4): `pair` showed a QR code that nobody scanned; the backup went to a repository in a folder.
+- **The install on the machine Scooter will live on**, which stays with the owner (section 6 of the plan).

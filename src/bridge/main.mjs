@@ -67,10 +67,10 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   // development.
   ensureDir(paths.dataDir, { mode: 0o755 })
   ensureDir(paths.bridge, { mode: 0o700 })
-  // The exchange is the runner's (3.2), and the bridge writes its own replies into the outbox
-  // there, and its `backup.lock` into `locks/`. Made here, if they are missing, with the runner's
-  // owner, so that a bridge that writes there first doesn't leave the runner a folder it can't
-  // write.
+  // The exchange is the runner's (3.2): the bridge takes the runner's entries from the outbox
+  // there, and writes its `backup.lock` into `locks/`; its own replies go to `bridge/outbox/`
+  // (D205). Made here, if they are missing, with the runner's owner, so that a bridge that starts
+  // first doesn't leave the runner a folder it can't write.
   for (const folder of [paths.exchange, paths.outbox, paths.locks]) ensureDir(folder, { mode: 0o700, owner: runnerUser })
   const instance = await holdInstance(paths.bridgeSocket, 'bridge')
   try {

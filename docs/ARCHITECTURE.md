@@ -178,7 +178,7 @@ Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter b
 - **Acceleration:** KVM when the runner can open `/dev/kvm`, otherwise emulation, which is announced. A forced accelerator that can't be used stops the runner.
 - **Lifetime:** the runner closes the VM when pi exits or the timeout passes. Nothing inside it survives.
 - **Limits:** the sandbox keeps the start of pi's answer and the end of its errors, and closes the VM of a run that writes more, or makes more files, than a run may, so nothing pi does can stop the runner or fill the disk the bridge writes on (6.6).
-- **The image:** `build-image` builds it, natively as root or in a container, in a folder beside the runner's, records what it holds beside it, and renames it into the runner's folder when it is complete. The runner refuses to start with a missing image, one built for another pi, or one that doesn't know the owner's time zone (6.12).
+- **The image:** `build-image` builds it, natively as root or in a container (in Docker, a privileged container of its own), in a folder beside the runner's, records what it holds beside it, and renames it into the runner's folder when it is complete. The runner refuses to start with a missing image, one built for another pi, or one that doesn't know the owner's time zone (6.12).
 
 The runner reaches it through one small interface: run this command, with these mounts, this environment, this timeout and this policy, and return the exit code and output. Tests use a fake that runs a stub of pi as a local process.
 
@@ -283,7 +283,7 @@ The bridge backs up with restic to an S3-compatible bucket: nightly at `BACKUP_T
 
 ### 3.3 Files
 
-Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
+Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker, where one volume holds it, and the owners and modes below keep the folders apart as they do natively (`docs/DECISIONS.md`, D219).
 
 | Folder | Owner and mode | Bridge | Runner | pi | wacli | Email reader |
 |---|---|---|---|---|---|---|
@@ -464,11 +464,12 @@ What the two share, the batches of one day, their time and sessions, is in `src/
 
 | | Native | Docker Compose | Development |
 |---|---|---|---|
-| Set up by | `sudo scooter setup` | `docker compose build` | nothing |
+| Set up by | `sudo scooter setup` | `docker compose build`; the image's `/data` makes the data volume's folders | nothing |
 | Services | `scooter-bridge.service` as root; `scooter-runner.service` as `scooter-runner` | `bridge` and `runner`, one image | two processes run by hand |
-| Users | created by `setup` | defined in the image, with fixed uids | the developer's own; user switching is skipped with one warning |
-| Data and settings | `/var/lib/scooter`, `/etc/scooter` | volumes; `./config` bind-mounted | `DATA_DIR`, `CONFIG_DIR` |
-| KVM | the `kvm` group, through `SupplementaryGroups` | `/dev/kvm` passed in: by group on rootful Docker, by a udev rule on rootless | the developer's `kvm` group |
+| Users | created by `setup` | defined in the image, with fixed uids; the runner is `scooter-runner` in every case | the developer's own; user switching is skipped with one warning |
+| Data and settings | `/var/lib/scooter`, `/etc/scooter` | one volume for the data folder, kept apart by owners and modes as natively; `./config` bind-mounted; an env file for each service | `DATA_DIR`, `CONFIG_DIR` |
+| KVM | the `kvm` group, through `SupplementaryGroups` | `/dev/kvm` passed in: by group on rootful Docker, by a udev rule for the runner's host uid on rootless, each a Compose file of its own | the developer's `kvm` group |
+| The VM image | `sudo scooter build-image` | `docker compose run --rm build-image`, a privileged container of its own | `scooter build-image`, with Docker or Podman |
 | VMs die with the runner | `KillMode=control-group` | the runner is the container's main process | not guaranteed |
 
 In every mode there are no published ports.
