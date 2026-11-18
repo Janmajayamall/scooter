@@ -77,8 +77,13 @@ export const COMMANDS = {
   rebuild: {
     side: 'runner',
     usage: 'rebuild <agent>',
-    where: 'runner',
+    where: 'runner, with the runner stopped',
     summary: 'Rebuild an agent\'s views from the whole datastore',
+    // Its batches run in Gondolin VMs, as the runner's do (6.10).
+    load: async () => {
+      const [{ runRebuild }, { openGondolinSandbox }] = await Promise.all([import('./runner/rebuild.mjs'), import('./runner/sandbox/gondolin.mjs')])
+      return ({ args, settings, stdout, stderr }) => runRebuild({ args, settings, stdout, stderr, openSandbox: openGondolinSandbox })
+    },
   },
 }
 

@@ -17,6 +17,12 @@
 // When even one item makes the prompt too long, it is fitted, in this order: the oldest lines of
 // context are left out; if the item is too long on its own, its texts are cut, followed by where
 // the whole of each is; and, last, the prompt is cut at the limit.
+//
+// A batch is drawn from a **lane**: `{ cursor, retry, failed }`, a cursor, the items waiting to be
+// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own
+// (6.3); a backfill from its own, with `skipped` as `failed` (6.11); and a rebuild from a state it
+// keeps in memory (6.10). `upTo` is the last line a lane's work reaches: the newest line for live
+// runs, and the `seq` a replay stops at (`replay.mjs`).
 
 import { limits } from '../common/limits.mjs'
 import { fitToLimit, promptHeader, renderBatchPrompt, renderTaskPrompt } from './prompt.mjs'
@@ -38,10 +44,10 @@ function largest(low, high, ok) {
 // The items the batch may take, in the order it takes them, at most `BATCH_MAX_ITEMS`: due retries,
 // then new work items. Each is `{ seq, origin, attempt }`: `origin` is `retry` or `new`, and
 // `attempt` is the attempt this run would be. Also returns `fresh`, every work item after the
-// cursor.
-export function selectCandidates({ agent, state, index, now }) {
-  const retries = dueRetries(state.retry, index, agent.reads, now).map(entry => ({ seq: entry.seq, origin: 'retry', attempt: entry.attempts + 1 }))
-  const fresh = workItemsAfter(index, agent.reads, state.cursor)
+// cursor, up to `upTo`.
+export function selectCandidates({ agent, lane, index, now, upTo = index.lastSeq }) {
+  const retries = dueRetries(lane.retry, index, agent.reads, now).map(entry => ({ seq: entry.seq, origin: 'retry', attempt: entry.attempts + 1 }))
+  const fresh = workItemsAfter(index, agent.reads, lane.cursor, upTo)
   const news = fresh.map(seq => ({ seq, origin: 'new', attempt: 1 }))
   return { candidates: [...retries, ...news].slice(0, limits.BATCH_MAX_ITEMS), fresh }
 }
@@ -51,9 +57,10 @@ export function selectCandidates({ agent, state, index, now }) {
 //   { items: [{ seq, origin, attempt }], context: [seq], covered, newest }
 //
 // `items` are in `seq` order, with those brought in by an edit or deletion (`origin` `retry` or
-// `failed`). `context` is in `seq` order. `covered` is where the cursor goes when the run succeeds,
-// and `newest` the newest item, which an answer's plain text is `about` (6.7).
-export function assembleBatch({ agent, state, index }, candidates, fresh) {
+// `failed`). `context` is in `seq` order. `covered` is where the lane's cursor goes once the run is
+// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`
+// (6.7).
+export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, candidates, fresh) {
   const items = new Map(candidates.map(candidate => [candidate.seq, candidate]))
   for (const candidate of candidates) {
     const { line } = index.get(candidate.seq)
@@ -61,16 +68,16 @@ export function assembleBatch({ agent, state, index }, candidates, fresh) {
     const target = line.target
     const entry = index.get(target)
     if (items.has(target) || !entry || !isWorkItem(entry.line, agent.reads)) continue
-    const retry = state.retry.find(other => other.seq === target)
+    const retry = lane.retry.find(other => other.seq === target)
     if (retry) {
       items.set(target, { seq: target, origin: 'retry', attempt: retry.attempts + 1 })
-    } else if (state.failed.some(other => other.seq === target)) {
+    } else if (lane.failed.some(other => other.seq === target)) {
       items.set(target, { seq: target, origin: 'failed', attempt: 1 })
     }
   }
 
   const taken = candidates.filter(candidate => candidate.origin === 'new').length
-  const covered = taken < fresh.length ? fresh[taken] - 1 : index.lastSeq
+  const covered = taken < fresh.length ? fresh[taken] - 1 : upTo
   const sorted = [...items.values()].sort((a, b) => a.seq - b.seq)
   const context = []
   for (let seq = sorted[0].seq; seq <= covered; seq++) {
@@ -78,7 +85,7 @@ export function assembleBatch({ agent, state, index }, candidates, fresh) {
     if (!entry || items.has(seq)) continue
     if (entry.line.dir === 'out' || entry.line.kind === 'reaction') context.push(seq)
   }
-  return { items: sorted, context, covered: Math.max(covered, state.cursor), newest: sorted.at(-1).seq }
+  return { items: sorted, context, covered: Math.max(covered, lane.cursor), newest: sorted.at(-1).seq }
 }
 
 // The largest cap on the item's texts at which the prompt fits, given that it fits at 0. `render`
@@ -126,6 +133,25 @@ export function headerFor({ agent, paths, now, timeZone, homeCurrency, internet 
   })
 }
 
+// The batch of the most of `candidates`, taken in order, whose prompt fits, and its prompt; at
+// least the first, fitted as it must be. `viewOf(batch)` is how its prompt shows it: `{ index,
+// paths, agentName, now, timeZone, header }`. Returns `{ batch, prompt }`.
+export function fitBatch({ agent, lane, index, upTo = index.lastSeq, candidates, fresh, viewOf }) {
+  let best = null
+  for (let count = 1; count <= candidates.length; count++) {
+    const batch = assembleBatch({ agent, lane, index, upTo }, candidates.slice(0, count), fresh)
+    const prompt = renderBatchPrompt(batch, viewOf(batch))
+    if (!fits(prompt)) break
+    best = { batch, prompt }
+  }
+  if (best) return best
+
+  const batch = assembleBatch({ agent, lane, index, upTo }, candidates.slice(0, 1), fresh)
+  const view = viewOf(batch)
+  const prompt = fitOne(batch, view) ?? fitToLimit(renderBatchPrompt(batch, view, { contextKeep: 0, itemCap: 0 }))
+  return { batch, prompt }
+}
+
 // The next batch of messages and its prompt, or null when there is nothing to give the agent.
 // Returns `{ batch, prompt }`, with the batch as `assembleBatch` gives it.
 //
@@ -134,22 +160,10 @@ export function headerFor({ agent, paths, now, timeZone, homeCurrency, internet 
 //   the VM (6.6).
 // - `now`, `timeZone`, `homeCurrency`, `internet`: what the prompt's first line says.
 export function buildBatch({ agent, state, index, paths, now, timeZone, homeCurrency, internet }) {
-  const { candidates, fresh } = selectCandidates({ agent, state, index, now })
+  const { candidates, fresh } = selectCandidates({ agent, lane: state, index, now })
   if (candidates.length === 0) return null
   const view = { index, paths, agentName: agent.name, now, timeZone, header: headerFor({ agent, paths, now, timeZone, homeCurrency, internet }) }
-
-  let best = null
-  for (let count = 1; count <= candidates.length; count++) {
-    const batch = assembleBatch({ agent, state, index }, candidates.slice(0, count), fresh)
-    const prompt = renderBatchPrompt(batch, view)
-    if (!fits(prompt)) break
-    best = { batch, prompt }
-  }
-  if (best) return best
-
-  const batch = assembleBatch({ agent, state, index }, candidates.slice(0, 1), fresh)
-  const prompt = fitOne(batch, view) ?? fitToLimit(renderBatchPrompt(batch, view, { contextKeep: 0, itemCap: 0 }))
-  return { batch, prompt }
+  return fitBatch({ agent, lane: state, index, candidates, fresh, viewOf: () => view })
 }
 
 // The prompt of a scheduled or `once` task (6.5). No messages, and no context.

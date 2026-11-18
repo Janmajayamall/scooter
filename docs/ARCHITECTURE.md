@@ -454,8 +454,10 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 Both replay history through the agent, one of the owner's days at a time, with the prompt's `Now:` set to the time of the batch, and without sending anything.
 
-- **`rebuild`** runs with the runner stopped. It empties the views, memory and sessions, and replays the whole datastore up to the newest `seq` at the time it started.
-- **A backfill** fills one new view. It runs inside the runner, only when nothing live is waiting, with its own cursor and retry list, and may change only the paths it names and the day pages.
+- **`rebuild`** runs with the runner stopped, and holds the runner's socket, so no runner starts during it. It tags the last commit, empties the views, memory and sessions, replays the whole datastore up to the newest `seq` at the time it started, keeping its progress in memory, and commits the result as one commit (`src/runner/rebuild.mjs`).
+- **A backfill** fills one new view. It runs inside the runner, only when nothing live is waiting, with its own cursor and retry list, and may change only the paths it names and the day pages (`src/runner/backfill.mjs`).
+
+What the two share, the batches of one day, their time and sessions, is in `src/runner/replay.mjs`, and each batch is a run like a live one (`run.mjs`), which sends nothing.
 
 ## 6. Deployment on Linux
 

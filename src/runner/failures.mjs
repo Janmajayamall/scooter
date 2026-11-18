@@ -15,7 +15,8 @@
 // |         | answering, or it left an unexpected file, or    | due again a minute later            |
 // |         | files that couldn't be checked or committed,    |                                     |
 // |         | or wrote too much, or answered at too great a   |                                     |
-// |         | length                                          |                                     |
+// |         | length, or a backfill's batch changed what it   |                                     |
+// |         | may not                                         |                                     |
 //
 // Neither a setup error nor an outage counts an attempt: the batch's items wait in `retry` for the
 // next try, with their counts unchanged, so nothing they hold up ends in `failed`.
@@ -111,13 +112,14 @@ export function openRouterMessage(stderr, status) {
 
 // Why a run failed. `result` is what the sandbox returned, or `{ error }` when it couldn't run
 // the command; `unexpected` the file a successful pi left that git wouldn't record, or null;
+// `outside` the file a backfill's batch changed that it may not change (6.11), or null;
 // `filesError` the error that checking or committing what a successful pi left met, or null;
 // `answer` what `lastOpenRouterAnswer` found. Returns `{ cause, reason, status }`: `cause` is
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
 // `status` OpenRouter's last status or null.
 //
-// An unexpected file, or an error in checking or committing the files, is pi's own failure,
-// whatever the log says: it is what pi left that failed the run.
+// An unexpected file, a change a backfill may not make, or an error in checking or committing the
+// files, is pi's own failure, whatever the log says: it is what pi left that failed the run.
 //
 // The reason is OpenRouter's error whenever its last answer was one (6.9), in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
@@ -126,7 +128,7 @@ export function openRouterMessage(stderr, status) {
 //
 // A sandbox that couldn't run pi at all, such as a VM that doesn't boot, is a setup error: it is
 // the machine's, not the message's, and trying every message four times wouldn't help.
-export function failureCause({ result, unexpected = null, filesError = null, answer = null }) {
+export function failureCause({ result, unexpected = null, outside = null, filesError = null, answer = null }) {
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
   // What pi did, whatever OpenRouter answered: its VM was closed for writing too much, or its
@@ -134,6 +136,7 @@ export function failureCause({ result, unexpected = null, filesError = null, ans
   if (result.wroteTooMuch) return { cause: 'other', reason: 'pi wrote more than a run may', status }
   if (result.code === 0 && result.stdoutCut) return { cause: 'other', reason: "pi's answer was too long", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
+  if (result.code === 0 && outside !== null) return { cause: 'other', reason: shortReason(`changed ${outside}, which the backfill may not change`), status }
   if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 
   // A request the network policy refused at OpenRouter: pi's first, which no try can mend, is a
@@ -161,7 +164,7 @@ export function failureCause({ result, unexpected = null, filesError = null, ans
 // A log that can't be read counts as one with no answer from OpenRouter in it, so the run is pi's
 // own failure: the run is still recorded and its attempt counted, which an error here would keep
 // from happening, and the runner, stopped, would run the batch again at its next start.
-export function readFailureCause({ paths, result, unexpected = null, filesError = null, startedAt, endedAt, log }) {
+export function readFailureCause({ paths, result, unexpected = null, outside = null, filesError = null, startedAt, endedAt, log }) {
   const answers = openRouterAnswers()
   let answer = null
   try {
@@ -170,7 +173,7 @@ export function readFailureCause({ paths, result, unexpected = null, filesError 
   } catch (error) {
     log?.warn('runner.netlog_unreadable', errorFields(error))
   }
-  return failureCause({ result, unexpected, filesError, answer })
+  return failureCause({ result, unexpected, outside, filesError, answer })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -201,11 +204,17 @@ function withoutPause(state) {
   return rest
 }
 
-// What every run does to the state, whatever it ran: `lastRun`, and the pause.
+// What every run does to the pause, whatever it ran: a run that got through to OpenRouter, a
+// success or a failure of pi's own, ends it; a setup error or an outage starts or continues one.
+export function pauseAfterRun(state, outcome, { now }) {
+  if (outcome.ok || outcome.cause === 'other') return withoutPause(state)
+  return { ...state, paused: pauseAfter(state.paused, { cause: outcome.cause, reason: outcome.reason, now }) }
+}
+
+// What every live run does to the state, whatever it ran: `lastRun`, and the pause. A backfill's
+// batches leave `lastRun` alone (the plan's rule for milestone 4).
 function afterRun(state, outcome, { now, startedAt, durationMs, seqs }) {
-  const next = { ...state, lastRun: { at: isoSeconds(startedAt), ok: outcome.ok, seqs, durationMs } }
-  if (outcome.ok || outcome.cause === 'other') return withoutPause(next)
-  return { ...next, paused: pauseAfter(state.paused, { cause: outcome.cause, reason: outcome.reason, now }) }
+  return pauseAfterRun({ ...state, lastRun: { at: isoSeconds(startedAt), ok: outcome.ok, seqs, durationMs } }, outcome, { now })
 }
 
 // Whether a failed run is the first of a row: the run before it got through, or there was none.
@@ -229,11 +238,21 @@ export function isFirstFailure(state) {
 // its newest `FAILED_KEEP`. The cursor moves past the batch in every case: what the batch didn't
 // handle waits in `retry`, which comes first in the next batch.
 export function settleBatch(state, batch, outcome, { now, startedAt, durationMs }) {
-  const at = isoSeconds(now)
   const seqs = batch.items.map(item => item.seq)
-  const inBatch = new Set(seqs)
-  const retry = state.retry.filter(entry => !inBatch.has(entry.seq))
-  const failed = state.failed.filter(entry => !inBatch.has(entry.seq))
+  const { lane, givenUp } = settleLane({ cursor: state.cursor, retry: state.retry, failed: state.failed }, batch, outcome, { now })
+  const next = afterRun(state, outcome, { now, startedAt, durationMs, seqs })
+  return { state: { ...next, cursor: lane.cursor, retry: lane.retry, failed: lane.failed.slice(-limits.FAILED_KEEP) }, givenUp }
+}
+
+// What a batch's outcome does to its lane's items, as `settleBatch` describes it: a lane is
+// `{ cursor, retry, failed }` (`batch.mjs`), with `failed` as `[{ seq, at, reason }]`. Returns
+// `{ lane, givenUp }`, the lane afterwards and the items that ran out of attempts, in order.
+// Live runs and a backfill's batches settle their own lanes so (6.8, 6.9, 6.11).
+export function settleLane(lane, batch, outcome, { now }) {
+  const at = isoSeconds(now)
+  const inBatch = new Set(batch.items.map(item => item.seq))
+  const retry = lane.retry.filter(entry => !inBatch.has(entry.seq))
+  const failed = lane.failed.filter(entry => !inBatch.has(entry.seq))
   const givenUp = []
 
   const giveUp = (seq, reason) => failed.push({ seq, at, reason })
@@ -246,26 +265,19 @@ export function settleBatch(state, batch, outcome, { now, startedAt, durationMs 
     }
   }
 
-  let next
   if (outcome.ok) {
     for (const item of batch.items) {
       if (outcome.failed.has(item.seq)) giveUp(item.seq, outcome.failed.get(item.seq))
       else if (!outcome.done.has(item.seq)) tryAgain(item, 'not reported')
     }
-    next = afterRun(state, outcome, { now, startedAt, durationMs, seqs })
   } else if (outcome.cause === 'other') {
     for (const item of batch.items) tryAgain(item, outcome.reason)
-    next = afterRun(state, outcome, { now, startedAt, durationMs, seqs })
   } else {
-    next = afterRun(state, outcome, { now, startedAt, durationMs, seqs })
     for (const item of batch.items) retry.push({ seq: item.seq, attempts: item.attempt - 1, due: at, reason: outcome.reason })
   }
 
   retry.sort((a, b) => a.seq - b.seq)
-  return {
-    state: { ...next, cursor: Math.max(state.cursor, batch.covered), retry, failed: failed.slice(-limits.FAILED_KEEP) },
-    givenUp,
-  }
+  return { lane: { cursor: Math.max(lane.cursor, batch.covered), retry, failed }, givenUp }
 }
 
 // The state after a scheduled or `once` task (the plan's rule for milestone 4). `task` is

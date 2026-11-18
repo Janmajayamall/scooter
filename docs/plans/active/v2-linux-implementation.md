@@ -454,6 +454,10 @@ Use the prompt shown in 6.5 as the first expected output.
 - The final `bridge.env.example` and `runner.env.example`.
 - "Check on the first real run" in the README: the items of gate G4.
 
+**Rules:**
+- **What milestone 9 left for the README** (`docs/DECISIONS.md`, milestone 9). `rebuild` refuses to start while the runner runs, which it tells by `runner/runner.sock`, so the README says to stop the runner's service first, and the bridge's may keep running. A rebuild isn't resumed: cut short, by a stop or a closed terminal, it starts from the beginning when run again, and spends again on OpenRouter what it had done. So the README says to run it where closing a terminal doesn't stop it, such as in `tmux` or with `docker compose run -d`, says that it tags the last commit before it (`before-rebuild-<UTC time>`), and how to go back to that commit. It also says that uncommitted changes in `views/` and `memory/` are thrown away by a rebuild, as by a runner's start (D89).
+- **A request the agent makes itself can decide the cause of a failure** (the review of milestone 8, smaller point 1; `docs/DECISIONS.md`, D160). No milestone changes this; list it among what isn't done, for the owner.
+
 **Final check:**
 1. Re-read DESIGN.md section by section and tick off every requirement. List anything not done in `docs/DECISIONS.md`.
 2. Run `npm test` from a clean checkout on the Linux machine, then the root tests, the sandbox tests and the live check.

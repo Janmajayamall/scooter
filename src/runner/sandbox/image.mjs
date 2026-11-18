@@ -26,7 +26,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { checkOwnFolder, ensureDir, removeHandOff, removeTree, writeFileAtomic } from '../../common/files.mjs'
-import { holdInstance } from '../../common/instance.mjs'
+import { RUNNER_SOCKET_HOLDERS, holdInstance } from '../../common/instance.mjs'
 import { limits } from '../../common/limits.mjs'
 import { createLog, errorFields } from '../../common/log.mjs'
 import { makePaths } from '../../common/paths.mjs'
@@ -514,10 +514,10 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
 
   let instance
   try {
-    instance = await holdInstance(paths.runnerSocket, 'runner')
+    instance = await holdInstance(paths.runnerSocket, RUNNER_SOCKET_HOLDERS)
   } catch (error) {
     if (refusedWriting(error)) throw cantWrite(paths.runner, error)
-    throw new ImageError(`build-image can't run while the runner does (${error.message}): stop the runner first`)
+    throw new ImageError(`build-image can't run while the runner, a rebuild or another build-image does (${error.message}): stop the runner first`)
   }
   try {
     const staging = canWrite(paths.dataDir, () => openStaging(paths, isRoot))

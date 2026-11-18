@@ -22,7 +22,7 @@
 // (`sandbox/gondolin.mjs`). The tests give the fake one.
 
 import { createIds, ensureDir } from '../common/files.mjs'
-import { holdInstance } from '../common/instance.mjs'
+import { RUNNER_SOCKET_HOLDERS, holdInstance } from '../common/instance.mjs'
 import { limits } from '../common/limits.mjs'
 import { lockExists, releaseLock } from '../common/locks.mjs'
 import { createLog, errorFields } from '../common/log.mjs'
@@ -32,17 +32,41 @@ import { createProc } from '../common/proc.mjs'
 import { RunnerStatusError, readRunnerStatus } from '../common/runnerstatus.mjs'
 import { systemClock } from '../common/time.mjs'
 import { ensureAgentDir } from './agentdir.mjs'
+import { backfillJob, finishBackfill } from './backfill.mjs'
 import { buildBatch, buildTaskPrompt } from './batch.mjs'
 import { handleCommands } from './commands.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
 import { loadProtocol } from './prompt.mjs'
+import { removeReplaySessions } from './replay.mjs'
 import { performRun } from './run.mjs'
 import { SandboxSetupError } from './sandbox/index.mjs'
 import { loadState, saveState, startupState } from './state.mjs'
 import { emulationNotice, runnerStatus, writeRunnerStatus } from './status.mjs'
 import { nextAction } from './triggers.mjs'
+
+// Makes the data folder's folders that the runner uses, if they are missing: `setup` makes them in
+// an install (8.4), so this is for development. Then holds `runner/runner.sock`, for a runner or a
+// rebuild, and returns what `holdInstance` returns: nothing else of the runner's may run on the
+// data folder meanwhile. It throws if something else holds it.
+export async function holdRunnerFolder(paths) {
+  ensureDir(paths.dataDir, { mode: 0o755 })
+  for (const folder of [paths.runner, paths.agents, paths.exchange, paths.locks]) ensureDir(folder, { mode: 0o700 })
+  return holdInstance(paths.runnerSocket, RUNNER_SOCKET_HOLDERS)
+}
+
+// Readies the agent's folder for runs, as a start does, before anything runs there (D89): frees
+// what pi wrote that a crash or a stop left taking room, before it makes any folder; creates the
+// folder if it is new (6.2); removes the lock files a git that was killed left; and throws away
+// the changes of a run that a crash or a stop cut short, so the next run starts from the last
+// commit (6.9). Returns git for the folder (`createGit`). The caller holds `runner.sock`.
+export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
+  const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
+  await ensureAgentDir({ paths, name: agent.name, git, log })
+  await git.discardChanges()
+  return git
+}
 
 // Starts the runner, without its loop: everything up to the loop. Returns the runner, whose
 // `tick()` does one round of the loop. Throws a `ConfigError` for a bad `agents.yaml`, and anything
@@ -58,16 +82,10 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
   // There is exactly one agent in v2 (6.1).
   const [agent] = agents
 
-  // The data folder holds the folders of 3.2. `setup` makes them natively (8.4); this is for
-  // development.
-  ensureDir(paths.dataDir, { mode: 0o755 })
-  for (const folder of [paths.runner, paths.agents, paths.exchange, paths.locks]) ensureDir(folder, { mode: 0o700 })
-  const instance = await holdInstance(paths.runnerSocket, 'runner')
+  const instance = await holdRunnerFolder(paths)
   try {
     // What pi left is freed before the sandbox opens, which may need room on the disk.
-    const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
-    await ensureAgentDir({ paths, name: agent.name, git, log })
-    await git.discardChanges()
+    const git = await readyAgentFolder({ paths, agent, proc, log, clock })
     const sandbox = await openSandbox({ paths, settings, log, clock })
 
     if (lockExists(paths.runLock)) {
@@ -93,7 +111,11 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: settings.timeZone })
     let state = started.state
     saveState(stateFile, state)
-    if (started.dropped) log.info('runner.backfill_dropped', { agent: agent.name, backfill: started.dropped })
+    if (started.dropped) {
+      // Its sessions served it alone.
+      const sessions = removeReplaySessions({ paths, agent, backfill: started.dropped, log })
+      log.info('runner.backfill_dropped', { agent: agent.name, backfill: started.dropped, sessions })
+    }
     if (started.started) log.info('runner.backfill_started', { agent: agent.name, backfill: started.started, until: state.backfill.until })
 
     const datastore = openDatastore({ paths, clock })
@@ -166,8 +188,20 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         if (typeof outcome === 'string' || outcome.cause === 'setup' || outcome.cause === 'outage') onceTried.delete(action.id)
         return { action, outcome }
       }
-      // Backfill batches, and finishing a backfill, are milestone 9's (6.11). Until then a backfill
-      // waits where it is.
+      // A backfill's batch, and finishing it (6.11; `backfill.mjs`). `nextAction` names only a
+      // backfill whose entry is in the config.
+      if (action.kind === 'backfill') {
+        const entry = agent.run.backfill.find(candidate => candidate.id === action.id)
+        const job = backfillJob({ agent, entry, state, index: datastore.index, ...prompts })
+        if (job === null) return { action }
+        const { outcome } = await run(job, signal)
+        return { action, outcome }
+      }
+      if (action.kind === 'backfill-finished') {
+        const entry = agent.run.backfill.find(candidate => candidate.id === action.id)
+        state = await finishBackfill({ agent, entry, state, stateFile, paths, ids, log })
+        return { action }
+      }
       return { action }
     }
 

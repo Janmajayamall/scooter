@@ -18,6 +18,11 @@
 // `run/session/` is emptied before the run is recorded, and on a failure `views/` and `memory/`
 // are cleaned up after it, so nothing pi left takes room the clean-up or the state needs: pi may
 // have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
+//
+// A replayed batch, of a rebuild or a backfill (6.10, 6.11; `replay.mjs`), is a run like the
+// others, with its own session, skills and commit message, and three differences: it sends
+// nothing, neither texts, reactions nor notices; a backfill's batch fails if it changed anything
+// but what the backfill may change; and each settles its own lane of the state.
 
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
@@ -26,6 +31,7 @@ import { errorFields } from '../common/log.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
 import { clearRunSession, keepSession, prepareRun } from './agentdir.mjs'
 import { answerEntries, droppedTexts, parseAnswer, reportsOf, shortReason } from './answer.mjs'
+import { mayChange, settleBackfill } from './backfill.mjs'
 import { failureNotice, givenUpNotice, isFirstFailure, readFailureCause, settleBatch, settleTask } from './failures.mjs'
 import { GUEST_HOME, GUEST_PATH, OPENROUTER_HOST, PI_PROGRAM } from './sandbox/index.mjs'
 import { currentSession, saveState, sessionId } from './state.mjs'
@@ -137,12 +143,32 @@ export function acquireRunLock({ paths, deadline, clock }) {
 // ---------------------------------------------------------------------------------------------
 // A run
 
+// Whether a job is a replayed batch, of a rebuild or a backfill (6.10, 6.11).
+export const isReplay = job => job.kind === 'rebuild' || job.kind === 'backfill'
+
 // The commit message (6.8): `lifelog: #1050 #1051 #1053` for a batch, `lifelog: scheduled task
-// 21:30` or `lifelog: once task poems` for a task.
+// 21:30` or `lifelog: once task poems` for a task; for a replayed batch, the range of its items,
+// `lifelog: backfill people-1 #812-#831` (6.11), or `lifelog: rebuild #812-#831`, which the
+// finished rebuild folds into one commit, `lifelog: rebuild` (6.10).
 export function commitMessage(agentName, job) {
   if (job.kind === 'scheduled') return `${agentName}: scheduled task ${job.at}`
   if (job.kind === 'once') return `${agentName}: once task ${job.id}`
-  return `${agentName}: ${job.batch.items.map(item => `#${item.seq}`).join(' ')}`
+  const seqs = job.batch.items.map(item => item.seq)
+  if (isReplay(job)) {
+    const [first, last] = [Math.min(...seqs), Math.max(...seqs)]
+    const range = first === last ? `#${first}` : `#${first}-#${last}`
+    return job.kind === 'backfill' ? `${agentName}: backfill ${job.id} ${range}` : `${agentName}: rebuild ${range}`
+  }
+  return `${agentName}: ${seqs.map(seq => `#${seq}`).join(' ')}`
+}
+
+// What a run of `job` does to the state, for each kind (6.8, 6.9): live batches and a rebuild's
+// settle the live lane of the state they are given, a backfill's batches the backfill's, and tasks
+// their dates. Returns `{ state, givenUp }`.
+function settleJob(job, state, outcome, timing) {
+  if (job.kind === 'messages' || job.kind === 'rebuild') return settleBatch(state, job.batch, outcome, timing)
+  if (job.kind === 'backfill') return settleBackfill(state, job.batch, outcome, timing)
+  return { state: settleTask(state, job, outcome, timing), givenUp: [] }
 }
 
 // Runs one job, and returns `{ state, outcome }`. `job` is
@@ -150,6 +176,11 @@ export function commitMessage(agentName, job) {
 //   { kind: 'messages', batch, prompt }            from `buildBatch`
 //   { kind: 'scheduled', at, date, task, prompt }  from `nextAction` and `buildTaskPrompt`
 //   { kind: 'once', id, task, prompt }
+//   { kind: 'rebuild', batch, prompt, sessionId }  a rebuild's batch (`rebuild.mjs`)
+//   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes }   from `backfillJob`
+//
+// A replayed batch names its session, null for none, and a backfill's the skills pi gets and what
+// it may change.
 //
 // `outcome` is `waiting` (a backup or a rebuild holds the locks, and nothing ran), `stopped` (the
 // runner is stopping, `signal` aborted the run, and its changes were thrown away, as after a crash),
@@ -157,21 +188,24 @@ export function commitMessage(agentName, job) {
 // `setup`, `outage` or `other` (`failureCause`).
 //
 // Context: `agent`, `settings`, `paths`; `sandbox`; `git` for the agent's folder; `protocol`;
-// `ids`, for outbox entries; `index`, the datastore's; `state` and `stateFile`; `log` and `clock`.
+// `ids`, for outbox entries; `index`, the datastore's; `state` and `stateFile`, null for a state
+// that isn't saved, as a rebuild keeps its own in memory; `log` and `clock`.
 export async function performRun(context) {
   const { agent, settings, paths, sandbox, git, protocol, log, clock, state, job, signal } = context
   const startedAt = clock.now()
   const lock = acquireRunLock({ paths, deadline: startedAt + agent.timeoutMinutes * MINUTE, clock })
   if (lock !== 'taken') return { state, outcome: 'waiting', why: lock }
   try {
-    const id =
-      agent.session === 'daily'
+    const id = isReplay(job)
+      ? job.sessionId
+      : agent.session === 'daily'
         ? sessionId(agent.name, currentSession(state, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour }))
         : null
-    const prepared = prepareRun({ paths, agent, protocol, sessionId: id })
+    const prepared = prepareRun({ paths, agent, protocol, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt })
-    const seqs = job.kind === 'messages' ? job.batch.items.map(item => item.seq) : []
-    log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, task: job.at ?? job.id, session: id })
+    const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
+    const task = job.kind === 'scheduled' ? job.at : job.kind === 'once' ? job.id : undefined
+    log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, task, backfill: job.kind === 'backfill' ? job.id : undefined, session: id })
 
     let result
     try {
@@ -201,13 +235,19 @@ export async function performRun(context) {
 
 // 6.8, steps 1 and 2, after pi exited with 0: anything git wouldn't record fails the run, then what
 // was staged is committed. Staging is the check's last step, because only git knows every name it
-// refuses. Returns `{ committed }`, whether there was a commit; `{ unexpected }`, the path the
-// check found; or `{ error }`, when a step failed. Everything here reads what pi left, so any
-// error is the run's, and fails it as an unexpected file would.
+// refuses. A backfill's batch also fails when it changed a file it may not change, which only the
+// staged changes say (6.11). Returns `{ committed }`, whether there was a commit; `{ unexpected }`,
+// the path the check found; `{ outside }`, the first file a backfill may not change that it
+// changed; or `{ error }`, when a step failed. Everything here reads what pi left, so any error is
+// the run's, and fails it as an unexpected file would.
 async function commitFiles({ agent, git, log, job }) {
   try {
     const unexpected = (await git.unexpectedFile()) ?? (await git.stage())
     if (unexpected !== null) return { unexpected }
+    if (job.kind === 'backfill') {
+      const outside = (await git.stagedChanges()).find(file => !mayChange(file, job.writes))
+      if (outside !== undefined) return { outside }
+    }
     return { committed: await git.commitStaged(commitMessage(agent.name, job)) }
   } catch (error) {
     log.warn('runner.files_failed', { agent: agent.name, ...errorFields(error) })
@@ -230,23 +270,24 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
   let next
   let entries
   let reports = null
-  if (job.kind === 'messages') {
+  if (job.batch) {
     reports = reportsOf(answer, seqs)
     if (reports.unknown.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reports.unknown })
-    entries = answerEntries({ answer, agent, index, about: job.batch.newest, done: reports.done })
-    const settled = settleBatch(state, job.batch, { ok: true, done: reports.done, failed: reports.failed }, timing)
+    // A replay is silent: its texts, `REPLY_TO` and `NO_REPLY` are ignored (6.10, 6.11).
+    entries = isReplay(job) ? [] : answerEntries({ answer, agent, index, about: job.batch.newest, done: reports.done })
+    const settled = settleJob(job, state, { ok: true, done: reports.done, failed: reports.failed }, timing)
     next = settled.state
-    if (settled.givenUp.length > 0) entries.push(givenUpNotice(index, settled.givenUp))
+    if (settled.givenUp.length > 0 && !isReplay(job)) entries.push(givenUpNotice(index, settled.givenUp))
   } else {
     const reported = [...new Set([...answer.done, ...answer.failed.map(entry => entry.seq)])].sort((a, b) => a - b)
     // A task has no items to report on (6.7).
     if (reported.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reported })
     entries = answerEntries({ answer, agent, index })
-    next = settleTask(state, job, { ok: true }, timing)
+    next = settleJob(job, state, { ok: true }, timing).state
   }
 
   for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
-  saveState(stateFile, next)
+  if (stateFile !== null) saveState(stateFile, next)
   log.info('runner.run_finished', {
     agent: agent.name,
     job: job.kind,
@@ -283,7 +324,9 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     cleanup = error
   }
   const unexpected = files?.unexpected ?? null
-  const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now, log })
+  const outside = files?.outside ?? null
+  const failure = readFailureCause({ paths, result, unexpected, outside, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now, log })
+  const file = unexpected ?? outside
   log.warn('runner.run_failed', {
     agent: agent.name,
     job: job.kind,
@@ -294,24 +337,23 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     stdoutCut: result.stdoutCut || undefined,
     wroteTooMuch: result.wroteTooMuch || undefined,
     // A name pi chose, cut as the reason is: it could hold a message's words.
-    file: unexpected === null ? undefined : shortReason(unexpected),
+    file: file === null ? undefined : shortReason(file),
+    outside: outside === null ? undefined : true,
     ms: timing.durationMs,
   })
 
   const outcome = { ok: false, cause: failure.cause, reason: failure.reason }
+  const settled = settleJob(job, state, outcome, timing)
+  const next = settled.state
   const entries = []
-  let next
-  if (job.kind === 'messages') {
-    const settled = settleBatch(state, job.batch, outcome, timing)
-    next = settled.state
+  // A replay's failures send no notice (6.10, 6.11), and its batches don't count in the live runs'
+  // row of failures, which `lastRun` keeps.
+  if (!isReplay(job)) {
     if (isFirstFailure(state)) entries.push(failureNotice(job, failure))
     if (settled.givenUp.length > 0) entries.push(givenUpNotice(index, settled.givenUp))
-  } else {
-    next = settleTask(state, job, outcome, timing)
-    if (isFirstFailure(state)) entries.push(failureNotice(job, failure))
   }
   for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
-  saveState(stateFile, next)
+  if (stateFile !== null) saveState(stateFile, next)
   // The run is recorded, and its attempt counted; a start cleans up again (D89).
   if (cleanup !== null) throw cleanup
   return { state: next, outcome: { ok: false, cause: failure.cause } }

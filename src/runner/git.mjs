@@ -166,6 +166,30 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
       return true
     },
 
+    // The paths in `folders` whose staged contents differ from the last commit's: each file added,
+    // changed or removed, as a path from the agent's folder, in git's order. A file moved is its
+    // two paths. For a backfill's batch, which may change only some of them (6.11).
+    async stagedChanges(folders = AGENT_FOLDERS) {
+      const { stdout } = await run(['diff', '--cached', '--name-only', '--no-renames', '-z', 'HEAD', '--', ...folders])
+      return stdout.split('\0').filter(Boolean)
+    },
+
+    // The last commit's ID.
+    async head() {
+      return (await run(['rev-parse', '--verify', 'HEAD'])).stdout.trim()
+    },
+
+    // Tags the last commit `name`, as a rebuild does first (6.10). A name already taken fails.
+    async tag(name) {
+      await run(['tag', name, 'HEAD'])
+    },
+
+    // Makes `commit` the branch's last commit again, leaving the index and the files as they are,
+    // so that the next commit holds every change since `commit` (`git reset --soft`).
+    async resetTo(commit) {
+      await run(['reset', '--soft', '--quiet', commit])
+    },
+
     // Packs the repository's loose objects when git finds there are enough of them (`git gc
     // --auto`): every few thousand, which is a few hundred commits. It runs in the foreground,
     // after a commit, while the runner still holds `run.lock`, so no backup reads `.git` while git

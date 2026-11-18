@@ -551,17 +551,20 @@ Steps 1 and 2 read what pi left, so an error in either, such as a git command th
 
 ### 6.10 Rebuilding the views
 
-`scooter rebuild lifelog` as the `scooter-runner` user (in Docker, `docker compose run --rm runner rebuild lifelog`), with the runner's service stopped. The bridge keeps running, so messages that arrive meanwhile are stored, and handled once the runner is back.
-1. Tag the current commit `before-rebuild-<UTC timestamp>`.
+`scooter rebuild lifelog` as the `scooter-runner` user (in Docker, `docker compose run --rm runner rebuild lifelog`), with the runner's service stopped. It holds `runner/runner.sock`, as the runner does, so it doesn't start while a runner, another rebuild or `build-image` runs, and none of them starts while it does: a runner's start would remove the rebuild's `run.lock` and throw its work away. It also doesn't start while `locks/run.lock` is there. The bridge keeps running, so messages that arrive meanwhile are stored, and handled once the runner is back.
+1. Tag the current commit `before-rebuild-<UTC timestamp>`, such as `before-rebuild-20261118T101500Z`.
 2. Note the newest `seq` in the datastore. The rebuild stops there; anything later is left for the normal runner, which handles it with replies.
-3. Empty `views/`, `memory/` and `sessions/`, and reset `state.json`, keeping `onceDone` and `backfillDone` so one-off tasks and backfills don't run again, and setting `commandSeq` to that `seq` so old commands aren't answered again. A backfill in progress is dropped, because the rebuild covers its view.
-4. Replay the datastore up to that `seq`, silently: nothing goes to the outbox.
-5. Set `cursor` to that `seq`, and commit with the message `lifelog: rebuild`.
+3. Empty `views/`, `memory/` and `sessions/`, and reset `state.json`, keeping `onceDone` and `backfillDone` so one-off tasks and backfills don't run again, and setting `cursor` and `commandSeq` to that `seq`, so old commands aren't answered again, and a runner started after a rebuild cut short goes on from there rather than replay history with replies. Every backfill of the config counts as done, and one in progress is dropped, because the rebuild covers their views.
+4. Replay the datastore up to that `seq`, silently: nothing goes to the outbox, and the rebuild says what it does on its own output. It keeps its progress in memory, and handles failures as the runner does (6.8, 6.9): an item not reported is tried again a minute later and given up on after 4 attempts, and a setup error or an outage holds the rebuild until the next try.
+5. Commit with the message `lifelog: rebuild`, on the tagged commit, and record what the rebuild gave up on in `failed`, where an edit of the message brings it back (6.5). Each batch is committed as it goes, so that a failed batch's clean-up (6.9) comes back to the last good one, and those commits are folded into this one. The rebuild's sessions are removed.
+
+Cut short, by a stop or a crash, a rebuild leaves the views rebuilt up to where it got, and is run again from the start.
 
 **Replayed batches**, here and in backfills (6.11):
-- A batch's items come from one of the owner's days (in `SCOOTER_TZ`), at most 20 and within the prompt's size limit (6.5), and each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`.
+- A batch's items come from one of the owner's days: every item it takes was sent on the local date, in `SCOOTER_TZ`, of the first, and it stops at the first sent on another. Within that, it is drawn as a live batch is (6.5): due retries first, at most 20, and within the prompt's size limit. A message that an edit or a deletion in it brings in (6.5) joins whatever its day, shown with its date. Each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`; with `session: none`, none. A replay's sessions are removed once it is over.
 - `Now:` in the prompt is the time of the batch's newest item, not the current time, so "today" and "yesterday" in old messages mean what they meant then.
 - Each batch takes `locks/run.lock` and gives way to `locks/backup.lock`, as a normal run does (6.4), so a backup never sees half a batch.
+- A message is shown as it is now, as 6.5 shows every message: with its latest edit, even one sent on a later day. A rebuild reads the datastore once, when it starts, so for it "now" is then.
 
 Rules the owner sent as messages are learned again at the point they were sent. Rules in `/config` apply to all of history.
 
@@ -569,14 +572,14 @@ Rules the owner sent as messages are learned again at the point they were sent. 
 
 Live runs use a skill from the moment it's added, but the messages before that were filed without it. A backfill runs that history through the new skill alone, without touching the other views and without stopping live work. It's a rebuild for one view.
 
-- **Starting one:** add the skill to the agent, then a `backfill` entry for it (6.1), and restart the runner. At startup the runner starts the first entry whose ID isn't in `backfillDone`, and records `until`, the current `cursor`. Live runs, which now load the new skill, handle everything after `until`, and the backfill handles everything up to it, so every message is covered once. Backfills run one at a time. If an entry is removed from the config, the runner drops its backfill at the next start.
+- **Starting one:** add the skill to the agent, then a `backfill` entry for it (6.1), and restart the runner. At startup the runner starts the first entry whose ID isn't in `backfillDone`, and records `until`, the current `cursor`. Live runs, which now load the new skill, handle everything after `until`, and the backfill handles everything up to it, so every message is covered once. Backfills run one at a time, and the next entry starts at the next start. If an entry is removed from the config, the runner drops its backfill at the next start, without adding it to `backfillDone`.
 - **When it runs:** a backfill batch starts only when nothing live is waiting: no work items after `cursor`, no due retries, and no scheduled task or command. Runs still never overlap (6.4), so a new message waits at most for the backfill batch in progress.
-- **Its own lane:** the backfill keeps its own `cursor`, `retry` list and `skipped` list in `state.json` (6.3), and handles them like the live ones (6.8, 6.9). Unreported items are retried a minute later, as live ones are. Items reported `FAILED`, or given up on after 4 attempts, go to `skipped`.
+- **Its own lane:** the backfill keeps its own `cursor`, `retry` list and `skipped` list in `state.json` (6.3), and handles them like the live ones (6.8, 6.9). Unreported items are retried a minute later, as live ones are. Items reported `FAILED`, or given up on after 4 attempts, go to `skipped`, from which an edit or a deletion in a later batch brings a message back, as from `failed`. A setup error or an outage pauses every run, as after a live run, and the items wait with their attempts as they were. Its batches leave `lastRun` alone, which is the live runs'.
 - **The batch:** work items after the backfill's cursor, up to `until`, with their context, shown as in 6.5 and replayed as in 6.10. The prompt starts with `Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and the day pages.` pi gets that skill and `day-pages`, with the same system prompt as live runs, so the owner's current preferences apply to all of history.
 - **What it may change:** only the paths in `writes`, and the day pages. After pi exits, the runner applies the check in 6.8, and also fails the batch if anything else changed, `memory/` included. It can't tell which section of a day page changed; git history shows that.
 - **Silent:** nothing is sent per batch. Text, `REPLY_TO` and `NO_REPLY` lines are ignored, and failures send no notice. Guesses stay marked ❓ in the rows instead of going to `needs-review.md`, which old questions would otherwise flood.
-- **Commits:** `lifelog: backfill people-1 #812-#831`.
-- **Finishing:** when the cursor reaches `until` and the backfill's retry list is empty, the runner moves the ID to `backfillDone` and sends one message, counting the rows of each CSV in `writes` and those marked ❓: "Backfill people-1 finished: people.csv has 143 rows, 12 marked ❓. Skipped: #1031, #1207."
+- **Commits:** `lifelog: backfill people-1 #812-#831`, the lowest and the highest `seq` of the batch.
+- **Finishing:** when the cursor reaches `until` and the backfill's retry list is empty, the runner moves the ID to `backfillDone` and sends one message, counting the rows of each CSV in `writes`, a folder's included, and those marked ❓: "Backfill people-1 finished: people.csv has 143 rows, 12 marked ❓. Skipped: #1031, #1207." The message is the runner's, so it goes also with `can_message: false`, as notices do.
 
 ### 6.12 The VM image
 
@@ -607,7 +610,7 @@ pi's VM has no network of its own. Gondolin's host side, inside the runner, hand
 The rules:
 - **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS. Plain HTTP is refused. OpenRouter's other hosts, and its name with a dot at the end, are refused even with internet access on: OpenRouter is reached only by its two routes, below.
 - **The key:** Gondolin swaps the placeholder in `OPENROUTER_API_KEY` for the real key only in requests to `openrouter.ai`, in the `Authorization` or `x-api-key` header. Anything else the VM sends carries only the placeholder. The hook lets it go there only in the header pi sends it in, `x-api-key` on the messages route and `Authorization: Bearer` on the other, as exactly the placeholder: a request to `openrouter.ai` with a key of its own gets 403, so that a key a misled agent found can't make OpenRouter answer 401 and runs pause for good (6.9). So does one with the placeholder in any other header, and a request to another host that carries the placeholder or the key (`docs/DECISIONS.md`, D156).
-- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages` (with pi's `?beta=true`), which pi uses for Anthropic's models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline, and answers 400, logging the reason but never the body, unless all of these hold:
+- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages` (with pi's `?beta=true`), which pi uses for Anthropic's models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline (`MODEL_REQUEST_MAX_BYTES`; a longer body Gondolin itself answers with 413, before the hook, to any host, and nothing of it goes out or is logged, so a run that ends on one reads as pi's own failure), and answers 400, logging the reason but never the body, unless all of these hold:
   - `model` is exactly the agent's configured model;
   - the body has only the top-level fields, and the request only the `anthropic-beta` values, that the pinned pi sends on that route for any model of its catalog (13.2; `test/fixtures/pi-requests/`; `docs/DECISIONS.md`, D155);
   - every tool is one pi runs itself: `type: "function"` on chat completions, and no `type` at all on messages, where a type names a server tool (such as `web_search_*`, `web_fetch_*` or `openrouter:*`);
@@ -817,7 +820,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
 | `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. Runs before `EMAIL_AUTHSERV_ID` is set, which it helps find. |
 | `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5) |
-| `rebuild <agent>` | runner | Section 6.10 |
+| `rebuild <agent>` | runner, with its service stopped | Section 6.10 |
 
 Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`. Sending `SIGUSR1` to the bridge starts a backup immediately.
 
@@ -993,7 +996,7 @@ Required tests, at least:
   - Each refusal: another model, an `:online` model, a tool that isn't `function` or is a server tool, `plugins`, `mcp_servers`, an unknown top-level field or `anthropic-beta` value, an image or document given by URL, another path or method on `openrouter.ai`, another host with internet access off, and plain HTTP with it on.
   - A body with a duplicated key goes out only as the hook's own re-encoding.
   - The placeholder is replaced only on requests to `openrouter.ai`. A request there with a key of its own, or the placeholder in another header, is refused, and so is one elsewhere that carries the placeholder or the key.
-  - With `OPENROUTER_ZDR=on`, every forwarded body carries `provider.zdr: true` and `data_collection: "deny"`, overriding anything pi sent; with it off, routing is left alone. When OpenRouter refuses a request because no endpoint meets ZDR, runs pause, and the owner's notice gives that reason.
+  - With `OPENROUTER_ZDR=on`, every forwarded body carries `provider.zdr: true` and `data_collection: "deny"`, and a body with a `provider` of its own is refused; with it off, routing is left alone. When OpenRouter refuses a request because no endpoint meets ZDR, runs pause, and the owner's notice gives that reason.
   - The `request` line is written before the request goes out, the `response` line when the status arrives, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
   - What one run adds to the log is bounded: a path is cut, requests past `RUN_REQUESTS_MAX` are refused, and refusals past `RUN_REFUSALS_LOGGED_MAX` are counted in one line.
   - A refusal of pi's first request at `openrouter.ai` pauses runs as a setup error; a refusal after a request went out counts an attempt.

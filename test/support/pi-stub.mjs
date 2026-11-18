@@ -10,6 +10,13 @@
 // | `ASK`             | notes a question in `memory/needs-review.md`, asks it with `REPLY_TO`,  |
 // |                   | and reports the item `DONE`                                             |
 // | `SAY`             | files it, and says so in plain text                                     |
+// | `UNSURE`          | files it with a ❓ in its row                                           |
+// | `OUTSIDE`         | in a backfill's batch, also files it in `views/notes.csv`, which the    |
+// |                   | backfill may not change                                                 |
+//
+// A backfill's batch (6.11), whose prompt starts with `Backfill`, files each item in the first file
+// it may change instead of `views/notes.csv`, and adds a line for it to the day page of the
+// prompt's `Now:`, `views/days/YYYY/MM/YYYY-MM-DD.md`.
 //
 // Anywhere in the items or the task, or in `behavior.json` in its control folder, which a test can
 // change between runs:
@@ -116,6 +123,12 @@ for (const line of (prompt ?? '').split('\n')) {
   else if (section === 'task') task += `${line}\n`
 }
 const everything = [...items.map(item => item.text), task].join('\n')
+
+// A backfill's batch: what it may change, and the owner's date its prompt says it is.
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const backfill = (prompt ?? '').startsWith('Backfill (from your configuration') ? /Change only (.*) and the day pages\./.exec(prompt)[1].split(', ') : null
+const nowLine = /Now: \w+ (\d+) (\w+) (\d{4}),/.exec(prompt ?? '')
+const today = nowLine ? `${nowLine[3]}-${String(MONTHS.indexOf(nowLine[2]) + 1).padStart(2, '0')}-${nowLine[1].padStart(2, '0')}` : null
 let behavior = {}
 try {
   behavior = JSON.parse(fs.readFileSync(path.join(CONTROL, 'behavior.json'), 'utf8'))
@@ -251,9 +264,19 @@ function act() {
       plain.push(`I couldn't read #${item.seq}.`)
       continue
     }
-    const notes = path.join(views, 'notes.csv')
-    if (!fs.existsSync(notes)) fs.writeFileSync(notes, 'seq,text\n')
-    fs.appendFileSync(notes, `${item.seq},${JSON.stringify(item.text.split('\n')[0])}\n`)
+    const row = `${item.seq},${JSON.stringify(`${word('UNSURE') ? '❓ ' : ''}${item.text.split('\n')[0]}`)}\n`
+    const files = backfill ? [...(backfill[0].endsWith('.csv') ? [backfill[0]] : []), ...(word('OUTSIDE') ? ['views/notes.csv'] : [])] : ['views/notes.csv']
+    for (const file of files) {
+      const notes = path.join(agent, file)
+      fs.mkdirSync(path.dirname(notes), { recursive: true })
+      if (!fs.existsSync(notes)) fs.writeFileSync(notes, 'seq,text\n')
+      fs.appendFileSync(notes, row)
+    }
+    if (backfill) {
+      const page = path.join(views, 'days', today.slice(0, 4), today.slice(5, 7), `${today}.md`)
+      fs.mkdirSync(path.dirname(page), { recursive: true })
+      fs.appendFileSync(page, `- #${item.seq}\n`)
+    }
     if (word('ASK')) {
       fs.appendFileSync(path.join(memory, 'needs-review.md'), `- #${item.seq}: work or personal?\n`)
       replies.push(`REPLY_TO: ${item.seq}\nWork or personal?`)

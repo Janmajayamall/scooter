@@ -19,6 +19,7 @@ import { readNetworkLog } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { systemClock } from '../src/common/time.mjs'
 import { openRunner } from '../src/runner/main.mjs'
+import { rebuildAgent } from '../src/runner/rebuild.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { piMounts } from '../src/runner/run.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
@@ -258,14 +259,18 @@ test('sandbox: from inside the VM, another host, DNS to an outside resolver, UDP
   }
 })
 
-test('sandbox: with internet access on, HTTPS goes only to public addresses, and plain HTTP not at all', options, async t => {
+test('sandbox: with internet access on, nothing reaches a private address given as a number, and plain HTTP is refused', options, async t => {
   const prepared = prepare(t, { agentInternet: true })
   const { paths } = prepared
   const lan = Object.values(os.networkInterfaces())
     .flat()
     .find(address => address.family === 'IPv4' && !address.internal)?.address ?? '192.168.1.1'
-  // Addresses, not names, so nothing is looked up outside the machine. Gondolin refuses the private
-  // ones before the policy sees anything of them, and the policy plain HTTP.
+  // Addresses, not names, so nothing is looked up outside the machine. What this shows is that
+  // nothing reaches them, and that the policy refuses plain HTTP. HTTPS to an address given as a
+  // number fails at the TLS handshake, before the policy sees anything of it, whether the address
+  // is private or not: the review of milestone 8 found a public one, 203.0.113.9, refused the same
+  // way. What keeps a name that resolves to a private address out is Gondolin's `isIpAllowed`,
+  // which the policy leaves on, and which `policy.test.mjs` asks about private and public addresses.
   const script = `
     probe() { label=$1; shift; if out=$("$@" 2>&1); then echo "$label: ok $out"; else echo "$label: refused"; fi; }
     probe metadata curl -sS -f -k -m 8 https://169.254.169.254/latest/meta-data/
@@ -506,6 +511,48 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   )
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'request').map(entry => `${entry.method} ${entry.host}${entry.path}`))], ['POST openrouter.ai/api/v1/messages'])
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'response').map(entry => entry.status))], [200])
+})
+
+test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
+  const prepared = prepare(t)
+  const { paths, settings, log } = prepared
+  // The rebuild makes the agent's folder itself; the datastore holds one message of Sunday.
+  fs.rmSync(paths.agents, { recursive: true })
+  fs.rmSync(paths.datastore, { recursive: true })
+  writeDatastore(paths, [line.text(1, '2026-11-08T05:00:00Z', 'coffee 120 at Blue Tokai', { sourceId: '3EB0E2E0000000000002' })])
+  const sunday = path.join(paths.datastore, '2026', '11', '08', 'log.jsonl')
+  const model = createFakeModel([
+    { tool: 'read', args: { path: sunday } },
+    { tool: 'write', args: { path: 'views/expenses.csv', content: 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n' } },
+    { text: 'Filed the coffee.\nDONE: 1' },
+  ])
+  const said = []
+  const result = await rebuildAgent({
+    settings,
+    agentName: 'lifelog',
+    clock: systemClock,
+    log,
+    say: text => said.push(text),
+    openSandbox: async options => openTestSandbox(t, { ...prepared, ...options, network: await fakeModelNetwork(t, model, options) }),
+  })
+  assert.deepEqual({ ...result, tag: undefined }, { stopped: false, tag: undefined, until: 1, cursor: 1, batches: 1, failed: [] })
+  assert.match(result.tag, /^before-rebuild-\d{8}T\d{6}Z$/)
+
+  // The prompt has the message's own time, and pi read its line through the read-only mount.
+  const [first, second] = model.modelRequests
+  assert.match(JSON.stringify(first.body), /\[scooter\] Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
+  assert.match(JSON.stringify(first.body), /New messages:\\n#1 10:30 text: \\"coffee 120 at Blue Tokai\\"/)
+  assert.match(JSON.stringify(second.body), /3EB0E2E0000000000002/)
+  // One commit on the tagged one, the view in it, its session gone, and nothing sent.
+  const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
+  assert.equal(await git('log', '--format=%s'), 'lifelog: rebuild\nlifelog: initial commit\n')
+  assert.equal(await git('rev-parse', 'HEAD^'), await git('rev-parse', result.tag))
+  assert.equal(fs.readFileSync(path.join(paths.agentViews('lifelog'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n')
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+  assert.ok(!fs.existsSync(paths.outbox) || fs.readdirSync(paths.outbox).length === 0)
+  const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
+  assert.deepEqual([state.cursor, state.commandSeq, state.lastRun], [1, 1, null])
+  assert.equal(said.at(-1), 'Rebuilt lifelog up to #1, in 1 batch, committed as "lifelog: rebuild".')
 })
 
 test("sandbox: pi in a VM reaches OpenRouter through the policy, OpenRouter answers 401, and the runner takes it as a setup error", options, async t => {

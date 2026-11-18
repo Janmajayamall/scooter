@@ -369,6 +369,42 @@ test('policy: what one run adds to the log is bounded: requests past RUN_REQUEST
   assert.deepEqual(policy.lines().at(-1), { at: '2026-11-09T15:50:00Z', event: 'unlogged', refused: 3 })
 })
 
+test('policy: requests read at the same time count against RUN_REQUESTS_MAX as they come, and one refused gives its place back (the review of milestone 8, smaller point 2)', async t => {
+  atEnd(t, overrideLimits({ RUN_REQUESTS_MAX: 2 }))
+  const policy = await openPolicy(t)
+  // A request the policy refuses for its body takes no place.
+  assert.equal((await policy.send(piRequest('messages', 'first', body => (body.plugins = [])))).status, 400)
+  // Eight sent at once, each with a body to read: two go out.
+  const results = await Promise.all(Array.from({ length: 8 }, () => policy.send(piRequest('messages'))))
+  assert.equal(results.filter(result => !isRefusal(result)).length, 2)
+  assert.deepEqual(
+    results.filter(isRefusal).map(result => result.status),
+    Array(6).fill(403),
+  )
+  assert.equal(linesOf(policy, 'request').length, 2)
+  assert.deepEqual(
+    linesOf(policy, 'refused').map(line => line.reason),
+    ['plugins are not allowed', ...Array(6).fill('this run has made all the requests a run may')],
+  )
+})
+
+test("policy: once the hook lets a request out, Gondolin connects only to a public address for it, whatever the name resolves to (the review of milestone 8, smaller point 5)", async t => {
+  const at = (hostname, ip) => ({ hostname, ip, family: ip.includes(':') ? 6 : 4, port: 443, protocol: 'https' })
+  const PRIVATE = ['127.0.0.1', '10.0.0.5', '192.168.1.20', '172.16.0.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', 'fe80::1']
+  const on = await openPolicy(t, { internet: true })
+  for (const ip of PRIVATE) {
+    assert.equal(await on.isIpAllowed(at('example.com', ip)), false, ip)
+    assert.equal(await on.isIpAllowed(at('openrouter.ai', ip)), false, ip)
+  }
+  assert.equal(await on.isIpAllowed(at('example.com', '93.184.215.14')), true)
+  assert.equal(await on.isIpAllowed(at('openrouter.ai', '104.18.2.115')), true)
+  // With internet access off, no host but openrouter.ai, at any address.
+  const off = await openPolicy(t)
+  assert.equal(await off.isIpAllowed(at('example.com', '93.184.215.14')), false)
+  assert.equal(await off.isIpAllowed(at('openrouter.ai', '104.18.2.115')), true)
+  assert.equal(await off.isIpAllowed(at('openrouter.ai', '10.0.0.5')), false)
+})
+
 test('policy: a line keeps a bounded path, and a host and a reason a reader takes, whatever the VM sent', async t => {
   const policy = await openPolicy(t, { internet: true })
   const long = `/${'a'.repeat(5000)}/b`
