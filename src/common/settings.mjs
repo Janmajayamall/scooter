@@ -52,6 +52,8 @@ const VARIABLES = {
     'RESTIC_KEEP_DAILY',
     'RESTIC_KEEP_WEEKLY',
     'RESTIC_KEEP_MONTHLY',
+    'FORCE_CHECK',
+    'RESTORE_TARGET',
     'DATA_DIR',
     'CONFIG_DIR',
   ],
@@ -278,7 +280,9 @@ export function loadSettings(side, { env = process.env } = {}) {
           : fault('BACKUP_TIME', 'BACKUP_TIME must be a time as HH:MM, such as 03:30, or off')
 
     // Backups are on when RESTIC_REPOSITORY is set (5.5). `env` is what restic is given besides
-    // the repository and the password.
+    // the repository and the password. `forceCheck` checks the repository after every backup, not
+    // only on Sundays; `restoreTarget` is the folder `restore` restores into, `/` putting every file
+    // back at the path it was backed up from.
     const repository = get('RESTIC_REPOSITORY')
     settings.backup = null
     if (repository !== undefined) {
@@ -286,12 +290,15 @@ export function loadSettings(side, { env = process.env } = {}) {
       for (const name of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'B2_ACCOUNT_ID', 'B2_ACCOUNT_KEY']) {
         if (get(name) !== undefined) resticEnv[name] = get(name)
       }
+      const forceCheck = oneOf('FORCE_CHECK', ['0', '1'], '0')
       settings.backup = {
         repository,
         password: required('RESTIC_PASSWORD', ' when RESTIC_REPOSITORY is set'),
         keepDaily: integer('RESTIC_KEEP_DAILY', 7),
         keepWeekly: integer('RESTIC_KEEP_WEEKLY', 4),
         keepMonthly: integer('RESTIC_KEEP_MONTHLY', 12),
+        forceCheck: forceCheck === undefined ? undefined : forceCheck === '1',
+        restoreTarget: folder('RESTORE_TARGET', '/'),
         env: resticEnv,
       }
     }

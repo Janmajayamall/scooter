@@ -81,8 +81,9 @@ function startRebuild(prepared, options = {}) {
 }
 
 // Waits for a rebuild to end, moving the fake clock on whenever it waits for a retry or a pause,
-// and taking a backup's lock away when it waits for that.
-async function drive(prepared, done) {
+// and taking a backup's lock away when it waits for that, after `onBackup()` has looked at what
+// the rebuild has done by then.
+async function drive(prepared, done, { onBackup = () => {} } = {}) {
   const { clock, entries, paths } = prepared
   let settled = false
   done.then(
@@ -95,7 +96,10 @@ async function drive(prepared, done) {
     const waits = entries.filter(entry => entry.event === 'rebuild.waiting')
     if (waits.length === handled) continue
     const wait = waits[handled++]
-    if (wait.for === 'backup') releaseLock(paths.backupLock)
+    if (wait.for === 'backup') {
+      await onBackup()
+      releaseLock(paths.backupLock)
+    }
     await clock.advance(wait.ms)
   }
   return done
@@ -205,7 +209,7 @@ test("rebuild: it doesn't start while a runner runs or run.lock is there, and no
   await runner.close()
 
   takeLock(paths.runLock, { clock })
-  await assert.rejects(startRebuild(prepared).done, error => error instanceof RebuildError && error.message.includes(`${paths.runLock} is there, though no runner is running`))
+  await assert.rejects(startRebuild(prepared).done, error => error instanceof RebuildError && error.message.includes(`${paths.runLock} is there, though no runner or rebuild is running: one stopped by force left it`))
   releaseLock(paths.runLock)
   // Nothing was changed by either.
   assert.equal(gitOf(paths, 'tag', '--list'), '')
@@ -248,18 +252,21 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   const { done, said } = startRebuild(prepared)
   const result = await drive(prepared, done)
   assert.deepEqual(result, { stopped: false, tag: TAG, until: 3, cursor: 3, batches: 6, failed: [2] })
+  // An item tried again is waited for: the next day waits until it is done with (D182).
   assert.deepEqual(
     sandbox.seen().map(call => call.items),
-    [[1, 2], [1, 2], [3], [2], [2], [2]],
+    [[1, 2], [1, 2], [2], [2], [2], [3]],
   )
-  assert.deepEqual(said.slice(1), [
+  // A backup held its lock when the rebuild started: it changed nothing before it was over (D181).
+  assert.deepEqual(said, [
     'Waiting for a backup to finish.',
+    `Rebuilding lifelog from the datastore, up to #3. The last commit before the rebuild is tagged ${TAG}.`,
     "2026-11-08 #1-#2: paused (OpenRouter: stub error 503) until 21:21.",
     '2026-11-08 #1-#2: done; not reported, tried again: #2.',
-    '2026-11-09 #3: done.',
     '2026-11-08 #2: done; not reported, tried again: #2.',
     '2026-11-08 #2: done; not reported, tried again: #2.',
     '2026-11-08 #2: done; given up on: #2.',
+    '2026-11-09 #3: done.',
     'Rebuilt lifelog up to #3, in 6 batches, committed as "lifelog: rebuild".',
     'Given up on: #2. An edit of one of these messages brings it back.',
   ])
@@ -271,6 +278,102 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
     'seq,text\n1,"#1 09:30 text: \\"coffee 120\\" (attempt 1 of 4)"\n3,"#3 10:30 text: \\"lunch 300\\""\n',
   )
   assert.deepEqual(outboxOf(paths), [])
+})
+
+test('rebuild: its own steps take run.lock and give way to a backup, as its batches do, so a backup never reads views or .git while it changes them (D181)', async t => {
+  const prepared = await prepare(t)
+  const { paths, sandbox, clock } = prepared
+  const head = gitOf(paths, 'rev-parse', 'HEAD')
+  // A backup holds its lock when the rebuild starts, and takes it again during the last batch.
+  takeLock(paths.backupLock, { clock })
+  beforeEachRun(sandbox, count => {
+    if (count === 2) takeLock(paths.backupLock, { clock })
+  })
+  const looks = []
+  const { done, said } = startRebuild(prepared)
+  const result = await drive(prepared, done, {
+    onBackup: () =>
+      looks.push({
+        tags: gitOf(paths, 'tag', '--list'),
+        last: gitOf(paths, 'log', '-1', '--format=%s'),
+        views: fs.readdirSync(paths.agentViews('lifelog')).sort(),
+        runLock: lockExists(paths.runLock),
+      }),
+  })
+  assert.equal(result.stopped, false)
+  assert.deepEqual(looks, [
+    // Before step 1: nothing tagged, emptied or committed.
+    { tags: '', last: 'lifelog: #1 #4 #6\n', views: ['old.csv'], runLock: false },
+    // Before step 5: the last batch's commit, not yet folded into one.
+    { tags: `${TAG}\n`, last: 'lifelog: rebuild #4-#6\n', views: ['notes.csv'], runLock: false },
+  ])
+  assert.equal(said.filter(line => line === 'Waiting for a backup to finish.').length, 2)
+  assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild\n')
+  assert.equal(gitOf(paths, 'rev-parse', 'HEAD^'), head)
+  assert.equal(lockExists(paths.runLock), false)
+
+  // Stopped while it waits before its first step, it has changed nothing.
+  takeLock(paths.backupLock, { clock })
+  const stopping = new AbortController()
+  const waiting = startRebuild(prepared, { signal: stopping.signal })
+  await prepared.clock.whenSleeping()
+  stopping.abort()
+  assert.deepEqual(await waiting.done, { stopped: true, tag: null, until: 6, cursor: 0, batches: 0, failed: [] })
+  assert.deepEqual(waiting.said, ['Waiting for a backup to finish.', 'Stopped before it changed anything.'])
+  assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild\n')
+})
+
+test('rebuild: an item not reported is tried again before the days after it, which are never its context (the review of milestone 9, point 2)', async t => {
+  const lines = [
+    line.text(1, '2026-11-07T07:00:00Z', 'from now on, tea is a drink IGNORE'), // Sat 7 Nov, 12:30
+    line.sent(2, '2026-11-07T07:01:00Z', 'Noted.'),
+    line.text(3, '2026-11-08T04:00:00Z', 'tea 40'), // Sun 8 Nov, 09:30
+    line.sent(4, '2026-11-08T04:01:00Z', 'Logged tea.'),
+    line.text(5, '2026-11-09T04:00:00Z', 'tea 45'), // Mon 9 Nov, 09:30
+    line.sent(6, '2026-11-09T04:01:00Z', 'Logged tea.'),
+  ]
+  const prepared = await prepare(t, { lines, state: { ...HANDLED, cursor: 6, commandSeq: 0 } })
+  const { sandbox } = prepared
+  const result = await drive(prepared, startRebuild(prepared).done)
+  assert.deepEqual(result.failed, [1])
+  assert.deepEqual(
+    sandbox.seen().map(call => call.items),
+    [[1], [1], [1], [1], [3], [5]],
+  )
+  for (const call of sandbox.seen().slice(0, 4)) {
+    assert.match(call.prompt, /^\[scooter\] Now: Saturday 7 November 2026, 12:30 /)
+    assert.match(call.prompt, /^#2 12:31 you sent: "Noted\."$/m)
+    assert.ok(!call.prompt.includes('Logged tea'))
+  }
+})
+
+test('rebuild: with session: none, its batches run without a session, and it leaves none', async t => {
+  const prepared = await prepare(t)
+  const { paths, sandbox } = prepared
+  fs.writeFileSync(paths.agentsYaml, rebuildYaml().replace('session: daily', 'session: none'))
+  const result = await drive(prepared, startRebuild(prepared).done)
+  assert.equal(result.batches, 2)
+  for (const call of sandbox.seen()) {
+    assert.ok(call.argv.includes('--no-session'))
+    assert.ok(!call.argv.includes('--session-id'))
+  }
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+})
+
+test('rebuild: a closed terminal, SIGHUP, stops it as SIGTERM does, and lets go of run.lock, so the next rebuild can start', async t => {
+  const prepared = await prepare(t)
+  const { settings, sandbox, paths } = prepared
+  beforeEachRun(sandbox, count => {
+    if (count === 1) process.emit('SIGHUP', 'SIGHUP')
+  })
+  let out = ''
+  const code = await runRebuild({ args: ['lifelog'], settings, openSandbox: async () => sandbox, stdout: { write: text => (out += text) }, stderr: { write: () => {} }, clock: prepared.clock, log: prepared.log })
+  assert.equal(code, 1)
+  assert.match(out, /Stopped at #0 of #6, with the views rebuilt only in part\. Run the rebuild again; it starts from the beginning\.\n$/)
+  assert.equal(lockExists(paths.runLock), false)
+  assert.equal(process.listenerCount('SIGHUP'), 0)
+  prepared.clock.set(Date.parse(START) + MINUTE)
+  assert.equal((await drive(prepared, startRebuild(prepared).done)).stopped, false)
 })
 
 test('rebuild: stopped, it throws the batch in progress away, and leaves a state from which a runner goes on after the rebuild\'s seq', async t => {

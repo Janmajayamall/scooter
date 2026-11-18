@@ -118,6 +118,14 @@ test('backfills: until is the live cursor when it starts, every message up to it
   assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 6, emoji: '✅' }])
 })
 
+test('backfills: with can_message: false, the batches send nothing and the summary still goes, as the runner\'s own (6.11)', async t => {
+  const { runner, outbox } = await openBackfill(t, { words: { 4: 'SAY' }, yaml: backfillYaml().replace('can_message: true', 'can_message: false') })
+  for (const kind of ['backfill', 'backfill']) assert.equal((await runner.tick()).action.kind, kind)
+  assert.deepEqual(outbox(), [])
+  assert.deepEqual((await runner.tick()).action, { kind: 'backfill-finished', id: 'people-1' })
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: people.csv has 4 rows, none marked ❓.' }])
+})
+
 test('backfills: its batches run only when nothing live is waiting, and a message that arrives during one is handled right after it', async t => {
   const { runner, clock, state, sandbox, add, outbox } = await openBackfill(t, { lines: [line.text(6, '2026-11-09T15:50:00Z', 'tea')] })
   // #6 waits after the live cursor: the owner's quiet period, then the live batch.

@@ -40,7 +40,9 @@ export function makePaths({ dataDir, configDir }) {
     agentState: name => path.join(agent(name), 'state.json'),
     // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them (6.9):
     // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
+    // Backups leave the whole of `agents/.discarded/` out: it holds what is being removed.
     agentDiscarded: name => data('agents', '.discarded', name),
+    agentsDiscarded: data('agents', '.discarded'),
 
     // The exchange (5.3, 5.5, 6.4).
     exchange: data('exchange'),
@@ -65,11 +67,13 @@ export function makePaths({ dataDir, configDir }) {
     imageStaging: data('.image-build'),
 
     // The bridge's own folder (5.1): its state; the socket that keeps a second bridge from
-    // starting on the same data; and where attachments wait between their channel and the store.
+    // starting on the same data; where attachments wait between their channel and the store; and
+    // the cache of the backup program (5.5), which marks itself as a cache, so backups leave it out.
     bridge: data('bridge'),
     bridgeState: data('bridge', 'state.json'),
     bridgeSocket: data('bridge', 'bridge.sock'),
     bridgeIncoming: data('bridge', 'incoming'),
+    backupCache: data('bridge', 'backup-cache'),
 
     // wacli's folder (5.1, 5.5): its home, its store, where it downloads media for the bridge, and
     // the XDG folders it is given.

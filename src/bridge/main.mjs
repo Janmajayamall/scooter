@@ -8,22 +8,24 @@
 //    the group `scooter-runner` (3.2). Not root, it is neither, and switching is skipped (10).
 // 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each give
 //    out the same `seq`, and the datastore would need repairing by hand (D29).
-// 3. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
-// 4. It makes its channels: WhatsApp, and email when `EMAIL_IMAP_HOST` is set (5.6). It checks
+// 3. It removes a leftover `backup.lock`, which would otherwise keep the agent from running for
+//    good (5.5): only the bridge takes it, and this is the only bridge.
+// 4. It reads the datastore, removing part of a line a crash left, and rebuilds the index.
+// 5. It makes its channels: WhatsApp, and email when `EMAIL_IMAP_HOST` is set (5.6). It checks
 //    `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp (5.3).
-// 5. It starts the channels.
-// 6. It answers the commands it hadn't answered, and starts delivery, which first sends what was
-//    left in the outbox, from where a crash cut it short (5.3).
-//
-// Milestone 10 adds removing a leftover `backup.lock`.
+// 6. It starts the channels.
+// 7. It answers the commands it hadn't answered, starts delivery, which first sends what was left
+//    in the outbox, from where a crash cut it short (5.3), and starts the backups' schedule.
 
 import fs from 'node:fs'
-import { createIds, ensureDir } from '../common/files.mjs'
+import { checkOwnFolder, createIds, ensureDir } from '../common/files.mjs'
 import { holdInstance } from '../common/instance.mjs'
+import { lockExists, releaseLock } from '../common/locks.mjs'
 import { createLog, errorFields } from '../common/log.mjs'
 import { makePaths } from '../common/paths.mjs'
 import { createProc } from '../common/proc.mjs'
 import { systemClock } from '../common/time.mjs'
+import { createBackups } from './backup.mjs'
 import { createEmail } from './channels/email.mjs'
 import { defaultChannelProblem } from './channels/index.mjs'
 import { createWhatsApp } from './channels/whatsapp.mjs'
@@ -34,9 +36,6 @@ import { openBridgeState } from './state.mjs'
 import { statusText } from './status.mjs'
 import { openStore } from './store.mjs'
 
-// What `/status` says about backups until milestone 10 of the plan builds them.
-export const BACKUPS_NOT_BUILT = "Backups: none yet. This version of Scooter doesn't make them."
-
 // The bridge can't start because of how it is configured. `scooter bridge` exits with 2 (D30).
 export class BridgeConfigError extends Error {
   constructor(message) {
@@ -45,8 +44,9 @@ export class BridgeConfigError extends Error {
   }
 }
 
-// Starts the bridge. Returns `{ paths, store, state, intake, channels, outbox, commands, fatal,
-// stop }`, where `fatal` resolves with an error if the bridge can't go on, and `stop()` stops it.
+// Starts the bridge. Returns `{ paths, store, state, intake, channels, outbox, commands, backups,
+// fatal, stop }`, where `fatal` resolves with an error if the bridge can't go on, and `stop()`
+// stops it.
 // `proc` is what `createProc` returns; tests give one with a clock of their own, and `emailReader`
 // a stub of the email reader. Throws a `BridgeConfigError` when `DEFAULT_CHANNEL` can't send, or
 // email is on without `EMAIL_AUTHSERV_ID`.
@@ -68,11 +68,23 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   ensureDir(paths.dataDir, { mode: 0o755 })
   ensureDir(paths.bridge, { mode: 0o700 })
   // The exchange is the runner's (3.2), and the bridge writes its own replies into the outbox
-  // there. Made here, if it is missing, with the runner's owner, so that a bridge that writes the
-  // first entry doesn't leave the runner a folder it can't write.
-  for (const folder of [paths.exchange, paths.outbox]) ensureDir(folder, { mode: 0o700, owner: runnerUser })
+  // there, and its `backup.lock` into `locks/`. Made here, if they are missing, with the runner's
+  // owner, so that a bridge that writes there first doesn't leave the runner a folder it can't
+  // write.
+  for (const folder of [paths.exchange, paths.outbox, paths.locks]) ensureDir(folder, { mode: 0o700, owner: runnerUser })
   const instance = await holdInstance(paths.bridgeSocket, 'bridge')
   try {
+    // A backup the bridge was making when it last stopped is over. The folder is the runner's,
+    // and is used only while it is the runner's and not a link (D136).
+    try {
+      checkOwnFolder(paths.locks, runnerUser)
+      if (lockExists(paths.backupLock)) {
+        releaseLock(paths.backupLock)
+        log.warn('bridge.lock_removed', { lock: 'backup.lock' })
+      }
+    } catch (error) {
+      log.error('bridge.lock_not_removed', { lock: 'backup.lock', ...errorFields(error) })
+    }
     // Attachments that waited for the store when the bridge last stopped. Their messages weren't
     // stored, and catch-up or the mail spool, whose folders stay until they are, hands them over
     // again.
@@ -84,8 +96,9 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     const fatal = new Promise(resolve => (reportFatal = resolve))
     const channels = new Map()
     const ids = createIds(clock)
-    const status = async () => statusText({ now: clock.now(), settings, paths, channels, index: store.index, backups: BACKUPS_NOT_BUILT })
-    const commands = createCommands({ store, state, paths, ids, log, clock, status })
+    // `backups` is made below, before any channel starts, so before any command can come.
+    const status = async () => statusText({ now: clock.now(), settings, paths, channels, index: store.index, backups: backups.statusLine(clock.now()) })
+    const commands = createCommands({ store, state, paths, ids, log, clock, status, backup: seq => backups.ask(seq) })
     const intake = createIntake({ store, channels, paths, log, clock, onFatal: reportFatal, onCommand: () => commands.handle() })
     const whatsapp = createWhatsApp({
       settings,
@@ -106,10 +119,42 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     if (problem !== null) throw new BridgeConfigError(problem)
 
     const take = record => intake.take(record)
+    const outbox = createOutbox({ paths, store, channels, defaultChannel: settings.defaultChannel, log, clock, owner: runnerUser, onFatal: reportFatal })
+    // What a backup stops while restic reads (5.5, step 3): delivery, between two messages; then
+    // the channels, which stop wacli's calls in progress, so a download a stop cut short leaves
+    // its message for catch-up, and intake the messages after it (D179); then what intake was
+    // storing. Started again, a channel's messages are stored again.
+    const stopped = []
+    const backups = createBackups({
+      settings,
+      paths,
+      proc,
+      log,
+      clock,
+      ids,
+      state,
+      runnerUser,
+      quiesce: async () => {
+        await outbox.pause()
+        for (const channel of channels.values()) {
+          stopped.push(channel)
+          await channel.stop()
+        }
+        await intake.idle()
+      },
+      resume: async () => {
+        for (const channel of stopped.splice(0)) {
+          intake.started(channel.name)
+          await channel.start(take)
+        }
+        outbox.resume()
+      },
+      onFatal: reportFatal,
+    })
     for (const channel of channels.values()) await channel.start(take)
     commands.handle()
-    const outbox = createOutbox({ paths, store, channels, defaultChannel: settings.defaultChannel, log, clock, owner: runnerUser, onFatal: reportFatal })
     outbox.start()
+    backups.start()
     log.info('bridge.started', { lines: store.index.lastSeq, channels: [...channels.keys()], defaultChannel: settings.defaultChannel })
 
     let stopping = null
@@ -121,12 +166,15 @@ export async function startBridge({ settings, clock = systemClock, log = createL
       channels,
       outbox,
       commands,
+      backups,
       fatal,
-      // Stops delivery, cutting short a send in progress, which goes out again at the next start;
-      // then the channels; waits for what they handed over to be stored and answered; and lets go
-      // of the data folder.
+      // Stops the backups, cutting short one in progress, which then starts nothing again; then
+      // delivery, cutting short a send in progress, which goes out again at the next start; then
+      // the channels; waits for what they handed over to be stored and answered; and lets go of
+      // the data folder.
       stop: () =>
         (stopping ??= (async () => {
+          await backups.stop()
           await outbox.stop()
           for (const channel of channels.values()) await channel.stop()
           await intake.idle()
@@ -141,25 +189,36 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   }
 }
 
-// `scooter bridge`: runs the bridge until SIGTERM or SIGINT. Exits with 2 if `DEFAULT_CHANNEL`
-// can't send, and with 1 if it can't start for another reason or can't go on.
+// `scooter bridge`: runs the bridge until SIGTERM or SIGINT. `SIGUSR1` starts a backup now (8.4).
+// Exits with 2 if `DEFAULT_CHANNEL` can't send, and with 1 if it can't start for another reason or
+// can't go on.
 export async function runBridge({ settings, stderr }) {
   const log = createLog({ component: 'bridge' })
-  let bridge
-  try {
-    bridge = await startBridge({ settings, log })
-  } catch (error) {
-    log.error('bridge.start_failed', errorFields(error))
-    // For the person starting it. What can fail here says where, and quotes no content: a
-    // DatastoreError names the file and the line (D29), the others a path, a user or a setting.
-    stderr.write(`scooter bridge: ${error.message}\n`)
-    return error instanceof BridgeConfigError ? 2 : 1
+  let bridge = null
+  // Taken first: without a listener, Node answers SIGUSR1 by opening its debugger.
+  const backupNow = () => {
+    if (bridge === null) log.warn('bridge.backup_signal_ignored', { reason: 'the bridge is still starting' })
+    else bridge.backups.request('signal')
   }
-  const outcome = await new Promise(resolve => {
-    for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => resolve(signal))
-    bridge.fatal.then(() => resolve('fatal'))
-  })
-  log.info('bridge.stopping', { reason: outcome })
-  await bridge.stop()
-  return outcome === 'fatal' ? 1 : 0
+  process.on('SIGUSR1', backupNow)
+  try {
+    try {
+      bridge = await startBridge({ settings, log })
+    } catch (error) {
+      log.error('bridge.start_failed', errorFields(error))
+      // For the person starting it. What can fail here says where, and quotes no content: a
+      // DatastoreError names the file and the line (D29), the others a path, a user or a setting.
+      stderr.write(`scooter bridge: ${error.message}\n`)
+      return error instanceof BridgeConfigError ? 2 : 1
+    }
+    const outcome = await new Promise(resolve => {
+      for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => resolve(signal))
+      bridge.fatal.then(() => resolve('fatal'))
+    })
+    log.info('bridge.stopping', { reason: outcome })
+    await bridge.stop()
+    return outcome === 'fatal' ? 1 : 0
+  } finally {
+    process.off('SIGUSR1', backupNow)
+  }
 }

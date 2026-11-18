@@ -2241,6 +2241,11 @@ What the milestone left in the repository:
 *Choice:* step 3 resets the state with `cursor` and `commandSeq` both the rebuild's `seq`. The replay works in a state it keeps in memory, the live lane's fields of a state that is never saved, with its cursor from 0, and `performRun` settles that as it settles a live batch's (`stateFile` null). Once done, the state is written again with what the rebuild gave up on in `failed` (D170).
 *Reason:* with the cursor at 0 on disk, a runner started after a rebuild cut short, by a stop, a crash or a closed terminal, would give the agent all of history as new messages, with replies and ✅s to every old one. With it at the rebuild's `seq`, that runner goes on after it, and only the views are incomplete until the rebuild is run again. Keeping the progress on disk instead, to resume, would need a field of the state that `/status` and the runner know, and a runner that refuses to start until the rebuild is finished: more than 6.10 asks.
 *Cost:* a rebuild isn't resumed. Cut short, it starts from the beginning when run again, and spends again on OpenRouter what it had done. The plan's milestone 14 now has the README say to run it where closing a terminal doesn't stop it.
+*Two more costs* (added in milestone 10, for the review of this milestone, smaller point 4):
+- Messages that wait when a rebuild starts get no reply. The rebuild stops at the newest `seq` (6.10), so a message that arrived after the runner was stopped is replayed silently: no question about it reaches the owner, and no ✅. A rebuild run again after one cut short takes a new `seq`, so everything that arrived during the first try is filed so too.
+- A rebuild that didn't finish leaves no mark. After a stop, the person at the terminal is told; after a crash or a reboot, the runner's service starts again and goes on from `cursor`, with the views rebuilt in part, and neither its start nor `/status` says so. A backup taken during a rebuild holds the same. Only the last commit's message shows it: `lifelog: rebuild #…`, where a finished rebuild leaves `lifelog: rebuild`.
+
+The plan's milestone 14 has the README say both: start the rebuild right after stopping the runner, and look at the last commit's message after a crash, a reboot or a restore. A warning at the runner's start when the last commit is a rebuild's batch would be cheap, but it is a choice of what the runner says, and is left (milestone 10, 10.2).
 
 **D169. A rebuild's commits: one per batch while it runs, folded into one `lifelog: rebuild`.**
 *Question:* 6.10 commits once, at the end, as `lifelog: rebuild`. A failed batch's clean-up puts back the last commit (6.9), which would then be the views before the rebuild.
@@ -2354,3 +2359,223 @@ Not verified:
 - **A rebuild of a datastore of months:** how long it takes and what it costs; and how much git's reflog keeps of the commits folded away (D169).
 - **`scooter rebuild` in Docker,** as `docker compose run --rm runner rebuild lifelog` (milestone 13), and natively as `scooter-runner` (milestone 12).
 - **arm64 and macOS.** Nothing here knows the architecture.
+
+## Milestone 10: backups
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.4, 5.5, 6.10, 8.2, 8.4, 8.6 and section 10, to say what this milestone settled (10.3 here). It also settled the five smaller points of the review of milestone 9, leaving one choice that review offered, and the two points earlier reviews had left for this milestone (10.2).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/bridge/backup.mjs` | The backup module, the only code that runs restic: `init`, `run`, `snapshots`, `check` and `restore`; the bridge's backups, with their schedule, locks, results, replies and notices; and the commands `backup-init`, `snapshots`, `check` and `restore` |
+| `src/bridge/main.mjs`, `commands.mjs`, `state.mjs`, `status.mjs` | The backups started and stopped with the bridge, `SIGUSR1`, a leftover `backup.lock` removed at startup; `/backup`; `lastBackup`; the line of `/status` |
+| `src/bridge/channels/whatsapp.mjs`, `intake.mjs` | A stop that stops wacli's calls in progress, and a download it cuts short leaving its message for catch-up (D179) |
+| `src/common/instance.mjs` | `instanceAnswers`: whether a service holds a socket, without taking it |
+| `src/common/settings.mjs`, `limits.mjs`, `paths.mjs` | `FORCE_CHECK` and `RESTORE_TARGET`; `RESTIC_TIMEOUT`; `backupCache` and `agentsDiscarded` |
+| `src/cli.mjs` | The four commands built |
+| `src/runner/rebuild.mjs`, `protocol.md` | The review of milestone 9 (10.2) |
+| `test/support/restic.mjs`, `restic-stub.mjs` | The restic stub, for the coordination tests |
+| `test/backup.test.mjs` | This milestone's tests, the real round trip among them, with additions to `bridge`, `whatsapp`, `intake`, `rebuild`, `backfill`, `settings`, `paths`, `limits` and `status` |
+
+### 10.1 Decisions
+
+**D179. Stopping a channel stops wacli's calls in progress, and a download it cuts short leaves its message, and the ones after it, for catch-up** (the review of milestone 2, point 3; the review of this milestone, must-fix 1, 10.5).
+*Question:* the channel's `stop()` waited for every wacli call in progress, a download among them, up to `WACLI_CALL_TIMEOUT` for each of its three tries, and returned while intake could still hold records. A backup stops the channels every night, and then waits for that.
+*Choice:* `stop()` aborts a signal that wacli's calls of the channel take: the catch-up's `messages list`, the pairing check's `auth status`, and `media download`, which also fails at once, with the code `ESTOPPED`, when the channel is stopped. Intake doesn't try such a download again, and doesn't store its message as `download failed`: it leaves the message unstored, logged as skipped, for the channel to hand over again. From then on it stores nothing of that channel, and leaves every record it takes from it, until the bridge says the channel starts again (`intake.started`), which it does before it starts a channel it stopped; that takes its turn after the records taken before it. The backup waits for `intake.idle()` after stopping the channels. Sends already took a signal (D104). A call that ended well as the signal came is a success, as before: a send that went out isn't sent again.
+*Reason:* the review's way. WhatsApp's catch-up runs as soon as the channel starts, from two minutes before the newest incoming line, and lists what came after it again, in order. A message stored after the one left would move that start past it, and it would never be stored: records queued behind a download needn't be close to it in time, since a download may take three tries of `WACLI_CALL_TIMEOUT` with what is sent meanwhile waiting, and after downtime wacli hands over within seconds a backlog that spans hours. With nothing of the channel stored after it, catch-up starts before the message left, and brings it and those after it. Catch-up itself hands its rows over one at a time, and stops between them on a stop. Email's download is a copy out of the spool, which is quick, and the spool keeps the email until it is stored (D137). *Not:* what pull request 11 had at first, the message left and the ones queued behind it stored, which lost the message for good when one of those was more than `CATCHUP_OVERLAP` newer (10.5).
+*Cost:* a message whose download a stop cut short, and those after it, are stored only when catch-up lists them, a few seconds after the channel starts again; a command among them is answered then.
+*Not changed:* catch-up and the webhook both hand records to intake while the channel runs, so a catch-up cut short between rows, by a stop or a crash, after the webhook stored a message more than `CATCHUP_OVERLAP` newer than the rows it hadn't listed yet, doesn't list them again. Only a row the webhook didn't hand over is lost so. It is so on `main`, and follows from where 5.2 step 7 starts catch-up; this milestone doesn't change it.
+
+**D180. restic's environment, and its cache.**
+*Question:* 5.5 runs restic with its settings in its environment, and says nothing of what else restic needs.
+*Choice:* restic's environment is `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, the bucket's credentials (`AWS_*` or `B2_*`), `TMPDIR`, the bridge's own temporary folder, and `TZ`, nothing else; it runs as the bridge's user, root in an install, from Scooter's own `PATH` (D25). The nightly backup keeps restic's cache in `bridge/backup-cache/`, which restic marks with a `CACHEDIR.TAG`, so `--exclude-caches` in 5.5's command leaves it out. The commands run at a terminal use `--no-cache`. `TZ` is UTC, so restic writes a snapshot's time in UTC (section 2), except for `snapshots`, whose list the owner reads, which gets `SCOOTER_TZ`.
+*Reason:* without a home or a cache folder restic stops before it does anything (10.2, facts), and a cache saves the nightly backup reading the repository's index from the bucket. The commands needn't keep one, and `restore` mustn't: it can delete inside `bridge/`, where the cache is (D190). restic otherwise takes the machine's zone for a snapshot's time.
+
+**D181. A rebuild's own steps take `run.lock`** (the review of milestone 9, point 1).
+*Question:* only a rebuild's batches took `run.lock`. Its tag, the emptying of `views/`, `memory/` and `sessions/`, the first commit and the reset state, and at the end `git reset --soft`, the commit `lifelog: rebuild`, `git gc --auto` and the removal of its sessions, changed the agent's folder outside it, also while a backup held `backup.lock`. A backup could then read a branch naming a commit it hadn't read.
+*Choice:* steps 1 to 3, and 5, run holding `run.lock`, taken as a batch takes it, giving way to `backup.lock` and trying again every `POLL_INTERVAL`, and saying "Waiting for a backup to finish." once. Stopped while it waits before step 1, the rebuild has changed nothing, and says so.
+*Not changed:* a runner's start, which throws away what a run cut short left (D88, D89) without `run.lock`. It commits nothing: it puts the index and the files of `views/` and `memory/` back from the last commit, and `git prune` removes only what no commit names. A backup taken during it holds a repository whose commits are whole, and at worst views in part, which the next start puts back from the last commit. Taking `run.lock` there would make a file before what pi wrote is freed, on a disk pi may have filled (D89).
+
+**D182. A rebuild waits for an item to be tried again before the items after it** (the review of milestone 9, point 2).
+*Question:* an item not reported is due again a minute later, and the rebuild went on to the following days meanwhile, so the batches of three days, the first not reported, were `[1] [3] [5] [1] [1] [1]`. A rule the owner sent that needed a second try was learned after the days that follow it were filed, where 6.10 has rules "learned again at the point they were sent"; and the retry's context ran from it to the lane's cursor, days ahead, so its prompt showed what the agent had sent on later days.
+*Choice:* while the rebuild's lane has an item waiting to be tried again, it waits until the first is due, as it waits for a pause, and takes nothing after it meanwhile. The batches are then `[1] [1] [1] [1] [3] [5]`, and the lane's cursor never passes the day of an item waiting: a retry's context is its own day's, as is every batch's, but for a message an edit brings in from another day (6.5).
+*Reason:* the review's first way; nobody waits on a rebuild. *Cost:* at most three minutes for each item not reported, and four attempts each. A backfill isn't changed: it files one view, its rules are the config's, and it runs inside the live runner, where it waits for nothing.
+
+**D183. A backup tells a runner still at work from one that is gone by `runner/runner.sock`** (the plan's rule for this milestone; the fourth review of milestone 4, point 2).
+*Question:* the time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it, so that a lock a dead runner left can't hold backups for good. But the runner holds the lock while it packs its repository and while its clean-up removes what pi left, and neither has a time limit (D96, D88).
+*Choice:* past that time, the backup goes ahead only when no runner holds `runner/runner.sock`; while one does, it is at work, and the backup waits on, logging `backup.run_overdue` once. Only a socket counts, not a link to one. Before that time nothing changes: the lock is its run's. A `run.lock` whose time can't be read is past it.
+*Reason:* every holder of `run.lock` holds the socket for as long as it lives: the runner and a rebuild (D90, D167). The socket answers only while its holder runs, in another container too, and it can't be mistaken for a process that got the same pid, which is why the services hold one (D48); the pid in `run.lock` would mean nothing in the bridge's container. A connection is queued by the system, so a runner whose own work keeps it from taking one, a long removal for one, still answers.
+*Cost:* a runner that hangs while it holds `run.lock` holds backups back for as long. Nothing of the runner's after a run is unbounded but by what pi could write, which `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` bound. The runner's user can hold backups back anyway, with a `run.lock` whose time is far ahead.
+
+**D184. `exchange/locks/` as the bridge uses it.**
+*Choice:* the bridge makes `exchange/locks/` at startup, if it is missing, as the runner's, 0700, as it makes the outbox (D108). It takes and removes `backup.lock` there only while the folder is the runner's and not a link (`checkOwnFolder`, D136), and reads `run.lock` as it reads the runner's other files: without following a link, without waiting on a FIFO, a regular file of at most `STATUS_FILE_MAX_BYTES` (D132). At startup it removes a leftover `backup.lock` (5.5), logged as `bridge.lock_removed`; it is the only one that takes it, and holds the bridge's socket.
+*Reason:* had the bridge made the folder first, as root, the runner couldn't take `run.lock` there, and every run would fail. The bridge writes there as root, in a folder the runner's user controls. A FIFO in place of `run.lock` would have the bridge's one thread wait with it.
+
+**D185. What a backup holds, and leaves out.**
+*Choice:* 5.5's folders and excludes, and also `agents/.discarded/` (the plan's rule), which holds what a clean-up is removing. A folder that isn't there, such as `mail/` with email off or `runner/log/` before the first run, is left out of restic's command line. `exchange/locks/` isn't held: a lock restored would hold runs or backups back.
+*Reason:* restic exits with 3 for a folder that isn't there, as for a file it couldn't read (10.2, facts), and every night would be a failure.
+
+**D186. A backup's steps, and its results.**
+*Choice:* the steps run in order, and the first that fails ends the backup: a forget or a check after a backup that failed would prune or check without a new snapshot. restic's exit code 3 saves a snapshot without the files it couldn't read: the backup fails, with that snapshot. A backup that exits 0 without the line `snapshot <id> saved` fails too. A step that takes longer than `RESTIC_TIMEOUT`, 6 hours, is stopped, and the backup fails. The reason is said in words for restic's exit codes 10, 11 and 12; otherwise it is restic's last line on stderr, `Fatal: …`, cut to `REASON_MAX_CHARS`. It goes into the reply or the notice and the bridge's state, never into the log, which has the step, the exit code and the snapshot's ID, as D82 does with OpenRouter's words. A notice or a reply that can't be written is tried again after the waits of a command's reply (5.4).
+*Reason:* while a backup lasts the channels are stopped and the runner waits, so a restic that hung would stop Scooter for good; 6 hours is room for a first backup of years of photos over a slow uplink, and what it uploaded is used again by the next. *Cost:* a restic that fails before the time limit at every try, as a bucket that refuses it would make, is a notice a night.
+
+**D187. `/backup` doesn't hold back the commands after it.**
+*Question:* the bridge answers commands one at a time (D106), and a `/backup` that waited for its backup, which waits for a run of up to two hours, would hold back a `/status` sent after it (the plan's rule for this milestone).
+*Choice:* `/backup` starts a backup, or joins the one in progress, and counts as handled at once; its reply, `about` the command, is written when the backup is over. A request during a backup joins it, whatever started it: a scheduled one, `SIGUSR1` or `/backup`. A backup the owner didn't ask for by message, scheduled or by `SIGUSR1`, says nothing when it works, and tells the owner when it fails, unless a `/backup` that joined it got the reply. A bridge that stops during a backup stops restic, starts nothing again, lets go of `backup.lock`, and tells each `/backup` that it was stopped; such a backup isn't recorded as one that failed. The backups' stop is over only once every backup asked for is told: one that ended as the stop came keeps its result and writes its replies first, though a new request no longer joins it (the review of this milestone, point 6).
+*Reason:* the `/status` the owner sends while waiting is the one that says a backup is in progress, waiting for a run. *Cost:* a bridge that crashes during a backup doesn't answer the `/backup` that started it. Keeping the request in the bridge's state, to answer it after a crash, would have a crash that a backup causes start one at every start.
+
+**D188. The schedule.**
+*Choice:* the next backup is `nextLocalTime` of `BACKUP_TIME` in `SCOOTER_TZ` (D21), worked out at the start and after each backup: so a bridge started after the day's time backs up the next day, a time that comes twice when the clocks go back comes due once, and a skipped one at the jump. The bridge sleeps until that instant, and sleeps again if the clock was set back meanwhile. Without `RESTIC_REPOSITORY`, `backup.off` is logged at startup, `/backup` says backups are off, and `SIGUSR1` is logged and does nothing. `BACKUP_TIME=off` leaves `/backup` and `SIGUSR1`.
+*Cost:* a machine that sleeps through the time backs up when it wakes, late. Scooter runs on a server.
+
+**D189. `FORCE_CHECK` and `RESTORE_TARGET` are settings of the bridge; Sunday is the owner's.**
+*Question:* 5.5 names both, as `FORCE_CHECK=1` and `RESTORE_TARGET` (default `/`); 8.2 lists neither, and a variable in `bridge.env` that isn't the bridge's stops it (D15).
+*Choice:* both are in the bridge's list, read from `bridge.env` or the environment, as every setting is: `FORCE_CHECK` is `0` or `1`, default `0`; `RESTORE_TARGET` an absolute path, default `/`. They are read only with backups on. 8.2 and `bridge.env.example` list them. The weekly check runs when the backup starts on a Sunday (`RESTIC_CHECK_WEEKDAY`) in `SCOOTER_TZ`, as `BACKUP_TIME` is.
+*Reason:* one way to set anything; the environment still wins, so `RESTORE_TARGET=/tmp/look scooter restore` works for one restore. `FORCE_CHECK` is written `=1` in 5.5. `BACKUP_TIME` is the owner's time, so "Sunday" is the owner's day.
+
+**D190. Restore.**
+*Question:* 5.5 restores into `RESTORE_TARGET` and refuses a non-empty destination without `--force`, and says nothing of what `--force` does with what is there, or of a destination of `/`, which is never empty.
+*Choice:*
+- The destination is each folder the snapshot holds, at `RESTORE_TARGET` joined with the path it was backed up from; one that isn't there, or is an empty folder, is empty.
+- Only a snapshot whose paths are the folders a backup holds, under one folder, is restored, whatever its tags say; `latest` is the newest with the host and the tag `scooter`.
+- It is one `restic restore <id>:<that folder> --target <RESTORE_TARGET>/<that folder>`, limited to the snapshot's folders by `--include`, with `--delete` and `--ownership-by-name`, and without a cache. So each folder becomes the snapshot's: restic deletes what the snapshot doesn't hold inside the folders it includes, and nothing else, such as `runner/image/`; the folders between, `runner/` and `exchange/`, get the owners and modes they had; and every file its owner by name, so a machine whose users `setup` made with other numbers gets them right. The data folder, if it makes it, is 0755 (D49).
+- Writing into the data folder of `DATA_DIR`, it refuses while the bridge or a runner holds its socket.
+- As root, it refuses while any of Scooter's three users isn't there, whatever the target, and says to run `setup` first (the review of this milestone, point 3). restic gives a file whose owner's name isn't a user there to root, and says nothing (10.5, facts): a restore before `setup` on a new machine, the case a restore is for, would leave the runner unable to enter the agent's folder, and wacli its own. Not root, no file gets another owner, and it goes on.
+- It exits with 0 once restored, 2 when it refuses, as for a call or a configuration it can't start with (D30), and 1 when restic fails.
+*Reason:* with `--force`, a datastore restored over a later one would keep the later days' logs after a shortened one, a gap in `seq` that stops the bridge (D29): what is there is replaced, as the owner asked. restic's `--delete` with a target of `/` would delete everything in `/` the snapshot doesn't hold (10.2, facts); limited to the folders included, it deletes nothing else. Restoring each folder on its own, `<id>:<folder>`, makes a new one root's, 0700, which the runner couldn't enter.
+*Cost:* a snapshot made with another `DATA_DIR` is restored at that one, under `RESTORE_TARGET`; moving it is the owner's. Nothing keeps a service from starting during a restore: the README says to stop both. A restore as root only to look at a backup elsewhere needs the users too, so on a machine without Scooter it also comes after `setup`.
+
+**D191. The commands.**
+*Choice:* `backup-init`, `snapshots` and `check` take no arguments; `restore` at most a snapshot's ID, eight to 64 hexadecimal digits, or `latest`, and `--force`, once each. Each exits with 2 and says so without `RESTIC_REPOSITORY` (5.5); without `RESTIC_PASSWORD` the settings already stop it with 2. They pass restic's own output on, and end a failure with a line that says why, in words for restic's exit codes 10 to 12. `backup-init` prints what `restic init` says, and that nothing was changed when the repository is there.
+
+**D192. What the bridge keeps of a backup, and what `/status` says.**
+*Choice:* `lastBackup` in the bridge's state is `{ at, ok, snapshot, reason }`: the backup's start, whether it worked, the snapshot, and why it failed, and the state's check holds it to that. `/status` says `Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.`, `the last, 03:30, failed (<reason>)`, `none yet`, `one in progress since 21:20, waiting for the agent's run to end`, `None is scheduled: BACKUP_TIME is off`, or that backups are off, and why.
+
+**D193. A rebuild stops on `SIGHUP`** (the review of milestone 9, point 3).
+*Choice:* `scooter rebuild` stops on `SIGHUP`, which a closed terminal sends, as on `SIGTERM` and `SIGINT`: the batch in progress is thrown away and `run.lock` let go of. Writing to a terminal that is gone fails, and the rebuild ignores that. A leftover `run.lock` is now said to be "left by a runner or a rebuild stopped by force".
+*Reason:* the review's way. A closed terminal is the likeliest way a rebuild is cut short, and killed by the signal it left `run.lock`, which the next rebuild refused.
+
+**D194. One constant, and one more use of another.**
+`RESTIC_TIMEOUT`, 6 hours (D186). `STATUS_FILE_MAX_BYTES` also bounds the `run.lock` the bridge reads (D184). 8.6 of DESIGN.md lists both.
+
+**D195. Scooter's snapshots are one group, whatever folders each holds** (the review of this milestone, point 2).
+*Question:* restic groups snapshots by host and paths unless told, and `forget` applies the retention to each group. D185 leaves out a folder that isn't there, so the paths change when `runner/log/` first appears, or email is turned on or off, and the last snapshot of the old paths stays for good, the newest of its group. `backup` picks its parent snapshot the same way, and without one reads every file again.
+*Choice:* `backup` and `forget` take `--group-by host,tags`. Scooter's snapshots all have the host and the tag `scooter`, so they are one group.
+*Reason:* the review's first way. The retention is about time, not about which folders a night held, and `restore` takes a snapshot whatever folders it holds (D190). With the latest snapshot as its parent, `backup` reads in full only a folder the parent doesn't hold.
+
+**D196. `SIGUSR1` is for the bridge alone, and the email reader ignores it** (the review of this milestone, point 1).
+*Question:* the plan's command for the README, `systemctl kill -s USR1 scooter-bridge`, signals every process of the unit: systemd's `--kill-whom` is `all` unless given. The email reader is Node, and Node answers a `SIGUSR1` it has no listener for by opening its debugger on `127.0.0.1:9229`, where any local user, `scooter-wacli` among them, could run code as `scooter-mail`, which holds the mailbox's password.
+*Choice:* the bridge starts the reader as `node --disable-sigusr1 <reader>`, which Node has had since 22.14: it then ignores the signal from its start, debugger and exit alike. The plan's command is `systemctl kill --kill-whom=main -s USR1 scooter-bridge`, and its milestone 12 says the bridge's unit has Node as its main process, which the wrapper `exec`s. In Docker, `docker compose kill` signals the container's first process, `tini`, which passes it to the bridge.
+*Reason:* the review's two ways. A listener in the reader, as the bridge has, would leave the moments before it is added; the flag leaves none. The bridge itself can't take the flag: with it, its own listener isn't called (10.5, facts).
+
+### 10.2 Facts found, and the reviews of the pull requests merged before this one
+
+**restic 0.19.1** on the Linux machine, by hand and in the round trip:
+- Exit codes: 0; 1 for an error; 3 for a backup that saved a snapshot without some files, a source folder that isn't there among them; 10 for a repository that isn't there (`cat config` too); 11 for one locked; 12 for a wrong password. `check` takes an exclusive lock, and a temporary cache.
+- Without `HOME`, `XDG_CACHE_HOME` or a cache option, every command stops with 1, "unable to locate cache directory". The cache folder holds a `CACHEDIR.TAG`, and `--exclude-caches` leaves it out of the backup.
+- Without `TZ` it writes a snapshot's time in the machine's zone, `+05:30` here.
+- `snapshots --json` answers `[]` and 0 for an ID it doesn't find, and for `latest` with no snapshot.
+- `restore <id>:<folder>` makes its target 0700, whatever the folder was. Restoring a folder above, with `--include` for each folder wanted and `--delete`, restores those with their own modes, gives the folders between the snapshot's modes, and deletes inside the included folders only: what else is in the target stays. `--ownership-by-name` as an ordinary user gives no error; as root it gives a file its owner by name, also when the user's number has changed since the backup.
+
+Pull request 10, milestone 9, was approved by its review with five smaller points. All five are settled, the fourth by recording its two costs; the warning it offered as a choice is left:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | The rebuild's own steps change the views and `.git` outside `run.lock`, also while a backup holds `backup.lock` | Settled (D181), the review's first way. Test in `rebuild`: a backup that holds its lock at the start, and takes it during the last batch, finds nothing tagged or emptied before step 1, and nothing folded before step 5. It fails on the code before |
+| 2 | A replay handles a retried item out of order, and shows it later days' lines | Settled (D182), the review's first way, which also keeps a retry's context to its day. Test in `rebuild`, the review's probe: three days, the first not reported, and no prompt of it showing a later day's reply. It and the changed order of the outage test fail on the code before |
+| 3 | A closed terminal leaves `run.lock`, and the next rebuild refuses, blaming a runner | Settled (D193). Test in `rebuild`, with `SIGHUP`; it fails on the code before |
+| 4 | Two costs of D168 aren't recorded | Settled by recording both under D168, and in the plan's milestone 14 rule for the README. Left: a warning at the runner's start when the last commit is a rebuild's batch, which the review called a choice; the README is where the owner learns it |
+| 5 | Small gaps: the summary with `can_message: false`, a rebuild with `session: none`, and `protocol.md` on a backfill's first line | Settled: a test in `backfill` and one in `rebuild`, which pass on the code before as the review's probes did; `protocol.md` says a backfill's line comes before the time |
+
+The points the reviews of milestones 0 to 8 left, as 9.2 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Settled (D179). Tests in `whatsapp`, a download that hangs, stopped, and its message brought back by catch-up, which hangs on the code before, and in `intake` |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time, packing and the clean-up's removal | Settled (D183), the plan's way. Tests in `backup` |
+| Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Left, for milestone 12 |
+| Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
+
+### 10.3 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 5.5 and the reviews left open:
+- 5: a channel's `stop()` stops wacli's calls in progress (D179).
+- 5.4: `/backup` replies once the backup is over, and the commands after it are answered meanwhile (D187).
+- 5.5: restic's environment and its cache (D180); `agents/.discarded/` left out, and a folder that isn't there (D185); the check on Sundays in `SCOOTER_TZ`, and `FORCE_CHECK` (D189); a step that fails ends the backup, and `RESTIC_TIMEOUT` (D186); what `restore` does, `--force` and owners by name (D190); `/backup` and `SIGUSR1` at any time, joining a backup in progress; a runner still at work past its time (D183); a rebuild's own steps under `run.lock` (D181); `exchange/locks/` as the bridge uses it (D184); the notice for a backup `SIGUSR1` started, and the state's result (D187, D192).
+- 6.10: an item tried again is waited for; the rebuild's own steps take `run.lock`; a closed terminal (D181, D182, D193).
+- 8.2: `FORCE_CHECK` and `RESTORE_TARGET` (D189).
+- 8.4: `restore` takes the latest unless a snapshot is named, and needs both services stopped to write into the data folder.
+- 8.6: `RESTIC_TIMEOUT`; `BACKUP_LOCK_EXTRA` and `STATUS_FILE_MAX_BYTES` as D183 and D184 have them.
+- Section 10: Backups, as this milestone tests them; Rebuilds, the retry's order and the backup's lock.
+
+ARCHITECTURE.md 2.11, decision 10, 5.4 and 5.5 say the same. The plan's milestones 12, 13 and 14 have what this milestone leaves for them. `bridge.env.example` has the two settings, and says what a backup stops.
+
+### 10.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `ec4bf4f`, which holds all the code. `5b39b34` changes only the restic stub, for a race the repeated runs found in it, and the commit after it only this file. The first five rows were run at `ec4bf4f`, and `npm test` again at `5b39b34`, with the same counts:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 701 tests: 656 pass, none fail. 45 skip themselves: 34 need the image (18 of milestone 0, 16 of the sandbox), 10 need root, and the restore by name needs root and `SCOOTER_ROOT_TESTS=1`. The real round trip runs, with the restic of `~/.local/bin` |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 703 tests: 692 pass, none fail, in 115 seconds. The 11 that need root skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 644 pass, none fail. 57 skip themselves: 34 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, 2 run `scooter bridge` as a process, and 2 need restic, which that image lacks |
+| The same container, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic`, `test/backup.test.mjs` | All 26 pass as root, the round trip and the restore by name among them: a user's number changed between the backup and the restore, and the restored files are the user's by name |
+| The `backup`, `rebuild`, `whatsapp`, `intake`, `bridge`, `delivery`, `backfill` and `status` tests, 16 times, 8 at once, at `ec4bf4f` | One failure in 16: the test of a stop during a backup found no mark of restic's stop. The stub wrote that it held the command before it was ready for SIGTERM, and a stop that came at once killed it before it could write the mark. `5b39b34` readies it first |
+| The same, 32 times, 8 at once, at `5b39b34`; and `test/backup.test.mjs` alone 20 times | No failure. The test of `scooter bridge` as a process skips itself when another copy holds the port |
+| The new tests of the rebuild, against `rebuild.mjs` of `main`, at `4ffb862` | Five fail: the message about a leftover `run.lock`, the order of the outage test, the lock around its own steps, the retry's order, and `SIGHUP`. The tests of `session: none` and of the stop pass, as the review found |
+| The new tests of the stop, against `intake.mjs` and `whatsapp.mjs` of `main`, at `4ffb862` | The intake test fails; the WhatsApp test hangs on the download, as the review found, until it was stopped |
+| By hand, at `4ffb862`: `scooter backup-init` twice, `scooter bridge` as a process with the real, unpaired wacli and restic, `SIGUSR1`, then `snapshots`, `check`, `restore`, with a scratch data folder | `backup-init` made the repository, then said it was there. On `SIGUSR1` the bridge stopped WhatsApp, backed up (`backup.step` for backup and forget, exit codes 0), started it again, and stopped cleanly on SIGTERM with no wacli left and `exchange/locks/` empty. `snapshots` listed the snapshot in Asia/Kolkata time; `check` found no errors; `restore` refused the live data folder as not empty (2), restored into `RESTORE_TARGET`, where the datastore matched and `bridge/backup-cache` wasn't, and with `--force` into the live folder (0); the repository held no plaintext; the wrong password exited with 1, saying so; a snapshot that isn't there with 2 |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| A backup waits for a run to finish | `backup.test.mjs`, the first test: `backup.lock` taken first, nothing of restic while `run.lock` is there, and the writers stopped only while restic runs |
+| It goes ahead once `run.lock` is 2 minutes past its time | `backup.test.mjs`: not a second before; and, past its time, it waits on while a runner holds `runner.sock`, and goes ahead once none does (D183); a lock that is a FIFO, a link or not a lock |
+| A leftover `backup.lock` is removed at startup | `backup.test.mjs`, through `startBridge` |
+| Real round trip: init, back up, no plaintext, the wrong password fails, the restore matches, `--force` needed for a non-empty target | `backup.test.mjs`, with restic installed; and, as root, owners by name |
+| Runner: no run while a backup holds its lock; the runner gives way when both appear | `runner.test.mjs` (milestone 4), and `backup.test.mjs` with a backup in progress |
+| Rebuilds: the retry's order, and the backup's lock | `rebuild.test.mjs` |
+
+Beyond section 10: restic's arguments and environment, the Sunday check and `FORCE_CHECK`, the replies, notices and joins, `RESTIC_TIMEOUT`, a stop during a backup, a resume that fails, `exchange/locks/` as a link, the schedule across a daylight-saving change, backups off, the bridge's channels and delivery stopped and started with a new webhook secret, `/status` answered while `/backup` waits, the commands' arguments and exit codes, `restore`'s refusals and its one restic call, in `backup.test.mjs`; `SIGUSR1` to `scooter bridge` as a process, in `bridge.test.mjs`.
+
+Not verified:
+- **A real bucket** (gate G4): R2 or B2, with real credentials, and a backup and a restore through it. The round trip uses a repository in a folder.
+- **Backups in Docker** (milestone 13): the bridge's connection to `runner.sock` through the runner's volume, mounted read-only in its container, which by the kernel's rules a read-only mount doesn't stop, and `restore` there, where the bridge's container can't write `runner/log/`.
+- **A native restore** (milestone 12, gate G2), as root, with the services of `setup`. The root test restores with a user whose number changed, in a container.
+- **A backup during a real run**, with the runner packing its repository past its time: the tests hold the socket and `run.lock` themselves.
+- **arm64 and macOS.** Nothing here knows the architecture; restic's arguments are the same, and Unix sockets and `lstat` are the same on macOS.
+
+### 10.5 The review of this milestone
+
+The review of the pull request, at `6006dd8`, found the milestone's "done when" met, asked for one change, and noted seven smaller points. Each is below, with what became of it.
+
+| # | Point | What became of it |
+|---|---|---|
+| Must 1 | A stop of the WhatsApp channel can lose a message for good: intake left the message whose download the stop cut short, and stored the records queued behind it, so catch-up, from two minutes before the newest of those, never listed it again | Fixed (D179), the review's way: once a stop has left a message of a channel, intake stores nothing more of that channel until the bridge says it starts again, which it does before it starts a channel a backup stopped. D179's reason and DESIGN.md 5's row for `stop()` say so, and ARCHITECTURE.md 5.4. Tests: in `whatsapp`, the review's probe, a photo whose download hangs, then a text and a command five minutes later, then a stop: nothing is stored, and once the channel starts, catch-up lists from the bridge's first start and stores all three, in order, the photo with its file; in `backup`, the same through a backup the bridge makes, which also checks that the bridge says the channel starts again; in `intake`, with another channel's message stored meanwhile. A gap of the same kind that is on `main` too, a catch-up cut short between its rows after the webhook stored a newer message, is recorded under D179 and not changed |
+| 1 | `systemctl kill -s USR1 scooter-bridge` signals every process of the unit, and the email reader's Node opens its debugger on it | Fixed (D196), both of the review's ways: the reader runs with `--disable-sigusr1`, which leaves no moment before a listener would be added; the plan's milestone 14 says `--kill-whom=main`, and its milestone 12 that the unit's main process is Node. Test in `email`: Node, started with the reader's options and signalled, neither opens its debugger nor exits; without them it opens it |
+| 2 | `forget` keeps old snapshots for good when the set of folders changes | Fixed (D195), the review's first way, `--group-by host,tags`, and on `backup` too, which picks its parent the same way. DESIGN.md 5.5 has both commands. Tests in `backup`: the arguments; and with the real restic, a backup without `mail/`, then one with it, the same day, of which `forget` with one daily snapshot keeps only the second |
+| 3 | A restore as root on a machine without Scooter's users makes every file root's, and says nothing | Fixed (D190): as root, `restore` refuses until the three users are there, and says to run `setup` first; the plan's milestones 12 and 14 say that `setup` comes first. DESIGN.md 5.5 and 8.4, ARCHITECTURE.md 2.11. Test in `backup`, with a `lookupUser` that answers as `id` does without the user: exit code 2, and nothing asked of restic. The root test of owners by name makes Scooter's users first, as `setup` will |
+| 4 | No test runs a backup with email on | A test in `backup`, the review's shape: the reader is gone before restic starts, `mail/` is among restic's folders, and the reader starts again after. It passes on `6006dd8`, as the review found |
+| 5 | One failure in 88 repeated runs: `scooter bridge` as a process timed out waiting for sync to start again after the backup | The test of `6006dd8`, with a listener put on port 8787 while restic held the backup, fails just so: the bridge can't listen again, stops, and the test waits for sync. The test now skips when the bridge stops because another process took the port then, as it already did at the start, and a wait that times out shows the bridge's last log lines, which hold no message's text. That the review's failure was this isn't confirmed: 48 runs below didn't meet it |
+| 6 | A `/backup` whose backup ends as the bridge stops may get no reply | Fixed (D187), the review's way: the backups' stop waits for every backup asked for to be told, not for the one in progress only. Test in `backup`: a stop that comes as a backup's result is kept is over only once its reply is written; on `6006dd8` it was over first |
+| 7 | ARCHITECTURE.md 4.4 has the bridge read the datastore before it removes a leftover `backup.lock` | Corrected to `main.mjs`'s order |
+
+Facts found:
+- **restic 0.19.1** groups snapshots by host and paths unless given `--group-by`, in `forget` and in `backup`'s choice of a parent. `forget` also keeps a group's oldest snapshot while the group holds fewer days than `--keep-daily` asks for ("oldest daily snapshot"), so of two snapshots on one day, `--keep-daily 7` keeps both, and `--keep-daily 1` the newer. As root, `restore --ownership-by-name` gives a file whose owner's name isn't a user there to root, and exits with 0 (the review's probe, in the root container).
+- **Node 22.23.2** with `--disable-sigusr1` ignores `SIGUSR1` altogether: it opens no debugger, doesn't exit, and calls no listener of the program's. Without it and without a listener, it opens its debugger on `127.0.0.1:9229`.
+- **systemd 255**: `systemctl kill` signals every process of the unit unless given `--kill-whom` ("If omitted, defaults to all").
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `124e5d6`, which holds all the changes; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 708 tests: 663 pass, none fail. 45 skip themselves, as before: 34 need the image, 10 need root, 1 needs root and `SCOOTER_ROOT_TESTS=1`. The real restic tests run |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 710 tests: 699 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 708 tests, 653 pass, none fail, 55 skip. All 31 backup tests pass as root, the round trip, the grouping and the restore by name among them |
+| The `backup`, `whatsapp`, `intake`, `bridge`, `email`, `status`, `rebuild` and `delivery` tests, 48 times, 8 at once | No failure. `scooter bridge` as a process skipped itself 14 times for the port: 11 times in use at its start, 3 times taken as the bridge started |
+| The new tests against the code of `6006dd8` | Each fails there, but the test with email on, which passes, as the review found |
+| By hand, restic alone: one snapshot of a folder, then four of it and another, a day apart each (`--time`), then `forget --keep-daily 2 --dry-run` | By host and paths it keeps three, the first among them; with `--group-by host,tags`, the newest two. The test in `backup` can't date its snapshots, so it shows the same within one day |
+
+Nothing is left unverified beyond what 10.4 lists.

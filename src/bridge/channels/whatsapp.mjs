@@ -252,14 +252,16 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   let running = null
 
   // Runs wacli with `--json` and returns the `data` part of its answer (13.1). Rejects when it
-  // fails, without repeating what it said: its errors can name chats and files. `signal` stops it.
+  // fails, without repeating what it said: its errors can name chats and files. `signal` stops it,
+  // and a call it stopped rejects with the code `ESTOPPED`. One that ended well as the signal came
+  // is a success: a send that went out isn't sent again.
   async function wacli(args, { signal = null } = {}) {
     const result = await proc.run(WACLI, ['--json', ...args], { env, user, timeout: limits.WACLI_CALL_TIMEOUT, signal })
     const what = args.filter(arg => /^[a-z]+$/.test(arg)).slice(0, 2).join(' ')
     // The log shows the exit code and whether it timed out (`errorFields`), and nothing wacli wrote.
-    const failure = reason => Object.assign(new Error(`wacli ${what}: ${reason}`), { code: 'EWACLI', exitCode: result.code, timedOut: result.timedOut })
+    const failure = (reason, code = 'EWACLI') => Object.assign(new Error(`wacli ${what}: ${reason}`), { code, exitCode: result.code, timedOut: result.timedOut })
     if (result.timedOut) throw failure('timed out')
-    if (result.code !== 0) throw failure(signal?.aborted ? 'stopped' : `exit code ${result.code}`)
+    if (result.code !== 0) throw signal?.aborted ? failure('stopped', 'ESTOPPED') : failure(`exit code ${result.code}`)
     let answer
     try {
       answer = JSON.parse(result.stdout)
@@ -271,19 +273,21 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   }
 
   // Whether wacli has a session: `data.authenticated`. Its exit code is 0 either way (0.6).
-  async function isPaired() {
-    const data = await wacli(['--read-only', 'auth', 'status'])
+  async function isPaired(signal) {
+    const data = await wacli(['--read-only', 'auth', 'status'], { signal })
     return isObject(data) && data.authenticated === true
   }
 
   // Before each start of sync: waits until wacli is paired, checking every `AUTH_CHECK_INTERVAL`.
+  // `signal` is the supervisor's, which a stop aborts, the check in progress with it.
   async function waitUntilPaired({ signal }) {
     if (link !== 'unpaired') link = 'checking'
     for (;;) {
       let paired = false
       try {
-        paired = await isPaired()
+        paired = await isPaired(signal)
       } catch (error) {
+        if (signal.aborted) return
         log.warn('whatsapp.auth_check_failed', errorFields(error))
       }
       if (paired) {
@@ -422,7 +426,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     const chat = ownerChat()
     for (;;) {
       const args = ['--read-only', 'messages', 'list', '--chat', chat, '--after', isoSeconds(after), '--asc']
-      const data = await wacli([...args, '--limit', String(limits.CATCHUP_LIMIT)])
+      const data = await wacli([...args, '--limit', String(limits.CATCHUP_LIMIT)], { signal })
       // wacli answers `null`, not an empty list, when there is nothing (0.6).
       const rows = isObject(data) ? (data.messages ?? []) : null
       if (!Array.isArray(rows)) throw Object.assign(new Error('wacli messages list: the answer has no list'), { code: 'EWACLI' })
@@ -458,6 +462,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
         try {
           await catchUp(onRecord, signal)
         } catch (error) {
+          if (signal.aborted) return
           log.warn('whatsapp.catchup_failed', errorFields(error))
         }
       }
@@ -537,8 +542,12 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       log.info('whatsapp.started', { address: server.address().address, port: server.address().port })
     },
 
-    // Stops sync, the webhook server and catch-up. Resolves once they have stopped and the
-    // messages they were handing over have been taken.
+    // Stops sync, the webhook server and catch-up, and wacli's calls in progress: a list, a check
+    // of the pairing, a download. Resolves once they have stopped and the messages they were
+    // handing over have been taken. A download it stops, or one asked for once it has stopped,
+    // fails with `ESTOPPED`, and intake leaves its message, and the ones after it, for catch-up,
+    // which lists them again when the channel starts (D179). A stop takes at most `STOP_GRACE` for
+    // each call, rather than up to `WACLI_CALL_TIMEOUT` for each try of a download.
     async stop() {
       if (!running) return
       const { server, supervisor, stopping, catchingUp } = running
@@ -560,9 +569,11 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     async download(record, n, target) {
       const chat = chats.get(record)
       if (chat === undefined || n !== 1 || record.attachments.length !== 1) throw new Error('no such attachment')
+      if (!running) throw Object.assign(new Error('wacli media download: the channel is stopped'), { code: 'ESTOPPED' })
+      const { signal } = running.stopping
       const staged = path.join(paths.wacliStaging, ids.next())
       try {
-        const data = await wacli(['media', 'download', '--chat', chat, '--id', record.id, '--output', staged])
+        const data = await wacli(['media', 'download', '--chat', chat, '--id', record.id, '--output', staged], { signal })
         if (!isObject(data) || data.path !== staged) throw Object.assign(new Error('wacli media download: saved elsewhere'), { code: 'EWACLI' })
         await copyUntrustedFile(staged, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
       } finally {

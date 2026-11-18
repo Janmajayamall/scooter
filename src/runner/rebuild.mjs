@@ -26,23 +26,28 @@
 //    `run.lock` and giving way to `backup.lock`. Its progress is a lane it keeps in memory, the
 //    live lane's fields of a state that is never saved, and it handles failures as the runner
 //    does (6.8, 6.9): items not reported are tried again a minute later, and given up on after
-//    `MAX_ATTEMPTS`; a setup error or an outage pauses it until the next try. Nothing goes to the
-//    outbox: it says what it does on its own output instead.
+//    `MAX_ATTEMPTS`; a setup error or an outage pauses it until the next try. It waits for an item
+//    to be tried again before it takes the items after it, so the history is replayed in its order,
+//    and a rule the owner sent is learned before the days after it are filed (D182). Nothing goes
+//    to the outbox: it says what it does on its own output instead.
 // 5. **Commit** the rebuilt folders as one commit, `lifelog: rebuild`, on the tagged one: each
 //    batch committed as it went, so a failed batch's clean-up had its last good state, and those
 //    commits are folded into this one. Then write the state, with what it gave up on in `failed`,
 //    where an edit of the message brings it back (6.5); and remove its sessions.
 //
+// Steps 1 to 3, and 5, take `run.lock` and give way to `backup.lock`, as each batch does: they
+// change `views/`, `memory/` and `.git`, and a backup must not read those halfway (D181).
+//
 // Rules the owner sent as messages are learned again at the point they were sent. Rules in the
 // config apply to all of history.
 //
-// Cut short, by a stop or a crash, it leaves the views rebuilt up to where it got, and the commits
-// of the batches so far. Run it again: it starts from the beginning.
+// Cut short, by a stop, a closed terminal or a crash, it leaves the views rebuilt up to where it
+// got, and the commits of the batches so far. Run it again: it starts from the beginning.
 
 import { createIds, emptyFolder } from '../common/files.mjs'
 import { initialAgentState } from '../common/agentstate.mjs'
 import { limits } from '../common/limits.mjs'
-import { lockExists } from '../common/locks.mjs'
+import { lockExists, releaseLock } from '../common/locks.mjs'
 import { createLog, errorFields } from '../common/log.mjs'
 import { makePaths } from '../common/paths.mjs'
 import { createProc } from '../common/proc.mjs'
@@ -52,9 +57,11 @@ import { openDatastore } from './datastore.mjs'
 import { holdRunnerFolder, readyAgentFolder } from './main.mjs'
 import { loadProtocol } from './prompt.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
-import { performRun } from './run.mjs'
+import { acquireRunLock, performRun } from './run.mjs'
 import { SandboxSetupError } from './sandbox/index.mjs'
 import { loadState, saveState } from './state.mjs'
+
+const MINUTE = 60 * 1000
 
 // A rebuild that can't start for how it was called or how things stand: no such agent, a runner
 // running, `run.lock` there. `scooter rebuild` exits with 2.
@@ -127,7 +134,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
   }
   try {
     if (lockExists(paths.runLock)) {
-      throw new RebuildError(`${paths.runLock} is there, though no runner is running: a runner stopped by force left it. Remove it, and run the rebuild again`)
+      throw new RebuildError(`${paths.runLock} is there, though no runner or rebuild is running: one stopped by force left it. Remove it, and run the rebuild again`)
     }
     const stateFile = paths.agentState(agent.name)
     const before = loadState(stateFile)
@@ -137,25 +144,10 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
     datastore.poll()
     const { index } = datastore
 
-    // 1 and 2.
     const until = index.lastSeq
     const tag = rebuildTag(clock.now())
-    const base = await git.head()
-    await git.tag(tag)
-    log.info('rebuild.started', { agent: agent.name, until, tag, accel: sandbox.accel })
-    say(`Rebuilding ${agent.name} from the datastore, up to #${until}. The last commit before the rebuild is tagged ${tag}.`)
-    if (sandbox.accel === 'emulation') say("pi's VMs run under emulation here, because KVM isn't available, so each batch takes much longer.")
-
-    // 3.
-    for (const folder of [paths.agentViews(agent.name), paths.agentMemory(agent.name), paths.agentSessions(agent.name)]) emptyFolder(folder)
-    const refused = await git.stage()
-    if (refused !== null) throw new Error(`git wouldn't stage ${refused} once the views were emptied`)
-    await git.commitStaged(`${agent.name}: rebuild, from empty views and memory`)
-    const reset = rebuiltState(before, agent, until)
-    saveState(stateFile, reset)
-
-    // 4.
     const context = { agent, settings, paths, sandbox, git, protocol: loadProtocol(), ids: createIds(clock), log, clock, index, stateFile: null, signal }
+    const reset = rebuiltState(before, agent, until)
     let state = { ...reset, cursor: 0 }
     let batches = 0
     let waitingFor = null
@@ -173,17 +165,69 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
         return false
       }
     }
+    // Says that it waits for the locks, once for each wait.
+    const waitFor = why => {
+      if (waitingFor !== why) say(why === 'backup' ? 'Waiting for a backup to finish.' : `Waiting for ${paths.runLock} to go.`)
+    }
+    // Does `step` holding `run.lock`, as a batch does, and giving way to a backup in the same way
+    // (D181). Returns false when `signal` stopped it before it could.
+    const locked = async step => {
+      for (;;) {
+        const lock = acquireRunLock({ paths, deadline: clock.now() + agent.timeoutMinutes * MINUTE, clock })
+        if (lock === 'taken') {
+          waitingFor = null
+          try {
+            await step()
+          } finally {
+            releaseLock(paths.runLock)
+          }
+          return true
+        }
+        waitFor(lock)
+        const going = await sleep(lock, limits.POLL_INTERVAL)
+        waitingFor = lock
+        if (!going) return false
+      }
+    }
     const stopped = () => {
       log.info('rebuild.stopped', { agent: agent.name, until, cursor: state.cursor, batches })
       say(`Stopped at #${state.cursor} of #${until}, with the views rebuilt only in part. Run the rebuild again; it starts from the beginning.`)
       return { stopped: true, tag, until, cursor: state.cursor, batches, failed: [...gaveUp] }
     }
 
+    // 1 to 3.
+    let base = null
+    const started = await locked(async () => {
+      base = await git.head()
+      await git.tag(tag)
+      log.info('rebuild.started', { agent: agent.name, until, tag, accel: sandbox.accel })
+      say(`Rebuilding ${agent.name} from the datastore, up to #${until}. The last commit before the rebuild is tagged ${tag}.`)
+      if (sandbox.accel === 'emulation') say("pi's VMs run under emulation here, because KVM isn't available, so each batch takes much longer.")
+      for (const folder of [paths.agentViews(agent.name), paths.agentMemory(agent.name), paths.agentSessions(agent.name)]) emptyFolder(folder)
+      const refused = await git.stage()
+      if (refused !== null) throw new Error(`git wouldn't stage ${refused} once the views were emptied`)
+      await git.commitStaged(`${agent.name}: rebuild, from empty views and memory`)
+      saveState(stateFile, reset)
+    })
+    if (!started) {
+      log.info('rebuild.stopped', { agent: agent.name, until, cursor: 0, batches })
+      say('Stopped before it changed anything.')
+      return { stopped: true, tag: null, until, cursor: 0, batches, failed: [] }
+    }
+
+    // 4.
     for (;;) {
       if (signal?.aborted) return stopped()
       const now = clock.now()
       if (state.paused && now < parseIsoSeconds(state.paused.next)) {
         if (!(await sleep('paused', parseIsoSeconds(state.paused.next) - now))) return stopped()
+        continue
+      }
+      // An item to be tried again is waited for, rather than passed by: the items after it, and
+      // the days after it, wait with it, as they wait for a pause (D182).
+      const waiting = state.retry.map(entry => parseIsoSeconds(entry.due))
+      if (waiting.length > 0 && Math.min(...waiting) > now) {
+        if (!(await sleep('retry', Math.min(...waiting) - now))) return stopped()
         continue
       }
       const built = buildReplayBatch({
@@ -197,17 +241,12 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
         homeCurrency: settings.homeCurrency,
         internet: settings.agentInternet,
       })
-      if (built === null) {
-        if (state.retry.length === 0) break
-        const due = Math.min(...state.retry.map(entry => parseIsoSeconds(entry.due)))
-        if (!(await sleep('retry', due - now))) return stopped()
-        continue
-      }
+      if (built === null) break
       const job = { kind: 'rebuild', batch: built.batch, prompt: built.prompt, sessionId: replaySessionId(agent, { day: built.day }) }
       const done = await performRun({ ...context, state, job })
       if (done.outcome === 'stopped') return stopped()
       if (done.outcome === 'waiting') {
-        if (waitingFor !== done.why) say(done.why === 'backup' ? 'Waiting for a backup to finish.' : `Waiting for ${paths.runLock} to go.`)
+        waitFor(done.why)
         const going = await sleep(done.why, limits.POLL_INTERVAL)
         waitingFor = done.why
         if (!going) return stopped()
@@ -224,15 +263,20 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
     }
 
     // 5. The batches' commits, folded into one on the tagged commit.
-    await git.resetTo(base)
-    const committed = await git.commitStaged(`${agent.name}: rebuild`)
-    try {
-      await git.pack()
-    } catch (error) {
-      log.warn('agent.pack_failed', { agent: agent.name, ...errorFields(error) })
-    }
-    saveState(stateFile, { ...reset, failed: state.failed })
-    const sessions = removeReplaySessions({ paths, agent, log })
+    let committed = false
+    let sessions = 0
+    const finished = await locked(async () => {
+      await git.resetTo(base)
+      committed = await git.commitStaged(`${agent.name}: rebuild`)
+      try {
+        await git.pack()
+      } catch (error) {
+        log.warn('agent.pack_failed', { agent: agent.name, ...errorFields(error) })
+      }
+      saveState(stateFile, { ...reset, failed: state.failed })
+      sessions = removeReplaySessions({ paths, agent, log })
+    })
+    if (!finished) return stopped()
     const failed = [...gaveUp].sort((a, b) => a - b)
     log.info('rebuild.finished', { agent: agent.name, until, batches, committed, failed: failed.length, sessions })
     say(`Rebuilt ${agent.name} up to #${until}, in ${batches} ${batches === 1 ? 'batch' : 'batches'}${committed ? `, committed as "${agent.name}: rebuild"` : ', which changed nothing'}.`)
@@ -244,9 +288,9 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
 }
 
 // `scooter rebuild <agent>`: rebuilds the agent's views and memory (6.10), saying what it does on
-// stdout. Stops on SIGTERM or SIGINT, throwing away the batch in progress. Exits with 0 once it
-// has rebuilt, 2 when it can't start for how it was called or how things stand, and 1 when it
-// fails or is stopped.
+// stdout. Stops on SIGTERM, SIGINT or SIGHUP, which a terminal that is closed sends, throwing away
+// the batch in progress, and letting go of `run.lock`. Exits with 0 once it has rebuilt, 2 when it
+// can't start for how it was called or how things stand, and 1 when it fails or is stopped.
 export async function runRebuild({ args = [], settings, stdout = process.stdout, stderr = process.stderr, openSandbox, clock = systemClock, log = createLog({ component: 'rebuild', clock }) }) {
   if (args.length !== 1 || args[0].startsWith('-')) {
     stderr.write("scooter rebuild: name the agent to rebuild, such as: scooter rebuild lifelog\n")
@@ -254,10 +298,13 @@ export async function runRebuild({ args = [], settings, stdout = process.stdout,
   }
   const stopping = new AbortController()
   const handlers = new Map()
-  for (const name of ['SIGTERM', 'SIGINT']) {
+  for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     handlers.set(name, () => stopping.abort())
     process.once(name, handlers.get(name))
   }
+  // A closed terminal makes what the rebuild says fail to be written; it stops all the same.
+  const quiet = () => {}
+  for (const stream of [stdout, stderr]) stream.on?.('error', quiet)
   try {
     const result = await rebuildAgent({ settings, agentName: args[0], openSandbox, clock, log, say: line => stdout.write(`${line}\n`), signal: stopping.signal })
     return result.stopped ? 1 : 0

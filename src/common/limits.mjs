@@ -102,8 +102,9 @@ const values = {
   EMAIL_CHECK_COUNT: 5,
   EMAIL_CHECK_TIMEOUT: 2 * MINUTE,
   // The largest `state.json` or `status.json` of the runner's, or `state.json` of the email
-  // reader's, that the bridge reads for `/status` (5.4). They are a few kilobytes each, written by
-  // another user, and the bridge reads them as root, as files that user controls.
+  // reader's, that the bridge reads for `/status` (5.4), and the largest `run.lock` it reads before
+  // a backup (5.5). They are a few kilobytes at most, written by another user, and the bridge reads
+  // them as root, as files that user controls.
   STATUS_FILE_MAX_BYTES: 4 * MB,
   // The largest model request the network policy reads (6.13).
   MODEL_REQUEST_MAX_BYTES: 50 * MB,
@@ -114,10 +115,16 @@ const values = {
   STOP_GRACE: 15 * SECOND,
   // How often an unpaired wacli is checked again (5.1).
   AUTH_CHECK_INTERVAL: 1 * MINUTE,
-  // How long past the time in `run.lock` a backup still waits for the run to finish (5.5).
+  // How long past the time in `run.lock` a backup still waits for the run to finish (5.5). Past
+  // it, the backup waits on only while a runner still holds its socket, at work after its run.
   BACKUP_LOCK_EXTRA: 2 * MINUTE,
   // The ISO weekday on which backups also run `restic check`: 7 is Sunday (5.5).
   RESTIC_CHECK_WEEKDAY: 7,
+  // The longest one step of a backup, restic's backup, forget or check, may take before the bridge
+  // stops it, and the backup fails (5.5). The channels are stopped and the runner waits for as long
+  // as a backup lasts, so a restic that hung would stop Scooter for good. A first backup of years
+  // of photos over a slow uplink can take hours; what it uploaded is used again by the next one.
+  RESTIC_TIMEOUT: 6 * HOUR,
   // The period `/status` counts over (5.4, 6.13).
   STATUS_WINDOW: 24 * HOUR,
   // The longest line of the network log that a reader takes. A longer one is skipped and counted,

@@ -37,9 +37,13 @@ import { createProc } from '../../common/proc.mjs'
 import { isoSeconds, parseIsoSeconds, shortLocalTime, systemClock } from '../../common/time.mjs'
 import { MEDIA_ERRORS } from '../intake.mjs'
 
-// The email reader, run with Node: `node <READER> run`.
+// The email reader, run with Node: `node --disable-sigusr1 <READER> run`. Without the flag, Node
+// answers SIGUSR1 by opening its debugger on 127.0.0.1:9229, where any local user could run code
+// as `scooter-mail`, which holds the mailbox's password. The signal is the bridge's, to back up
+// now, and a signal to the whole service, as `systemctl kill` sends by default, reaches the
+// reader too (D196). With the flag, Node ignores it from the moment it starts.
 const READER = fileURLToPath(new URL('../../mail/reader.mjs', import.meta.url))
-export const DEFAULT_READER = { program: process.execPath, args: [READER] }
+export const DEFAULT_READER = { program: process.execPath, args: ['--disable-sigusr1', READER] }
 
 // The spool folder's files (`src/mail/spool.mjs`).
 const MESSAGE_FILE = 'message.eml'

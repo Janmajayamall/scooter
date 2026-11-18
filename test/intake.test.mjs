@@ -228,6 +228,38 @@ test('intake: a failed download is tried twice more, 10 seconds apart, and then 
   assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
 })
 
+test('intake: a download its channel\'s stop cut short leaves the message unstored, and its channel\'s later ones, for the channel to hand over again once it starts', async t => {
+  const email = createFakeChannel({ name: 'email', takesCommands: false, canSend: false, canReact: false })
+  const whatsapp = createFakeChannel()
+  const { intake, lines, clock, entries, paths } = setup(t, { channels: [whatsapp, email] })
+  const record = makeRecord({ id: 'S1', text: 'receipt', attachments: [makeAttachment()] })
+  whatsapp.willDownload(record, 1, 'never', { failures: 1, code: 'ESTOPPED' })
+  const later = makeRecord({ id: 'S2', text: 'coffee 150', at: '2026-11-09T15:51:00Z' })
+  // Taken while the download runs, as a webhook's record is.
+  const results = await Promise.all([intake.take(record), intake.take(later), intake.take(makeRecord({ id: 'S3', text: '/status' }))])
+  assert.deepEqual(results, [
+    { stored: false, reason: 'its channel stopped during a download' },
+    { stored: false, reason: 'its channel stopped during a download before it' },
+    { stored: false, reason: 'its channel stopped during a download before it' },
+  ])
+  assert.deepEqual(lines(), [])
+  assert.deepEqual(clock.sleeping(), [])
+  assert.equal(whatsapp.downloads.length, 1)
+  assert.ok(!entries.some(entry => entry.event === 'intake.download_failed'))
+  assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
+  // Another channel's are stored meanwhile.
+  assert.equal((await email.deliver(makeRecord({ source: 'email', id: 'E1@example.com', text: 'a booking', subject: 'Booking' }))).stored, true)
+  // Until the channel starts again, what it hands over is left.
+  assert.equal((await intake.take(later)).stored, false)
+
+  // Started again, it hands them over again, in order, and they are stored, the first with its file.
+  intake.started('whatsapp')
+  await intake.take(record)
+  await intake.take(later)
+  assert.deepEqual(lines().map(line => line.sourceId), ['E1@example.com', 'S1', 'S2'])
+  assert.deepEqual(lines()[1].files, [{ path: '2.jpg', mime: 'image/jpeg', bytes: 5 }])
+})
+
 test('intake: an attachment over the size limit is not downloaded, or not kept', async t => {
   const { whatsapp, lines } = setup(t)
   const restore = overrideLimits({ ATTACHMENT_MAX_BYTES: 10 })

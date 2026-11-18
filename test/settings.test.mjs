@@ -235,6 +235,8 @@ test('settings: everything the bridge can be given', () => {
       RESTIC_KEEP_DAILY: '14',
       RESTIC_KEEP_WEEKLY: '0',
       RESTIC_KEEP_MONTHLY: '24',
+      FORCE_CHECK: '1',
+      RESTORE_TARGET: '/tmp/restored/',
       DATA_DIR: '/var/lib/scooter/',
       CONFIG_DIR: '/etc/scooter/config',
     },
@@ -265,6 +267,8 @@ test('settings: everything the bridge can be given', () => {
       keepDaily: 14,
       keepWeekly: 0,
       keepMonthly: 24,
+      forceCheck: true,
+      restoreTarget: '/tmp/restored',
       env: { AWS_DEFAULT_REGION: 'auto', AWS_ACCESS_KEY_ID: 'key-id', AWS_SECRET_ACCESS_KEY: 'key-secret' },
     },
   })
@@ -274,6 +278,8 @@ test('settings: everything the bridge can be given', () => {
   })
   assert.deepEqual(b2.backup.env, { AWS_DEFAULT_REGION: 'eu', B2_ACCOUNT_ID: 'id', B2_ACCOUNT_KEY: 'key' })
   assert.deepEqual([b2.backup.keepDaily, b2.backup.keepWeekly, b2.backup.keepMonthly], [7, 4, 12])
+  // A check on Sundays only, and a restore back where each file was backed up from (5.5).
+  assert.deepEqual([b2.backup.forceCheck, b2.backup.restoreTarget], [false, '/'])
 })
 
 test('settings: each fault in the bridge\'s settings names its variable', () => {
@@ -337,7 +343,13 @@ test('settings: backups are off without RESTIC_REPOSITORY, and need the password
 
   const on = { ...BRIDGE, RESTIC_REPOSITORY: 'b2:bucket:scooter' }
   assert.deepEqual(faults('bridge', on), { RESTIC_PASSWORD: 'RESTIC_PASSWORD is required when RESTIC_REPOSITORY is set' })
-  const bad = { RESTIC_KEEP_DAILY: ['0', '3651', 'x'], RESTIC_KEEP_WEEKLY: ['521', '-1'], RESTIC_KEEP_MONTHLY: ['1201', '1.5'] }
+  const bad = {
+    RESTIC_KEEP_DAILY: ['0', '3651', 'x'],
+    RESTIC_KEEP_WEEKLY: ['521', '-1'],
+    RESTIC_KEEP_MONTHLY: ['1201', '1.5'],
+    FORCE_CHECK: ['yes', 'on', '2', 'true'],
+    RESTORE_TARGET: ['restored', './restored'],
+  }
   for (const [variable, values] of Object.entries(bad)) {
     for (const value of values) {
       assert.deepEqual(Object.keys(faults('bridge', { ...on, RESTIC_PASSWORD: 'x', [variable]: value })), [variable], `${variable}=${value}`)
@@ -481,6 +493,8 @@ test('settings: the examples\' defaults are the loader\'s defaults', () => {
     RESTIC_KEEP_DAILY: '7',
     RESTIC_KEEP_WEEKLY: '4',
     RESTIC_KEEP_MONTHLY: '12',
+    FORCE_CHECK: '0',
+    RESTORE_TARGET: '/',
     DATA_DIR: '/data',
     CONFIG_DIR: '/config',
   })

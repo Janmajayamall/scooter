@@ -13,6 +13,19 @@ import net from 'node:net'
 // a rebuild would remove the rebuild's `run.lock` and throw its work away (D89).
 export const RUNNER_SOCKET_HOLDERS = 'runner, rebuild or build-image'
 
+// Whether something listens on the Unix socket `file`. A connection is made into the socket's
+// queue by the system, so a holder whose own work keeps it from taking connections still answers.
+function connects(file) {
+  return new Promise(resolve => {
+    const socket = net.connect(file)
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once('error', () => resolve(false))
+  })
+}
+
 // Makes sure only one `name` (`bridge` or `runner`) runs on a data folder: it listens on the Unix
 // socket `file`. A second one finds the socket answering and refuses to start. A socket left by one
 // that was killed doesn't answer, and is replaced. Unlike a lock file holding a pid, this can't
@@ -29,24 +42,29 @@ export async function holdInstance(file, name = 'bridge') {
         resolve()
       })
     })
-  const answers = () =>
-    new Promise(resolve => {
-      const socket = net.connect(file)
-      socket.once('connect', () => {
-        socket.destroy()
-        resolve(true)
-      })
-      socket.once('error', () => resolve(false))
-    })
 
   try {
     await listen()
   } catch (error) {
     if (error.code !== 'EADDRINUSE') throw error
-    if (await answers()) throw Object.assign(new Error(`another ${name} is running on this data folder: ${file} answers`), { code: 'EINSTANCE' })
+    if (await connects(file)) throw Object.assign(new Error(`another ${name} is running on this data folder: ${file} answers`), { code: 'EINSTANCE' })
     fs.rmSync(file, { force: true })
     await listen()
   }
   // Node removes the socket when it stops listening.
   return { close: () => new Promise(resolve => server.close(() => resolve())) }
+}
+
+// Whether a service holds the socket `file`, as `holdInstance` holds it, without taking it: the
+// bridge asks it of `runner/runner.sock` to tell a runner still at work after its run's time from
+// one that is gone (5.5), and `restore` of both sockets before it writes over the data folder.
+// Only a socket counts, not a link to one: the runner's user controls the runner's folder.
+export async function instanceAnswers(file) {
+  let stat
+  try {
+    stat = fs.lstatSync(file)
+  } catch {
+    return false
+  }
+  return stat.isSocket() && connects(file)
 }

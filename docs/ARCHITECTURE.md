@@ -230,8 +230,9 @@ The runner is the only committer. Git history is the audit trail for everything 
 The bridge backs up with restic to an S3-compatible bucket: nightly at `BACKUP_TIME`, on `/backup`, and on `SIGUSR1` (5.5, 8.4). The backup logic is a Node module in the bridge, and restic is the only program it runs.
 
 - **In:** the datastore, the agents' folders, wacli's folder without its cache, the bridge's and the email reader's state, the network log and the outbox.
-- **Out:** the env files, the VM image and caches.
-- **Consistency:** the bridge takes `backup.lock`, waits for a run in progress to end, stops the channels, pauses delivery, backs up, and starts everything again.
+- **Out:** the env files, the VM image, the locks, caches, and what the runner's clean-up is removing (`agents/.discarded/`).
+- **Consistency:** the bridge takes `backup.lock`, waits for a run in progress to end, stops the channels, pauses delivery, backs up, and starts everything again. A run past its time is waited for while its runner still holds `runner/runner.sock`, at work after the run; a lock whose runner is gone is passed by (`docs/DECISIONS.md`, milestone 10).
+- **Restore** puts each folder back at the path it was backed up from, with owners by name, and makes each folder the snapshot's, deleting nothing outside those folders. It refuses to write into the data folder while either service runs on it, and, as root, to run before `setup` has made Scooter's users.
 
 ### 2.12 Configuration
 
@@ -406,7 +407,7 @@ All pinned to exact versions. The library versions are the ones DESIGN.md gives 
 
 ### 4.4 Starting up
 
-**Bridge:** load `bridge.env`; read the datastore and rebuild the index; remove a leftover `backup.lock`; start the channels; send what was left in the outbox; then loop.
+**Bridge:** load `bridge.env`; remove a leftover `backup.lock`; read the datastore and rebuild the index; start the channels; send what was left in the outbox; then loop.
 
 **Runner:** load `runner.env`; validate `agents.yaml`; free what pi left, then create the agent's folder if it's new and throw away a run's uncommitted changes; check the image and pick the accelerator; remove a leftover `run.lock`; write `status.json`; run any `once` task and start any backfill; then loop.
 
@@ -445,8 +446,8 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 ### 5.4 A backup
 
-1. The bridge takes `backup.lock`, then waits for `run.lock` to go.
-2. It stops the channels and pauses delivery.
+1. The bridge takes `backup.lock`, then waits for `run.lock` to go, or for the runner that took it to be gone.
+2. It stops the channels, with wacli's calls in progress, and pauses delivery. A download the stop cut short leaves its message, and intake the ones after it, for catch-up.
 3. restic backs up, then prunes old snapshots; on Sundays it also checks the repository.
 4. The bridge starts the channels and delivery again, and releases the lock. Catch-up collects what arrived meanwhile.
 
@@ -454,7 +455,7 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 Both replay history through the agent, one of the owner's days at a time, with the prompt's `Now:` set to the time of the batch, and without sending anything.
 
-- **`rebuild`** runs with the runner stopped, and holds the runner's socket, so no runner starts during it. It tags the last commit, empties the views, memory and sessions, replays the whole datastore up to the newest `seq` at the time it started, keeping its progress in memory, and commits the result as one commit (`src/runner/rebuild.mjs`).
+- **`rebuild`** runs with the runner stopped, and holds the runner's socket, so no runner starts during it. It tags the last commit, empties the views, memory and sessions, replays the whole datastore up to the newest `seq` at the time it started, keeping its progress in memory and waiting for an item tried again before it goes on, and commits the result as one commit (`src/runner/rebuild.mjs`). Its own steps, like its batches, take `run.lock` and give way to a backup.
 - **A backfill** fills one new view. It runs inside the runner, only when nothing live is waiting, with its own cursor and retry list, and may change only the paths it names and the day pages (`src/runner/backfill.mjs`).
 
 What the two share, the batches of one day, their time and sessions, is in `src/runner/replay.mjs`, and each batch is a run like a live one (`run.mjs`), which sends nothing.
@@ -490,7 +491,7 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 7. **Two services that share folders, not sockets.** The bridge and the runner never call each other: the datastore carries work one way and the outbox carries replies back. *Why:* each holds different secrets; either can be down or restart without losing anything; nothing listens for connections; and the queue is plain files the owner can read. (3)
 8. **Polling, once a second.** No file watchers and no signals between the services. *Why:* the volume is a handful of messages a day, and a poll behaves the same on every system. (6.4, 10)
 9. **Hand-offs are atomic renames.** Outbox entries and mail spool folders are written as `.tmp-<id>` and renamed when complete; state files are written to a temporary file and renamed. *So:* a reader never sees half of anything. (5.3, 5.6, 6.3)
-10. **Two lock files keep runs and backups apart.** Each side creates its own lock first and then looks for the other's. The runner backs off if it finds `backup.lock`; the bridge waits for `run.lock` to go. `run.lock` records when its run must be over, and the bridge waits no longer than that plus 2 minutes. Each side removes its own leftover lock at startup. *Why:* checking before creating would let a run and a backup start at the same instant. (5.5, 6.4; section 8, rows 6 and 7)
+10. **Two lock files keep runs and backups apart.** Each side creates its own lock first and then looks for the other's. The runner backs off if it finds `backup.lock`; the bridge waits for `run.lock` to go. `run.lock` records when its run must be over, and the bridge waits no longer than that plus 2 minutes, unless a runner still holds its socket and so is still at work after the run. Each side removes its own leftover lock at startup. A rebuild takes `run.lock` for its own steps too. *Why:* checking before creating would let a run and a backup start at the same instant. (5.5, 6.4; section 8, rows 6 and 7)
 11. **Secrets are split by process.** Settled. The bridge has the WhatsApp session, the mailbox password and the backup credentials; the runner has the OpenRouter key; each reads only its own env file. pi gets a placeholder. *So:* no single compromise yields everything. (3.2, 9)
 12. **The bridge runs as root.** *Why:* it has to start wacli and the email reader as other users, and read every folder for backups. *Cost, accepted:* a flaw in the bridge exposes the machine on a native install. Running it as its own user, with systemd starting the other two, is a possible later change. (9)
 13. **Programs that face the outside get their own user.** wacli and the email reader run third-party code that parses whatever the internet sends. Each can read and write only its own folder and sees only its own settings. The bridge validates what they hand over. (3.2, 5.6)
