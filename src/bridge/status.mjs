@@ -80,7 +80,7 @@ function newestMessage(index) {
 // - `paths`: what `makePaths` returns.
 // - `channels`: a Map from each channel's name to the channel, for its `status()`.
 // - `index`: the datastore's index, as the store keeps it.
-// - `backups`: one line about backups, which milestone 10 builds.
+// - `backups`: the line about backups (`createBackups().statusLine`).
 export function statusText({ now, settings, paths, channels, index, backups }) {
   const zone = settings.timeZone
   const at = text => shortLocalTime(parseIsoSeconds(text), now, zone)

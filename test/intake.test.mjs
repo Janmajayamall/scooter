@@ -228,6 +228,21 @@ test('intake: a failed download is tried twice more, 10 seconds apart, and then 
   assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
 })
 
+test('intake: a download its channel\'s stop cut short leaves the message unstored, for the channel to hand over again, and isn\'t tried again', async t => {
+  const { whatsapp, lines, clock, entries, paths } = setup(t)
+  const record = makeRecord({ id: 'S1', text: 'receipt', attachments: [makeAttachment()] })
+  whatsapp.willDownload(record, 1, 'never', { failures: 1, code: 'ESTOPPED' })
+  assert.deepEqual(await whatsapp.deliver(record), { stored: false, reason: 'its channel stopped during a download' })
+  assert.deepEqual(lines(), [])
+  assert.deepEqual(clock.sleeping(), [])
+  assert.equal(whatsapp.downloads.length, 1)
+  assert.ok(!entries.some(entry => entry.event === 'intake.download_failed'))
+  assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
+  // Handed over again, it is stored with its file.
+  await whatsapp.deliver(record)
+  assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 5 }])
+})
+
 test('intake: an attachment over the size limit is not downloaded, or not kept', async t => {
   const { whatsapp, lines } = setup(t)
   const restore = overrideLimits({ ATTACHMENT_MAX_BYTES: 10 })

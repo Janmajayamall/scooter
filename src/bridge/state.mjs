@@ -6,7 +6,9 @@
 //   so the chat's earlier history is never imported (5.2 step 7).
 // - `ownerChat`: the chat of the owner's newest message, and that message's time. Replies go to it
 //   (5.2 step 5). Null before the owner has written.
-// - `lastBackup`: the last backup's date, snapshot ID and result, for milestone 10. Null until then.
+// - `lastBackup`: the last backup that ran to its end (5.5): `{ at, ok, snapshot, reason }`, when it
+//   started, whether it worked, the snapshot it saved or null, and, when it failed, why, in words
+//   for the owner, restic's among them, which no log holds. Null before the first.
 // - `commandSeq`: the `seq` of the newest command line the bridge has handled (5.4), as the runner
 //   keeps its own in `state.json` (6.3). A state written before the bridge handled commands has
 //   none, and gets the newest line's, so commands sent before that are never answered.
@@ -27,7 +29,21 @@ function problemsOf(state) {
   if (chat !== null && !(isObject(chat) && typeof chat.jid === 'string' && chat.jid !== '' && parseIsoSeconds(chat.at) !== null)) {
     return 'ownerChat must be null or { jid, at }'
   }
-  if (state.lastBackup !== null && !isObject(state.lastBackup)) return 'lastBackup must be null or an object'
+  const backup = state.lastBackup
+  const orNull = (value, check) => value === null || check(value)
+  if (
+    backup !== null &&
+    !(
+      isObject(backup) &&
+      Object.keys(backup).length === 4 &&
+      parseIsoSeconds(backup.at) !== null &&
+      typeof backup.ok === 'boolean' &&
+      orNull(backup.snapshot, value => typeof value === 'string' && /^[0-9a-f]{8,64}$/.test(value)) &&
+      orNull(backup.reason, value => typeof value === 'string')
+    )
+  ) {
+    return 'lastBackup must be null or { at, ok, snapshot, reason }'
+  }
   if (!Number.isSafeInteger(state.commandSeq) || state.commandSeq < 0) return 'commandSeq must be a whole number, 0 or more'
   return null
 }

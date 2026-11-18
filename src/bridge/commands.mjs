@@ -11,6 +11,12 @@
 // It runs when intake has stored a command, and once at startup for any the bridge didn't get to.
 // A reply that can't be written, as on a full disk, is tried again after a wait that doubles,
 // as a failed look at the outbox is (`SEND_RETRY_BACKOFF`), without waiting for another command.
+//
+// `/backup` starts a backup, or joins the one in progress, and its reply comes when the backup is
+// over (`backup.mjs`), which may be minutes later, after a run has finished. Commands are answered
+// one at a time, so waiting for it here would hold back a `/status` sent after it. The command
+// counts as handled once the backup has started: a bridge that crashes during the backup doesn't
+// answer it (docs/DECISIONS.md, milestone 10).
 
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
@@ -27,26 +33,24 @@ export const HELP_TEXT = [
   'Anything else you send is filed.',
 ].join('\n')
 
-// The reply to `/backup` until backups are built (milestone 10 of the plan).
-export const BACKUP_NOT_BUILT = "Backups aren't built into this version of Scooter yet, so nothing was backed up."
-
 // Returns the commands' handler. Options:
 // - `store`: the open store, whose index holds the command lines.
 // - `state`: the bridge's state (`state.mjs`), which keeps `commandSeq`.
 // - `paths`, `ids`: for the outbox (`writeOutboxEntry`); `ids` is the bridge's one generator.
 // - `status()`: the reply to `/status` (`status.mjs`).
-// - `backup()`: the reply to `/backup`.
-export function createCommands({ store, state, paths, ids, log, clock = systemClock, status, backup = async () => BACKUP_NOT_BUILT }) {
+// - `backup(seq)`: what `/backup`, the command line `seq`, does (`createBackups().ask`): the reply
+//   to give now, or null when the backup gives it once it is over.
+export function createCommands({ store, state, paths, ids, log, clock = systemClock, status, backup = () => null }) {
   let queue = Promise.resolve()
   let failures = 0
   // The wait before the next try, after a failure, which `stop()` cuts short.
   let retrying = null
   let stopped = false
 
-  async function reply(command) {
+  async function reply(command, seq) {
     if (command === '/status') return status()
     if (command === '/help') return HELP_TEXT
-    if (command === '/backup') return backup()
+    if (command === '/backup') return backup(seq)
     // `/new` is the runner's.
     return null
   }
@@ -54,7 +58,7 @@ export function createCommands({ store, state, paths, ids, log, clock = systemCl
   async function handlePending() {
     for (const seq of store.index.commandsAfter(state.get().commandSeq)) {
       const command = store.index.get(seq).line.text
-      const text = await reply(command)
+      const text = await reply(command, seq)
       if (text !== null) {
         const entry = await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'bridge', text, about: seq } })
         log.info('bridge.replied', { command, seq, entry })

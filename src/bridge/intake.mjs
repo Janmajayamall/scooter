@@ -21,6 +21,9 @@
 //   nothing of the message is stored, and the channel hands it over again later, files and all.
 // - Duplicates, which the webhook and catch-up both deliver (4.4), are the store's to skip. A
 //   message already stored is recognized before its attachments are downloaded again.
+// - A download that its channel's stop cut short, for a backup or a shutdown, leaves the message
+//   unstored, rather than stored as `download failed`: the channel hands it over again when it
+//   starts, as WhatsApp's catch-up does (D179).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -103,6 +106,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         return { file, attachment }
       } catch (error) {
         fs.rmSync(file, { force: true })
+        // The channel is stopping: the message is left for it to hand over again.
+        if (error.code === 'ESTOPPED') throw error
         log.warn('intake.download_failed', { source: record.source, n, attempt, ...errorFields(error) })
         if (error.code === 'EFBIG') return { error: MEDIA_ERRORS.tooLarge }
         // A copy that failed on the bridge's side, such as on a full disk, from a channel that
@@ -166,6 +171,9 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         log.warn('intake.attachment_not_stored', { source: record.source, ...errorFields(error) })
         return await append({ ...fields, media: media ?? mediaOf(downloaded[0].attachment, MEDIA_ERRORS.notStored) })
       }
+    } catch (error) {
+      if (error.code !== 'ESTOPPED') throw error
+      return skip(record, 'message', 'its channel stopped during a download')
     } finally {
       for (const { file } of downloaded) fs.rmSync(file, { force: true })
     }

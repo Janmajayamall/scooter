@@ -494,6 +494,28 @@ test('whatsapp: a wacli call that hangs is stopped after WACLI_CALL_TIMEOUT', as
   assert.deepEqual(lines()[0].media, { type: 'image', mime: 'image/jpeg', error: 'download failed' })
 })
 
+test('whatsapp: a stop stops a download in progress, its message is left for catch-up, and stored with its file once the channel starts again (D179)', async t => {
+  const at = '2026-11-09T15:46:00Z'
+  const context = await setup(t, { fixtures: { paired: true, messages: [], media: { H1: { as: 'hang' } } } })
+  const { stub, lines, synced, bridge, whatsapp, events } = context
+  await synced()
+  await stub.postWebhook(webhookPayload({ ID: 'H1', Timestamp: at, Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 9 } }))
+  await waitFor(() => stub.callsOf('media download').length === 1, 'the download to start')
+  const { pid } = stub.callsOf('media download')[0]
+  // As a backup stops the channels: the download is stopped, not waited for.
+  await whatsapp.stop()
+  await bridge.intake.idle()
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
+  assert.deepEqual(lines(), [])
+  assert.ok(!events().includes('intake.download_failed'))
+  assert.equal(stub.callsOf('media download').length, 1)
+
+  stub.fixtures({ media: { H1: { content: 'the photo' } }, messages: [listRow({ MsgID: 'H1', Timestamp: at, MediaType: 'image', MimeType: 'image/jpeg' })] })
+  await whatsapp.start(record => bridge.intake.take(record))
+  await waitFor(() => lines().length === 1, 'catch-up to bring it back')
+  assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])
+})
+
 test('whatsapp: not paired, it says to run pair and checks every minute; once paired, sync starts', async t => {
   const context = await setup(t, { fixtures: { paired: false } })
   const { stub, clock, whatsapp, events, entries } = context

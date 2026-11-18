@@ -8,7 +8,6 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { BACKUPS_NOT_BUILT } from '../src/bridge/main.mjs'
 import { statusText } from '../src/bridge/status.mjs'
 import { writeFileAtomic } from '../src/common/files.mjs'
 import { limits } from '../src/common/limits.mjs'
@@ -17,6 +16,10 @@ import { makePaths } from '../src/common/paths.mjs'
 import { createFakeChannel } from './support/fake-channel.mjs'
 import { indexOf, line } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
+
+// The line about backups, which `createBackups().statusLine` makes (test/backup.test.mjs), and the
+// reply only passes on.
+const BACKUPS = 'Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026; 10:50 in New York.
 const NOW = Date.parse('2026-11-09T15:50:30Z')
@@ -62,7 +65,7 @@ function setup(t) {
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
   const channels = new Map([['whatsapp', { ...createFakeChannel({ name: 'whatsapp' }), status: () => 'WhatsApp: linked' }]])
   const status = ({ timeZone = 'Asia/Kolkata', lines = LINES } = {}) =>
-    statusText({ now: NOW, settings: { timeZone }, paths, channels, index: indexOf(lines), backups: BACKUPS_NOT_BUILT })
+    statusText({ now: NOW, settings: { timeZone }, paths, channels, index: indexOf(lines), backups: BACKUPS })
   const write = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     writeFileAtomic(file, typeof value === 'string' ? value : JSON.stringify(value))
@@ -89,7 +92,7 @@ test('status: before the runner has ever started, it says so', t => {
       "Runner: it hasn't started yet, so there is nothing to say about the agent or its VMs.",
       'Network, last 24 hours: 0 requests to 0 hosts.',
       '',
-      BACKUPS_NOT_BUILT,
+      BACKUPS,
     ].join('\n'),
   )
   assert.match(status({ lines: [] }), /^Newest message: none yet$/m)
@@ -129,7 +132,7 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
       'Messages: 2 pending, 1 retrying, 2 failed.',
       'Backfill people-1: at #1 of #3.',
       '',
-      BACKUPS_NOT_BUILT,
+      BACKUPS,
     ].join('\n'),
   )
 })
@@ -155,7 +158,7 @@ test('status: the same files in another time zone', t => {
       "Runs aren't paused.",
       'Messages: 2 pending, 1 retrying, 2 failed.',
       '',
-      BACKUPS_NOT_BUILT,
+      BACKUPS,
     ].join('\n'),
   )
 })

@@ -10,7 +10,8 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { BACKUP_NOT_BUILT, HELP_TEXT, createCommands } from '../src/bridge/commands.mjs'
+import { OFF_REPLY } from '../src/bridge/backup.mjs'
+import { HELP_TEXT, createCommands } from '../src/bridge/commands.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
@@ -23,6 +24,7 @@ import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
 import { createMailReaderStub } from './support/mail-reader.mjs'
 import { AUTHSERV, OWNER_ADDRESSES, appleMailAudio, gmailPlain } from './support/mail-samples.mjs'
+import { createResticStub } from './support/restic.mjs'
 import { isRoot } from './support/root.mjs'
 import { line, writeDatastore } from './support/runner.mjs'
 import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
@@ -268,7 +270,7 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   assert.match(email.status(), /; 2 stored and 0 skipped since the bridge started, /)
 })
 
-test('bridge: /status reports the runner\'s state, /help lists the commands, /backup says it isn\'t built, and /new is the runner\'s', async t => {
+test('bridge: /status reports the runner\'s state, /help lists the commands, /backup says backups are off without a repository, and /new is the runner\'s', async t => {
   const both = await startBoth(t)
   await both.post(webhookPayload({ ID: 'M1', Timestamp: '2026-11-09T15:50:00Z', Text: 'coffee 150' }))
   await both.runNext()
@@ -297,7 +299,8 @@ test('bridge: /status reports the runner\'s state, /help lists the commands, /ba
   assert.match(status, /^Runs aren't paused\.$/m)
   assert.match(status, /^Messages: 0 pending, 0 retrying, 0 failed\.$/m)
   assert.equal(help, HELP_TEXT)
-  assert.equal(backup, BACKUP_NOT_BUILT)
+  assert.equal(backup, OFF_REPLY)
+  assert.match(status, /^Backups: off, because RESTIC_REPOSITORY isn't set in bridge\.env\.$/m)
   assert.equal(fresh, 'Started a fresh conversation.')
   // Each reply goes back where its command was sent, unquoted, and is logged with who sent it.
   const replies = both.lines().filter(line => line.dir === 'out' && line.kind === 'message')
@@ -475,11 +478,12 @@ function portIsFree(port) {
 // As root, the bridge needs the users that `setup` makes.
 const asProcess = { skip: isRoot ? 'as root, scooter bridge needs the users setup makes' : false }
 
-test('bridge: `scooter bridge` runs as a process until SIGTERM, and leaves no wacli behind', asProcess, async t => {
+test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGUSR1, and leaves no wacli behind', asProcess, async t => {
   if (!(await portIsFree(limits.WEBHOOK_PORT))) return t.skip(`port ${limits.WEBHOOK_PORT} is in use`)
   const root = makeTestDir(t)
   const stub = createWacliStub(t, root)
   stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: '2099-01-01T00:00:00Z', Text: 'caught up' })] })
+  const restic = createResticStub(t, root)
   const dataDir = path.join(root, 'data')
   const env = {
     PATH: process.env.PATH,
@@ -488,6 +492,9 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, and leaves no wa
     OWNER_NUMBER: `+${OWNER_NUMBER}`,
     DATA_DIR: dataDir,
     CONFIG_DIR: path.join(root, 'config'),
+    RESTIC_REPOSITORY: path.join(root, 'repository'),
+    RESTIC_PASSWORD: 'correct horse',
+    BACKUP_TIME: 'off',
   }
   const child = spawn(process.execPath, [CLI, 'bridge'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
@@ -505,10 +512,15 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, and leaves no wa
   const log = path.join(dataDir, 'datastore')
   await waitFor(() => events().filter(event => event === 'intake.stored').length === 2, 'two lines')
 
+  // A backup now: WhatsApp stops while restic runs, and starts again.
+  child.kill('SIGUSR1')
+  await waitFor(() => events().includes('backup.finished'), 'the backup')
+  assert.deepEqual(restic.commands(), ['backup', 'forget'])
+  await waitFor(() => stub.callsOf('sync').length === 2, 'sync to start again')
+
   child.kill('SIGTERM')
   assert.deepEqual(await exited, { code: 0, signal: null })
-  const { pid } = stub.callsOf('sync')[0]
-  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
+  for (const { pid } of stub.callsOf('sync')) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' })
   assert.deepEqual(events().slice(-2), ['whatsapp.stopped', 'bridge.stopped'])
   // Every log line is JSON, and none holds what the owner wrote.
   assert.ok(!stderr.includes('coffee') && !stderr.includes('caught up'))

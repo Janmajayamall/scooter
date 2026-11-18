@@ -80,6 +80,8 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     NETLOG_PATH_MAX_CHARS: 1000,
     RUN_REQUESTS_MAX: 1000,
     RUN_REFUSALS_LOGGED_MAX: 100,
+    // Milestone 10: docs/DECISIONS.md, milestone 10.
+    RESTIC_TIMEOUT: 6 * 60 * MINUTE,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)

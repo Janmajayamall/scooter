@@ -178,7 +178,7 @@ The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which re
 | Function | Does | WhatsApp | Email |
 |---|---|---|---|
 | `start(onRecord)` | Starts receiving, and calls `onRecord` for each message from the owner. The module drops everything else itself. | wacli sync, the webhook and catch-up (5.1; 5.2 steps 1–5 and 7) | Starts the email reader, and reads its spool (5.6) |
-| `stop()` | Stops receiving, for backups and shutdown | Stops wacli sync | Stops the email reader |
+| `stop()` | Stops receiving, for backups and shutdown | Stops wacli sync and its calls in progress; a download it cuts short leaves its message for catch-up (5.2) | Stops the email reader, and waits for the spool folder it is taking |
 | `download(record, n, path)` | Saves the record's `n`th attachment | `wacli media download` into wacli's staging folder, then a copy | A copy from the spool |
 | `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text --no-preview` | — |
 | `react(id, emoji)` | Reacts to a message and returns the reaction's ID | `wacli send react` | — |
@@ -254,7 +254,7 @@ Commands come only from WhatsApp. They're logged as `command` lines and never gi
 | Command | Handled by | Effect |
 |---|---|---|
 | `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated, when the VM image was built, whether zero data retention is on, whether runs are paused and why, the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
-| `/backup` | bridge | Runs a backup now and replies with the snapshot ID or the error. |
+| `/backup` | bridge | Runs a backup now, or joins the one in progress, and replies with the snapshot ID or the error once it is over. The commands sent after it are answered meanwhile. |
 | `/help` | bridge | Lists the commands. |
 | `/new` | runner | Starts a fresh pi session for the rest of the day and replies "Started a fresh conversation." |
 
@@ -264,21 +264,21 @@ A reply to a command that the bridge can't write, as on a full disk, is tried ag
 
 ### 5.5 Backups
 
-- The backup logic is a module in the bridge, `src/bridge/backup.mjs`, and the only code that runs restic. It runs restic directly, with the arguments as a list and the settings in restic's environment, never through a shell. Its operations are `init`, `run`, `snapshots`, `check` and `restore [snapshot] [--force]`, which the commands in 8.4 call.
+- The backup logic is a module in the bridge, `src/bridge/backup.mjs`, and the only code that runs restic. It runs restic directly, with the arguments as a list and the settings in restic's environment, never through a shell. That environment holds the repository, the password, the bucket's credentials, a temporary folder and `TZ`, and nothing else. Its operations are `init`, `run`, `snapshots`, `check` and `restore [snapshot] [--force]`, which the commands in 8.4 call.
   - A command exits with code 2 and a clear message if `RESTIC_REPOSITORY` or `RESTIC_PASSWORD` isn't set.
   - `init` is safe to repeat: it runs `restic cat config` first.
-  - `run` runs `restic backup /data/datastore /data/agents /data/wacli /data/bridge /data/mail /data/runner/log /data/exchange/outbox --host scooter --tag scooter --exclude /data/wacli/cache --exclude-caches`, then `restic forget --host scooter --tag scooter --keep-daily <RESTIC_KEEP_DAILY> --keep-weekly <RESTIC_KEEP_WEEKLY> --keep-monthly <RESTIC_KEEP_MONTHLY> --prune` (defaults 7, 4 and 12). It runs `restic check` on Sundays (ISO weekday 7) or when `FORCE_CHECK=1`.
-  - `restore` restores into `RESTORE_TARGET` (default `/`) and refuses a non-empty destination without `--force`.
-- **Schedule:** daily at `BACKUP_TIME` (`HH:MM` in `SCOOTER_TZ`, or `off`). If `RESTIC_REPOSITORY` isn't set, disable backups with a warning at startup instead of failing every night. If the bridge starts after the day's backup time, the first backup is the next day.
+  - `run` runs `restic backup /data/datastore /data/agents /data/wacli /data/bridge /data/mail /data/runner/log /data/exchange/outbox --host scooter --tag scooter --exclude /data/wacli/cache --exclude /data/agents/.discarded --exclude-caches`, leaving out a folder that isn't there, such as `mail/` with email off, then `restic forget --host scooter --tag scooter --keep-daily <RESTIC_KEEP_DAILY> --keep-weekly <RESTIC_KEEP_WEEKLY> --keep-monthly <RESTIC_KEEP_MONTHLY> --prune` (defaults 7, 4 and 12). It runs `restic check` on Sundays (ISO weekday 7) in `SCOOTER_TZ`, or after every backup when `FORCE_CHECK=1`. A step stops the backup when it fails, and one that takes longer than `RESTIC_TIMEOUT` is stopped: the channels are stopped and the runner waits for as long as a backup lasts. restic keeps its cache in `/data/bridge/backup-cache`, which marks itself as a cache, so `--exclude-caches` leaves it out; the commands run at a terminal use none.
+  - `restore` restores into `RESTORE_TARGET` (default `/`), each folder at the path it was backed up from, and refuses a non-empty destination without `--force`. With `--force`, each folder the snapshot holds becomes the snapshot's: restic deletes what the snapshot doesn't hold inside those folders, and nothing outside them, such as the VM image. It gives every file its owner by name, so a machine whose users have other numbers gets them right. It restores only a snapshot whose folders are those of one data folder, and refuses to write into the data folder while the bridge or the runner runs on it.
+- **Schedule:** daily at `BACKUP_TIME` (`HH:MM` in `SCOOTER_TZ`, or `off`). If `RESTIC_REPOSITORY` isn't set, disable backups with a warning at startup instead of failing every night. If the bridge starts after the day's backup time, the first backup is the next day. `/backup` and `SIGUSR1` start one at any time, `BACKUP_TIME=off` or not, and a request during a backup joins it.
 - **Consistency:**
   1. Create `/data/exchange/locks/backup.lock`.
-  2. Wait for `locks/run.lock` to disappear. The lock records when its run must be over (6.4). If it's still there 2 minutes after that, a runner that died left it, and the backup goes ahead.
+  2. Wait for `locks/run.lock` to disappear. The lock records when its run must be over (6.4). If it's still there 2 minutes after that, and no runner holds `runner/runner.sock`, a runner that died left it, and the backup goes ahead. A runner that still holds its socket is at work after its run, packing its repository or freeing what pi wrote, neither of which has a time limit (6.8, 6.9), and the backup waits on.
   3. Stop the channels (wacli sync and the email reader) and pause outbox processing.
   4. Run the backup.
   5. Restart the channels and remove the lock.
 
-  The runner doesn't start a run while `backup.lock` exists. Each side creates its own lock before it looks for the other's, so a run and a backup can't both start at the same instant: when the two locks appear together, the runner gives way (6.4). At startup the bridge removes a leftover `backup.lock`, which would otherwise stop the agent for good.
-- **Results:** read the snapshot ID from restic's `snapshot <id> saved` line. If a scheduled backup fails, message the owner. A backup requested with `/backup` always replies.
+  The runner doesn't start a run while `backup.lock` exists. Each side creates its own lock before it looks for the other's, so a run and a backup can't both start at the same instant: when the two locks appear together, the runner gives way (6.4). A rebuild's own steps take `run.lock` the same way (6.10). At startup the bridge removes a leftover `backup.lock`, which would otherwise stop the agent for good. `exchange/locks/` is the runner's folder, so the bridge uses it only while it is that and not a link, and reads `run.lock` as it reads the runner's other files (5.4).
+- **Results:** read the snapshot ID from restic's `snapshot <id> saved` line. If a scheduled backup fails, or one `SIGUSR1` started, message the owner. A backup requested with `/backup` always replies, also when the bridge stops it. The bridge's state keeps the last backup's time, snapshot and result, and its reason when it failed, in restic's words where it gave any, which no log holds; `/status` shows them, and the next scheduled backup.
 
 ### 5.6 Email
 
@@ -555,10 +555,12 @@ Steps 1 and 2 read what pi left, so an error in either, such as a git command th
 1. Tag the current commit `before-rebuild-<UTC timestamp>`, such as `before-rebuild-20261118T101500Z`.
 2. Note the newest `seq` in the datastore. The rebuild stops there; anything later is left for the normal runner, which handles it with replies.
 3. Empty `views/`, `memory/` and `sessions/`, and reset `state.json`, keeping `onceDone` and `backfillDone` so one-off tasks and backfills don't run again, and setting `cursor` and `commandSeq` to that `seq`, so old commands aren't answered again, and a runner started after a rebuild cut short goes on from there rather than replay history with replies. Every backfill of the config counts as done, and one in progress is dropped, because the rebuild covers their views.
-4. Replay the datastore up to that `seq`, silently: nothing goes to the outbox, and the rebuild says what it does on its own output. It keeps its progress in memory, and handles failures as the runner does (6.8, 6.9): an item not reported is tried again a minute later and given up on after 4 attempts, and a setup error or an outage holds the rebuild until the next try.
+4. Replay the datastore up to that `seq`, silently: nothing goes to the outbox, and the rebuild says what it does on its own output. It keeps its progress in memory, and handles failures as the runner does (6.8, 6.9): an item not reported is tried again a minute later and given up on after 4 attempts, and a setup error or an outage holds the rebuild until the next try. An item to be tried again is waited for before the items after it, so history is replayed in its order.
 5. Commit with the message `lifelog: rebuild`, on the tagged commit, and record what the rebuild gave up on in `failed`, where an edit of the message brings it back (6.5). Each batch is committed as it goes, so that a failed batch's clean-up (6.9) comes back to the last good one, and those commits are folded into this one. The rebuild's sessions are removed.
 
-Cut short, by a stop or a crash, a rebuild leaves the views rebuilt up to where it got, and is run again from the start.
+Steps 1 to 3, and 5, take `locks/run.lock` and give way to `locks/backup.lock`, as each batch does, so a backup never reads the views or `.git` while the rebuild changes them.
+
+Cut short, by a stop, a closed terminal or a crash, a rebuild leaves the views rebuilt up to where it got, and is run again from the start.
 
 **Replayed batches**, here and in backfills (6.11):
 - A batch's items come from one of the owner's days: every item it takes was sent on the local date, in `SCOOTER_TZ`, of the first, and it stops at the first sent on another. Within that, it is drawn as a live batch is (6.5): due retries first, at most 20, and within the prompt's size limit. A message that an edit or a deletion in it brings in (6.5) joins whatever its day, shown with its date. Each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`; with `session: none`, none. A replay's sessions are removed once it is over.
@@ -775,6 +777,8 @@ The bridge and the runner never import each other's code. They share only `src/c
 | `RESTIC_REPOSITORY`, `RESTIC_PASSWORD` | required for backups | bridge | The restic repository and its password |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | `AWS_DEFAULT_REGION=auto` | bridge | R2 credentials (or `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for B2) |
 | `RESTIC_KEEP_DAILY`, `RESTIC_KEEP_WEEKLY`, `RESTIC_KEEP_MONTHLY` | `7`, `4`, `12` | bridge | Snapshots kept |
+| `FORCE_CHECK` | `0` | bridge | `1` runs `restic check` after every backup, not only on Sundays (5.5) |
+| `RESTORE_TARGET` | `/` | bridge | Where `restore` puts what it restores: each folder goes to this folder joined with the path it was backed up from, so `/` puts it back (5.5) |
 | `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` in Docker; natively set by `setup` (8.5) | both | Roots for all paths; tests override them |
 
 - **Two files, one per service.** The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, so neither sees the other's secrets. Natively they're in `/etc/scooter/`, owned by root and by `scooter-runner` respectively, mode 0600; in Docker, `compose.yaml` gives each service its own file. Values already in the environment win over the file.
@@ -819,7 +823,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `build-image` | the host, as root; in Docker, the runner container | Builds the VM image (6.12) |
 | `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
 | `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. Runs before `EMAIL_AUTHSERV_ID` is set, which it helps find. |
-| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5) |
+| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5). `restore` restores the latest snapshot unless one is named, and needs the bridge and the runner stopped to write into the data folder |
 | `rebuild <agent>` | runner, with its service stopped | Section 6.10 |
 
 Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`. Sending `SIGUSR1` to the bridge starts a backup immediately.
@@ -871,13 +875,14 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `ATTACHMENT_NAME_MAX_CHARS` | 255 | 5.6 | The longest original file name of an email's attachment: the reader cuts a longer one, and the bridge refuses a `parsed.json` with one |
 | `SPOOL_RETRY_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.6 | The waits before a spool folder the store couldn't take is tried again |
 | `EMAIL_CHECK_COUNT`, `EMAIL_CHECK_TIMEOUT` | 5; 2 minutes | 8.4 | How many messages `email-check` lists, and how long its run of the reader may take |
-| `STATUS_FILE_MAX_BYTES` | 4 MB | 5.4 | The largest file of the runner's, or of the email reader's, that the bridge reads for `/status` |
+| `STATUS_FILE_MAX_BYTES` | 4 MB | 5.4, 5.5 | The largest file of the runner's, or of the email reader's, that the bridge reads for `/status`, and the largest `run.lock` it reads before a backup |
 | `MODEL_REQUEST_MAX_BYTES` | 50 MB | 6.13 | The largest model request the network policy reads |
 | `RESTART_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.1, 5.6 | Restart waits for wacli and the email reader |
 | `STOP_GRACE` | 15 seconds | 5.1 | From SIGTERM to SIGKILL when stopping wacli |
 | `AUTH_CHECK_INTERVAL` | 1 minute | 5.1 | How often an unpaired wacli is checked again |
-| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | How long past the time in `run.lock` a backup still waits for the run to finish |
+| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | How long past the time in `run.lock` a backup still waits for the run to finish; past it, only while a runner still holds its socket |
 | `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
+| `RESTIC_TIMEOUT` | 6 hours | 5.5 | The longest one step of a backup, restic's backup, forget or check, may take. The channels are stopped and the runner waits meanwhile, so a restic that hung would stop Scooter for good |
 | `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
 | `NETLOG_LINE_MAX_BYTES` | 16 KB | 6.9, 6.13 | The longest line of the network log a reader takes, so reading it needs the same memory however large pi made it |
 | `NETLOG_PATH_MAX_CHARS` | 1,000 | 6.13 | The longest path a line of the network log keeps, so every line the policy writes fits within `NETLOG_LINE_MAX_BYTES` |
@@ -979,7 +984,7 @@ Required tests, at least:
   - One answer sends at most 25 texts.
   - The sandbox gets the mounts of 6.6, with `sessions/` hidden, and the network policy for the configured internet mode. The prompt shows which mode is on.
   - Scheduled and `once` tasks, and `/new`, which is handled once even when the batch after it fails.
-  - Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies. `Now:` is each batch's own time, and batches don't cross the owner's days.
+  - Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies. `Now:` is each batch's own time, and batches don't cross the owner's days. An item tried again is handled before the days after it, and the rebuild's own steps give way to a backup.
   - Backfills:
     - `until` is the live cursor when the backfill starts, and every message up to it is covered once.
     - Its batches run only when nothing live is waiting, and a message that arrives during one is handled right after it.
@@ -1010,7 +1015,7 @@ Required tests, at least:
   - A run that writes more than `RUN_WRITE_MAX_BYTES`, or makes more than `RUN_NAMES_MAX_COUNT` names, through its writable mounts is stopped. The sandbox keeps the start of stdout and the end of stderr, and says when an answer was cut.
   - A missing image, or one built for another pi version, stops the runner, and so does a `SCOOTER_TZ` the image doesn't know.
   - As root, `build-image` builds outside the runner's folder, and links the runner's user puts in that folder during the build lead it nowhere: nothing they lead to is written, given away or removed. This one needs root, not QEMU.
-- **Backups:** lock coordination with a restic stub: a backup waits for a run to finish, goes ahead once `run.lock` is 2 minutes past its time, and a leftover `backup.lock` is removed at startup. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target.
+- **Backups:** lock coordination with a restic stub: a backup waits for a run to finish, goes ahead once `run.lock` is 2 minutes past its time and no runner holds its socket, waits on while one does, and a leftover `backup.lock` is removed at startup; the channels and delivery stop while restic runs, and start again after; restic gets only the backup settings; the schedule across a daylight-saving change; and `/backup` replies, without holding back the commands after it. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target; and, as root, a restore gives files their owners by name.
 - **Config:** each validation error names the field, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, wrong folder modes) with its fix.
 
 ## 11. Development plan
