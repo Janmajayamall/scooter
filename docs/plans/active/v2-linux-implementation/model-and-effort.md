@@ -2,7 +2,7 @@
 
 This file says which model, at which effort level, runs each kind of task while Scooter v2 is built by the milestone loop (`docs/plans/active/milestone-loop.workflow.js`), and what evidence each choice rests on. Read it before you start an agent for this plan. It is updated as milestones finish, and section 7 says how.
 
-Where the plan stands: milestones 0 to 13 are merged, the last on 2026-11-18. Milestone 14 and gate G4 are left.
+Where the plan stands: milestones 0 to 14 are merged, the last on 2026-11-18. Gate G4, the first real run, is left, and it is the owner's.
 
 Two terms:
 
@@ -35,18 +35,20 @@ Measure the first run of a new kind of task, and add it to section 3.
 - The implementer is where the cost is: 71%, 68% and 63% of milestones 1, 2 and 3, and 64% to 72% of the six later milestones that were approved on their first review (section 3).
 - The tightest limit is the weekly allowance for Fable (section 5). Milestone 1, all on Fable 5.2, took $26 of it. With the implementer on Opus 5.5, a milestone that was approved on its first review took $6 to $11 of it, for the review and the merge.
 - On the two meters that Opus 5.5 shares with Fable 5.2, its use counted for less than half its list price (section 5).
-- It built twelve milestones, 2 to 13. Eight of its pull requests were approved on the first review, three on the second (milestones 6, 7 and 10), and one on the fifth (milestone 4). The approving reviews left 3 to 8 smaller points each. The two pull requests from Fable 5.2 were approved on the first review, with 7 and 8.
+- It built thirteen milestones, 2 to 14. Eight of its pull requests were approved on the first review, four on the second (milestones 6, 7, 10 and 14), and one on the fifth (milestone 4). The approving reviews left 3 to 8 smaller points each. The two pull requests from Fable 5.2 were approved on the first review, with 7 and 8.
 - Milestone 4 took five reviews. Each of the first four found new cases of one kind of problem: something that pi, the agent Scooter runs, leaves in its folders stops the runner. The implementer fixed every case it was shown, as the next review confirmed each time. In its first run it built to the cases, not to the kind of problem, and three reviews weren't enough.
 - Then the owner told it to close the whole kind of problem, by four rules, and it rebuilt that part. The next review still found two cases, both against one of the rules. After one more fix, the reviewer went through every step that reads what pi leaves, found no further case, and approved. So the instruction made it converge, though not at the first attempt (section 6).
-- In milestones 6, 7 and 10 the first review found five problems. One round fixed them, as the second review confirmed each time:
+- In milestones 6, 7, 10 and 14 the first review found six problems. One round fixed them, as the second review confirmed each time:
   - 6: as root, the bridge deleted whole folders through a link that the email reader's user could put in the spool's place. On a full disk an email lost its files. And two tests failed now and then.
   - 7: as root, `build-image` worked inside the runner's folder, where a link swapped in during the build gave the runner's user a folder of its choosing.
   - 10: when a backup stopped WhatsApp, a message could be lost for good.
+  - 14: the README's steps for a native upgrade failed as written, and would have left the old pi in place.
 - What a rule in the plan names, it closes. Milestone 7's plan had the rule that nothing pi does may stop the runner, and the review's probes of the sandbox found no way through. Milestone 8's plan had three such rules, and its pull request was approved on the first review.
+- Told to close a kind of problem and not a case, it goes through the kind. Milestone 14's rule for WhatsApp's catch-up named two ways a message could stay out of the datastore, and said to look for every other. It closed both and three more that it found, and listed the one it couldn't close as a known limit (D179). The first review found nothing to fix there. The second found one further case, which delays a message and doesn't lose it, and left it for the first real run.
 - It doesn't carry a kind of problem over to new work by itself. Milestone 6's fix recorded the rule for root and a folder that another user controls (`docs/DECISIONS.md`, D136), which every later implementer is told to read. Milestone 7's implementer still had root build the image inside such a folder. Section 6 says what follows.
 - While fixing, it did look for more cases of what a review showed. It found one that the reviews had missed in milestone 6, which milestone 12 then closed (D205), and one in milestone 10, which is left for the owner (D179).
 - At list prices it was no cheaper than Fable 5.2 at `high`: $20.35 for milestone 2, against $18.59 for milestone 1, which was different work. The two wrote about as much, 234,000 output tokens against 228,000. But Opus 5.5 at `xhigh` made 143 requests where Fable 5.2 made 66, and each request reads the context so far from the cache: 52.8 million tokens against 19.2 million. Cache reads cost the same on both models, and they were 52% of its bill. The implementers of milestones 3 and 4 cost $17.65 and $20.15, and those of milestones 5 to 13 cost $11 to $32, $24 on average.
-- Why not `high`: by Anthropic's figures (section 4), Opus 5.5 at `high` is 0.8 and 5.1 points under Fable 5.2 at `high` on the two coding benchmarks. At `xhigh` it is level on one and 2.4 under on the other. `high` should cost 34% to 40% of `xhigh`, but the saving would fall on the meters that have room. A weak implementation costs a round of a fix and a review, $15 to $34 here with $7 to $12 of it from the Fable allowance, and a defect that passes review is built on by the next milestone. `high` hasn't been tried here.
+- Why not `high`: by Anthropic's figures (section 4), Opus 5.5 at `high` is 0.8 and 5.1 points under Fable 5.2 at `high` on the two coding benchmarks. At `xhigh` it is level on one and 2.4 under on the other. `high` should cost 34% to 40% of `xhigh`, but the saving would fall on the meters that have room. A weak implementation costs a round of a fix and a review, $13 to $34 here with $7 to $12 of it from the Fable allowance, and a defect that passes review is built on by the next milestone. `high` hasn't been tried here.
 - Why not `max`: Anthropic publishes no comparison for Opus 5.5 at `max`. Its guidance for Fable 5.2 says that `max` costs more and runs slower than `xhigh`, often for a small gain. The one `max` run here, milestone 0's implementer on Fable 5.2, spent the most per hour.
 
 **The reviewer: Fable 5.2 at `high`.**
@@ -54,13 +56,14 @@ Measure the first run of a new kind of task, and add it to section 3.
 - The review is the only check of the code before it is merged.
 - Fable 5.2 at `high` finds the most planted defects in Anthropic's test: it scores 0.909, against 0.850 for Opus 5.5 at `high`, and its range of scores lies above every other configuration's.
 - A review costs $6 to $12 here, $9 on average, which is a quarter to a third of a milestone that is approved on its first review. With the implementer on Opus 5.5, it is nearly all that a milestone takes from the Fable allowance.
-- Twenty-one reviews are in. Fourteen approved, with 3 to 8 smaller points each. Seven asked for changes: four on milestone 4, and one each on milestones 6, 7 and 10. What they found mattered:
+- Twenty-three reviews are in. Fifteen approved, with 3 to 8 smaller points each. Eight asked for changes: four on milestone 4, and one each on milestones 6, 7, 10 and 14. What they found mattered:
   - One smaller point led the owner to change the send interval (`docs/DECISIONS.md`).
   - The review of milestone 2 read wacli's source, and found that a deletion by the owner would probably be dropped as the bot's own. Tests against a stub can't show that.
   - It also ran the new tests 64 times and saw one fail twice, where the implementer had run them 16 times and seen no failure.
   - The reviews of milestone 4 started VMs, timed git and filled disks, and found seven problems that a misled agent could cause, among them a runner that can't start again. Each was reproduced before it was reported.
   - The five problems in milestones 6, 7 and 10 were reproduced too, for example as root in a container, with a link placed as the less trusted user could place it. On each of those pull requests the suite had passed when the review first ran it.
   - It checks what a description claims. Milestone 6's said that its tests had run 32 times without a failure. The review ran the suite 33 times, and 3 runs failed.
+  - It reads the documentation against the code. In milestone 14 it followed the README's steps for a native upgrade, and found that `build-image` refuses to run at the step where the README had it.
   - It also reports what holds. In milestone 7 it made a 3 GB file under a 1 MB limit, printed 300 MB, and looked for the key inside the VM. The sandbox held each time.
   - A review can be wrong too. The second review of milestone 4 took a path longer than the system allows to be out of pi's reach, because `mkdir` refuses to make one. The fourth review made one with `mv`.
 - Not tried: a cheaper reviewer, or one off the Fable meter. Fable 5.2 at `medium` scores 0.877 in that test for about a third less. Opus 5.5 at `high` scores 0.850, and takes nothing from the Fable allowance. Either is worth trying only if the Fable allowance runs short.
@@ -129,6 +132,11 @@ Measure the first run of a new kind of task, and add it to section 3.
 | 13: Docker | Implement | Opus 5.5, `xhigh` | 46 min | $23.40 | Pull request 14: 1,082 lines added in 27 files. It ran gate G3 in a throwaway VM |
 | 13 | Review | Fable 5.2, `high` | 31 min | $10.46 | Approved. Nothing to fix, 5 smaller points |
 | 13 | Merge | Fable 5.2, `low` | Under 1 min | $0.48 | Merged |
+| 14: docs and final check | Implement | Opus 5.5, `xhigh` | 47 min | $25.65 | Pull request 15. Besides the README and the final check, it closed the two cases the owner asked to have closed (section 6) |
+| 14 | Review 1 | Fable 5.2, `high` | 11 min | $7.50 | Changes requested: 1 problem to fix, in the README, and 8 smaller points |
+| 14 | Fix 1 | Opus 5.5, `xhigh` | 13 min | $5.95 | Fixed, as review 2 confirmed |
+| 14 | Review 2 | Fable 5.2, `high` | 10 min | $6.60 | Approved. Nothing to fix, 3 smaller points |
+| 14 | Merge | Fable 5.2, `low` | Under 1 min | $0.46 | Merged. Pull request 15: 1,837 lines added in 36 files |
 
 Each milestone as a whole:
 
@@ -148,14 +156,15 @@ Each milestone as a whole:
 | 11 | 1 | $17.52 | $6.31 | 39 min |
 | 12 | 1 | $38.45 | $11.49 | 1 h 26 min |
 | 13 | 1 | $34.34 | $10.94 | 1 h 17 min |
-| 0 to 13 | 21, and 1 lost | $648.78 | $293.53 | About 22 h 30 min |
+| 14 | 2 | $46.16 | $14.56 | 1 h 21 min |
+| 0 to 14 | 23, and 1 lost | $694.94 | $308.09 | About 23 h 50 min |
 
 - From milestone 1 on, a milestone that was approved on its first review cost $18 to $38. The six of them among milestones 5 to 13 cost $31 on average.
 - Milestone 4 cost about four times that, over two runs of the loop. $10.25 of it was lost to the limit.
-- A round of one fix and the review after it cost $15 to $24 in milestones 4, 7 and 10. In milestone 6 it cost $34: the fix took as long as the implementation had.
+- A round of one fix and the review after it cost $13 to $24 in milestones 4, 7, 10 and 14. In milestone 6 it cost $34: the fix took as long as the implementation had.
 - The loop spends $26 to $35 for an hour of agent time.
 - The run of 2026-11-17 and 18 took milestones 4 to 13 through 39 agents in 14 hours 50 minutes, with no stop: $414.
-- Not in the tables: the session that runs the loop, which used about $5 in that run, and the agent that lists the merged pull requests when a run starts, $0.44.
+- Not in the tables: the session that runs the loop, which used about $5 in that run and again in milestone 14's, and the agent that lists the merged pull requests when a run starts, $0.44.
 - Milestone 0's implementer at `max` spent about $41 an hour in its first run. The milestones are different work, so none of this compares two levels or two models cleanly.
 - Before milestone 2, the ratios in section 4 gave an estimate of $10 to $14 for its implementer. It cost $20.35, and section 2 says where the cost went. Don't estimate this project's costs from those ratios.
 
@@ -188,7 +197,9 @@ The owner's plan has three usage meters, and the app shows them only as whole pe
 | A week, Fable only | $300 |
 | A week, all models | $600 |
 
-How Opus 5.5 counts, from four pairs of meter readings between 2026-11-16 and 2026-11-18:
+A second check, on 2026-11-18: $12 of Fable 5.2 use with nothing else running moved them by 11, 4 and 2 points, which fits.
+
+How Opus 5.5 counts, from five pairs of meter readings between 2026-11-16 and 2026-11-18:
 
 | Between the readings | Fable 5.2 use | Opus 5.5 use | 5-hour window | Fable week | All-models week |
 |---|---|---|---|---|---|
@@ -196,11 +207,12 @@ How Opus 5.5 counts, from four pairs of meter readings between 2026-11-16 and 20
 | Milestones 3 and 4, up to the limit | $42 | $53 | 65 points | 16 points | 11 points |
 | Milestone 4's second run, and the first 35 minutes of milestone 5 | $26 | $46 | 47 points | 10 points | 8 points |
 | The rest of milestone 5, and milestones 6 to 13 | $122 | $235 | It reset three times | 42 points | 38 points |
+| Milestone 14 | $28 | $32 | It reset once | 8 points | 6 points |
 
 The weekly meters of the second row were read 19 minutes after the limit, when the Fable use had reached $48.
 
-- Opus 5.5 doesn't count on the Fable meter. All four times, the Fable use alone accounts for that meter's points, to within a point or two.
-- On the other two meters, the Opus use counted for a quarter to a half of its list price: about $8 of $18 the first time, $13 to $20 of $53 the second, about $21 of $46 the third, and about $106 of $235 the fourth. The fourth is by far the largest sample, and it says 45%.
+- Opus 5.5 doesn't count on the Fable meter. All five times, the Fable use alone accounts for that meter's points, to within a point or two.
+- On the other two meters, the Opus use counted for a quarter to a half of its list price: about $8 of $18 the first time, $13 to $20 of $53 the second, about $21 of $46 the third, about $106 of $235 the fourth, and about $8 of $32 the fifth. The fourth is by far the largest sample, and it says 45%.
 - The meters don't follow list prices exactly, even for Fable 5.2 alone. A third reading, of $16 of Fable use, moved the 5-hour window 13 points where the first calibration predicts 17. Take every figure here as rough.
 
 What follows:
@@ -211,8 +223,9 @@ What follows:
   - On 2026-11-16 the window ran out during milestone 4's third review, and that review's $10.25 was lost.
   - On 2026-11-18 the loop ran through two whole windows without a stop. Each carried about $45 of Fable use and $91 to $95 of Opus use, which is about 86 points by the figures above.
 - When an agent dies on a limit, resume the run: the Workflow tool's `resumeFromRunId`, with the same `from`. The agents that finished return from the run's records, and only the one that died runs again. A plain rerun starts a new implementer and counts the reviews from 1.
-- The nine milestones from 5 to 13 took about 39 points of the Fable week and about 38 of the all-models week. Three of them needed a second review. The estimate before the run was 32 points of the Fable week if none did, and 60 if all did.
-- The weekly meters reset on Tuesdays at 19:00 UTC. On 2026-11-18 at 11:33 UTC, after the run, they stood at 54% for Fable and 47% for all models. The owner's own sessions use the same allowance.
+- The nine milestones from 5 to 13 took about 39 points of the Fable week and about 38 of the all-models week. Three of them needed a second review. The estimate before the run was 32 points of the Fable week if none did, and 60 if all did. Milestone 14, with its second review, took about 5 points of the Fable week and 4 of the all-models week.
+- The session that coordinates the loop uses the Fable allowance too. On 2026-11-18 it took about 7 points of the Fable week, for reading the reviews, measuring the agents and keeping this file. That is as much as two reviews.
+- The weekly meters reset on Tuesdays at 19:00 UTC. On 2026-11-18 at 15:33 UTC, after milestone 14, they stood at 66% for Fable and 55% for all models. The owner's own sessions use the same allowance.
 
 ## 6. What would change a choice
 
@@ -220,7 +233,7 @@ A change to section 1 is the owner's decision. Put the evidence to the owner, an
 
 - **Step the implementer down to `high`** if the 5-hour window or the all-models week, and not the Fable week, is what stops the loop, or if milestones take too long. By Anthropic's figures, `high` should take 60% to 66% less of both. It changes nothing on the Fable meter. Neither limit stopped the run of milestones 4 to 13.
   - Until milestone 2, this entry said: step down if `xhigh` costs more than Fable 5.2 at `high` did, about $19 for milestone 1. Milestone 2's implementer cost $20.35, for different work, so by the letter that was met. It was put to the owner on 2026-11-16, with the advice to stay at `xhigh`, because the plan doesn't count Opus 5.5 at its list price (section 5). The choice in section 1 stands unless the owner changes it.
-- **Reconsider Opus 5.5 for the implementer** if its pull requests need a second review more often than not. Four of its twelve have: milestone 4, which took five reviews, and milestones 6, 7 and 10, which took two each (section 2). So this isn't met.
+- **Reconsider Opus 5.5 for the implementer** if its pull requests need a second review more often than not. Five of its thirteen have: milestone 4, which took five reviews, and milestones 6, 7, 10 and 14, which took two each (section 2). So this isn't met.
   - After milestone 4's third review, on 2026-11-16, this was put to the owner, with the advice to keep the implementer and tell it to close the whole kind of problem, not the next case. The proposal had four rules: limit what is accepted; put back what git doesn't record; fail the run, don't stop the runner; make the clean-up unstoppable. The owner agreed on 2026-11-17 ("yes"), and the loop gave that to milestone 4's next implementer as the owner's answer. `docs/DECISIONS.md` 4.7 quotes it.
   - What came of it: the next review found two more cases, both ways to stop the clean-up, which the fourth rule was meant to rule out. After one fix, the review after that found none, and approved. Without the instruction, three reviews weren't enough. With it, two were.
   - So when a pull request keeps failing its review on new cases of one kind, name the kind and the rules that close it, and give them to the implementer as the answer to a question (the loop's `question` and `answer` arguments). Try that before a change of model.
@@ -234,10 +247,11 @@ A change to section 1 is the owner's decision. Put the evidence to the owner, an
 - **Write the kind of problem into the plan before the implementer starts.** The evidence is from one implementer, Opus 5.5 at `xhigh`. No other was tried, so it says what worked with this one, not that another model would need it less.
   - Where the plan named a kind of problem as a rule, the first review found no case that the rule covered: pi stopping the runner, in milestones 7 and 8, and the bridge writing into the runner's outbox, in milestone 12.
   - Where only a decision recorded it, a case came back: root working in a folder that a less trusted user controls, found in milestone 6 (D136) and again in milestone 7 (D151).
-  - The three kinds found so far, for work that comes after milestone 13:
+  - Milestone 14 was the first whose rules were written this way on purpose, for the two cases the owner asked on 2026-11-18 to have closed: how often pi runs when the runner keeps stopping (D229), and a catch-up that passes a message (D179). Each rule named the kind of problem and the known cases, and said to look for others. The first review found nothing to fix in either. Its one problem was in the README.
+  - The three kinds found so far, for work that comes after milestone 14:
     - something pi does stops the runner, or a fault has pi run again and again (`docs/DECISIONS.md` 4.7, D160, D229);
     - a part that runs as root follows a path that a less trusted user controls (D136, D151, D205);
-    - a stop or a crash between two steps loses a message (D179).
+    - a stop, a crash, or a delivery that never came leaves a message out of the datastore (D179).
   - When new work touches one of them, put a rule for it in that work's plan, and name the decisions that hold the cases.
 
 ## 7. Keeping this file up to date
