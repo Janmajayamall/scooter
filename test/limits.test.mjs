@@ -60,6 +60,8 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     EMAIL_SUBJECT_MAX_CHARS: 1000,
     EMAIL_HEADER_MAX_BYTES: 256 * 1024,
     EMAIL_PARSED_MAX_BYTES: MB,
+    // Milestone 6, after its review.
+    ATTACHMENT_NAME_MAX_CHARS: 255,
     SPOOL_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
     EMAIL_CHECK_COUNT: 5,
     EMAIL_CHECK_TIMEOUT: 2 * MINUTE,

@@ -108,7 +108,7 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     const take = record => intake.take(record)
     for (const channel of channels.values()) await channel.start(take)
     commands.handle()
-    const outbox = createOutbox({ paths, store, channels, defaultChannel: settings.defaultChannel, log, clock, onFatal: reportFatal })
+    const outbox = createOutbox({ paths, store, channels, defaultChannel: settings.defaultChannel, log, clock, owner: runnerUser, onFatal: reportFatal })
     outbox.start()
     log.info('bridge.started', { lines: store.index.lastSeq, channels: [...channels.keys()], defaultChannel: settings.defaultChannel })
 

@@ -32,21 +32,24 @@
 //   it: it is still tried first, at every look, but when it fails the look goes on to the next. It
 //   is given up on, and logged, only when a message of a later entry has gone out since, which
 //   shows that the channel works, and its own try after that fails too; a message going out past
-//   it starts the look over, so that try comes next. So an outage, during which nothing goes out,
-//   gives up on nothing, and the entries then go in order: the channel says it is ready while
-//   wacli reconnects, and only a send shows that it isn't. An entry with nothing behind it holds
-//   nothing back, and is tried again after the longest wait. A look at the outbox that fails for
-//   another reason, such as a full disk, is tried again after the same waits.
+//   it starts the look over, so that try comes next. Before an entry behind ones passed over is
+//   tried, they are tried again, in order, whatever their own waits. So an outage, during which
+//   nothing goes out, gives up on nothing, and the entries then go in order: the channel says it
+//   is ready while wacli reconnects, and only a send shows that it isn't. An entry with nothing
+//   behind it holds nothing back, and is tried again after the longest wait. A look at the outbox
+//   that fails for another reason, such as a full disk, is tried again after the same waits.
 // - **Pausing.** `pause()` stops it between two messages, for a backup (5.5), and `resume()`
 //   starts it again.
 //
-// The runner's user writes the entries. The bridge, as root, reads each file without following a
-// link, and checks it (`checkOutboxEntry`); an entry that isn't one is logged and removed. Logs
-// name entries by their ID and never hold their text.
+// The runner's user owns the outbox and writes the entries. The bridge, as root, takes them only
+// while the outbox is the runner's folder and not a link, reads each file without following a link,
+// and checks it (`checkOutboxEntry`); an entry that isn't one is logged and removed. It removes an
+// entry only by the names one holds, and leaves what isn't a folder, logged once. Logs name entries
+// by their ID and never hold their text.
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { listHandOffs, readUntrustedFile, writeFileAtomic } from '../common/files.mjs'
+import { TMP_PREFIX, checkOwnFolder, listHandOffs, readUntrustedFile, removeHandOff, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { ENTRY_FILE, SENDING_FILE, checkOutboxEntry, checkSendingFile, cutText, orderedEntry } from '../common/outbox.mjs'
@@ -163,8 +166,14 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
 // ---------------------------------------------------------------------------------------------
 // The processor
 
+// The names an entry folder holds: its `entry.json`, the `sending.json` the bridge makes of it, and
+// what a write of that one cut short leaves (`writeFileAtomic`). The only names the bridge removes.
+const isEntryFile = name => name === ENTRY_FILE || name === SENDING_FILE || name.startsWith(`${TMP_PREFIX}${SENDING_FILE}-`)
+
 // Returns the processor. Options:
 // - `paths`: what `makePaths` returns; the entries are in `paths.outbox`.
+// - `owner`: `{ uid, gid }` of the runner's user, who owns the outbox, or null when the bridge
+//   isn't root (section 10).
 // - `store`: the open store (`store.mjs`), which logs the `out` lines and whose index routing reads.
 // - `channels`: a Map from each channel's name to the channel; `defaultChannel`, a name in it.
 // - `onFatal(error)`: called once if the store stops taking lines (D29). Delivery stops with it.
@@ -172,7 +181,7 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
 // `start()` starts the loop, `stop()` stops it, cutting short a send in progress, which is then
 // sent again at the next start. `pause()` resolves once no message is going out, and none will
 // until `resume()`.
-export function createOutbox({ paths, store, channels, defaultChannel, log, clock = systemClock, onFatal = () => {} }) {
+export function createOutbox({ paths, store, channels, defaultChannel, log, clock = systemClock, owner = null, onFatal = () => {} }) {
   let lastSend = -Infinity
   let paused = false
   let broken = false
@@ -187,21 +196,25 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   const lastChance = new Set()
   // How many messages have gone out, so a look can tell whether an entry sent any.
   let sends = 0
+  // What the bridge left in the outbox, by name, so it is logged once: what isn't a folder, or
+  // couldn't be removed.
+  const left = new Set()
   // The channel whose entries are waiting until it is ready, so that is logged once.
   let waitingFor = null
   let round = Promise.resolve()
   let running = null
 
-  // Reads an entry folder: `{ entry, sent }`, or `{ refused }`, why it isn't one. An `entry.json`
-  // becomes a `sending.json` here, before anything of it goes out.
+  // Reads an entry folder: `{ entry, sent }`, or `{ refused }`, why it isn't one, with `leave` when
+  // it isn't a folder, and so isn't removed. An `entry.json` becomes a `sending.json` here, before
+  // anything of it goes out.
   function load(dir) {
     let stat
     try {
       stat = fs.lstatSync(dir)
     } catch (error) {
-      return { refused: `the entry can't be opened (${error.code})` }
+      return { refused: `the entry can't be opened (${error.code})`, leave: true }
     }
-    if (!stat.isDirectory()) return { refused: 'the entry is not a folder' }
+    if (!stat.isDirectory()) return { refused: 'the entry is not a folder', leave: true }
     for (const file of [SENDING_FILE, ENTRY_FILE]) {
       let text
       try {
@@ -230,9 +243,20 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     writeFileAtomic(path.join(dir, SENDING_FILE), `${JSON.stringify({ entry: orderedEntry(entry), sent })}\n`, { mode: 0o600 })
   }
 
-  // The runner's user owns the outbox and writes the entries; the bridge removes what it has
-  // read, without following links.
-  const remove = dir => fs.rmSync(dir, { recursive: true, force: true })
+  // The runner's user owns the outbox and writes the entries, and could put a link in an entry's
+  // place, or the outbox's, at any moment: the bridge removes an entry only by the names one holds,
+  // then the folder once it is empty (`removeHandOff`). One that holds anything else, or has been
+  // made something else meanwhile, is left, and logged once.
+  function remove(dir) {
+    const id = path.basename(dir)
+    if (left.has(id)) return
+    try {
+      removeHandOff(dir, isEntryFile)
+    } catch (error) {
+      log.warn('outbox.not_removed', { entry: id, ...errorFields(error) })
+      left.add(id)
+    }
+  }
 
   // Waits until a message may go out: `SEND_INTERVAL` after the last one tried.
   async function pace(signal) {
@@ -286,8 +310,9 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     const dir = path.join(paths.outbox, id)
     const loaded = load(dir)
     if (loaded.refused) {
-      log.warn('outbox.refused', { entry: id, reason: loaded.refused })
-      remove(dir)
+      log.warn('outbox.refused', { entry: id, reason: loaded.refused, ...(loaded.leave ? { left: true } : {}) })
+      if (loaded.leave) left.add(id)
+      else remove(dir)
       return 'next'
     }
     const { entry } = loaded
@@ -367,39 +392,62 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     return 'next'
   }
 
-  // One look at the outbox: the entries in order, until one has to wait. When a message goes out
-  // past entries that failed and were passed over, the channel works: each of them gets one last
-  // try, and the look starts over so that it comes next.
+  // One look at the outbox: the entries in order, until one has to wait.
+  // - An entry passed over that isn't due waits on its own, and the look goes on; one not passed
+  //   over yet that isn't due holds back the entries after it.
+  // - Before an entry behind ones passed over is tried, those are tried again, in order, whatever
+  //   their waits: should sends work again, they go first, and the entries keep their order.
+  // - When a message goes out past entries passed over that failed again, the channel works: each
+  //   of them gets one last try, and the look starts over so that it comes next.
   async function look(signal) {
     if (paused || broken || clock.now() < retryAt) return
+    // The runner's user owns the folder above the outbox, and could put a link in its place: then
+    // nothing is taken, and the look is tried again after waits that grow.
+    try {
+      checkOwnFolder(paths.outbox, owner)
+    } catch (error) {
+      if (error.code === 'ENOENT') return
+      throw error
+    }
     const ids = listHandOffs(paths.outbox)
-    for (const id of troubles.keys()) if (!ids.includes(id)) troubles.delete(id)
-    for (const id of lastChance) if (!ids.includes(id)) lastChance.delete(id)
+    const listed = new Set(ids)
+    for (const id of troubles.keys()) if (!listed.has(id)) troubles.delete(id)
+    for (const id of lastChance) if (!listed.has(id)) lastChance.delete(id)
+    for (const id of left) if (!listed.has(id)) left.delete(id)
+    // Passed over, and failed again in this look.
     const passed = []
-    for (const id of ids) {
-      if (paused || broken || signal.aborted) break
-      // Waiting for its next try: one passed over waits on its own, and one not yet holds back the
-      // entries after it.
-      const trouble = troubles.get(id)
-      if (trouble && clock.now() < trouble.due) {
-        if (trouble.failures < limits.SEND_ATTEMPTS) break
-        passed.push(id)
-        continue
-      }
+    // Passed over, and not tried yet in this look.
+    let waiting = []
+    // Tries one entry. Returns whether the look goes on.
+    async function attempt(id) {
       const before = sends
       const outcome = await deliver(id, signal)
       if (outcome === 'pass') {
         passed.push(id)
-        continue
+        return true
       }
       if (sends > before && passed.length > 0) {
         for (const other of passed) {
           lastChance.add(other)
           troubles.get(other).due = -Infinity
         }
-        break
+        return false
       }
-      if (outcome === 'wait') break
+      return outcome !== 'wait'
+    }
+    entries: for (const id of ids) {
+      if (left.has(id)) continue
+      const trouble = troubles.get(id)
+      if (trouble && clock.now() < trouble.due) {
+        if (trouble.failures < limits.SEND_ATTEMPTS) break
+        waiting.push(id)
+        continue
+      }
+      const turn = [...waiting, id]
+      waiting = []
+      for (const next of turn) {
+        if (paused || broken || signal.aborted || !(await attempt(next))) break entries
+      }
     }
     lookFailures = 0
   }

@@ -368,6 +368,51 @@ test('reader: a message the reader ended while parsing is handed over unparsed a
   assert.equal(context.position().parsing, null)
 })
 
+test('reader: an email it parsed but couldn\'t hand over, as on a full disk, is parsed again at the next start', async t => {
+  const context = setup(t)
+  const first = context.start()
+  await context.looked(1)
+  // The spool can't take a folder, once (the review of milestone 6, smaller point 2).
+  const mkdir = fs.mkdirSync
+  let refuse = true
+  fs.mkdirSync = (target, ...rest) => {
+    if (refuse && String(target).startsWith(context.spool)) {
+      refuse = false
+      throw Object.assign(new Error('ENOSPC: no space left on device, mkdir'), { code: 'ENOSPC' })
+    }
+    return mkdir(target, ...rest)
+  }
+  atEnd(t, () => (fs.mkdirSync = mkdir))
+  context.mailbox.deliver(gmailPlain())
+  await assert.rejects(first.done, { code: 'ENOSPC' })
+  assert.deepEqual([context.position().next, context.position().parsing], [1, null])
+  const looks = context.mailbox.callsOf('list').length
+  context.start()
+  await context.looked(looks + 1)
+  assert.deepEqual(context.folders().map(folder => [folder.parsed.uid, folder.parsed.parsed]), [[1, true]])
+})
+
+test('reader: a UIDVALIDITY change forgets the message it was parsing, whose UID may now name another', async t => {
+  const context = setup(t)
+  context.start()
+  await context.looked(1)
+  context.mailbox.deliver(gmailPlain(), { arrivedAt: '2026-11-09T15:00:00Z' })
+  await context.looked(2)
+  await context.stop()
+  // As a reader that ended while parsing message 2 leaves its position. Then the server renumbers
+  // the mailbox, and 2 names the message handed over before, which is handed over again.
+  fs.writeFileSync(path.join(context.home, 'state.json'), JSON.stringify({ ...context.position(), parsing: 2 }))
+  context.mailbox.renumber({ from: 2 })
+  context.mailbox.deliver(outlookHtmlOnly(), { arrivedAt: '2026-11-09T16:30:00Z' })
+  const looks = context.mailbox.callsOf('list').length
+  context.start()
+  await context.looked(looks + 1)
+  assert.deepEqual(context.folders().slice(1).map(folder => [folder.parsed.uid, folder.parsed.parsed]), [
+    [2, true],
+    [3, true],
+  ])
+})
+
 test('reader: text and subject are kept to one character past where the bridge cuts them', async t => {
   const context = setup(t)
   atEnd(t, overrideLimits({ EMAIL_TEXT_MAX_CHARS: 10, EMAIL_SUBJECT_MAX_CHARS: 5 }))

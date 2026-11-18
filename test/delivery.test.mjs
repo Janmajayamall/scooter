@@ -302,8 +302,10 @@ test('delivery: an outage gives up on nothing: entries passed over wait, and all
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
   assert.ok(entries.filter(entry => entry.event === 'outbox.passed_over').length >= 1)
   // Each entry is tried SEND_ATTEMPTS times, with waits that grow, and then every five minutes,
-  // while the next ramps up: about 60 tries in the hour, never two within SEND_INTERVAL.
-  assert.ok(whatsapp.sends.length > 40 && whatsapp.sends.length < 80, `${whatsapp.sends.length} tries`)
+  // while the next ramps up; and before each try of an entry behind ones passed over, those are
+  // tried again, so that they would go first. About 140 tries in the hour, never two within
+  // SEND_INTERVAL.
+  assert.ok(whatsapp.sends.length > 110 && whatsapp.sends.length < 170, `${whatsapp.sends.length} tries`)
   whatsapp.sends.slice(1).forEach((send, n) => assert.ok(send.at - whatsapp.sends[n].at >= limits.SEND_INTERVAL))
 
   whatsapp.failAll(null)
@@ -311,6 +313,61 @@ test('delivery: an outage gives up on nothing: entries passed over wait, and all
   assert.deepEqual(
     out().map(entry => entry.text),
     ['one', 'two', 'three', 'four', 'five', 'six'],
+  )
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
+})
+
+// Whether the outbox is between two looks, so that none is trying an entry.
+async function betweenLooks(outbox) {
+  let done = false
+  outbox.idle().then(() => (done = true))
+  await new Promise(resolve => setImmediate(resolve))
+  return done
+}
+
+test('delivery: after an outage of any length the entries go in order: those passed over are tried before an entry behind them', async t => {
+  // The review of milestone 6, smaller point 1: an entry behind one passed over, which came due
+  // first, went first, after 7 of these 30 lengths.
+  for (const minutes of Array.from({ length: 30 }, (_, n) => 5 + 3 * n)) {
+    await t.test(`${minutes} minutes`, async t => {
+      const { write, drain, whatsapp, clock, entries, out, outbox } = setup(t)
+      whatsapp.failAll({ code: 'EWACLI' })
+      for (const text of ['one', 'two', 'three', 'four']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+      for (let n = 0; n < minutes * 60; n++) await clock.advance(SECOND)
+      // Sends work again from a moment when no look is trying an entry (the next test has one
+      // that is).
+      while (!(await betweenLooks(outbox))) await clock.advance(SECOND)
+      whatsapp.failAll(null)
+      await drain()
+      assert.deepEqual(
+        out().map(entry => entry.text),
+        ['one', 'two', 'three', 'four'],
+      )
+      assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
+    })
+  }
+})
+
+test('delivery: when sends work again in the middle of a look, the entry tried then goes first, and nothing is given up', async t => {
+  const { write, drain, whatsapp, clock, entries, out, outbox } = setup(t)
+  whatsapp.failAll({ code: 'EWACLI' })
+  for (const text of ['one', 'two']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+  // Until both are passed over, and a look has tried `one` and is waiting to try `two`.
+  const passedOver = () => entries.filter(entry => entry.event === 'outbox.passed_over').length
+  while (passedOver() < 2) await clock.advance(SECOND)
+  const tries = whatsapp.sends.length
+  let found = false
+  for (let n = 0; n < 3600 && !found; n++) {
+    await clock.advance(SECOND)
+    found = whatsapp.sends.length > tries && whatsapp.sends.at(-1).text === 'one' && !(await betweenLooks(outbox))
+  }
+  assert.ok(found, 'a look that tried one, and has two to try')
+  whatsapp.failAll(null)
+  await drain()
+  // `two` showed that sends work, so `one` had its last try, which worked.
+  assert.deepEqual(
+    out().map(entry => entry.text),
+    ['two', 'one'],
   )
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
 })
@@ -346,7 +403,7 @@ test('delivery: a failure that leaves the channel not ready isn\'t counted again
   assert.equal(whatsapp.sends.filter(send => !send.failed).length, 1)
 })
 
-test('delivery: an entry that isn\'t one is logged and removed, and the next goes', async t => {
+test('delivery: an entry that isn\'t one is logged and removed, and the next goes; what isn\'t a folder is left, and logged once', async t => {
   const context = setup(t, { started: false })
   const { paths, whatsapp, entries, root } = context
   const folder = name => {
@@ -365,11 +422,14 @@ test('delivery: an entry that isn\'t one is logged and removed, and the next goe
   fs.writeFileSync(path.join(paths.outbox, '20261109T150000000-0008'), 'a file, not a folder')
   await context.write({ type: 'text', by: 'runner', text: 'the real one' })
   context.start()
-  await context.drain()
+  for (let n = 0; n < 30; n++) await context.clock.advance(SECOND)
   assert.deepEqual(
     sendsOf(whatsapp).map(send => send.text),
     ['the real one'],
   )
+  // The bridge removes only an entry's own files, by name: the file stays, for its writer to
+  // remove, and the bridge doesn't say so again at every look.
+  assert.deepEqual(context.waiting(), ['20261109T150000000-0008'])
   assert.deepEqual(
     entries.filter(entry => entry.event === 'outbox.refused').map(entry => entry.reason),
     [
@@ -385,6 +445,39 @@ test('delivery: an entry that isn\'t one is logged and removed, and the next goe
   )
   // The file the link led to is untouched.
   assert.ok(fs.existsSync(secret))
+})
+
+test('delivery: an outbox the runner\'s user made a link is not looked into, and nothing the link leads to is removed', async t => {
+  const context = setup(t, { started: false })
+  const { paths, root, entries, whatsapp, clock } = context
+  // As the runner's user could make the outbox lead to the data folder (the review of milestone 6,
+  // smaller point 4): folders as the data folder holds them, and one named as an entry is.
+  const elsewhere = path.join(root, 'elsewhere')
+  for (const name of ['agents', 'datastore', '20261109T150000000-0001']) {
+    fs.mkdirSync(path.join(elsewhere, name), { recursive: true })
+    fs.writeFileSync(path.join(elsewhere, name, 'kept'), 'kept')
+  }
+  fs.mkdirSync(paths.exchange, { recursive: true })
+  fs.symlinkSync(elsewhere, paths.outbox)
+  context.start()
+  for (let n = 0; n < 30; n++) await clock.advance(SECOND)
+  for (const name of ['agents', 'datastore', '20261109T150000000-0001']) assert.ok(fs.existsSync(path.join(elsewhere, name, 'kept')), name)
+  assert.deepEqual(whatsapp.sends, [])
+  // Tried again after waits that grow, not every second.
+  const failed = entries.filter(entry => entry.event === 'outbox.failed')
+  assert.ok(failed.length > 0 && failed.length < 5 && failed.every(entry => entry.code === 'EUNTRUSTED'), `${failed.length} looks`)
+})
+
+test('delivery: an entry is removed by the names one holds; one holding anything else is left once sent, and said once', async t => {
+  const { write, whatsapp, clock, paths, entries, waiting } = setup(t)
+  const id = await write({ type: 'text', by: 'lifelog', text: 'hello', about: 1 })
+  fs.writeFileSync(path.join(paths.outbox, id, 'notes.txt'), 'not a name an entry holds')
+  await write({ type: 'text', by: 'lifelog', text: 'and the next', about: 1 })
+  for (let n = 0; n < 30; n++) await clock.advance(SECOND)
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['hello', 'and the next'])
+  assert.deepEqual(waiting(), [id])
+  assert.deepEqual(fs.readdirSync(path.join(paths.outbox, id)), ['notes.txt'])
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.not_removed').map(entry => [entry.entry, entry.code]), [[id, 'ENOTEMPTY']])
 })
 
 test('delivery: pause stops it between two messages, until resume', async t => {

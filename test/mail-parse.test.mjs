@@ -77,6 +77,14 @@ test('html: a comment, tag or script that never ends drops the rest, and nothing
   }
 })
 
+test('html: a letter that lower case makes two characters doesn\'t move where a hidden element ends', () => {
+  // The review of milestone 6, smaller point 3: `İ` lowered is two characters, and the total after
+  // the style was dropped.
+  const html = '<p>İİİİİİİİİİİİ Istanbul</p><style>p { color: red }</style><p>Total: 850 TL</p><p>Thanks</p>'
+  assert.equal(htmlToText(html), 'İİİİİİİİİİİİ Istanbul\n\nTotal: 850 TL\n\nThanks')
+  assert.equal(htmlToText('<P>K</P><STYLE>x</STYLE><Script>y</SCRIPT><p>after</p>'), 'K\n\nafter')
+})
+
 test('html: character references, numeric and named, and the ones that name no character', () => {
   assert.equal(decodeEntities('&amp;&lt;&gt;&quot;&apos;&eacute;&Eacute;&euro;&hellip;&rsquo;'), '&<>"\'éÉ€…’')
   assert.equal(decodeEntities('&#65;&#x42;&#X43;&#0;&#xD800;&#1114112;'), 'ABC���')

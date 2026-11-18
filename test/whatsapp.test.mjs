@@ -429,30 +429,56 @@ test('whatsapp: a download wacli fails, or leaves as a link or elsewhere, is not
   assert.deepEqual(fs.readdirSync(paths.wacliStaging).filter(name => !name.endsWith('-elsewhere')), [])
 })
 
-test('whatsapp: wacli\'s staging folder is emptied at the start, and of a folder left in a download\'s place', async t => {
+test('whatsapp: what the bridge\'s downloads left in wacli\'s staging folder is removed at the start, by their names, and wacli\'s own folders stay', async t => {
   const context = await setup(t, {
     fixtures: { paired: true, leftDir: ['D1'] },
     limits: { MEDIA_DOWNLOAD_RETRIES: 0 },
-    // What a bridge killed during downloads left there.
+    // What a bridge killed during downloads left there, under the names it gives them; and what
+    // wacli made there itself.
     seed: paths => {
-      fs.mkdirSync(path.join(paths.wacliStaging, 'half', 'deeper'), { recursive: true })
-      fs.writeFileSync(path.join(paths.wacliStaging, 'half-done.jpg'), 'part')
-      fs.symlinkSync('/etc/hostname', path.join(paths.wacliStaging, 'a-link'))
+      fs.mkdirSync(paths.wacliStaging, { recursive: true })
+      fs.writeFileSync(path.join(paths.wacliStaging, '20261109T154000000-0001'), 'part')
+      fs.writeFileSync(path.join(paths.wacliStaging, '20261109T154000000-0002-elsewhere'), 'part')
+      fs.symlinkSync('/etc/hostname', path.join(paths.wacliStaging, '20261109T154000000-0003'))
+      fs.mkdirSync(path.join(paths.wacliStaging, '20261109T154000000-0004', 'deeper'), { recursive: true })
+      fs.writeFileSync(path.join(paths.wacliStaging, 'wacli-own.tmp'), 'wacli\'s')
     },
   })
   const { lines, synced, paths, entries } = context
   await synced()
-  assert.deepEqual(fs.readdirSync(paths.wacliStaging), [])
-  // Removing the link removed the link only.
+  // Removing the link removed the link only. A folder, or a name the bridge doesn't give, is
+  // wacli's, and stays.
   assert.ok(fs.existsSync('/etc/hostname'))
+  assert.deepEqual(fs.readdirSync(paths.wacliStaging).sort(), ['20261109T154000000-0004', 'wacli-own.tmp'])
+  assert.deepEqual(entries.filter(entry => entry.event === 'whatsapp.staging_kept').map(entry => entry.names), [2])
 
   await post(context, webhookPayload({ ID: 'D1', Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 0 } }))
   assert.equal(lines()[0].media.error, 'download failed')
-  assert.deepEqual(fs.readdirSync(paths.wacliStaging), [])
+  // The folder wacli left in the download's place is wacli's too.
+  assert.equal(fs.readdirSync(paths.wacliStaging).length, 3)
+  assert.deepEqual(entries.filter(entry => entry.event === 'whatsapp.staging_kept').map(entry => entry.names), [2, 1])
   // The log says why the download failed: wacli's exit code, and none of what it wrote.
   const failed = entries.find(entry => entry.event === 'intake.download_failed')
   assert.deepEqual([failed.code, failed.exitCode, failed.timedOut], ['EWACLI', 1, undefined])
   assert.ok(!JSON.stringify(entries).includes('interrupted'))
+})
+
+test('whatsapp: a staging folder wacli made a link is not cleared, and nothing the link leads to is removed', async t => {
+  let elsewhere
+  const { synced, events, root } = await setup(t, {
+    // As wacli could make its staging folder lead to the data folder.
+    seed: paths => {
+      elsewhere = path.join(path.dirname(paths.dataDir), 'elsewhere')
+      fs.mkdirSync(path.join(elsewhere, 'datastore'), { recursive: true })
+      fs.writeFileSync(path.join(elsewhere, '20261109T154000000-0001'), 'named as a download is')
+      fs.mkdirSync(paths.wacli, { recursive: true })
+      fs.symlinkSync(elsewhere, paths.wacliStaging)
+    },
+  })
+  await synced()
+  assert.ok(elsewhere.startsWith(root))
+  assert.deepEqual(fs.readdirSync(elsewhere).sort(), ['20261109T154000000-0001', 'datastore'])
+  assert.ok(events().includes('whatsapp.staging_not_cleared'))
 })
 
 test('whatsapp: a wacli call that hangs is stopped after WACLI_CALL_TIMEOUT', async t => {

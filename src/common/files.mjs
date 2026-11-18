@@ -150,7 +150,11 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
 // Opens a file that another program wrote, in a folder that program controls, for reading: without
 // following a link at the end of its path, without waiting for a writer, and only if it is a
 // regular file with exactly one name, belonging to `owner` when one is given. Returns `{ fd, stat }`.
-function openUntrusted(file, owner) {
+//
+// A file that has no name left when it is looked at was replaced after it was opened, as a write
+// that renames a new file into place replaces it: the reader's `state.json` and the runner's
+// `status.json` are written so. It is opened again, once, which finds the new one.
+function openUntrusted(file, owner, again = true) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
   const refuse = why => Object.assign(new Error(`not read: ${why}`), { code: 'EUNTRUSTED' })
   let fd
@@ -163,11 +167,17 @@ function openUntrusted(file, owner) {
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile()) throw refuse('not a regular file')
+    if (stat.nlink === 0 && again) {
+      fs.closeSync(fd)
+      fd = null
+      return openUntrusted(file, owner, false)
+    }
+    if (stat.nlink === 0) throw refuse('a file replaced as it was opened, twice')
     if (stat.nlink !== 1) throw refuse('a file with more than one name')
     if (owner && stat.uid !== owner.uid) throw refuse('a file of another user')
     return { fd, stat }
   } catch (error) {
-    fs.closeSync(fd)
+    if (fd !== null) fs.closeSync(fd)
     throw error
   }
 }
@@ -217,6 +227,56 @@ export function readUntrustedStart(file, { maxBytes, owner = null }) {
     fs.closeSync(fd)
   }
 }
+
+// Checks that `dir` is a folder, and not a link to one, belonging to `owner` when one is given
+// (`{ uid, gid }`): what a folder another program controls must be before the bridge, as root,
+// takes anything out of it or removes anything in it, such as the mail spool (5.6), the outbox
+// (5.3) or wacli's staging folder (5.2). That program owns the folder above it, and can put a link
+// in its place: the bridge would then list, read and remove what the link leads to, which for root
+// is anything. Throws an error with the code `EUNTRUSTED` when it isn't such a folder, and the
+// system's error, `ENOENT` among them, when it can't be looked at.
+export function checkOwnFolder(dir, owner = null) {
+  const refuse = why => Object.assign(new Error(`not used: ${why}`), { code: 'EUNTRUSTED' })
+  const stat = fs.lstatSync(dir)
+  if (stat.isSymbolicLink()) throw refuse('a symbolic link')
+  if (!stat.isDirectory()) throw refuse('not a folder')
+  if (owner && stat.uid !== owner.uid) throw refuse('a folder of another user')
+}
+
+// Removes a folder that another program handed over, in a folder that program controls, by the
+// names it writes in one: each name in it that `isKnown(name)` accepts is unlinked, which neither
+// follows a link nor removes a folder, and then the folder itself, which goes only once it is
+// empty. Nothing else is removed. A folder that isn't there is fine. Throws when the folder can't be
+// removed, `ENOTEMPTY` when it holds anything else.
+//
+// The other program can put a link in the folder's place, or in its parent's, at any moment, even
+// between a check (`checkOwnFolder`) and the removal: Node has no calls relative to a folder it has
+// open, which would close that gap. Removing everything under a path would then remove what the
+// link leads to, which for the bridge, as root, is anything. Removing by known names leaves such a
+// swap only files of those names, and empty folders, to reach.
+export function removeHandOff(dir, isKnown) {
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  for (const name of names) {
+    if (!isKnown(name)) continue
+    try {
+      fs.unlinkSync(path.join(dir, name))
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+  fs.rmdirSync(dir)
+}
+
+// Whether `name` is one that `createIds` makes, or starts with one: the names of the folders handed
+// over through the outbox and the mail spool, and of the bridge's downloads in wacli's staging
+// folder. Nothing else Scooter keeps is named so.
+export const startsWithId = name => /^\d{8}T\d{9}-\d{4}/.test(name)
 
 // The path of `name` in the folder `parent`, as bytes. Walking a folder by the bytes of its names
 // reaches every name as it is on disk: one that isn't UTF-8 doesn't survive a round trip through a

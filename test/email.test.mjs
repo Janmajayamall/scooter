@@ -370,6 +370,8 @@ test('email: emails from the spool become the right lines and attachments: the w
 
 test('email: a folder counts only once it is renamed', async t => {
   const context = await setup(t)
+  // The reader removes what it left unfinished when it opens the spool, before it connects.
+  await waitFor(() => context.channel.status().startsWith('Email: connected'), 'the reader to connect')
   spool(context, { name: '.tmp-20261109T161500000-0001' })
   await context.take()
   assert.deepEqual(context.lines(), [])
@@ -397,16 +399,18 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   })
   await context.take()
 
+  await context.take(5)
   const refusals = context.entries.filter(entry => entry.event === 'email.refused')
   assert.deepEqual(
-    refusals.map(entry => [entry.folder, entry.reason]),
+    refusals.map(entry => [entry.folder, entry.reason, entry.left ?? false]),
     [
-      [bad[0], 'parsed.json is not JSON'],
-      [bad[1], 'parsed.json: unknown field extra'],
-      [bad[2], 'parsed.json can\'t be read (ENOENT)'],
-      [bad[3], 'message.eml can\'t be read (ENOENT)'],
-      [linked, 'parsed.json can\'t be read (EUNTRUSTED)'],
-      ['20261109T161500000-0900', 'it is not a folder'],
+      [bad[0], 'parsed.json is not JSON', false],
+      [bad[1], 'parsed.json: unknown field extra', false],
+      [bad[2], 'parsed.json can\'t be read (ENOENT)', false],
+      [bad[3], 'message.eml can\'t be read (ENOENT)', false],
+      [linked, 'parsed.json can\'t be read (EUNTRUSTED)', false],
+      // Left where it is, for the reader to remove, and said once, not at every look.
+      ['20261109T161500000-0900', 'it is not a folder', true],
     ],
   )
   const [line] = context.lines()
@@ -421,7 +425,9 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
     ],
   )
   assert.deepEqual(fs.readdirSync(context.dayDir).sort(), ['1-2.sh', '1-3.txt', '1.eml', 'log.jsonl'])
-  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), ['20261109T161500000-0900'])
+  // The link was removed as a link.
+  assert.ok(fs.existsSync('/etc/hostname'))
 })
 
 test('email: a duplicate Message-ID is skipped, as when a renumbered mailbox hands over again', async t => {
@@ -494,8 +500,9 @@ test('email: mail that fails the sender check isn\'t stored; it is logged with i
 
 test('email: /status says whether the reader is connected, when it last looked, and what was stored and skipped', async t => {
   const context = await setup(t)
-  await waitFor(() => context.channel.status().startsWith('Email: connected, last checked'), 'the reader to connect')
-  assert.match(context.channel.status(), /^Email: connected, last checked (\d\d:\d\d|\w{3} \d+ \w{3} \d\d:\d\d); 0 stored and 0 skipped since the bridge started, 21:45\.$/)
+  let line
+  await waitFor(() => (line = context.channel.status()).startsWith('Email: connected, last checked'), 'the reader to connect')
+  assert.match(line, /^Email: connected, last checked (\d\d:\d\d|\w{3} \d+ \w{3} \d\d:\d\d); 0 stored and 0 skipped since the bridge started, 21:45\.$/)
   spool(context, { parsed: { text: 'one' } })
   spool(context, { raw: stranger(), parsed: { uid: 99, fetched: 'whole' } })
   await context.take()
@@ -543,6 +550,100 @@ test('email: a folder the store can\'t take now stays, and is tried again after 
   )
   assert.deepEqual(fs.readdirSync(paths.mailSpool), [])
   assert.deepEqual(events().filter(event => event === 'email.spool_failed').length, 2)
+})
+
+// An email with an attachment, as the reader hands it over.
+const spoolMemo = context =>
+  spool(context, {
+    raw: appleMailAudio(),
+    parsed: { subject: 'Call with Sam', text: 'Recording.', attachments: [{ name: 'Call with Sam.m4a', mime: 'audio/x-m4a', bytes: M4A.length }] },
+    parts: [M4A],
+  })
+
+test('email: an email whose files the bridge can\'t copy, as on a full disk, stays whole in the spool, and is stored with them once it can', async t => {
+  const context = await setup(t)
+  // A copy that fails on the bridge's side isn't tried again in place, whatever the retries.
+  atEnd(t, overrideLimits({ MEDIA_DOWNLOAD_RETRIES: 0 }))
+  spool(context, { parsed: { text: 'first' } })
+  await context.take()
+  const id = spoolMemo(context)
+  // The copy into `bridge/incoming/` fails, as on a full disk, while the datastore can still take
+  // a line (the review of milestone 6, must-fix 2).
+  const open = fs.promises.open
+  let full = true
+  fs.promises.open = (target, flags, ...rest) =>
+    full && String(target).startsWith(context.paths.bridgeIncoming) && /^w/.test(flags)
+      ? Promise.reject(Object.assign(new Error(`ENOSPC: no space left on device, open '${target}'`), { code: 'ENOSPC', syscall: 'open' }))
+      : open(target, flags, ...rest)
+  atEnd(t, () => (fs.promises.open = open))
+  await context.take()
+  assert.deepEqual(context.lines().map(line => line.text), ['first'])
+  assert.deepEqual(fs.readdirSync(path.join(context.paths.mailSpool, id)).sort(), ['message.eml', 'parsed.json', 'part-1'])
+  assert.deepEqual(context.events().filter(event => event === 'email.spool_failed').length, 1)
+
+  full = false
+  await context.take(5)
+  const [, line] = context.lines()
+  assert.deepEqual(
+    { text: line.text, files: line.files.map(file => file.path), media: line.media },
+    { text: 'Recording.', files: ['2.eml', '2-2.m4a'], media: undefined },
+  )
+  assert.deepEqual(fs.readFileSync(path.join(context.dayDir, '2-2.m4a')), M4A)
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
+})
+
+test('email: an email whose files can\'t go into the day folder stays whole in the spool, and is stored with them later', { skip: skipIfRoot }, async t => {
+  const context = await setup(t)
+  spool(context, { parsed: { text: 'first' } })
+  await context.take()
+  // The day folder, with its log, can't take another file.
+  fs.chmodSync(context.dayDir, 0o500)
+  atEnd(t, () => fs.chmodSync(context.dayDir, 0o750))
+  const id = spoolMemo(context)
+  await context.take()
+  assert.deepEqual(context.lines().map(line => line.text), ['first'])
+  assert.deepEqual(fs.readdirSync(path.join(context.paths.mailSpool, id)).sort(), ['message.eml', 'parsed.json', 'part-1'])
+
+  fs.chmodSync(context.dayDir, 0o750)
+  await context.take(5)
+  const [, line] = context.lines()
+  assert.deepEqual(
+    { text: line.text, files: line.files.map(file => file.path), media: line.media },
+    { text: 'Recording.', files: ['2.eml', '2-2.m4a'], media: undefined },
+  )
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
+})
+
+test('email: a folder the bridge is done with is removed by the names the reader writes; one holding anything else is left, and said once', async t => {
+  const context = await setup(t)
+  const id = spool(context, { parsed: { text: 'one' }, files: { 'notes.txt': 'not a name the reader writes' } })
+  spool(context, { raw: gmailPlain({ messageId: '<two@mail.example>' }), parsed: { text: 'two' } })
+  await context.take(5)
+  assert.deepEqual(context.lines().map(line => line.text), ['one', 'two'])
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [id])
+  assert.deepEqual(fs.readdirSync(path.join(context.paths.mailSpool, id)), ['notes.txt'])
+  assert.deepEqual(context.entries.filter(entry => entry.event === 'email.not_removed').map(entry => [entry.folder, entry.code]), [[id, 'ENOTEMPTY']])
+})
+
+test('email: a spool the reader made a link is not looked into, and nothing the link leads to is removed', async t => {
+  const context = await setup(t)
+  await waitFor(() => context.channel.status().startsWith('Email: connected'), 'the reader to connect')
+  // As the reader could make the spool lead to the data folder (the review of milestone 6,
+  // must-fix 1): folders as the data folder holds them, and one named as a spool folder is.
+  const elsewhere = path.join(context.root, 'elsewhere')
+  for (const name of ['agents', 'datastore', '20261109T161500000-0001']) {
+    fs.mkdirSync(path.join(elsewhere, name), { recursive: true })
+    fs.writeFileSync(path.join(elsewhere, name, 'kept'), 'kept')
+  }
+  fs.renameSync(context.paths.mailSpool, path.join(context.paths.mail, 'spool-before'))
+  fs.symlinkSync(elsewhere, context.paths.mailSpool)
+  await context.take(10)
+  for (const name of ['agents', 'datastore', '20261109T161500000-0001']) assert.ok(fs.existsSync(path.join(elsewhere, name, 'kept')), name)
+  assert.deepEqual(context.entries.filter(entry => entry.event === 'email.refused'), [])
+  const failed = context.entries.filter(entry => entry.event === 'email.spool_failed')
+  assert.ok(failed.length > 0 && failed.every(entry => entry.code === 'EUNTRUSTED'))
+  // Tried again after waits that grow, not every second.
+  assert.ok(failed.length < 5, `${failed.length} looks`)
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -620,26 +721,66 @@ test('email: as root, the reader runs as its own user, its folders are its own, 
   const state = fs.statSync(context.paths.mailState)
   assert.deepEqual([state.uid, state.mode & 0o777], [4545, 0o600])
 
-  // A folder that isn't the reader's, and one whose parsed.json isn't, are refused.
+  // A folder that isn't the reader's, and one whose parsed.json isn't, are refused. The first is
+  // left as it is: the bridge removes nothing the reader couldn't (the review of milestone 6,
+  // must-fix 1).
   const rootsFolder = spool(context)
   const rootsFile = spool(context)
   fs.chownSync(path.join(context.paths.mailSpool, rootsFile), 4545, 4545)
   const mine = spool(context, { parsed: { text: 'mine' } })
   for (const entry of fs.readdirSync(path.join(context.paths.mailSpool, mine))) fs.chownSync(path.join(context.paths.mailSpool, mine, entry), 4545, 4545)
   fs.chownSync(path.join(context.paths.mailSpool, mine), 4545, 4545)
-  await context.take()
+  await context.take(5)
   assert.deepEqual(
-    context.entries.filter(entry => entry.event === 'email.refused').map(entry => [entry.folder, entry.reason]),
+    context.entries.filter(entry => entry.event === 'email.refused').map(entry => [entry.folder, entry.reason, entry.left ?? false]),
     [
-      [rootsFolder, 'it is not the email reader\'s'],
-      [rootsFile, 'parsed.json can\'t be read (EUNTRUSTED)'],
+      [rootsFolder, 'it is not the email reader\'s', true],
+      [rootsFile, 'parsed.json can\'t be read (EUNTRUSTED)', false],
     ],
   )
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [rootsFolder])
+  assert.deepEqual(fs.readdirSync(path.join(context.paths.mailSpool, rootsFolder)).sort(), ['message.eml', 'parsed.json'])
   // The email is stored as root's, with the runner's group.
   const [line] = context.lines()
   assert.equal(line.text, 'mine')
   const stored = fs.statSync(path.join(context.dayDir, '1.eml'))
   assert.deepEqual([stored.uid, stored.gid, stored.mode & 0o777], [0, 4343, 0o640])
+})
+
+test('email: as root, a spool the reader made a link to the data folder removes nothing there', { skip: skipUnlessRoot }, async t => {
+  const users = { 'scooter-wacli': { uid: 4242, gid: 4242 }, 'scooter-runner': { uid: 4343, gid: 4343 }, 'scooter-mail': { uid: 4545, gid: 4545 } }
+  const context = await setup(t, {
+    users,
+    prepare: ({ root, reader }) => {
+      fs.chmodSync(root, 0o755)
+      for (const dir of [reader.bin, reader.control, path.join(root, 'stub'), path.join(root, 'bin')]) fs.chmodSync(dir, 0o777)
+      for (const file of fs.readdirSync(reader.control)) fs.chmodSync(path.join(reader.control, file), 0o666)
+    },
+  })
+  await waitFor(() => context.channel.status().startsWith('Email: connected'), 'the reader to connect')
+  // An email stored first, so the data folder holds the record.
+  const mine = spool(context, { parsed: { text: 'mine' } })
+  for (const entry of fs.readdirSync(path.join(context.paths.mailSpool, mine))) fs.chownSync(path.join(context.paths.mailSpool, mine, entry), 4545, 4545)
+  fs.chownSync(path.join(context.paths.mailSpool, mine), 4545, 4545)
+  await context.take()
+  assert.equal(context.lines().length, 1)
+  const before = fs.readdirSync(context.paths.dataDir, { recursive: true }).filter(name => !name.startsWith('mail')).sort()
+  assert.ok(before.includes('datastore/2026/11/09/log.jsonl') && before.includes('bridge/state.json'))
+
+  // The reader, which owns `mail/`, puts a link to the data folder in the spool's place, its own,
+  // as the review of milestone 6 did; and a folder of root's in the spool, named as the reader's.
+  fs.renameSync(context.paths.mailSpool, path.join(context.paths.mail, 'spool-before'))
+  fs.symlinkSync(context.paths.dataDir, context.paths.mailSpool)
+  fs.lchownSync(context.paths.mailSpool, 4545, 4545)
+  await context.take(10)
+  fs.rmSync(context.paths.mailSpool)
+  fs.renameSync(path.join(context.paths.mail, 'spool-before'), context.paths.mailSpool)
+  const rootsFolder = spool(context)
+  await context.take(10)
+
+  assert.deepEqual(fs.readdirSync(context.paths.dataDir, { recursive: true }).filter(name => !name.startsWith('mail')).sort(), before)
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [rootsFolder])
+  assert.ok(context.entries.some(entry => entry.event === 'email.spool_failed' && entry.code === 'EUNTRUSTED'))
 })
 
 test('email: a file in the spool the bridge can\'t read is refused, not a reason to stop', { skip: skipIfRoot }, async t => {

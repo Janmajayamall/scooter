@@ -5,9 +5,13 @@
 // module:
 // - runs the reader as `scooter-mail`, with the mailbox's settings and nothing else of the bridge's
 //   in its environment, and starts it again with backoff whenever it exits;
-// - takes the spool's folders in order, every `POLL_INTERVAL`, as untrusted: `parsed.json` must be
-//   valid and within its size limit, every file is read without following a link and only if it is
-//   the reader's, and the bridge names the stored files itself;
+// - takes the spool's folders in order, every `POLL_INTERVAL`, as untrusted: the spool must be the
+//   reader's folder and not a link, `parsed.json` must be valid and within its size limit, every
+//   file is read without following a link and only if it is the reader's, and the bridge names the
+//   stored files itself. What isn't the reader's, or isn't a folder, is left where it is, and a
+//   folder the bridge is done with is removed by the names the reader writes in one;
+// - keeps an email whose files it can't copy, for a reason of its own such as a full disk, in the
+//   spool, whole, and tries it again after waits that grow;
 // - applies the sender check, Scooter's own code reading the raw headers: exactly one `From`,
 //   holding a single one of the owner's addresses, and a topmost `Authentication-Results` that
 //   names the mailbox's provider and says `dmarc=pass`. Anything ambiguous is skipped;
@@ -25,7 +29,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { copyUntrustedFile, ensureDir, listHandOffs, readUntrustedFile, readUntrustedStart } from '../../common/files.mjs'
+import { checkOwnFolder, copyUntrustedFile, ensureDir, listHandOffs, readUntrustedFile, readUntrustedStart, removeHandOff } from '../../common/files.mjs'
 import { limits } from '../../common/limits.mjs'
 import { createLog, errorFields } from '../../common/log.mjs'
 import { makePaths } from '../../common/paths.mjs'
@@ -41,6 +45,8 @@ export const DEFAULT_READER = { program: process.execPath, args: [READER] }
 const MESSAGE_FILE = 'message.eml'
 const PARSED_FILE = 'parsed.json'
 const PART_PREFIX = 'part-'
+// The names the reader writes in a spool folder: the only ones the bridge removes (`removeHandOff`).
+const isSpoolFile = name => name === MESSAGE_FILE || name === PARSED_FILE || /^part-[1-9][0-9]*$/.test(name)
 
 // What a too-long email's text ends with, after its first `EMAIL_TEXT_MAX_CHARS` characters, and a
 // too-long subject after its first `EMAIL_SUBJECT_MAX_CHARS` (5.6).
@@ -304,7 +310,6 @@ export function dateOf(lines) {
 
 // What an attachment's MIME type must look like (RFC 6838), as the reader writes it.
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/
-const NAME_MAX_CHARS = 255
 const PARSED_FIELDS = ['uid', 'uidValidity', 'arrivedAt', 'size', 'fetched', 'parsed', 'subject', 'text', 'attachments']
 
 const isUid = value => Number.isSafeInteger(value) && value > 0
@@ -315,7 +320,7 @@ function checkAttachment(attachment) {
   const { name, mime, bytes, ...rest } = attachment
   return (
     Object.keys(rest).length === 0 &&
-    (name === null || (typeof name === 'string' && name !== '' && chars(name) <= NAME_MAX_CHARS)) &&
+    (name === null || (typeof name === 'string' && name !== '' && chars(name) <= limits.ATTACHMENT_NAME_MAX_CHARS)) &&
     typeof mime === 'string' &&
     MIME_TYPE.test(mime) &&
     isCount(bytes)
@@ -414,11 +419,31 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
   let retryAt = -Infinity
   let failures = 0
   let round = Promise.resolve()
+  // What the bridge left in the spool, by name, so it is logged once: what isn't the reader's, isn't
+  // a folder, or couldn't be removed.
+  const left = new Set()
 
-  const remove = dir => fs.rmSync(dir, { recursive: true, force: true })
   const prune = list => {
     const from = clock.now() - limits.STATUS_WINDOW
     while (list.length > 0 && list[0] < from) list.shift()
+  }
+  // Counts an email for `/status`. Those past the window go then too, so a mailbox strangers write
+  // to keeps a day of times at most, whether `/status` is asked or not.
+  const count = list => {
+    list.push(clock.now())
+    prune(list)
+  }
+
+  // Removes a spool folder the bridge is done with, by the names the reader writes in one, and
+  // never anything else (`removeHandOff`). One that holds anything else, or has been made something
+  // else meanwhile, is left, and logged once.
+  function remove(id) {
+    try {
+      removeHandOff(path.join(paths.mailSpool, id), isSpoolFile)
+    } catch (error) {
+      log.warn('email.not_removed', { folder: id, ...errorFields(error) })
+      left.add(id)
+    }
   }
 
   // Takes one spool folder. Returns `next` when it is done with, `retry` when it must be tried
@@ -427,17 +452,25 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     const dir = path.join(paths.mailSpool, id)
     const refuse = reason => {
       log.warn('email.refused', { folder: id, reason })
-      remove(dir)
+      remove(id)
+      return 'next'
+    }
+    // What isn't the reader's, or isn't a folder, is left where it is: the bridge, as root, removes
+    // only what the reader can, and only by the names it writes. A well-behaved reader leaves
+    // nothing else.
+    const leave = reason => {
+      log.warn('email.refused', { folder: id, reason, left: true })
+      left.add(id)
       return 'next'
     }
     let stat
     try {
       stat = fs.lstatSync(dir)
     } catch (error) {
-      return refuse(`it can't be opened (${error.code})`)
+      return leave(`it can't be opened (${error.code})`)
     }
-    if (!stat.isDirectory()) return refuse('it is not a folder')
-    if (user && stat.uid !== user.uid) return refuse('it is not the email reader\'s')
+    if (user && stat.uid !== user.uid) return leave('it is not the email reader\'s')
+    if (!stat.isDirectory()) return leave('it is not a folder')
 
     let parsed
     try {
@@ -457,21 +490,23 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     const lines = readHeaderBlock(head.bytes)
     const check = senderCheck(lines, config)
     if (!check.ok) {
-      skipped.push(clock.now())
+      count(skipped)
       log.info('email.skipped', { uid: parsed.uid, sender: check.sender, reason: check.reason })
-      remove(dir)
+      remove(id)
       return 'next'
     }
     const record = emailRecord({ parsed, lines, size: head.size })
     folders.set(record, dir)
     const result = await onRecord(record)
     if (result?.reason === 'the store stopped') return 'stop'
+    // Intake stored nothing of it, for a reason of the bridge's own, such as a full disk: the
+    // folder stays, whole, and is tried again (5.6).
     if (result?.reason === 'failed') return 'retry'
     if (result?.stored) {
-      stored.push(clock.now())
+      count(stored)
       log.info('email.stored', { uid: parsed.uid, seq: result.seq })
     }
-    remove(dir)
+    remove(id)
     return 'next'
   }
 
@@ -486,8 +521,20 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
   async function look(onRecord, signal) {
     if (clock.now() < retryAt) return null
     try {
-      for (const id of listHandOffs(paths.mailSpool)) {
+      // The reader owns the folder above the spool, and could put a link in its place: then
+      // nothing is taken, and the look is tried again after waits that grow.
+      try {
+        checkOwnFolder(paths.mailSpool, user)
+      } catch (error) {
+        if (error.code === 'ENOENT') return null
+        throw error
+      }
+      const ids = listHandOffs(paths.mailSpool)
+      const listed = new Set(ids)
+      for (const id of left) if (!listed.has(id)) left.delete(id)
+      for (const id of ids) {
         if (signal.aborted) return null
+        if (left.has(id)) continue
         const outcome = await take(id, onRecord)
         if (outcome === 'stop') return 'stop'
         if (outcome === 'retry') throw Object.assign(new Error('the email could not be stored'), { code: 'ERETRY' })
@@ -528,6 +575,8 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
   return {
     name: 'email',
     takesCommands: false,
+    // An email stays in the spool until it is stored, with its files, or skipped (5.6).
+    keepsUntilStored: true,
     canSend: false,
     canReact: false,
 
@@ -571,12 +620,20 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     },
 
     // Saves the record's `n`th attachment at `target`: the whole message for the first, then the
-    // parts, copied out of the spool with care, since the reader owns it.
+    // parts, copied out of the spool with care, since the reader owns it. A file in the spool that
+    // is missing, isn't one to copy, or is too large is the email's own; any other failure is on
+    // the bridge's side, such as a full disk, and says so (`bridgeSide`): the email then stays in
+    // the spool, and is tried again (5.6).
     async download(record, n, target) {
       const dir = folders.get(record)
       if (dir === undefined || !Number.isSafeInteger(n) || n < 1 || n > record.attachments.length) throw new Error('no such attachment')
       const source = path.join(dir, n === 1 ? MESSAGE_FILE : `${PART_PREFIX}${n - 1}`)
-      await copyUntrustedFile(source, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
+      try {
+        await copyUntrustedFile(source, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
+      } catch (error) {
+        if (!(error.code === 'EUNTRUSTED' || error.code === 'EFBIG' || error.path === source)) error.bridgeSide = true
+        throw error
+      }
     },
 
     // Resolves when the look at the spool in progress is over. For tests.

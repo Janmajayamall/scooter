@@ -7,13 +7,20 @@
 //
 //   name              `whatsapp` or `email`: the `source` of the lines its records become
 //   takesCommands     whether a text from it can be a command (5.4). WhatsApp's can; an email never
+//   keepsUntilStored  whether a message stays with the channel until intake has stored it, so that
+//                     one the bridge can't store now, for a reason of its own such as a full disk,
+//                     is handed over again later. An email stays in the spool (5.6); WhatsApp's
+//                     messages don't, and are stored without the files that couldn't be copied
 //   start(onRecord)   starts receiving, and calls `onRecord(record)` for each message from the
 //                     owner, awaiting what it returns. The channel drops everything else itself.
 //   stop()            stops receiving, for backups and shutdown
 //   download(record, n, path)
 //                     saves the record's `n`th attachment, counting from 1, at `path`, a file name
 //                     in a folder only the bridge can write. Rejects if it can't; an error with the
-//                     code `EFBIG` means the attachment is too large to store, and isn't retried.
+//                     code `EFBIG` means the attachment is too large to store, and isn't retried,
+//                     and one with `bridgeSide: true` that the copy failed on the bridge's side,
+//                     such as on a full disk, which from a channel that keeps its messages until
+//                     they are stored stores nothing of the message now.
 //   status()          one line for `/status`
 //
 // And for delivery (5.3):

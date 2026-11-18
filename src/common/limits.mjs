@@ -88,6 +88,10 @@ const values = {
   // email whose description would be larger as one it couldn't parse, so a larger file was written
   // by something else than the reader.
   EMAIL_PARSED_MAX_BYTES: 1 * MB,
+  // The longest original file name of an email's attachment, in characters: the reader cuts a
+  // longer one, and the bridge refuses a `parsed.json` with one (5.6). The bridge names the stored
+  // file itself (4.1), so this is only what the owner called it, as a line's `name` (4.2).
+  ATTACHMENT_NAME_MAX_CHARS: 255,
   // A spool folder the bridge couldn't take for a reason of its own, such as a full disk, is
   // tried again after a wait that starts at `first` and doubles up to `max`. The folder stays,
   // so the email isn't lost, and the folders after it wait (5.6).

@@ -10,16 +10,13 @@
 // it decides on (the sender check, the `Message-ID` and the `Date`) itself.
 
 import PostalMime from 'postal-mime'
+import { limits } from '../common/limits.mjs'
 
 // What an attachment's MIME type must look like to be handed over as it is: `type/subtype`, in the
 // characters RFC 6838 allows, at most 127 of each. Anything else is `application/octet-stream`.
 // The bridge holds a type to the same rule (`src/bridge/channels/email.mjs`).
 const MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/
 export const UNKNOWN_MIME = 'application/octet-stream'
-
-// The longest original file name handed over, in characters. A longer one is cut; the bridge names
-// the stored file itself (4.1), so the name is only what the owner called it.
-export const NAME_MAX_CHARS = 255
 
 // The first `max` characters of `text`, a character being a Unicode code point.
 export function firstChars(text, max) {
@@ -101,7 +98,9 @@ const CELLS = new Set(['td', 'th'])
 // time in step with its length whatever it holds: a tag, a comment or a script that never ends
 // drops the rest.
 export function htmlToText(html) {
-  const lower = html.toLowerCase()
+  // Where a hidden element ends is looked for in this, so it must keep every position of `html`:
+  // only A to Z are lowered, since `toLowerCase` makes some letters two characters, such as `İ`.
+  const lower = html.replace(/[A-Z]+/g, letters => letters.toLowerCase())
   // What is out so far, in pieces, and its last character: building one string and looking at its
   // end would take time in the square of its length.
   const parts = []
@@ -200,7 +199,9 @@ export async function parseEmail(raw) {
     subject: typeof email.subject === 'string' ? email.subject : '',
     text: text.replace(/\r\n?/g, '\n').trim(),
     attachments: email.attachments.map(attachment => ({
-      name: typeof attachment.filename === 'string' && attachment.filename !== '' ? firstChars(attachment.filename, NAME_MAX_CHARS) : null,
+      // A longer name is cut; the bridge names the stored file itself (4.1), so the name is only
+      // what the owner called it.
+      name: typeof attachment.filename === 'string' && attachment.filename !== '' ? firstChars(attachment.filename, limits.ATTACHMENT_NAME_MAX_CHARS) : null,
       mime: mimeTypeOf(attachment.mimeType),
       content: Buffer.from(attachment.content instanceof ArrayBuffer ? new Uint8Array(attachment.content) : attachment.content),
     })),

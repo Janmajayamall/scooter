@@ -137,7 +137,8 @@ export async function runReader({ config, openMailbox, clock = systemClock, log,
         if (uids.length > 0) next = uids.reduce((low, uid) => Math.min(low, uid))
       }
       log.warn('mail.uidvalidity_changed', { before: position.uidValidity, now: box.uidValidity, next })
-      save({ uidValidity: box.uidValidity, next })
+      // A message being parsed is named by a UID of the numbering before.
+      save({ uidValidity: box.uidValidity, next, parsing: null })
     }
 
     for (;;) {
@@ -205,6 +206,8 @@ export async function runReader({ config, openMailbox, clock = systemClock, log,
       log.warn('mail.parse_failed', { uid, reason: 'the reader ended while parsing it' })
       description = { ...description, parsed: false }
     } else {
+      // Set only while postal-mime runs, so that what ends the reader then is told from what ends
+      // it later, such as a spool it can't write: that one is parsed again at the next start.
       save({ parsing: uid })
       try {
         const email = await parseEmail(raw)
@@ -216,6 +219,7 @@ export async function runReader({ config, openMailbox, clock = systemClock, log,
         log.warn('mail.parse_failed', { uid, ...errorFields(error) })
         description = { ...description, parsed: false }
       }
+      save({ parsing: null })
       // So many attachments, or names so long, that the bridge wouldn't read the description.
       if (Buffer.byteLength(JSON.stringify(description)) > limits.EMAIL_PARSED_MAX_BYTES) {
         log.warn('mail.parse_failed', { uid, reason: 'too much to describe', attachments: parts.length })

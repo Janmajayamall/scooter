@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeTree, writeFileAtomic } from '../src/common/files.mjs'
+import { checkOwnFolder, copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeHandOff, removeTree, startsWithId, writeFileAtomic } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { deepChain, deepTree } from './support/deep-tree.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
@@ -275,6 +275,82 @@ test('files: a small file another program wrote is read only when it is a regula
   fs.writeFileSync(path.join(dir, 'large'), 'x'.repeat(21))
   assert.throws(() => read('large'), { code: 'EFBIG' })
   assert.throws(() => read('missing'), { code: 'ENOENT' })
+})
+
+test('files: a small file replaced by a rename as it is opened is opened again, once', t => {
+  const dir = makeTestDir(t)
+  const file = path.join(dir, 'state.json')
+  fs.writeFileSync(file, '{"connected":false}')
+  // The writer renames a new file into place between the open and the look at what was opened, as
+  // an atomic write can (the review of milestone 6, must-fix 3).
+  const fstat = fs.fstatSync
+  let replaces = 0
+  fs.fstatSync = (fd, ...rest) => {
+    if (replaces > 0) {
+      replaces -= 1
+      fs.writeFileSync(`${file}.new`, `{"connected":true,"n":${replaces}}`)
+      fs.renameSync(`${file}.new`, file)
+    }
+    return fstat(fd, ...rest)
+  }
+  atEnd(t, () => (fs.fstatSync = fstat))
+  replaces = 1
+  assert.equal(readUntrustedFile(file, { maxBytes: 100 }), '{"connected":true,"n":0}')
+  // Replaced again as it is opened again: refused, as before.
+  replaces = 2
+  assert.throws(() => readUntrustedFile(file, { maxBytes: 100 }), { code: 'EUNTRUSTED', message: 'not read: a file replaced as it was opened, twice' })
+})
+
+test('files: a folder another program controls is used only when it is a folder of that program\'s, not a link', t => {
+  const dir = makeTestDir(t)
+  fs.mkdirSync(path.join(dir, 'spool'))
+  checkOwnFolder(path.join(dir, 'spool'))
+  checkOwnFolder(path.join(dir, 'spool'), { uid: process.getuid(), gid: process.getgid() })
+  fs.symlinkSync(path.join(dir, 'spool'), path.join(dir, 'link'))
+  assert.throws(() => checkOwnFolder(path.join(dir, 'link')), { code: 'EUNTRUSTED', message: 'not used: a symbolic link' })
+  fs.writeFileSync(path.join(dir, 'file'), '')
+  assert.throws(() => checkOwnFolder(path.join(dir, 'file')), { code: 'EUNTRUSTED', message: 'not used: not a folder' })
+  assert.throws(() => checkOwnFolder(path.join(dir, 'spool'), { uid: process.getuid() + 1, gid: 0 }), { code: 'EUNTRUSTED', message: 'not used: a folder of another user' })
+  assert.throws(() => checkOwnFolder(path.join(dir, 'missing')), { code: 'ENOENT' })
+})
+
+test('files: a folder handed over is removed only by the names its writer gives, and only once that empties it', t => {
+  const dir = makeTestDir(t)
+  const known = name => name === 'parsed.json' || /^part-\d+$/.test(name)
+  const folder = (name, files) => {
+    fs.mkdirSync(path.join(dir, name))
+    for (const file of files) fs.writeFileSync(path.join(dir, name, file), 'x')
+    return path.join(dir, name)
+  }
+  removeHandOff(folder('done', ['parsed.json', 'part-1', 'part-2']), known)
+  assert.equal(fs.existsSync(path.join(dir, 'done')), false)
+  // Anything else stays, and so does the folder.
+  const other = folder('other', ['parsed.json', 'notes.txt'])
+  assert.throws(() => removeHandOff(other, known), { code: 'ENOTEMPTY' })
+  assert.deepEqual(fs.readdirSync(other), ['notes.txt'])
+  // A folder under a known name isn't removed, nor what is in it.
+  const nested = folder('nested', [])
+  fs.mkdirSync(path.join(nested, 'part-1'))
+  fs.writeFileSync(path.join(nested, 'part-1', 'kept'), 'x')
+  assert.throws(() => removeHandOff(nested, known))
+  assert.ok(fs.existsSync(path.join(nested, 'part-1', 'kept')))
+  // A link in the folder's place: only files of the known names in what it leads to could go, and
+  // the link and what it leads to stay. A link inside goes as a link.
+  const target = folder('target', ['part-1', 'log.jsonl'])
+  fs.mkdirSync(path.join(target, 'datastore'))
+  fs.symlinkSync(target, path.join(dir, 'swapped'))
+  assert.throws(() => removeHandOff(path.join(dir, 'swapped'), known), { code: 'ENOTDIR' })
+  assert.deepEqual(fs.readdirSync(target).sort(), ['datastore', 'log.jsonl'])
+  const linked = folder('linked', [])
+  fs.symlinkSync(path.join(target, 'log.jsonl'), path.join(linked, 'parsed.json'))
+  removeHandOff(linked, known)
+  assert.ok(fs.existsSync(path.join(target, 'log.jsonl')))
+  removeHandOff(path.join(dir, 'missing'), known)
+})
+
+test('files: names the bridge gives what is handed over start with an ID', () => {
+  for (const name of ['20261109T155015123-0001', '20261109T155015123-0001-elsewhere']) assert.equal(startsWithId(name), true, name)
+  for (const name of ['agents', 'datastore', 'log.jsonl', '2026', '20261109T1550-0001', '.tmp-20261109T155015123-0001']) assert.equal(startsWithId(name), false, name)
 })
 
 test('files: removing what a program wrote reaches every entry however deep it goes, past what a path can name, whatever its modes', t => {
