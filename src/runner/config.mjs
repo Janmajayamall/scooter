@@ -176,6 +176,11 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       fault(parts, `names ${clean}, which holds ${inside}: a skill's folder holds only files and folders`)
       return false
     }
+    const problem = skillFileProblem(fs.readFileSync(skillFile, 'utf8'), path.posix.basename(clean))
+    if (problem !== null) {
+      fault(parts, `names ${clean}, whose SKILL.md ${problem}`)
+      return false
+    }
     return true
   }
 
@@ -406,6 +411,37 @@ function viewPath(value) {
   // No `.`, `..` or empty parts, and no name the file check would refuse (6.8).
   if (parts.some(part => part === '' || part.startsWith('.'))) return null
   return `${parts.join('/')}${folder ? '/' : ''}`
+}
+
+// What pi 1.5.2 takes as a skill's `name` and `description`: the limits of the Agent Skills format,
+// which pi checks. They are pi's, not Scooter's tuning numbers.
+const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const SKILL_NAME_MAX_CHARS = 64
+const SKILL_DESCRIPTION_MAX_CHARS = 1024
+
+// What is wrong with a skill's `SKILL.md`, as words that follow "whose SKILL.md", or null. Its
+// frontmatter, read as pi reads it (`---`, YAML, then a line starting `---`), must give `name`, the
+// skill folder's own name, and a `description` (7.3). pi offers the model a skill by its name and
+// description, and leaves out one whose description is missing or whose frontmatter isn't YAML;
+// and the runner, the prompt and a backfill name a skill by its folder (D197).
+export function skillFileProblem(text, folderName) {
+  const normalized = text.replace(/^﻿/, '').replace(/\r\n?/g, '\n')
+  const end = normalized.startsWith('---') ? normalized.indexOf('\n---', 3) : -1
+  if (end === -1) return 'has no frontmatter: it must start with a block between two --- lines that gives the name and the description'
+  const doc = parseDocument(normalized.slice(4, end), { version: '1.2', schema: 'core', uniqueKeys: true })
+  const [error] = [...doc.errors, ...doc.warnings]
+  if (error) return `has frontmatter that isn't YAML: ${error.message.split('\n')[0]}`
+  const front = doc.toJS({ maxAliasCount: 100 })
+  if (!isObject(front)) return 'has frontmatter that is no map of name and description'
+  const { name, description } = front
+  if (name === undefined) return `has no name: it must be ${folderName}, the folder's name`
+  if (name !== folderName) return `gives the name ${JSON.stringify(name)}: it must be ${folderName}, the folder's name`
+  if (name.length > SKILL_NAME_MAX_CHARS || !SKILL_NAME.test(name)) {
+    return `gives the name ${name}, which pi doesn't take: at most ${SKILL_NAME_MAX_CHARS} lowercase letters, digits and single hyphens between them, which the folder's name must be too`
+  }
+  if (typeof description !== 'string' || description.trim() === '') return "has no description, which says when to use the skill: pi doesn't load a skill without one"
+  if (description.length > SKILL_DESCRIPTION_MAX_CHARS) return `has a description of ${description.length} characters: pi takes at most ${SKILL_DESCRIPTION_MAX_CHARS}`
+  return null
 }
 
 // Reads and checks `agents.yaml` from the config folder. Throws a `ConfigError` that lists every

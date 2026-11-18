@@ -232,7 +232,7 @@ The bridge backs up with restic to an S3-compatible bucket: nightly at `BACKUP_T
 - **In:** the datastore, the agents' folders, wacli's folder without its cache, the bridge's and the email reader's state, the network log and the outbox.
 - **Out:** the env files, the VM image, the locks, caches, and what the runner's clean-up is removing (`agents/.discarded/`).
 - **Consistency:** the bridge takes `backup.lock`, waits for a run in progress to end, stops the channels, pauses delivery, backs up, and starts everything again. A run past its time is waited for while its runner still holds `runner/runner.sock`, at work after the run; a lock whose runner is gone is passed by (`docs/DECISIONS.md`, milestone 10).
-- **Restore** puts each folder back at the path it was backed up from, with owners by name, and makes each folder the snapshot's, deleting nothing outside those folders. It refuses to write into the data folder while either service runs on it, and, as root, to run before `setup` has made Scooter's users.
+- **Restore** puts each folder back at the path it was backed up from, with owners by name, and makes each folder the snapshot's, deleting nothing outside those folders. It refuses to write into the data folder while either service runs on it, or while `runner/` or `exchange/` there is a link, which restic would follow, and, as root, to run before `setup` has made Scooter's users.
 
 ### 2.12 Configuration
 

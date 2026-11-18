@@ -1,0 +1,31 @@
+# The agent Scooter runs, and when (docs/DESIGN.md, 6.1). The runner reads this file when it
+# starts, and refuses to start on any fault, naming the field. Restart the runner after a change.
+agents:
+  lifelog:
+    model: anthropic/claude-sonnet-5.5   # OpenRouter model ID; it must accept images
+    thinking: low                        # optional: off, minimal, low, medium, high, xhigh, max
+    prompt: prompts/lifelog.md           # paths are relative to this config folder
+    skills:
+      - skills/expenses
+      - skills/runs
+      - skills/meals
+      - skills/travel
+      - skills/people
+      - skills/day-pages
+    reads: [whatsapp, email]             # the sources this agent works on
+    session: daily                       # daily or none
+    reply_mode: quiet                    # quiet or confirm
+    ack_reaction: "✅"                   # reaction on handled messages in quiet mode; "" for none
+    can_message: true                    # false: the agent never sends anything
+    timeout_minutes: 10
+    run:
+      - on: new-messages                 # every batch of new messages
+      - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
+        task: >-
+          Evening check-in. List in a few lines what you filed today,
+          mention anything that looks missing, and list the open questions.
+      # - once: poems                    # runs once; the ID is remembered
+      #   task: Write poems for my earlier images captioned "poem".
+      # - backfill: people-1             # fills a newly added view from the whole datastore (6.11)
+      #   skill: people
+      #   writes: [views/people.csv]     # what it may change, besides the day pages

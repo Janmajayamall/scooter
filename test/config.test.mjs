@@ -248,11 +248,64 @@ test('config: a skill holds only files and folders, and everything is inside the
   const outside = faults(change(base, 'prompt', 'prompts/outside.md'))
   assert.match(outside[0].message, /names prompts\/outside.md, which leads outside the config folder/)
 
-  // A skill folder that is a link elsewhere inside the config folder is fine.
-  fs.symlinkSync(path.join(configDir, 'skills', 'runs'), path.join(configDir, 'skills', 'running'))
+  // A skill folder that is a link elsewhere inside the config folder is fine. The skill is named
+  // by the link, which is the folder pi is given.
+  fs.mkdirSync(path.join(configDir, 'library', 'running'), { recursive: true })
+  fs.writeFileSync(path.join(configDir, 'library', 'running', 'SKILL.md'), '---\nname: running\ndescription: Runs.\n---\n')
+  fs.symlinkSync(path.join(configDir, 'library', 'running'), path.join(configDir, 'skills', 'running'))
   const { agents } = parseConfig(base.replace('- skills/runs', '- skills/running'), { configDir })
   assert.equal(agents[0].skills[1].name, 'running')
-  assert.equal(agents[0].skills[1].dir, fs.realpathSync(path.join(configDir, 'skills', 'runs')))
+  assert.equal(agents[0].skills[1].dir, fs.realpathSync(path.join(configDir, 'library', 'running')))
+})
+
+test("config: a skill's SKILL.md gives the folder's name and a description, as pi takes them (D197)", t => {
+  const { configDir, faults, parse } = setup(t)
+  const base = exampleYaml()
+  const skillFile = path.join(configDir, 'skills', 'runs', 'SKILL.md')
+  const cases = [
+    // [the SKILL.md, what the message says after "whose SKILL.md"]
+    ['# Runs\n', /has no frontmatter: it must start with a block between two --- lines/],
+    ['---\nname: runs\ndescription: Runs.\n', /has no frontmatter/],
+    ['---\nname: runs\ndescription: Runs: and walks: too\n---\n', /has frontmatter that isn't YAML: /],
+    ['---\nname: runs\nname: runs\ndescription: Runs.\n---\n', /has frontmatter that isn't YAML: Map keys must be unique/],
+    ['---\n- runs\n---\n', /has frontmatter that is no map of name and description/],
+    ['---\n---\n', /has frontmatter that is no map/],
+    ['---\ndescription: Runs.\n---\n', /has no name: it must be runs, the folder's name/],
+    ['---\nname: Runs\ndescription: Runs.\n---\n', /gives the name "Runs": it must be runs, the folder's name/],
+    ['---\nname: running\ndescription: Runs.\n---\n', /gives the name "running": it must be runs/],
+    ['---\nname: runs\n---\n', /has no description, which says when to use the skill: pi doesn't load a skill without one/],
+    ['---\nname: runs\ndescription: "  "\n---\n', /has no description/],
+    ['---\nname: runs\ndescription: 42\n---\n', /has no description/],
+    [`---\nname: runs\ndescription: ${'x'.repeat(1025)}\n---\n`, /has a description of 1025 characters: pi takes at most 1024/],
+  ]
+  for (const [text, message] of cases) {
+    fs.writeFileSync(skillFile, text)
+    const problems = faults(base)
+    assert.equal(problems.length, 1, text)
+    assert.equal(problems[0].field, 'agents.lifelog.skills[1]', text)
+    assert.match(problems[0].message, /^agents\.yaml, line \d+: agents\.lifelog\.skills\[1\] names skills\/runs, whose SKILL\.md /, text)
+    assert.match(problems[0].message, message, text)
+  }
+
+  // A folder's name pi doesn't take is refused, though SKILL.md gives the same.
+  for (const name of ['Running', 'runs--old', '-runs', 'runs_old', 'r'.repeat(65)]) {
+    fs.mkdirSync(path.join(configDir, 'skills', name))
+    fs.writeFileSync(path.join(configDir, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Runs.\n---\n`)
+    const problems = faults(base.replace('- skills/runs', `- skills/${name}`))
+    assert.match(problems[0].message, new RegExp(`gives the name ${name}, which pi doesn't take: at most 64 lowercase letters, digits and single hyphens`), name)
+    fs.rmSync(path.join(configDir, 'skills', name), { recursive: true })
+  }
+
+  // What pi accepts is accepted: a byte-order mark, Windows line breaks, a description of 1024
+  // characters, other keys, and a body after the frontmatter.
+  for (const text of [
+    '﻿---\r\nname: runs\r\ndescription: Runs.\r\n---\r\n# Runs\r\n',
+    `---\nname: runs\ndescription: ${'é'.repeat(1024)}\n---\n`,
+    '---\nname: runs\ndescription: >-\n  Runs, walks\n  and workouts.\nlicense: MIT\n---\n\n# Runs\n\nThe body.\n',
+  ]) {
+    fs.writeFileSync(skillFile, text)
+    assert.equal(parse(base).agents[0].skills[1].name, 'runs', text)
+  }
 })
 
 test('config: no prompt or skill lies inside another skill\'s folder, where their copies would overlap', t => {
@@ -276,7 +329,8 @@ test('config: no prompt or skill lies inside another skill\'s folder, where thei
   assert.match(prompt[0].message, /names skills\/expenses\/SKILL\.md, which is inside the skill skills\/expenses: the prompt is a file of its own$/)
 
   // Names that only begin the same are apart.
-  fs.cpSync(path.join(configDir, 'skills', 'expenses'), path.join(configDir, 'skills', 'expenses-old'), { recursive: true })
+  fs.mkdirSync(path.join(configDir, 'skills', 'expenses-old'))
+  fs.writeFileSync(path.join(configDir, 'skills', 'expenses-old', 'SKILL.md'), '---\nname: expenses-old\ndescription: Old expenses.\n---\n')
   const { agents } = parseConfig(base.replace('- skills/runs', '- skills/expenses-old'), { configDir })
   assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people', 'day-pages'])
 })

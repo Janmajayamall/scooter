@@ -838,6 +838,40 @@ test('backups: restore refuses a target that isn\'t empty without --force, and t
   void root
 })
 
+test('backups: restore refuses when runner/ or exchange/ is a link, which restic would follow, or isn\'t a folder, and asks restic for no restore (D198)', async t => {
+  const { root, stub, run } = cli(t)
+  const target = path.join(root, 'restored')
+  const data = `${target}/var/lib/scooter`
+  const elsewhere = path.join(root, 'elsewhere')
+  fs.mkdirSync(path.join(elsewhere, 'log'), { recursive: true })
+  fs.writeFileSync(path.join(elsewhere, 'log', 'kept.jsonl'), 'kept\n')
+  stub.fixtures({ snapshots: [snapshotOf('/var/lib/scooter')] })
+  const restore = () => run(runRestore, ['--force'], { backup: { ...BACKUP, restoreTarget: target } })
+
+  for (const between of ['runner', 'exchange']) {
+    fs.mkdirSync(data, { recursive: true })
+    fs.symlinkSync(elsewhere, path.join(data, between))
+    assert.deepEqual(await restore(), {
+      code: 2,
+      out: '',
+      err: `scooter restore: ${data}/${between} is a link: restic would write where it leads, and with --force delete there. Remove the link, or restore into another RESTORE_TARGET\n`,
+    })
+    fs.rmSync(path.join(data, between))
+    fs.writeFileSync(path.join(data, between), 'a file\n')
+    assert.deepEqual((await restore()).err, `scooter restore: ${data}/${between} isn't a folder: remove it, or restore into another RESTORE_TARGET\n`)
+    fs.rmSync(path.join(data, between))
+  }
+  assert.deepEqual(stub.commands(), ['snapshots', 'snapshots', 'snapshots', 'snapshots'])
+  assert.deepEqual(fs.readdirSync(path.join(elsewhere, 'log')), ['kept.jsonl'])
+  // A link at a folder the restore holds is restic's to replace, and doesn't stop it; nor do the
+  // folders between, as folders.
+  fs.mkdirSync(path.join(data, 'runner'))
+  fs.mkdirSync(path.join(data, 'exchange'))
+  fs.symlinkSync(elsewhere, path.join(data, 'agents'))
+  assert.equal((await restore()).code, 0)
+  assert.deepEqual(stub.commands().slice(-2), ['snapshots', 'restore'])
+})
+
 test('backups: as root, restore refuses until setup has made Scooter\'s users, whose names its files get as owners, and asks restic nothing', async t => {
   const { root, stub, settings } = cli(t)
   stub.fixtures({ snapshots: [snapshotOf('/var/lib/scooter')] })

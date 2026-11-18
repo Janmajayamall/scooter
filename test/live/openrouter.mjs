@@ -6,7 +6,8 @@
 //   SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'node test/live/openrouter.mjs'
 //
 // For each of OpenRouter's two chat routes, with a model pi sends there, it runs the runner on one
-// message, with a well-formed key OpenRouter doesn't know. pi's request must pass the policy and
+// message, with the agent's instructions of the repository's `config/` (the plan's milestone 11)
+// and a well-formed key OpenRouter doesn't know. pi's request must pass the policy and
 // reach OpenRouter, which answers 401, and the runner must take that as a setup error: runs paused,
 // no attempt counted, one notice. Then, in a VM of the same sandbox, `curl https://example.com/`
 // must be refused by the policy. It prints what it found, and exits with 1 if anything wasn't so.
@@ -21,7 +22,7 @@ import { systemClock } from '../../src/common/time.mjs'
 import { openRunner } from '../../src/runner/main.mjs'
 import { piEnv, piMounts } from '../../src/runner/run.mjs'
 import { openGondolinSandbox } from '../../src/runner/sandbox/gondolin.mjs'
-import { exampleYaml, line, writeConfig, writeDatastore } from '../support/runner.mjs'
+import { line, writeDatastore } from '../support/runner.mjs'
 import { linkTestImage, sandboxSkipReason } from '../support/sandbox.mjs'
 import { runnerSettings } from '../support/test-runner.mjs'
 
@@ -53,7 +54,10 @@ for (const [route, model, routePath] of ROUTES) {
   try {
     const settings = runnerSettings(root, { openrouterApiKey: DUMMY_KEY, batchSeconds: 1 })
     const paths = makePaths(settings)
-    writeConfig(paths.configDir, { yaml: exampleYaml().replace('anthropic/claude-sonnet-5.5', model) })
+    // The repository's own config folder, as `setup` copies it, with the route's model.
+    fs.cpSync(new URL('../../config', import.meta.url), paths.configDir, { recursive: true })
+    const agentsYaml = path.join(paths.configDir, 'agents.yaml')
+    fs.writeFileSync(agentsYaml, fs.readFileSync(agentsYaml, 'utf8').replace('model: anthropic/claude-sonnet-5.5', `model: ${model}`))
     fs.mkdirSync(paths.datastore, { recursive: true })
     writeDatastore(paths, [line.text(1, new Date(Date.now() - 60_000).toISOString().replace(/\.\d+Z$/, 'Z'), 'coffee 150 at Blue Tokai')])
     await linkTestImage(paths)
