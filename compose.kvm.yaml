@@ -1,0 +1,16 @@
+# KVM for pi's VMs under rootful Docker, the usual install (8.3 of DESIGN.md), added to compose.yaml.
+# In a .env file beside compose.yaml:
+#
+#   COMPOSE_FILE=compose.yaml:compose.kvm.yaml
+#   KVM_GID=<the host's kvm group id: getent group kvm | cut -d: -f3>
+#
+# The runner gets the host's /dev/kvm, and reaches it through the kvm group, as natively: Ubuntu's
+# device rules leave the group's access alone (13.4). Then `docker compose up -d`, and
+# `docker compose run --rm runner doctor` reports KVM.
+
+services:
+  runner:
+    devices:
+      - /dev/kvm:/dev/kvm
+    group_add:
+      - "${KVM_GID:?set KVM_GID in .env to the host's kvm group id: getent group kvm | cut -d: -f3}"

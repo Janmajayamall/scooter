@@ -26,6 +26,7 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { Writable } from 'node:stream'
 import { emptyFolder, ensureDir } from '../../common/files.mjs'
@@ -34,13 +35,21 @@ import { errorFields } from '../../common/log.mjs'
 import { findProgram } from '../../common/proc.mjs'
 import { systemClock } from '../../common/time.mjs'
 import { pickAccelerator } from './accel.mjs'
-import { checkImage, pinnedPiVersion, qemuProgram, readBuildFile } from './image.mjs'
-import { SandboxSetupError, checkRunSpec, createOutput } from './index.mjs'
+import { checkImage, machineArch, pinnedPiVersion, qemuProgram, readBuildFile } from './image.mjs'
+import { GUEST_PATH, SandboxSetupError, checkRunSpec, createOutput } from './index.mjs'
 import { policyNetwork } from './policy.mjs'
 
 // Where Gondolin's own file system goes in the VM, instead of `/data`, which is where Scooter's
 // folders are in Docker (row 14; 0.5, VM 1). `/run` is a temporary file system of the VM's boot.
 export const FUSE_MOUNT = '/run/gondolin-vfs'
+
+// QEMU's machine for pi's VMs, with KVM and under emulation alike (D218). Gondolin 0.14.0 gives
+// x86_64 `microvm` with KVM, and `q35` under emulation; `microvm` hangs in the guest kernel's APIC
+// setup under nested KVM with 2 processors, as in a VM of a cloud provider, where `q35` boots, and
+// boots sooner on the machine itself too. On arm64 Gondolin's own choice, `virt`, stands.
+export function machineType(arch = machineArch()) {
+  return arch === 'x86_64' ? 'q35' : undefined
+}
 
 // The image's `env`, through which every command runs, so it gets exactly the spec's environment.
 export const ENV_PROGRAM = '/usr/bin/env'
@@ -230,7 +239,7 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
     try {
       hooks = gondolin.createHttpHooks({ ...hookOptions, secrets })
       vm = await gondolin.VM.create({
-        sandbox: { imagePath: image.dir, accel: accel.qemu, mitmCertDir: folders.certificates, console: 'none' },
+        sandbox: { imagePath: image.dir, accel: accel.qemu, machineType: machineType(), mitmCertDir: folders.certificates, console: 'none' },
         memory: `${Math.floor(limits.VM_MEMORY_BYTES / (1024 * 1024))}M`,
         cpus: limits.VM_CPUS,
         allowWebSockets: false,
@@ -325,4 +334,43 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
   }
 
   return { accel: accel.accel, imageBuiltAt: image.builtAt, run }
+}
+
+// Boots one VM as a run does, with the accelerator the runner would use, and runs `true` in it, for
+// `doctor` (8.4; the review of milestone 12, smaller point 7; D224): KVM can open and still not
+// boot a VM, as under nested virtualization. Nothing of the data folder changes, and a runner at
+// work keeps its own: Gondolin's home and temporary folder, and the network log, are a folder of
+// its own in the system's temporary folder, removed afterwards; the VM sees an empty folder of it,
+// and reaches no host. Returns `{ accel, ms }`, how its VMs run and how long the boot took. Throws
+// a `SandboxSetupError` when the sandbox can't open, and an error when the VM doesn't boot within
+// `VM_START_TIMEOUT`.
+export async function bootCheck({ paths, settings, clock = systemClock }) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'scooter-doctor-'))
+  const booted = []
+  const quiet = { info: (event, fields) => event === 'sandbox.vm_started' && booted.push(fields.ms), warn: () => {}, error: () => {} }
+  try {
+    const own = {
+      ...paths,
+      runnerHome: path.join(scratch, 'home'),
+      runnerTmp: path.join(scratch, 'tmp'),
+      networkLogDir: path.join(scratch, 'log'),
+      networkLog: date => path.join(scratch, 'log', `${date}.jsonl`),
+    }
+    const empty = path.join(scratch, 'empty')
+    fs.mkdirSync(empty, { mode: 0o700 })
+    const sandbox = await openGondolinSandbox({ paths: own, settings, log: quiet, clock })
+    const result = await sandbox.run({
+      argv: ['true'],
+      cwd: '/',
+      env: { PATH: GUEST_PATH },
+      mounts: [{ path: empty, writable: false, hide: [] }],
+      // The boot has its own limit, `VM_START_TIMEOUT`; `true` then takes no time.
+      timeoutMs: 2 * limits.VM_START_TIMEOUT,
+      policy: { model: 'none', internet: false, zdr: true, secrets: {} },
+    })
+    if (result.code !== 0) throw new Error(`the VM booted, and \`true\` ended with ${result.timedOut ? 'a timeout' : `exit code ${result.code}`}`)
+    return { accel: sandbox.accel, ms: booted[0] ?? null }
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
 }

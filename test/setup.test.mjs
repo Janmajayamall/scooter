@@ -20,6 +20,7 @@ import {
   envFileProblems,
   envFileText,
   envFiles,
+  kvmMembership,
   nodeProblems,
   nodeVersionProblem,
   pathProblems,
@@ -182,6 +183,41 @@ test('setup: Node must be one Scooter runs on, that every user can run and only 
   const link = path.join(root, 'node-link')
   fs.symlinkSync(node, link)
   assert.deepEqual(nodeProblems(link, { owner, version: '22.23.2' }), [])
+})
+
+test("setup: with services, a machine without a kvm group gets one, which the runner's unit names; without them, none", async () => {
+  // A machine as each case has it: its groups, and who is in them.
+  const machine = (groups = {}) => {
+    const calls = []
+    return {
+      calls,
+      findGroup: async name => (Object.hasOwn(groups, name) ? 999 : null),
+      run: async (program, args) => {
+        calls.push([program, ...args])
+        if (program === 'groupadd') groups[args.at(-1)] = []
+        if (program === 'usermod') groups[args[2]].push(args.at(-1))
+        if (program === 'id') return { stdout: `${args.at(-1)} ${Object.keys(groups).filter(group => groups[group].includes(args.at(-1))).join(' ')}\n` }
+        return { stdout: '' }
+      },
+    }
+  }
+  // No group, with services: made, then the runner put in it (the review of milestone 12, smaller point 1).
+  let found = machine()
+  assert.equal(
+    await kvmMembership({ runner: 'scooter-runner', kvmGroup: 'kvm', services: true, ...found }),
+    "there was no kvm group, which the runner's service names, so setup made one; scooter-runner is now in the kvm group",
+  )
+  assert.deepEqual(found.calls.map(call => call[0]), ['groupadd', 'id', 'usermod'])
+  assert.deepEqual(found.calls[0], ['groupadd', '--system', '--', 'kvm'])
+  // No group, without services: none made.
+  found = machine()
+  assert.match(await kvmMembership({ runner: 'scooter-runner', kvmGroup: 'kvm', services: false, ...found }), /^there is no kvm group on this machine, so pi's VMs will run under emulation/)
+  assert.deepEqual(found.calls, [])
+  // A group: the runner put in it once.
+  found = machine({ kvm: [] })
+  assert.equal(await kvmMembership({ runner: 'scooter-runner', kvmGroup: 'kvm', services: true, ...found }), 'scooter-runner is now in the kvm group')
+  assert.equal(await kvmMembership({ runner: 'scooter-runner', kvmGroup: 'kvm', services: true, ...found }), 'scooter-runner is in the kvm group')
+  assert.deepEqual(found.calls.map(call => call[0]), ['id', 'usermod', 'id'])
 })
 
 test('setup: not as root, without systemd, or with code a user could change, it stops before making anything', { skip: skipIfRoot }, async t => {

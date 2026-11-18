@@ -52,13 +52,16 @@
 //
 // The runner's user owns its outbox and writes the entries. The bridge, as root, takes them only
 // while the outbox is the runner's folder and not a link, reads each file without following a link,
-// and checks it (`checkOutboxEntry`); an entry that isn't one is logged and removed. It removes an
-// entry only by the names one holds, and leaves what isn't a folder, logged once. Logs name entries
-// by their ID and never hold their text.
+// and checks it (`checkOutboxEntry`); an entry that isn't one is logged and removed. It takes only
+// folders named as `createIds` names them, since it names its record after the entry, and leaves
+// any other name, logged once (D226). It removes an entry only by the names one holds, which in the
+// runner's outbox is `entry.json` alone, and leaves what isn't a folder, logged once. While the
+// runner's outbox isn't one to take from, the bridge's own entries still go, `/status`'s reply
+// among them. Logs name entries by their ID and never hold their text.
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { TMP_PREFIX, checkOwnFolder, ensureDir, listHandOffs, readUntrustedFile, removeHandOff, writeFileAtomic } from '../common/files.mjs'
+import { TMP_PREFIX, checkOwnFolder, ensureDir, isId, listHandOffs, readUntrustedFile, removeHandOff, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { ENTRY_FILE, SENDING_FILE, checkOutboxEntry, checkSendingFile, cutText, orderedEntry } from '../common/outbox.mjs'
@@ -175,10 +178,12 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
 // ---------------------------------------------------------------------------------------------
 // The processor
 
-// The names an entry folder holds: its `entry.json`; in the bridge's own outbox, the `sending.json`
-// the bridge makes of it, and what a write of that one cut short leaves (`writeFileAtomic`). The
-// only names the bridge removes.
-const isEntryFile = name => name === ENTRY_FILE || name === SENDING_FILE || name.startsWith(`${TMP_PREFIX}${SENDING_FILE}-`)
+// The names an entry folder holds, the only names the bridge removes in one: in the runner's
+// outbox, its `entry.json` alone, since the bridge writes nothing there (D205, D226); in the
+// bridge's own, also the `sending.json` the bridge makes of it, and what a write of that one cut
+// short leaves (`writeFileAtomic`).
+const isRunnerEntryFile = name => name === ENTRY_FILE
+const isOwnEntryFile = name => name === ENTRY_FILE || name === SENDING_FILE || name.startsWith(`${TMP_PREFIX}${SENDING_FILE}-`)
 
 // The IDs of the entries whose record is in `bridge/sending/`, as `<id>.json`. Unfinished writes
 // start with a dot, and aren't listed.
@@ -226,6 +231,10 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   const left = new Set()
   // The channel whose entries are waiting until it is ready, so that is logged once.
   let waitingFor = null
+  // The names in the runner's outbox that aren't entries' IDs, so each is logged once; and why the
+  // runner's outbox isn't taken from, so that is logged once.
+  const strangers = new Set()
+  let refusedRunners = null
   let round = Promise.resolve()
   let running = null
 
@@ -299,7 +308,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     let taken = true
     try {
       if (!fs.lstatSync(dir).isDirectory()) throw Object.assign(new Error('the entry is not a folder any more'), { code: 'ENOTDIR' })
-      removeHandOff(dir, isEntryFile)
+      removeHandOff(dir, target.own ? isOwnEntryFile : isRunnerEntryFile)
     } catch (error) {
       if (error.code !== 'ENOENT') {
         log.warn('outbox.not_removed', { entry: target.id, ...(target.own ? { own: true } : {}), ...errorFields(error) })
@@ -446,20 +455,42 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     return 'next'
   }
 
+  // The runner's entries: those in its outbox, by the names `createIds` gives, and those the bridge
+  // has a record of. Each other name in the outbox is logged once and left. The runner's user owns
+  // the folder above its outbox, and could put a link in its place: then none of the runner's
+  // entries is taken, not even one the bridge has a record of, whose removal would reach through
+  // the link, and that is logged once (D226).
+  function runnerEntries() {
+    let names = []
+    try {
+      checkOwnFolder(paths.outbox, owner)
+      names = listHandOffs(paths.outbox)
+    } catch (error) {
+      if (error.code === 'EUNTRUSTED') {
+        if (refusedRunners !== error.message) log.error('outbox.runner_outbox_refused', { reason: error.message })
+        refusedRunners = error.message
+        return []
+      }
+      if (error.code !== 'ENOENT') throw error
+    }
+    if (refusedRunners !== null) log.info('outbox.runner_outbox_taken')
+    refusedRunners = null
+    const ids = names.filter(isId)
+    const others = new Set(names.filter(name => !isId(name)))
+    for (const name of strangers) if (!others.has(name)) strangers.delete(name)
+    for (const name of others) {
+      if (strangers.has(name)) continue
+      strangers.add(name)
+      log.warn('outbox.not_an_entry', { name: name.slice(0, 64), bytes: Buffer.byteLength(name) })
+    }
+    return [...ids, ...listRecords(paths.bridgeSending)]
+  }
+
   // The entries waiting, in the order of their IDs: the runner's, in its outbox or with a record
   // of the bridge's, and the bridge's own. Of two with the same ID, the bridge's goes first.
   function listEntries() {
-    let runners = []
-    // The runner's user owns the folder above its outbox, and could put a link in its place: then
-    // nothing is taken, and the look is tried again after waits that grow.
-    try {
-      checkOwnFolder(paths.outbox, owner)
-      runners = listHandOffs(paths.outbox)
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error
-    }
     const all = new Map()
-    for (const id of [...runners, ...listRecords(paths.bridgeSending)]) all.set(`runner/${id}`, item(id, false))
+    for (const id of runnerEntries()) all.set(`runner/${id}`, item(id, false))
     for (const id of listHandOffs(paths.bridgeOutbox)) all.set(`bridge/${id}`, item(id, true))
     return [...all.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : Number(b.own) - Number(a.own)))
   }

@@ -30,7 +30,7 @@ import { RUNNER_SOCKET_HOLDERS, holdInstance } from '../../common/instance.mjs'
 import { limits } from '../../common/limits.mjs'
 import { createLog, errorFields } from '../../common/log.mjs'
 import { makePaths } from '../../common/paths.mjs'
-import { createProc, findProgram } from '../../common/proc.mjs'
+import { createProc, findProgram, inDocker } from '../../common/proc.mjs'
 import { SettingsError, loadFolders } from '../../common/settings.mjs'
 import { isoSeconds, systemClock } from '../../common/time.mjs'
 import { SandboxSetupError } from './index.mjs'
@@ -395,10 +395,14 @@ async function fetchApkIndexes({ repositories, arch, fetch, clock }) {
 
 // How to build, as row 8 has it: natively as root, or else in a container when Docker or Podman is
 // there. Returns `{ native: true }` or `{ native: false, runtime }`. Throws an `ImageError` that
-// says what is needed.
-export function buildMethod({ isRoot, find = findProgram }) {
+// says what is needed: in Docker, the container `docker compose run --rm build-image` makes, as root
+// with the privileges a chroot needs (D220).
+export function buildMethod({ isRoot, find = findProgram, docker = inDocker() }) {
   if (isRoot) return { native: true }
   for (const runtime of ['docker', 'podman']) if (find(runtime) !== null) return { native: false, runtime }
+  if (docker) {
+    throw new ImageError("in Docker, build-image runs in a container of its own, as root, with the privileges Gondolin's builder needs for its chroot: docker compose run --rm build-image")
+  }
   throw new ImageError(
     "build-image needs root, to build natively, or Docker or Podman, to build in a container: Gondolin's builder runs the build's commands in a chroot, which only root can make",
   )

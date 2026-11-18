@@ -10,7 +10,7 @@ import test from 'node:test'
 import { ConfigError, loadConfig } from '../src/runner/config.mjs'
 import { IMAGE_RECORD, checkImage, machineArch, pinnedPiVersion, qemuProgram, readBuildFile } from '../src/runner/sandbox/image.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
-import { ZDR_ENDPOINTS_URL, accelCheck, envFileCheck, kvmFix, openRouterChecks, reportText, runChecks } from '../src/ops/doctor.mjs'
+import { ZDR_ENDPOINTS_URL, accelCheck, bootCheckResult, envFileCheck, kvmFix, openRouterChecks, reportText, runChecks, wrongUser } from '../src/ops/doctor.mjs'
 import { USERS, dataFolders } from '../src/ops/setup.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { makeFakeImage } from './support/fake-image.mjs'
@@ -77,9 +77,15 @@ function install(t, { accel = 'auto', zdr = true } = {}) {
 
   const users = { [USERS.wacli]: me, [USERS.runner]: me, [USERS.mail]: me }
   const proc = { findUser: async name => users[name] ?? null }
-  const runner = { loadConfig, ConfigError, readBuildFile, pinnedPiVersion, checkImage, qemuProgram, kvmProblem: () => null }
+  // A VM that boots, as the real `bootCheck` finds it, without booting one.
+  const booted = []
+  const bootCheck = async ({ paths: given }) => {
+    booted.push(given.dataDir)
+    return { accel: 'kvm', ms: 1234 }
+  }
+  const runner = { loadConfig, ConfigError, readBuildFile, pinnedPiVersion, checkImage, qemuProgram, kvmProblem: () => null, bootCheck }
   const check = (changes = {}) => runChecks({ settings, runner, proc, envDir, root: me, docker: false, fetch: fakeFetch().fetch, ...changes })
-  return { root, settings, paths, envDir, bin, users, proc, runner, check }
+  return { root, settings, paths, envDir, bin, users, proc, runner, check, booted }
 }
 
 const byName = (checks, name) => checks.filter(check => check.name === name)
@@ -92,8 +98,9 @@ test('doctor: with everything there, every check passes, and the report says so'
   assert.deepEqual(failed(checks), [])
   assert.deepEqual(
     checks.map(entry => entry.name),
-    ['config', 'accelerator', 'QEMU', 'VM image', 'folders', 'env files', 'OpenRouter', 'ZDR'],
+    ['config', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files', 'OpenRouter', 'ZDR'],
   )
+  assert.equal(byName(checks, 'VM boot')[0].text, 'a VM booted in 1.2 seconds, with KVM')
   assert.match(byName(checks, 'config')[0].text, new RegExp(`the agent's model is ${MODEL}`))
   assert.equal(byName(checks, 'accelerator')[0].text, 'KVM')
   assert.match(byName(checks, 'VM image')[0].text, /^built 2026-11-18T08:14:00Z, with pi 1\.5\.2/)
@@ -118,8 +125,8 @@ test('doctor: no accelerator, with its fix natively and in Docker; a forced one 
 
   assert.equal(accelCheck('kvm', 'ENOENT').status, 'fail')
   assert.match(accelCheck('kvm', 'ENOENT').fix, /this machine has no \/dev\/kvm: turn on virtualization/)
-  assert.match(accelCheck('auto', 'ENOENT', { docker: true }).fix, /devices: \["\/dev\/kvm:\/dev\/kvm"\]/)
-  assert.match(kvmFix('EACCES', { docker: true }), /rootful Docker.*group_add.*rootless Docker, install the README's udev rule/)
+  assert.match(accelCheck('auto', 'ENOENT', { docker: true }).fix, /compose\.kvm\.yaml \(rootful Docker\) or compose\.kvm-rootless\.yaml \(rootless Docker\) to COMPOSE_FILE/)
+  assert.match(kvmFix('EACCES', { docker: true }), /^scooter-runner can't open \/dev\/kvm in its container \(EACCES\): with rootful Docker, compose\.kvm\.yaml .*KVM_GID.*rootless Docker, the udev rule compose\.kvm-rootless\.yaml gives/)
   assert.equal(accelCheck('emulation', null).status, 'ok')
   assert.equal(accelCheck('hvf', null).status, 'fail')
   assert.equal(accelCheck('auto', null).text, 'KVM')
@@ -138,6 +145,8 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
   assert.equal(image.status, 'fail')
   assert.match(image.text, /has no scooter-image\.json/)
   assert.equal(image.fix, 'sudo scooter build-image')
+  // Without QEMU or an image, no VM is booted.
+  assert.deepEqual(byName(checks, 'VM boot'), [])
   assert.match(reportText(checks), /2 things to fix\.\n$/)
 
   fs.rmSync(paths.runnerImage, { recursive: true })
@@ -147,7 +156,32 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
   fs.writeFileSync(path.join(paths.runnerImage, IMAGE_RECORD), JSON.stringify({ builtAt: '2026-11-18T08:14:00Z', pi: '1.4.0', arch: machineArch(), zones: ['Asia/Kolkata'] }))
   checks = await check({ docker: true })
   assert.match(byName(checks, 'VM image')[0].text, /has pi 1\.4\.0, and config\/image\/build\.json pins 1\.5\.2/)
-  assert.equal(byName(checks, 'VM image')[0].fix, 'docker compose run --rm runner build-image')
+  assert.equal(byName(checks, 'VM image')[0].fix, 'docker compose run --rm build-image, with the runner stopped')
+})
+
+test("doctor: a VM boots from the image with the runner's accelerator, in its own folder; one that doesn't is a failure, with its fix", async t => {
+  const { check, runner, paths, booted } = install(t)
+  await check()
+  assert.deepEqual(booted, [paths.dataDir])
+  // KVM that opens and doesn't boot a VM, as under nested virtualization (D218).
+  const checks = await check({ runner: { ...runner, bootCheck: async () => Promise.reject(new Error("the VM couldn't start: timeout")) } })
+  const [boot] = byName(checks, 'VM boot')
+  assert.equal(boot.status, 'fail')
+  assert.equal(boot.text, "a VM didn't boot from the image: the VM couldn't start: timeout")
+  assert.match(boot.fix, /enable nested virtualization for it, or set AGENT_ACCEL=emulation in runner\.env/)
+  assert.match(bootCheckResult({ error: new Error('x'), docker: true }).fix, /runner\.env beside compose\.yaml.*docker compose run --rm build-image/)
+  assert.equal(bootCheckResult({ booted: { accel: 'emulation', ms: 6100 } }).text, 'a VM booted in 6.1 seconds, with emulation')
+})
+
+test("doctor: it runs as the runner's user where that user is there, and says how", async () => {
+  const proc = users => ({ findUser: async name => users[name] ?? null })
+  assert.equal(await wrongUser({ proc: proc({}), uid: 0 }), null)
+  assert.equal(await wrongUser({ proc: proc({ [USERS.runner]: { uid: 997, gid: 997 } }), uid: 997 }), null)
+  assert.equal(
+    await wrongUser({ proc: proc({ [USERS.runner]: { uid: 997, gid: 997 } }), uid: 0, docker: false }),
+    'doctor checks what the runner can reach, so it runs as scooter-runner, not as uid 0: sudo -u scooter-runner scooter doctor',
+  )
+  assert.match(await wrongUser({ proc: proc({ [USERS.runner]: { uid: 10002, gid: 10002 } }), uid: 0, docker: true }), /: docker compose run --rm runner doctor$/)
 })
 
 test('doctor: a folder with the wrong mode or owner, or no users, each with its fix', async t => {
@@ -165,7 +199,7 @@ test('doctor: a folder with the wrong mode or owner, or no users, each with its 
   )
   assert.ok(folders.every(entry => entry.fix === 'sudo scooter setup, which sets them'))
   checks = await check({ docker: true })
-  assert.match(byName(checks, 'folders')[0].fix, /^chown \d+:\d+ \S+\/datastore && chmod 0750 \S+\/datastore, as root$/)
+  assert.match(byName(checks, 'folders')[0].fix, /^docker compose run --rm --entrypoint sh bridge -c 'chown \d+:\d+ \S+\/datastore && chmod 0750 \S+\/datastore'$/)
 
   // A data folder another user could write would let them steer build-image, as root (D151).
   fs.chmodSync(paths.agents, 0o700)

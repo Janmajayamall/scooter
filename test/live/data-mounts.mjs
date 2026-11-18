@@ -1,0 +1,91 @@
+// A live check (the plan's milestone 13; row 14): the mounts of a run, with the data folder where
+// Docker has it, at /data, which is also where Gondolin 0.14.0 puts its own file system unless told
+// otherwise. It is run by hand, in the runner's container, with the runner stopped, from a checkout
+// of this repository mounted at /app/test:
+//
+//   docker compose stop runner
+//   docker compose run --rm -v ./test:/app/test:ro --entrypoint node runner /app/test/live/data-mounts.mjs
+//
+// It holds runner/runner.sock, as the runner does, so it refuses while a runner runs. It opens the
+// sandbox as the runner does, on the runner's own settings and data folder, and runs a shell in a
+// VM with the mounts of a run of `lifelog` (`piMounts`). What the VM sees is checked against 6.6:
+// the agent's folder and the datastore at their paths under /data, read-only but for views/,
+// memory/ and run/session/; sessions/ not there; and nothing else of the data folder or the config.
+// It writes one file, in run/session/, which every run empties, and removes it. It prints what it
+// found, and exits with 1 if anything wasn't so.
+
+import { loadSettings } from '../../src/common/settings.mjs'
+import { makePaths } from '../../src/common/paths.mjs'
+import { createLog } from '../../src/common/log.mjs'
+import { holdRunnerFolder } from '../../src/runner/main.mjs'
+import { piMounts } from '../../src/runner/run.mjs'
+import { openGondolinSandbox } from '../../src/runner/sandbox/gondolin.mjs'
+import { GUEST_PATH } from '../../src/runner/sandbox/index.mjs'
+
+const settings = loadSettings('runner')
+const paths = makePaths(settings)
+const agent = paths.agentDir('lifelog')
+
+// Each line the VM prints: `<what> <answer>`.
+const SCRIPT = `
+cd ${agent}
+echo "data-folder $(ls /data | tr '\\n' ' ')"
+for name in runner exchange bridge wacli mail; do test -e /data/$name && echo "$name there" || echo "$name absent"; done
+test -e /config && echo "config there" || echo "config absent"
+test -e sessions && echo "sessions there" || echo "sessions absent"
+mkdir sessions 2>/dev/null && echo "sessions made" || echo "sessions refused"
+test -d views && echo "views there" || echo "views absent"
+ls ${paths.datastore} >/dev/null 2>&1 && echo "datastore readable" || echo "datastore unreadable"
+touch ${paths.datastore}/x 2>/dev/null && echo "datastore writable" || echo "datastore read-only"
+touch ${agent}/x 2>/dev/null && echo "agent writable" || echo "agent read-only"
+echo check > run/session/mount-check && echo "run/session writable" || echo "run/session read-only"
+rm -f run/session/mount-check
+grep -q " /data " /proc/mounts && echo "/data a mount" || echo "/data not a mount"
+`
+
+const WANT = {
+  'data-folder': 'agents datastore',
+  runner: 'absent',
+  exchange: 'absent',
+  bridge: 'absent',
+  wacli: 'absent',
+  mail: 'absent',
+  config: 'absent',
+  sessions: ['absent', 'refused'],
+  views: 'there',
+  datastore: ['readable', 'read-only'],
+  agent: 'read-only',
+  'run/session': 'writable',
+  '/data': 'not a mount',
+}
+
+const instance = await holdRunnerFolder(paths)
+let failures = 0
+try {
+  const log = createLog({ component: 'check' })
+  const sandbox = await openGondolinSandbox({ paths, settings, log })
+  const result = await sandbox.run({
+    argv: ['/bin/sh', '-c', SCRIPT],
+    cwd: '/',
+    env: { PATH: GUEST_PATH },
+    mounts: piMounts(paths, 'lifelog'),
+    timeoutMs: 5 * 60_000,
+    policy: { model: 'none', internet: false, zdr: true, secrets: {} },
+  })
+  const found = {}
+  for (const line of result.stdout.trim().split('\n')) {
+    const [what, ...answer] = line.split(' ')
+    ;(found[what] ??= []).push(answer.join(' ').trim())
+  }
+  console.log(`VMs with ${sandbox.accel}; the VM's command exited with ${result.code}`)
+  for (const [what, want] of Object.entries(WANT)) {
+    const wanted = [want].flat()
+    const got = found[what] ?? []
+    const ok = got.length === wanted.length && got.every((answer, n) => answer === wanted[n])
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}: ${got.join(', ')}`)
+    if (!ok) failures += 1
+  }
+} finally {
+  await instance.close()
+}
+process.exitCode = failures > 0 ? 1 : 0

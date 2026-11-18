@@ -222,7 +222,9 @@ test('image: build-image builds natively as root, in Docker or Podman otherwise,
   assert.deepEqual(buildMethod({ isRoot: true, find: finder([]) }), { native: true })
   assert.deepEqual(buildMethod({ isRoot: false, find: finder(['docker', 'podman']) }), { native: false, runtime: 'docker' })
   assert.deepEqual(buildMethod({ isRoot: false, find: finder(['podman']) }), { native: false, runtime: 'podman' })
-  assert.throws(() => buildMethod({ isRoot: false, find: finder([]) }), /^ImageError: build-image needs root, to build natively, or Docker or Podman, to build in a container/)
+  assert.throws(() => buildMethod({ isRoot: false, find: finder([]), docker: false }), /^ImageError: build-image needs root, to build natively, or Docker or Podman, to build in a container/)
+  // In the runner's container, which has neither, it says which container builds (D220).
+  assert.throws(() => buildMethod({ isRoot: false, find: finder([]), docker: true }), /^ImageError: in Docker, build-image runs in a container of its own, .*: docker compose run --rm build-image$/)
 })
 
 // A data folder with the build file, a builder that writes a fake image where Gondolin would,

@@ -23,12 +23,12 @@ import { rebuildAgent } from '../src/runner/rebuild.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { piMounts } from '../src/runner/run.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
-import { FUSE_MOUNT, gondolinFolders } from '../src/runner/sandbox/gondolin.mjs'
+import { FUSE_MOUNT, bootCheck, gondolinFolders, machineType } from '../src/runner/sandbox/gondolin.mjs'
 import { GUEST_HOME, GUEST_PATH } from '../src/runner/sandbox/index.mjs'
 import { createFakeModel } from './support/fake-model.mjs'
 import { createTestLog } from './support/log.mjs'
 import { line, writeConfig, writeDatastore } from './support/runner.mjs'
-import { fakeModelNetwork, openTestSandbox, sandboxSkipReason } from './support/sandbox.mjs'
+import { fakeModelNetwork, keepEnvironment, linkTestImage, openTestSandbox, sandboxSkipReason } from './support/sandbox.mjs'
 import { toolResults } from './support/vm.mjs'
 import { KEY, runnerSettings } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
@@ -105,6 +105,34 @@ test('sandbox: a VM boots from the built image and runs pi --version, in under 3
   // Every VM is closed: no QEMU is left, and nothing in the temporary folder.
   for (const pid of qemuPids(prepared.entries)) assert.equal(isAlive(pid), false)
   assert.deepEqual(fs.readdirSync(prepared.paths.runnerTmp), [])
+})
+
+test("sandbox: pi's VMs get QEMU's q35 machine on x86_64, with KVM as under emulation, and Gondolin's own on arm64", () => {
+  // microvm, Gondolin's choice with KVM, hangs under nested KVM with 2 processors (D218).
+  assert.equal(machineType('x86_64'), 'q35')
+  assert.equal(machineType('aarch64'), undefined)
+})
+
+test("sandbox: doctor's boot check boots a VM with the runner's accelerator, in a folder of its own, and changes nothing in the data folder", options, async t => {
+  const prepared = prepare(t)
+  await linkTestImage(prepared.paths)
+  keepEnvironment(t)
+  fs.mkdirSync(path.dirname(prepared.paths.imageBuild), { recursive: true })
+  fs.copyFileSync(new URL('../config/image/build.json', import.meta.url), prepared.paths.imageBuild)
+  const snapshot = () =>
+    fs
+      .readdirSync(prepared.paths.dataDir, { recursive: true })
+      .sort()
+      .map(name => {
+        const stat = fs.lstatSync(path.join(prepared.paths.dataDir, name))
+        return `${name} ${stat.mode} ${stat.size} ${stat.mtimeMs}`
+      })
+  const before = snapshot()
+  const booted = await bootCheck({ paths: prepared.paths, settings: prepared.settings })
+  t.diagnostic(`boot with ${booted.accel}: ${booted.ms} ms`)
+  assert.equal(booted.accel, kvmProblem() === null ? 'kvm' : 'emulation')
+  assert.ok(booted.ms > 0)
+  assert.deepEqual(snapshot(), before)
 })
 
 test("sandbox: the mounts: at the host's paths, read-only but for views, memory and run/session, with sessions/ not there, even through a link", options, async t => {

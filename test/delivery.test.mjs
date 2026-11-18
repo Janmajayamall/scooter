@@ -523,13 +523,61 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   }
   fs.mkdirSync(paths.exchange, { recursive: true })
   fs.symlinkSync(elsewhere, paths.outbox)
+  // A record of a runner's entry, whose removal would reach through the link, and an entry of the
+  // bridge's own, such as its reply to `/status`.
+  fs.mkdirSync(paths.bridgeSending, { recursive: true })
+  fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0001.json'), JSON.stringify({ entry: { type: 'text', by: 'lifelog', text: 'from the record' }, sent: 0 }))
+  await context.writeOwn({ type: 'text', by: 'bridge', text: 'the reply to /status', about: 2 })
   context.start()
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   for (const name of ['agents', 'datastore', '20261109T150000000-0001']) assert.ok(fs.existsSync(path.join(elsewhere, name, 'kept')), name)
-  assert.deepEqual(whatsapp.sends, [])
-  // Tried again after waits that grow, not every second.
-  const failed = entries.filter(entry => entry.event === 'outbox.failed')
-  assert.ok(failed.length > 0 && failed.length < 5 && failed.every(entry => entry.code === 'EUNTRUSTED'), `${failed.length} looks`)
+  // The bridge's own entry goes, while nothing of the runner's does, its record included (D226).
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status'])
+  assert.deepEqual(fs.readdirSync(paths.bridgeSending), ['20261109T150000000-0001.json'])
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.runner_outbox_refused').map(entry => entry.reason), ['not used: a symbolic link'])
+  // Once it is a folder again, the record goes, and that is said.
+  fs.unlinkSync(paths.outbox)
+  fs.mkdirSync(paths.outbox, { mode: 0o700 })
+  for (let n = 0; n < 10; n++) await clock.advance(SECOND)
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status', 'from the record'])
+  assert.equal(context.events().filter(event => event === 'outbox.runner_outbox_taken').length, 1)
+})
+
+test("delivery: a name in the runner's outbox that isn't an entry's ID is left, and said once, and the entries after it go", async t => {
+  const context = setup(t, { started: false })
+  const { paths, whatsapp, entries, clock } = context
+  // The review of milestone 12, smaller point 3: a valid entry in a folder whose name is too long
+  // for the bridge's record once `.json` and a temporary prefix are added.
+  const entry = JSON.stringify({ type: 'text', by: 'lifelog', text: 'not taken', about: 1 })
+  for (const name of ['x'.repeat(240), '20261109T150000000-0001-more', 'notes']) {
+    fs.mkdirSync(path.join(paths.outbox, name), { recursive: true })
+    fs.writeFileSync(path.join(paths.outbox, name, ENTRY_FILE), entry)
+  }
+  await context.write({ type: 'text', by: 'lifelog', text: 'the real one', about: 1 })
+  context.start()
+  for (let n = 0; n < 30; n++) await clock.advance(SECOND)
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the real one'])
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'outbox.not_an_entry').map(entry => entry.bytes).sort((a, b) => a - b),
+    [5, 28, 240],
+  )
+  for (const name of ['x'.repeat(240), '20261109T150000000-0001-more', 'notes']) assert.deepEqual(fs.readdirSync(path.join(paths.outbox, name)), [ENTRY_FILE])
+  assert.deepEqual(fs.readdirSync(paths.bridgeSending), [])
+})
+
+test("delivery: in the runner's outbox the bridge removes only entry.json; in its own, also its sending.json", async t => {
+  const { write, writeOwn, whatsapp, clock, paths, entries } = setup(t)
+  // A runner's entry with what an older bridge left in it (D205's cost), and one of the bridge's own.
+  const id = await write({ type: 'text', by: 'lifelog', text: 'the runner\'s', about: 1 })
+  for (const name of [SENDING_FILE, `.tmp-${SENDING_FILE}-1`]) fs.writeFileSync(path.join(paths.outbox, id, name), '{}')
+  const own = await writeOwn({ type: 'text', by: 'bridge', text: 'the bridge\'s', about: 2 })
+  for (let n = 0; n < 30; n++) await clock.advance(SECOND)
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ["the runner's", "the bridge's"])
+  assert.deepEqual(fs.readdirSync(path.join(paths.outbox, id)).sort(), [`.tmp-${SENDING_FILE}-1`, SENDING_FILE])
+  assert.deepEqual(entries.filter(entry => entry.event === 'outbox.not_removed').map(entry => [entry.entry, entry.code]), [[id, 'ENOTEMPTY']])
+  assert.equal(fs.existsSync(path.join(paths.bridgeOutbox, own)), false)
 })
 
 test('delivery: an entry is removed by the names one holds; one holding anything else is left once sent, and said once', async t => {

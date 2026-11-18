@@ -373,6 +373,27 @@ function settleFile(file, { mode, owner }) {
 // only root's `PATH` has.
 const SBIN_PATH = `${process.env.PATH ?? ''}${path.delimiter}/usr/sbin${path.delimiter}/sbin${path.delimiter}/usr/bin${path.delimiter}/bin`
 
+// Puts the runner's user, `runner`, in the group `kvmGroup` (row 4), and returns what it did, for
+// the report. With services, a machine without the group gets one, a system group: the runner's
+// unit names it in `SupplementaryGroups`, and systemd refuses to start a unit whose group isn't
+// there (the review of milestone 12, smaller point 1; D225). Without services none is made, and
+// pi's VMs run under emulation until there is one. `findGroup(name)` is `proc.findGroup`, and
+// `run(program, args)` runs a program, throwing when it fails.
+export async function kvmMembership({ runner, kvmGroup, services, findGroup, run }) {
+  let made = ''
+  if ((await findGroup(kvmGroup)) === null) {
+    if (!services) {
+      return `there is no ${kvmGroup} group on this machine, so pi's VMs will run under emulation; \`sudo -u ${runner} scooter doctor\` says how to enable KVM, and setup, run again, adds ${runner} to the group`
+    }
+    await run('groupadd', ['--system', '--', kvmGroup])
+    made = `there was no ${kvmGroup} group, which the runner's service names, so setup made one; `
+  }
+  const groups = await run('id', ['-nG', '--', runner])
+  if (groups.stdout.trim().split(/\s+/).includes(kvmGroup)) return `${made}${runner} is in the ${kvmGroup} group`
+  await run('usermod', ['--append', '--groups', kvmGroup, '--', runner])
+  return `${made}${runner} is now in the ${kvmGroup} group`
+}
+
 // The shell setup gives its users: none they can log in with.
 function noLoginShell() {
   for (const shell of ['/usr/sbin/nologin', '/sbin/nologin']) if (fs.existsSync(shell)) return shell
@@ -432,18 +453,7 @@ export async function setup({ locations = NATIVE, codeDir = CODE_DIR, node = pro
     ids[part] = await proc.findUser(name)
     if (ids[part] === null) throw new Error(`the user ${name} can't be found after it was made`)
   }
-  let kvm
-  if ((await proc.findGroup(kvmGroup)) === null) {
-    kvm = `there is no ${kvmGroup} group on this machine, so pi's VMs will run under emulation; \`sudo -u ${users.runner} scooter doctor\` says how to enable KVM, and setup, run again, adds ${users.runner} to the group`
-  } else {
-    const groups = await runAt('id', ['-nG', '--', users.runner])
-    if (groups.stdout.trim().split(/\s+/).includes(kvmGroup)) {
-      kvm = `${users.runner} is in the ${kvmGroup} group`
-    } else {
-      await runAt('usermod', ['--append', '--groups', kvmGroup, '--', users.runner])
-      kvm = `${users.runner} is now in the ${kvmGroup} group`
-    }
-  }
+  const kvm = await kvmMembership({ runner: users.runner, kvmGroup, services, findGroup: name => proc.findGroup(name), run: runAt })
   done.push(`Users: ${made.length > 0 ? `made ${made.join(', ')}` : `${Object.values(users).join(', ')} were there`}; ${kvm}.`)
 
   // 3. The folders.
