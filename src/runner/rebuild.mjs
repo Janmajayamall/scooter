@@ -175,7 +175,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
     }
     const stopped = () => {
       log.info('rebuild.stopped', { agent: agent.name, until, cursor: state.cursor, batches })
-      say(`Stopped at #${state.cursor} of #${until}. The views are rebuilt up to there. Run the rebuild again; it starts from the beginning.`)
+      say(`Stopped at #${state.cursor} of #${until}, with the views rebuilt only in part. Run the rebuild again; it starts from the beginning.`)
       return { stopped: true, tag, until, cursor: state.cursor, batches, failed: [...gaveUp] }
     }
 

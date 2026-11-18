@@ -283,7 +283,7 @@ test('rebuild: stopped, it throws the batch in progress away, and leaves a state
   const { done, said } = startRebuild(prepared, { signal: stopping.signal })
   const result = await drive(prepared, done)
   assert.deepEqual(result, { stopped: true, tag: TAG, until: 6, cursor: 3, batches: 1, failed: [] })
-  assert.equal(said.at(-1), 'Stopped at #3 of #6. The views are rebuilt up to there. Run the rebuild again; it starts from the beginning.')
+  assert.equal(said.at(-1), 'Stopped at #3 of #6, with the views rebuilt only in part. Run the rebuild again; it starts from the beginning.')
   // The first day is committed; the second thrown away.
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild #1\n')
   assert.equal(gitOf(paths, 'status', '--porcelain'), '')
