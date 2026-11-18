@@ -43,7 +43,7 @@ For example, an answer in quiet mode to a batch whose new messages are #1050 to 
 REPLY_TO: 1052
 Is this ticket for you alone, or for Sam too?
 REPLY_TO: 1053
-I couldn't open this PDF: it asks for a password. Could you send a screenshot of it?
+I couldn't open this PDF: it asks for a password. Send it again without one if it matters.
 DONE: 1050 1051 1052
 FAILED: 1053 the PDF needs a password
 ```
