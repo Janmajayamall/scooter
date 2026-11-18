@@ -487,8 +487,9 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   // What a bridge stopped in the middle of a download left in staging. Its message wasn't stored,
   // and catch-up hands it over again. wacli owns the folder above staging, and could put a link in
   // its place, or swap one in later: so nothing is removed unless staging is its folder and not a
-  // link, and only names the bridge gives its downloads (`startsWithId`), which nothing of root's
-  // has. Anything else there is wacli's, and stays.
+  // link, and only names the bridge gives its downloads (`startsWithId`), by unlinking them. Only
+  // outbox entries have such names besides, and they are folders, which unlinking refuses. Anything
+  // else there is wacli's, and stays.
   function clearStaging() {
     try {
       checkOwnFolder(paths.wacliStaging, user)

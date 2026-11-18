@@ -408,6 +408,9 @@ Use the prompt shown in 6.5 as the first expected output.
 - `src/ops/doctor.mjs` (8.4).
 - `pair`, and anything in 8.4 not built yet.
 
+**Rules:**
+- **What the bridge writes in the outbox** (`docs/DECISIONS.md`, D136, the review of milestone 6). The bridge, as root, removes in the folders other users control only names it knows, but it still writes `sending.json` into an entry's folder (D101), and hands its own entries off into the outbox. Node can't act relative to a folder it has open, so the runner's user could swap a link in between the bridge's read of an entry and that write, and steer it, as root, into another folder, under that name. Settle it, for example by keeping `sending.json` in `bridge/`, and add the root test.
+
 **Tests:**
 - Hermetic: the decisions `setup` and `doctor` make, such as which users, modes, mounts and settings; `doctor` reports each missing piece with its fix.
 - Root tests, in a container: `setup` without services creates the users and folders; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file.
