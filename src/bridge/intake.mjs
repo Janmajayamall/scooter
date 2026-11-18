@@ -24,8 +24,10 @@
 // - A download that its channel's stop cut short, for a backup or a shutdown, leaves the message
 //   unstored, rather than stored as `download failed`, and every record of that channel after it
 //   too, until the channel starts again: the channel hands them over again when it starts, as
-//   WhatsApp's catch-up does, from two minutes before the newest line it stored (D179). Had a
-//   later one been stored, catch-up would start after the message left.
+//   WhatsApp's catch-up does, from where it had got to (D179). So they are stored in their order.
+// - A record intake didn't store, and that its channel must hand over again, is said so with
+//   `again: true`: one a stop left, one that failed for a reason of the bridge's, such as a bug,
+//   and one the store stopped for. WhatsApp's catch-up never goes on past such a row (D179).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -62,7 +64,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
   const left = new Set()
 
   // The `at` of the newest incoming line from each channel, by `seq`. WhatsApp's catch-up starts
-  // from it (5.2 step 7).
+  // from it only for a bridge state an older bridge wrote, which doesn't say where catch-up had
+  // got to (D179).
   const newestIn = new Map()
   for (const { line } of store.index.entries()) {
     if (line.dir === 'in') newestIn.set(line.source, line.at)
@@ -90,6 +93,11 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
   function skip(record, kind, reason) {
     log.info('intake.skipped', { source: record.source, kind, reason })
     return { stored: false, reason }
+  }
+
+  // Not stored, for its channel to hand over again.
+  function leave(record, kind, reason) {
+    return { ...skip(record, kind, reason), again: true }
   }
 
   const mediaOf = (attachment, error) => ({ type: attachment.type, ...(attachment.mime ? { mime: attachment.mime } : {}), error })
@@ -179,7 +187,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     } catch (error) {
       if (error.code !== 'ESTOPPED') throw error
       left.add(record.source)
-      return skip(record, 'message', 'its channel stopped during a download')
+      return leave(record, 'message', 'its channel stopped during a download')
     } finally {
       for (const { file } of downloaded) fs.rmSync(file, { force: true })
     }
@@ -193,7 +201,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     }
     const channel = channels.get(record.source)
     if (!channel) return skip(record, null, 'no such channel')
-    if (left.has(record.source)) return skip(record, null, 'its channel stopped during a download before it')
+    if (left.has(record.source)) return leave(record, null, 'its channel stopped during a download before it')
     const base = { dir: 'in', at: record.at ?? isoSeconds(clock.now()), source: record.source, trust: 'owner' }
 
     if (record.revoked) {
@@ -219,7 +227,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
   }
 
   async function take(record) {
-    if (failed) return { stored: false, reason: 'the store stopped' }
+    if (failed) return { stored: false, reason: 'the store stopped', again: true }
     try {
       return await handle(record)
     } catch (error) {
@@ -229,12 +237,13 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
           log.error('intake.store_failed', errorFields(error))
           onFatal(error)
         }
-        return { stored: false, reason: 'the store stopped' }
+        return { stored: false, reason: 'the store stopped', again: true }
       }
-      // A bug, or the disk. The record is lost to this delivery: catch-up brings a WhatsApp
-      // message back within `CATCHUP_INTERVAL`, and an email stays in the spool.
+      // A bug, or the disk. The record is lost to this delivery: WhatsApp's catch-up lists it
+      // again within `CATCHUP_INTERVAL`, since it never goes on past a record left so (D179), and
+      // an email stays in the spool.
       log.error('intake.failed', { source: record?.source, ...errorFields(error) })
-      return { stored: false, reason: 'failed' }
+      return { stored: false, reason: 'failed', again: true }
     }
   }
 
@@ -242,7 +251,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
 
   return {
     // Takes a record. Resolves, once it has been handled, with what the store said: `{ stored:
-    // true, seq, line }`, or `{ stored: false, reason }`. Never rejects.
+    // true, seq, line }`, or `{ stored: false, reason }`, with `again: true` when the channel must
+    // hand the record over again. Never rejects.
     take(record) {
       const result = queue.then(() => take(record))
       queue = result

@@ -159,6 +159,21 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
   assert.equal(byName(checks, 'VM image')[0].fix, 'docker compose run --rm build-image, with the runner stopped')
 })
 
+test('doctor: stopped during the boot check, it hands the boot check its signal, which closes the VM, and makes no check after it', async t => {
+  // The review of milestone 13, smaller point 2: `bootCheck` closes its VM on the signal (sandbox.test.mjs).
+  const { check, runner } = install(t)
+  const stopping = new AbortController()
+  const given = []
+  const bootCheck = async ({ signal }) => {
+    given.push(signal)
+    stopping.abort()
+    throw new Error('doctor was stopped during the boot')
+  }
+  const checks = await check({ runner: { ...runner, bootCheck }, signal: stopping.signal })
+  assert.deepEqual(given, [stopping.signal])
+  assert.deepEqual(checks.map(entry => entry.name), ['config', 'accelerator', 'QEMU', 'VM image'])
+})
+
 test("doctor: a VM boots from the image with the runner's accelerator, in its own folder; one that doesn't is a failure, with its fix", async t => {
   const { check, runner, paths, booted } = install(t)
   await check()

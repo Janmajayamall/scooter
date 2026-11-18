@@ -10,7 +10,8 @@
 //     "imageBuiltAt": "2026-11-09T12:31:40Z",
 //     "agents": {
 //       "lifelog": {"model": "anthropic/claude-sonnet-5.5", "timeoutMinutes": 10, "reads": ["whatsapp", "email"]}
-//     }
+//     },
+//     "restart": {"stops": 2, "until": "2026-11-09T15:06:31Z", "reason": "ENOSPC"}
 //   }
 //
 // - `startedAt`: when the runner that wrote it started.
@@ -18,17 +19,24 @@
 // - `zdr`, `internet`: whether `OPENROUTER_ZDR` and `AGENT_INTERNET` are on.
 // - `imageBuiltAt`: when the VM image was built (6.12), or null when that isn't known.
 // - `agents`: each agent's model, `timeout_minutes` and `reads`.
+// - `restart`: when the runner started after stopping on an error, and waits before it goes on,
+//   where its service manager doesn't wait (D229): how many stops in a row, until when, and the
+//   error's code or name, or null when it couldn't record one. Null otherwise; a status an older
+//   runner wrote has none.
 //
 // The runner writes it atomically at startup. The bridge reads it for `/status`, which is why its
 // format is here.
 
 import { SOURCES } from './datastore/line.mjs'
 import { readJsonFile, readUntrustedFile } from './files.mjs'
+import { limits } from './limits.mjs'
 import { parseIsoSeconds } from './time.mjs'
 
 export const ACCELERATORS = ['kvm', 'emulation']
 
 const FIELDS = ['startedAt', 'accel', 'zdr', 'internet', 'imageBuiltAt', 'agents']
+// Fields a status may leave out.
+const OPTIONAL = ['restart']
 const AGENT_FIELDS = ['model', 'timeoutMinutes', 'reads']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -42,7 +50,22 @@ export function checkRunnerStatus(status) {
   if (!isObject(status)) return ['the status must be an object']
   const problems = []
   for (const name of Object.keys(status)) {
-    if (!FIELDS.includes(name)) problems.push(`${name} is not a field of the status`)
+    if (!FIELDS.includes(name) && !OPTIONAL.includes(name)) problems.push(`${name} is not a field of the status`)
+  }
+  const restart = status.restart
+  if (
+    restart !== undefined &&
+    restart !== null &&
+    !(
+      isObject(restart) &&
+      Object.keys(restart).length === 3 &&
+      Number.isSafeInteger(restart.stops) &&
+      restart.stops > 0 &&
+      isTime(restart.until) &&
+      (restart.reason === null || (typeof restart.reason === 'string' && restart.reason.length <= limits.REASON_MAX_CHARS))
+    )
+  ) {
+    problems.push('restart must be null or { stops, until, reason }')
   }
   for (const name of FIELDS) {
     if (status[name] === undefined) problems.push(`${name} is missing`)

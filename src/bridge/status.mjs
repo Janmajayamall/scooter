@@ -103,6 +103,13 @@ export function statusText({ now, settings, paths, channels, index, backups }) {
     const accel = status.accel === 'kvm' ? 'KVM' : 'emulation, which is much slower'
     const image = status.imageBuiltAt === null ? 'when, unknown' : at(status.imageBuiltAt)
     lines.push(`Runner: started ${at(status.startedAt)}. VMs run with ${accel}; their image was built ${image}.`)
+    // A runner that stopped on an error, and waits before it goes on (D229).
+    const restart = status.restart ?? null
+    if (restart !== null && parseIsoSeconds(restart.until) > now) {
+      const why = restart.reason === null ? "it stopped, and couldn't record why" : `it stopped on an error (${restart.reason})`
+      const times = restart.stops === 1 ? '' : `, ${restart.stops} times in a row`
+      lines.push(`The runner waits until ${at(restart.until)} before it goes on: ${why}${times}. Restarting it ends the wait.`)
+    }
     lines.push(`Zero data retention: ${status.zdr ? 'on' : 'off'}. The agent's internet access: ${status.internet ? 'on' : 'off'}.`)
   }
   try {

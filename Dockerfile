@@ -72,11 +72,14 @@ RUN set -eu; \
     install -d -o scooter-mail -g scooter-mail -m 0700 /data/mail /data/mail/spool; \
     install -d -o root -g root -m 0755 /config
 
-# The app, root's.
+# The app, root's, readable by every user and writable by root alone, whatever modes the checkout
+# gave it: a checkout made under umask 077 would otherwise leave scooter-runner and scooter-mail
+# unable to read it (the review of milestone 13, smaller point 4).
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 COPY src ./src
+RUN chmod -R a+rX,go-w /app
 
 # The services run in UTC (8.2), as the systemd units do.
 ENV TZ=UTC

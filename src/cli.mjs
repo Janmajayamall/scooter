@@ -32,10 +32,15 @@ export const COMMANDS = {
     usage: 'runner',
     where: 'runner',
     summary: 'Run the runner',
-    // The runner, with pi's runs in Gondolin VMs (6.6).
+    // The runner, with pi's runs in Gondolin VMs (6.6), and its own waits between starts unless
+    // its service manager keeps them (D229).
     load: async () => {
-      const [{ runRunner }, { openGondolinSandbox }] = await Promise.all([import('./runner/main.mjs'), import('./runner/sandbox/gondolin.mjs')])
-      return ({ settings, stderr }) => runRunner({ settings, stderr, openSandbox: openGondolinSandbox })
+      const [{ runRunner }, { openGondolinSandbox }, { keepsRestartWaits }] = await Promise.all([
+        import('./runner/main.mjs'),
+        import('./runner/sandbox/gondolin.mjs'),
+        import('./runner/restarts.mjs'),
+      ])
+      return ({ settings, stderr }) => runRunner({ settings, stderr, openSandbox: openGondolinSandbox, restartWaits: keepsRestartWaits() })
     },
   },
   setup: {
@@ -76,7 +81,7 @@ export const COMMANDS = {
   'build-image': {
     side: 'host',
     usage: 'build-image',
-    where: 'the host, as root; in Docker, the runner container',
+    where: 'the host, as root; in Docker, a container of its own: docker compose run --rm build-image',
     summary: 'Build the VM image that pi runs in',
     load: async () => (await import('./runner/sandbox/image.mjs')).runBuildImage,
   },

@@ -536,8 +536,11 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   assert.deepEqual(fs.readdirSync(paths.bridgeSending), ['20261109T150000000-0001.json'])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.runner_outbox_refused').map(entry => entry.reason), ['not used: a symbolic link'])
-  // Once it is a folder again, the record goes, and that is said.
+  // While there is no outbox, nothing is said to be taken from it (the review of milestone 13,
+  // smaller point 5); once it is a folder again, the record goes, and that is said.
   fs.unlinkSync(paths.outbox)
+  for (let n = 0; n < 3; n++) await clock.advance(SECOND)
+  assert.equal(context.events().filter(event => event === 'outbox.runner_outbox_taken').length, 0)
   fs.mkdirSync(paths.outbox, { mode: 0o700 })
   for (let n = 0; n < 10; n++) await clock.advance(SECOND)
   assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status', 'from the record'])

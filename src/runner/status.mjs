@@ -11,8 +11,10 @@ import { checkRunnerStatus } from '../common/runnerstatus.mjs'
 import { isoSeconds } from '../common/time.mjs'
 
 // What `status.json` says about this start. `sandbox` is the one the runner opened; `agents` the
-// config's.
-export function runnerStatus({ settings, agents, sandbox, now }) {
+// config's; `restarts`, what `openRestarts` returns, when the runner keeps its own waits between
+// starts, which says whether this start waits before it goes on (D229).
+export function runnerStatus({ settings, agents, sandbox, now, restarts = null }) {
+  const waits = restarts !== null && restarts.until !== null && restarts.until > now
   const status = {
     startedAt: isoSeconds(now),
     accel: sandbox.accel,
@@ -20,6 +22,7 @@ export function runnerStatus({ settings, agents, sandbox, now }) {
     internet: settings.agentInternet,
     imageBuiltAt: sandbox.imageBuiltAt,
     agents: {},
+    restart: waits ? { stops: restarts.record.stops, until: isoSeconds(restarts.until), reason: restarts.record.reason } : null,
   }
   for (const agent of agents) status.agents[agent.name] = { model: agent.model, timeoutMinutes: agent.timeoutMinutes, reads: [...agent.reads] }
   return status

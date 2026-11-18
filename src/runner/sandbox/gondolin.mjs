@@ -69,6 +69,12 @@ function placeholderFor(name) {
 // Where Gondolin keeps its things: its certificate authority under the runner's home, which keeps
 // it from one start to the next; and its list of running VMs, each with a socket, in the
 // temporary folder, which a start empties, and where a socket's path is shortest.
+// Whether Gondolin's sockets fit under `tmp`, as the runner's temporary folder: a socket's path
+// can't be longer than the system takes.
+export function socketsFit(tmp) {
+  return Buffer.byteLength(tmp) + 1 + TMP_SOCKET_NAME_BYTES <= SOCKET_PATH_MAX_BYTES && Buffer.byteLength(path.join(tmp, 'sessions')) + 1 + SESSION_SOCKET_NAME_BYTES <= SOCKET_PATH_MAX_BYTES
+}
+
 export function gondolinFolders(paths) {
   const cache = path.join(paths.runnerHome, '.cache')
   return {
@@ -343,9 +349,15 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
 // its own in the system's temporary folder, removed afterwards; the VM sees an empty folder of it,
 // and reaches no host. Returns `{ accel, ms }`, how its VMs run and how long the boot took. Throws
 // a `SandboxSetupError` when the sandbox can't open, and an error when the VM doesn't boot within
-// `VM_START_TIMEOUT`.
-export async function bootCheck({ paths, settings, clock = systemClock }) {
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'scooter-doctor-'))
+// `VM_START_TIMEOUT`, or `signal` stops it first, which closes the VM: `doctor` stops it on a
+// signal, so a `doctor` killed during the boot leaves no QEMU (the review of milestone 13, smaller
+// point 2).
+//
+// Its folder is in the system's temporary folder, or in `/tmp` when a `TMPDIR` of the owner's is
+// too long a path for Gondolin's sockets (the same review, smaller point 3).
+export async function bootCheck({ paths, settings, clock = systemClock, signal = null }) {
+  const base = socketsFit(path.join(os.tmpdir(), 'scooter-doctor-XXXXXX', 'tmp')) ? os.tmpdir() : '/tmp'
+  const scratch = fs.mkdtempSync(path.join(base, 'scooter-doctor-'))
   const booted = []
   const quiet = { info: (event, fields) => event === 'sandbox.vm_started' && booted.push(fields.ms), warn: () => {}, error: () => {} }
   try {
@@ -359,15 +371,19 @@ export async function bootCheck({ paths, settings, clock = systemClock }) {
     const empty = path.join(scratch, 'empty')
     fs.mkdirSync(empty, { mode: 0o700 })
     const sandbox = await openGondolinSandbox({ paths: own, settings, log: quiet, clock })
-    const result = await sandbox.run({
-      argv: ['true'],
-      cwd: '/',
-      env: { PATH: GUEST_PATH },
-      mounts: [{ path: empty, writable: false, hide: [] }],
-      // The boot has its own limit, `VM_START_TIMEOUT`; `true` then takes no time.
-      timeoutMs: 2 * limits.VM_START_TIMEOUT,
-      policy: { model: 'none', internet: false, zdr: true, secrets: {} },
-    })
+    const result = await sandbox.run(
+      {
+        argv: ['true'],
+        cwd: '/',
+        env: { PATH: GUEST_PATH },
+        mounts: [{ path: empty, writable: false, hide: [] }],
+        // The boot has its own limit, `VM_START_TIMEOUT`; `true` then takes no time.
+        timeoutMs: 2 * limits.VM_START_TIMEOUT,
+        policy: { model: 'none', internet: false, zdr: true, secrets: {} },
+      },
+      { signal },
+    )
+    if (signal?.aborted) throw new Error('doctor was stopped during the boot')
     if (result.code !== 0) throw new Error(`the VM booted, and \`true\` ended with ${result.timedOut ? 'a timeout' : `exit code ${result.code}`}`)
     return { accel: sandbox.accel, ms: booted[0] ?? null }
   } finally {

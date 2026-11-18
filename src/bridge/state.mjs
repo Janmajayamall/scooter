@@ -12,6 +12,11 @@
 // - `commandSeq`: the `seq` of the newest command line the bridge has handled (5.4), as the runner
 //   keeps its own in `state.json` (6.3). A state written before the bridge handled commands has
 //   none, and gets the newest line's, so commands sent before that are never answered.
+// - `catchUp`: where WhatsApp's catch-up has got to in each of the owner's chats (5.2 step 7;
+//   D179): `{ "<chat JID>": "<UTC time>" }`, the time of the newest of the owner's rows it has
+//   listed there with every row before it handled. The next catch-up of that chat starts
+//   `CATCHUP_OVERLAP` before it. A state an older bridge wrote has none until the channel first
+//   saves one.
 //
 // Only the bridge reads and writes it. It is written atomically, mode 0600, in the bridge's own
 // folder, which only root can read (3.2).
@@ -45,6 +50,10 @@ function problemsOf(state) {
     return 'lastBackup must be null or { at, ok, snapshot, reason }'
   }
   if (!Number.isSafeInteger(state.commandSeq) || state.commandSeq < 0) return 'commandSeq must be a whole number, 0 or more'
+  const points = state.catchUp
+  if (points !== undefined && !(isObject(points) && Object.entries(points).every(([chat, at]) => chat !== '' && parseIsoSeconds(at) !== null))) {
+    return 'catchUp must be { "<chat>": "<UTC time>" }'
+  }
   return null
 }
 

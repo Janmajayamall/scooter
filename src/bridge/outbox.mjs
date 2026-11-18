@@ -462,6 +462,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   // the link, and that is logged once (D226).
   function runnerEntries() {
     let names = []
+    let there = true
     try {
       checkOwnFolder(paths.outbox, owner)
       names = listHandOffs(paths.outbox)
@@ -472,16 +473,21 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
         return []
       }
       if (error.code !== 'ENOENT') throw error
+      there = false
     }
-    if (refusedRunners !== null) log.info('outbox.runner_outbox_taken')
-    refusedRunners = null
+    // Said once it is taken from again, not while it isn't there (the review of milestone 13,
+    // smaller point 5).
+    if (there && refusedRunners !== null) {
+      log.info('outbox.runner_outbox_taken')
+      refusedRunners = null
+    }
     const ids = names.filter(isId)
     const others = new Set(names.filter(name => !isId(name)))
     for (const name of strangers) if (!others.has(name)) strangers.delete(name)
     for (const name of others) {
       if (strangers.has(name)) continue
       strangers.add(name)
-      log.warn('outbox.not_an_entry', { name: name.slice(0, 64), bytes: Buffer.byteLength(name) })
+      log.warn('outbox.not_an_entry', { name: name.slice(0, limits.LOGGED_NAME_MAX_CHARS), bytes: Buffer.byteLength(name) })
     }
     return [...ids, ...listRecords(paths.bridgeSending)]
   }

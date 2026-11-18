@@ -5,8 +5,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { limits } from '../src/common/limits.mjs'
 import { createProc, findProgram } from '../src/common/proc.mjs'
 import { NATIVE, UNITS, USERS } from '../src/ops/setup.mjs'
+import { SERVICE_MANAGER_WAITS } from '../src/runner/restarts.mjs'
 import { createTestLog } from './support/log.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -46,7 +48,7 @@ test('units: the bridge runs as root, the runner as its user with the kvm group,
     // VMs die with the runner, and wacli and the email reader with the bridge (6.6).
     assert.deepEqual(unit['Service.KillMode'], ['control-group'])
     assert.deepEqual(unit['Service.Restart'], ['on-failure'])
-    assert.deepEqual(unit['Service.Environment'], ['TZ=UTC'])
+    assert.equal(unit['Service.Environment'][0], 'TZ=UTC')
     assert.deepEqual(unit['Install.WantedBy'], ['multi-user.target'])
     // Nothing else of the environment: each service reads its own env file (8.2).
     assert.equal(unit['Service.EnvironmentFile'], undefined)
@@ -55,6 +57,21 @@ test('units: the bridge runs as root, the runner as its user with the kvm group,
   // has run would otherwise run pi again every few seconds.
   assert.deepEqual([runner['Service.RestartSec'], runner['Service.RestartSteps'], runner['Service.RestartMaxDelaySec']], [['1min'], ['2'], ['30min']])
   assert.deepEqual([bridge['Service.RestartSec'], bridge['Service.RestartSteps'], bridge['Service.RestartMaxDelaySec']], [['5s'], ['6'], ['5min']])
+  // systemd keeps those waits, so the runner keeps none of its own (D229); the bridge is told nothing.
+  assert.deepEqual(runner['Service.Environment'], ['TZ=UTC', `SCOOTER_RESTART_WAITS=${SERVICE_MANAGER_WAITS}`])
+  assert.deepEqual(bridge['Service.Environment'], ['TZ=UTC'])
+})
+
+test('units: the waits the runner keeps itself where its service manager doesn\'t are those systemd works out for the runner\'s unit (D229)', () => {
+  // systemd's waits grow from RestartSec to RestartMaxDelaySec in RestartSteps steps, each the one
+  // before times (max / first) ^ (1 / steps), and stay at the last (12.2, which measured it).
+  const runner = units['scooter-runner.service']
+  const minutes = value => Number(/^(\d+)min$/.exec(value)[1]) * 60_000
+  const first = minutes(runner['Service.RestartSec'][0])
+  const max = minutes(runner['Service.RestartMaxDelaySec'][0])
+  const steps = Number(runner['Service.RestartSteps'][0])
+  const systemd = Array.from({ length: steps + 1 }, (_, n) => Math.round(first * (max / first) ** (n / steps)))
+  assert.deepEqual(limits.RUNNER_RESTART_WAITS, systemd)
 })
 
 const analyze = findProgram('systemd-analyze', `${process.env.PATH ?? ''}:/usr/bin:/bin`)

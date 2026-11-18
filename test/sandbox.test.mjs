@@ -7,7 +7,7 @@
 // (`sg kvm -c 'npm test'` on the plan's machine) they take about a minute; under emulation, several.
 
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import dgram from 'node:dgram'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -133,6 +133,47 @@ test("sandbox: doctor's boot check boots a VM with the runner's accelerator, in 
   assert.equal(booted.accel, kvmProblem() === null ? 'kvm' : 'emulation')
   assert.ok(booted.ms > 0)
   assert.deepEqual(snapshot(), before)
+})
+
+test("sandbox: doctor's boot check, stopped during the boot, closes its VM and removes its folder; with a TMPDIR too long for Gondolin's sockets it boots in /tmp", options, async t => {
+  // The review of milestone 13, smaller points 2 and 3.
+  const prepared = prepare(t)
+  await linkTestImage(prepared.paths)
+  keepEnvironment(t)
+  fs.mkdirSync(path.dirname(prepared.paths.imageBuild), { recursive: true })
+  fs.copyFileSync(new URL('../config/image/build.json', import.meta.url), prepared.paths.imageBuild)
+  const scratch = base => fs.readdirSync(base).filter(name => name.startsWith('scooter-doctor-'))
+  // The sandbox sets the process's temporary folder to its own, as the runner's does (6.6).
+  const tmp = os.tmpdir()
+  const stop = new AbortController()
+  const checking = bootCheck({ paths: prepared.paths, settings: prepared.settings, signal: stop.signal })
+  // The boot check's QEMU, by its folder, whose name is its own, on its command line.
+  const [folder] = scratch(tmp)
+  const qemus = () => {
+    try {
+      return execFileSync('pgrep', ['-f', path.join(tmp, folder)], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+  await waitFor(() => qemus().length > 0, "the boot check's QEMU")
+  stop.abort()
+  await assert.rejects(checking, /doctor was stopped during the boot/)
+  await waitFor(() => qemus().length === 0, 'no QEMU')
+  assert.deepEqual(scratch(tmp), [])
+
+  const long = path.join(tmp, 'x'.repeat(90))
+  fs.mkdirSync(long)
+  const before = process.env.TMPDIR
+  process.env.TMPDIR = long
+  try {
+    assert.equal(os.tmpdir(), long)
+    const booted = await bootCheck({ paths: prepared.paths, settings: prepared.settings })
+    assert.ok(booted.ms > 0)
+  } finally {
+    process.env.TMPDIR = before
+  }
+  assert.deepEqual(scratch(long), [])
 })
 
 test("sandbox: the mounts: at the host's paths, read-only but for views, memory and run/session, with sessions/ not there, even through a link", options, async t => {

@@ -21,7 +21,14 @@ const STATUS = {
 test('status.json: the format, each fault naming its field', () => {
   assert.deepEqual(checkRunnerStatus(STATUS), [])
   assert.deepEqual(checkRunnerStatus({ ...STATUS, imageBuiltAt: null }), [])
+  // A runner that waits before it goes on (D229); an older runner's status has no `restart`.
+  assert.deepEqual(checkRunnerStatus({ ...STATUS, restart: null }), [])
+  assert.deepEqual(checkRunnerStatus({ ...STATUS, restart: { stops: 2, until: '2026-11-09T12:40:00Z', reason: 'ENOSPC' } }), [])
+  assert.deepEqual(checkRunnerStatus({ ...STATUS, restart: { stops: 1, until: '2026-11-09T12:40:00Z', reason: null } }), [])
   const cases = [
+    [{ restart: { stops: 0, until: '2026-11-09T12:40:00Z', reason: null } }, 'restart must be null or { stops, until, reason }'],
+    [{ restart: { stops: 1, until: 'soon', reason: null } }, 'restart must be null or { stops, until, reason }'],
+    [{ restart: { stops: 1, until: '2026-11-09T12:40:00Z', reason: 'x'.repeat(201) } }, 'restart must be null or { stops, until, reason }'],
     [{ accel: 'hvf' }, 'accel must be one of kvm, emulation'],
     [{ zdr: 'on' }, 'zdr must be true or false'],
     [{ startedAt: 'now' }, 'startedAt must be a UTC time to the second'],

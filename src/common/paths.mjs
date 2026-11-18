@@ -55,6 +55,9 @@ export function makePaths({ dataDir, configDir }) {
     // from starting on the same data. `date` is a UTC date, `2026-11-09`.
     runner: data('runner'),
     runnerStatus: data('runner', 'status.json'),
+    // How the runner's latest starts ended, for the waits it keeps between them where its service
+    // manager doesn't (D229).
+    runnerRestarts: data('runner', 'restarts.json'),
     runnerSocket: data('runner', 'runner.sock'),
     runnerImage: data('runner', 'image'),
     runnerHome: data('runner', 'home'),
