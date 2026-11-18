@@ -37,7 +37,7 @@ import { BUILD_FILE } from './support/image.mjs'
 import { createTestLog } from './support/log.mjs'
 import { isRoot, skipUnlessRoot } from './support/root.mjs'
 import { prepareTestRunner } from './support/test-runner.mjs'
-import { makeTestDir } from './support/tmp.mjs'
+import { atEnd, makeTestDir } from './support/tmp.mjs'
 
 const needsE2fs = { skip: fakeImageSkipReason() }
 
@@ -76,10 +76,14 @@ test('image: the build file pins pi, installed without its scripts, and says not
   }
   assert.throws(() => pin(['npm install --global @earendil-works/pi-coding-agent@1.5.2']), /must install pi with npm install --ignore-scripts/)
   assert.throws(() => pin(['pnpm add --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), /must install pi with npm install --ignore-scripts/)
-  // npm takes the last word about scripts: one that turns them back on is refused.
-  for (const again of ['--ignore-scripts=false', '--no-ignore-scripts']) {
-    assert.throws(() => pin([`${install('1.5.2')} ${again}`]), /must install pi with npm install --ignore-scripts/, again)
+  // npm takes the last word about scripts: one that turns them back on is refused. So is any word
+  // but pi and the switches the build file uses: npm takes a word after a switch as its value, and
+  // a switch by the start of its name (the second review of milestone 7, smaller point 1).
+  for (const again of ['--ignore-scripts=false', '--no-ignore-scripts', '--ignore-scripts false', '--no-ignore-s', '--ignore-s=false', '--foreground-scripts', '--prefix=/tmp', 'other-package']) {
+    assert.throws(() => pin([`${install('1.5.2')} ${again}`]), /must install pi with npm install --ignore-scripts.*no other word than pi and --global, -g, --ignore-scripts, --omit=dev, --no-audit, --no-fund/, again)
   }
+  assert.throws(() => pin(['npm install --global --ignore-scripts false @earendil-works/pi-coding-agent@1.5.2']), /no other word/)
+  assert.equal(pin(['npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), '1.5.2')
 
   // pi named again, with or without a version, as by a second install (the review of milestone 7,
   // smaller point 4), or in a path.
@@ -302,6 +306,21 @@ test('image: build-image refuses while a runner runs, and a build of another pi 
   assert.deepEqual(fs.readdirSync(paths.runnerImage), ['old'])
   // The socket is let go of: a runner can start.
   await (await holdInstance(paths.runnerSocket, 'runner')).close()
+})
+
+test("image: a user who can't write the data folder, or the runner's, is told who builds the image, with exit code 2", { skip: isRoot ? 'root writes anyway' : false }, async t => {
+  const { paths, build, fetch, log, proc } = prepareBuild(t)
+  fs.mkdirSync(paths.runner, { recursive: true })
+  // As `scooter-runner` on a native install, whose data folder is root's (D151).
+  fs.chmodSync(paths.dataDir, 0o555)
+  atEnd(t, () => fs.chmodSync(paths.dataDir, 0o755))
+  const refused = error => error instanceof ImageError && error.setup
+  await assert.rejects(buildImage({ paths, proc, log, isRoot: false, build, fetch }), error => refused(error) && error.message === `build-image can't write in ${paths.dataDir} (EACCES): on a native install it runs as root, as sudo scooter build-image; otherwise, as a user who can write the data folder`)
+  // A runner's folder it can't write, where it holds its socket.
+  fs.chmodSync(paths.dataDir, 0o755)
+  fs.chmodSync(paths.runner, 0o555)
+  atEnd(t, () => fs.chmodSync(paths.runner, 0o755))
+  await assert.rejects(buildImage({ paths, proc, log, isRoot: false, build, fetch }), error => refused(error) && error.message.startsWith(`build-image can't write in ${paths.runner} (EACCES)`))
 })
 
 // A builder that writes a fake image with a stand-in for its file system, which `readFakeImage`

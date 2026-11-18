@@ -16,14 +16,15 @@
 // program exits, at the timeout, when the runner stops, and when the run writes more than it may.
 // Closing is what stops the program: aborting the command in Gondolin 0.14.0 doesn't (13.4).
 //
-// The network is the policy's (6.13), which milestone 8 builds. Until then a VM reaches nothing:
-// every request is refused, and the key is swapped in nowhere (`refuseNetwork`). Tests give the
-// scripted fake model in its place.
+// The network is the policy's (6.13; `policy.mjs`): it checks and logs every request the VM makes,
+// and the key, which the VM sees only as a placeholder, is swapped in on requests to OpenRouter.
+// Tests give one with the scripted fake model behind the policy, in OpenRouter's place.
 //
 // Only `src/runner/sandbox/` loads Gondolin (ARCHITECTURE.md 4.2), and this module loads it only
 // once the runner's folders are set, because Gondolin fixes the folder of its list of running VMs
 // when it loads.
 
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { Writable } from 'node:stream'
@@ -35,6 +36,7 @@ import { systemClock } from '../../common/time.mjs'
 import { pickAccelerator } from './accel.mjs'
 import { checkImage, pinnedPiVersion, qemuProgram, readBuildFile } from './image.mjs'
 import { SandboxSetupError, checkRunSpec, createOutput } from './index.mjs'
+import { policyNetwork } from './policy.mjs'
 
 // Where Gondolin's own file system goes in the VM, instead of `/data`, which is where Scooter's
 // folders are in Docker (row 14; 0.5, VM 1). `/run` is a temporary file system of the VM's boot.
@@ -49,10 +51,10 @@ const SOCKET_PATH_MAX_BYTES = 107
 const TMP_SOCKET_NAME_BYTES = 37
 const SESSION_SOCKET_NAME_BYTES = 41
 
-// The network until milestone 8's policy: Gondolin refuses every request, before any goes out, and
-// answers DNS with made-up addresses inside the runner.
-export function refuseNetwork() {
-  return { allowedHosts: [], isRequestAllowed: async () => false }
+// The placeholder the VM sees for a secret, new for each run. It is worth nothing outside the
+// runner: Gondolin puts the secret in its place only on requests to the secret's hosts (6.13).
+function placeholderFor(name) {
+  return `scooter-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-placeholder-${crypto.randomBytes(24).toString('hex')}`
 }
 
 // Where Gondolin keeps its things: its certificate authority under the runner's home, which keeps
@@ -163,9 +165,11 @@ function sink(collect) {
   })
 }
 
-// Opens the sandbox (see the top of this file). `network(policy)` gives the options of Gondolin's
-// `createHttpHooks` for a run, apart from the secrets; `kvmDevice` is for tests.
-export async function openGondolinSandbox({ paths, settings, log, clock = systemClock, network = refuseNetwork, kvmDevice }) {
+// Opens the sandbox (see the top of this file). `network(policy, { placeholders })` gives, for a
+// run, the options of Gondolin's `createHttpHooks` apart from the secrets, and may give `close()`,
+// called once the run's VM has closed; it is the network policy unless a test gives another.
+// `kvmDevice` is for tests.
+export async function openGondolinSandbox({ paths, settings, log, clock = systemClock, network, kvmDevice }) {
   const folders = gondolinFolders(paths)
   if (Buffer.byteLength(paths.runnerTmp) + 1 + TMP_SOCKET_NAME_BYTES > SOCKET_PATH_MAX_BYTES) {
     throw new SandboxSetupError(`${paths.runnerTmp} is too long a path for the sockets Gondolin puts there: the data folder needs a shorter path`)
@@ -191,6 +195,8 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
   process.env.GONDOLIN_SESSIONS_DIR = folders.sessions
   const gondolin = await import('@earendil-works/gondolin')
 
+  network ??= policyNetwork({ paths, clock, log })
+
   if (accel.fellBack) log.warn('sandbox.emulation', { setting: settings.agentAccel, kvm: accel.problem })
   log.info('sandbox.opened', { accel: accel.accel, imageBuiltAt: image.builtAt, pi: pinned })
 
@@ -211,20 +217,35 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
       log.warn('sandbox.write_limit', { passed: what })
       end('writes')
     })
+    const placeholders = {}
     const secrets = {}
-    for (const [name, { hosts, value }] of Object.entries(spec.policy.secrets)) secrets[name] = { hosts, value }
-    const hooks = gondolin.createHttpHooks({ ...network(spec.policy), secrets })
+    for (const [name, { hosts, value }] of Object.entries(spec.policy.secrets)) {
+      placeholders[name] = placeholderFor(name)
+      secrets[name] = { hosts, value, placeholder: placeholders[name] }
+    }
+    const { close: closeNetwork = () => {}, ...hookOptions } = network(spec.policy, { placeholders })
 
-    const vm = await gondolin.VM.create({
-      sandbox: { imagePath: image.dir, accel: accel.qemu, mitmCertDir: folders.certificates, console: 'none' },
-      memory: `${Math.floor(limits.VM_MEMORY_BYTES / (1024 * 1024))}M`,
-      cpus: limits.VM_CPUS,
-      allowWebSockets: false,
-      httpHooks: hooks.httpHooks,
-      vfs: { mounts: mountsOf(gondolin, spec.mounts, budget), fuseMount: FUSE_MOUNT },
-      startTimeoutMs: Math.min(limits.VM_START_TIMEOUT, spec.timeoutMs),
-      sessionLabel: 'scooter runner',
-    })
+    let hooks
+    let vm
+    try {
+      hooks = gondolin.createHttpHooks({ ...hookOptions, secrets })
+      vm = await gondolin.VM.create({
+        sandbox: { imagePath: image.dir, accel: accel.qemu, mitmCertDir: folders.certificates, console: 'none' },
+        memory: `${Math.floor(limits.VM_MEMORY_BYTES / (1024 * 1024))}M`,
+        cpus: limits.VM_CPUS,
+        allowWebSockets: false,
+        httpHooks: hooks.httpHooks,
+        // A request's body is read whole by the policy for OpenRouter; Gondolin refuses a larger one
+        // before it reaches the policy.
+        maxHttpBodyBytes: limits.MODEL_REQUEST_MAX_BYTES,
+        vfs: { mounts: mountsOf(gondolin, spec.mounts, budget), fuseMount: FUSE_MOUNT },
+        startTimeoutMs: Math.min(limits.VM_START_TIMEOUT, spec.timeoutMs),
+        sessionLabel: 'scooter runner',
+      })
+    } catch (error) {
+      closeNetwork()
+      throw error
+    }
     let closed = null
     const close = () => (closed ??= vm.close().catch(error => log.warn('sandbox.close_failed', errorFields(error))))
     ending.signal.addEventListener('abort', close, { once: true })
@@ -242,13 +263,23 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
     // when it never booted.
     let ended = 'not_started'
     try {
+      let started = false
       try {
-        if (!ending.signal.aborted) await vm.start()
+        if (!ending.signal.aborted) {
+          await vm.start()
+          started = true
+        }
       } catch (error) {
         if (!ending.signal.aborted) {
           log.error('sandbox.start_failed', { accel: accel.accel, ...errorFields(error) })
           throw Object.assign(new Error(`the VM couldn't start: ${error.message}`), { cause: error })
         }
+      }
+      // The run's time ran out before the VM booted, as when it is no longer than the start limit:
+      // the VM couldn't start, which is the machine's fault, not pi's (6.9; D149).
+      if (!started && why === 'timeout') {
+        log.error('sandbox.start_failed', { accel: accel.accel, error: 'timeout', ms: clock.now() - startedAt })
+        throw new Error("the VM couldn't start: it didn't boot within the run's time")
       }
       let result = null
       if (!ending.signal.aborted) {
@@ -288,6 +319,7 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
       ending.abort()
       signal?.removeEventListener('abort', stop)
       await close()
+      closeNetwork()
       log.info('sandbox.vm_closed', { ms: clock.now() - startedAt, ended: why ?? ended })
     }
   }

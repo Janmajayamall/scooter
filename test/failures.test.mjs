@@ -32,7 +32,9 @@ const NOW = at('2026-11-09T15:51:00Z')
 const TIMING = { now: NOW, startedAt: at('2026-11-09T15:50:10Z'), durationMs: 50000 }
 
 const request = (id, host = 'openrouter.ai') => ({ id, at: '2026-11-09T15:50:12Z', event: 'request', host, method: 'POST', path: '/api/v1/messages' })
-const response = (id, status) => ({ id, at: '2026-11-09T15:50:19Z', event: 'response', status, sent: 48211, received: 5340, ms: 7012 })
+const response = (id, status) => ({ id, at: '2026-11-09T15:50:13Z', event: 'response', status, ms: 812 })
+const end = id => ({ id, at: '2026-11-09T15:50:19Z', event: 'end', sent: 48211, received: 5340, ms: 7012 })
+const refused = (host = 'openrouter.ai', reason = 'a field the pinned pi doesn\'t send: "web_search_options"') => ({ at: '2026-11-09T15:50:20Z', event: 'refused', host, method: 'POST', path: '/api/v1/messages', reason })
 const ID1 = '20261109T155012041-0001'
 const ID2 = '20261109T155013502-0001'
 
@@ -43,8 +45,14 @@ test('network log: the lines of 6.13, checked and written in order', () => {
   const lines = [
     request(ID1),
     response(ID1, 200),
+    end(ID1),
+    { ...end(ID1), reason: 'run_ended' },
     { id: ID2, at: '2026-11-09T15:50:14Z', event: 'error', reason: 'ECONNREFUSED', ms: 31 },
     { at: '2026-11-09T15:51:02Z', event: 'refused', host: 'example.com', reason: 'host not allowed' },
+    refused(),
+    { at: '2026-11-09T16:00:40Z', event: 'unlogged', refused: 5120 },
+    // A host the writer wrote as a URL writes a byte.
+    request(ID2, 'a%21b_c.example.com'),
   ]
   for (const entry of lines) assert.deepEqual(checkNetworkLogLine(entry), [], JSON.stringify(entry))
   assert.equal(
@@ -56,7 +64,11 @@ test('network log: the lines of 6.13, checked and written in order', () => {
   assert.deepEqual(checkNetworkLogLine({ ...request(ID1), headers: {} }), ["headers doesn't belong on a request line"])
   assert.deepEqual(checkNetworkLogLine({ ...response(ID1, 200), body: 'x' }), ["body doesn't belong on a response line"])
   assert.deepEqual(checkNetworkLogLine({ ...response(ID1, 200), status: 99 }), ['status must be an HTTP status'])
-  assert.deepEqual(checkNetworkLogLine({ event: 'gossip' }), ['event must be one of request, response, error, refused'])
+  assert.deepEqual(checkNetworkLogLine({ ...end(ID1), sent: -1 }), ['sent must be a count of bytes'])
+  assert.deepEqual(checkNetworkLogLine({ at: '2026-11-09T16:00:40Z', event: 'unlogged' }), ['refused is missing'])
+  assert.deepEqual(checkNetworkLogLine({ ...request(ID1), host: 'Example.com' }), ['host must be a host name in lower case'])
+  assert.deepEqual(checkNetworkLogLine({ ...refused(), reason: 'two\nlines' }), ['reason must be a short reason on one line'])
+  assert.deepEqual(checkNetworkLogLine({ event: 'gossip' }), ['event must be one of request, response, end, error, refused, unlogged'])
   assert.throws(() => formatNetworkLogLine({ event: 'response', id: ID1 }), /not a line of the network log: at is missing/)
 })
 
@@ -67,11 +79,11 @@ test('network log: read by time across UTC days, skipping what isn\'t a line', t
   fs.writeFileSync(paths.networkLog('2026-11-08'), formatNetworkLogLine({ ...request('20261108T120000000-0001'), at: '2026-11-08T12:00:00Z' }) + formatNetworkLogLine(late))
   fs.writeFileSync(
     paths.networkLog('2026-11-09'),
-    [formatNetworkLogLine(response('20261108T235959000-0001', 200)), 'not json\n', '{"event":"request"}\n', formatNetworkLogLine(request(ID1)), '{"id":"2026'].join(''),
+    [formatNetworkLogLine(end('20261108T235959000-0001')), 'not json\n', '{"event":"request"}\n', formatNetworkLogLine(request(ID1)), '{"id":"2026'].join(''),
   )
   const { entries, skipped } = readNetworkLog(paths, { from: at('2026-11-08T23:59:59.400Z'), to: at('2026-11-09T15:50:19Z') })
   // The second `from` falls in counts whole; a partial last line and lines that aren't lines are skipped.
-  assert.deepEqual(entries, [late, response('20261108T235959000-0001', 200), request(ID1)])
+  assert.deepEqual(entries, [late, end('20261108T235959000-0001'), request(ID1)])
   assert.equal(skipped, 3)
   // A line after `to` is left out.
   assert.deepEqual(readNetworkLog(paths, { from: at('2026-11-09T15:50:12Z'), to: at('2026-11-09T15:50:18Z') }).entries, [request(ID1)])
@@ -120,8 +132,36 @@ test('failures: OpenRouter\'s last answer during a run', () => {
   // An answer to the last request, not an earlier one.
   assert.deepEqual(lastOpenRouterAnswer([request(ID1), request(ID2), response(ID1, 200)]), { answer: 'none' })
   assert.deepEqual(lastOpenRouterAnswer([request(ID1), { id: ID1, at: '2026-11-09T15:50:14Z', event: 'error', reason: 'ETIMEDOUT', ms: 9 }]), { answer: 'none' })
-  // A refusal by the policy isn't OpenRouter's answer.
+  // A refusal by the policy elsewhere isn't OpenRouter's answer.
   assert.deepEqual(lastOpenRouterAnswer([request(ID1), response(ID1, 200), { at: '2026-11-09T15:50:20Z', event: 'refused', host: 'example.com', reason: 'host not allowed' }]), { status: 200 })
+  // The status counts from when it came: a run that ends during the answer's body still has it.
+  assert.deepEqual(lastOpenRouterAnswer([request(ID1), response(ID1, 200)]), { status: 200 })
+  assert.deepEqual(lastOpenRouterAnswer([request(ID1), response(ID1, 200), { ...end(ID1), reason: 'run_ended' }]), { status: 200 })
+})
+
+test('failures: a request the policy refused at OpenRouter: pi\'s first, or one after a request went out', () => {
+  const reason = 'a field the pinned pi doesn\'t send: "web_search_options"'
+  // Before any request went out, it can only be pi's own.
+  assert.deepEqual(lastOpenRouterAnswer([refused()]), { refused: reason, first: true })
+  assert.deepEqual(lastOpenRouterAnswer([refused('example.com'), refused()]), { refused: reason, first: true })
+  // After one went out, the agent may have sent it.
+  assert.deepEqual(lastOpenRouterAnswer([request(ID1), response(ID1, 200), end(ID1), refused()]), { refused: reason, first: false })
+  // A request that went out after the refusal is what came last.
+  assert.deepEqual(lastOpenRouterAnswer([refused(), request(ID2), response(ID2, 401)]), { status: 401 })
+
+  const result = { code: 1, stdout: '', stderr: '400 {"error":{"message":"refused","code":400}}', timedOut: false }
+  assert.deepEqual(failureCause({ result, answer: { refused: reason, first: true } }), {
+    cause: 'setup',
+    reason: `the network policy refused pi's request: ${reason}`,
+    status: null,
+  })
+  assert.deepEqual(failureCause({ result, answer: { refused: reason, first: false } }), {
+    cause: 'other',
+    reason: `the network policy refused a request: ${reason}`,
+    status: null,
+  })
+  // What pi left still comes first.
+  assert.equal(failureCause({ result: { ...result, code: 0 }, unexpected: 'views/.x', answer: { refused: reason, first: true } }).cause, 'other')
 })
 
 test('failures: OpenRouter\'s own words, from the last line pi printed on stderr', () => {

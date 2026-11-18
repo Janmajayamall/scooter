@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { overrideLimits } from '../src/common/limits.mjs'
+import { readNetworkLog } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { systemClock } from '../src/common/time.mjs'
 import { openRunner } from '../src/runner/main.mjs'
@@ -215,12 +216,13 @@ test('sandbox: from inside the VM, another host, DNS to an outside resolver, UDP
     env | sort
   `.replace(/probe_http/g, 'curl -sS -f -m 8')
   for (const [name, network] of [
-    ['until milestone 8, no host at all', undefined],
-    ['with the fake model at OpenRouter', fakeModelNetwork(createFakeModel([{ text: 'DONE' }]))],
+    ['the network policy, with internet access off', undefined],
+    ['with the fake model at OpenRouter, behind the policy', await fakeModelNetwork(t, createFakeModel([{ text: 'DONE' }]), prepared)],
   ]) {
     await t.test(name, async () => {
       hits.length = 0
       datagrams.length = 0
+      fs.rmSync(paths.networkLogDir, { recursive: true, force: true })
       const sandbox = await openTestSandbox(t, { ...prepared, network })
       const result = await sandbox.run(sh(paths, script))
       assert.equal(result.code, 0, result.stderr)
@@ -232,6 +234,19 @@ test('sandbox: from inside the VM, another host, DNS to an outside resolver, UDP
       assert.ok(lines.includes('dns: ok '), result.stdout)
       assert.deepEqual(hits, [])
       assert.deepEqual(datagrams, [])
+      // The policy refused each HTTP(S) request, and said why; nothing went out. The host's
+      // loopback, from inside the VM, is the VM's own.
+      const logged = readNetworkLog(paths, { from: Date.now() - 600_000, to: Date.now() + 1000 }).entries
+      assert.deepEqual(
+        logged.map(entry => `${entry.event} ${entry.host} ${entry.reason}`).sort(),
+        [
+          'refused 10.0.0.1 plain HTTP isn\'t allowed',
+          'refused 169.254.169.254 plain HTTP isn\'t allowed',
+          `refused ${lan ?? '192.168.1.1'} plain HTTP isn't allowed`,
+          'refused example.com host not allowed',
+          'refused example.com plain HTTP isn\'t allowed',
+        ].sort(),
+      )
 
       // The environment: exactly the spec's, and the key's placeholder, which isn't the key.
       const env = Object.fromEntries(lines.filter(entry => /^[A-Z_]+=/.test(entry)).map(entry => entry.split(/=(.*)/s).slice(0, 2)))
@@ -241,6 +256,33 @@ test('sandbox: from inside the VM, another host, DNS to an outside resolver, UDP
       assert.ok(env.OPENROUTER_API_KEY.length > 20)
     })
   }
+})
+
+test('sandbox: with internet access on, HTTPS goes only to public addresses, and plain HTTP not at all', options, async t => {
+  const prepared = prepare(t, { agentInternet: true })
+  const { paths } = prepared
+  const lan = Object.values(os.networkInterfaces())
+    .flat()
+    .find(address => address.family === 'IPv4' && !address.internal)?.address ?? '192.168.1.1'
+  // Addresses, not names, so nothing is looked up outside the machine. Gondolin refuses the private
+  // ones before the policy sees anything of them, and the policy plain HTTP.
+  const script = `
+    probe() { label=$1; shift; if out=$("$@" 2>&1); then echo "$label: ok $out"; else echo "$label: refused"; fi; }
+    probe metadata curl -sS -f -k -m 8 https://169.254.169.254/latest/meta-data/
+    probe lan curl -sS -f -k -m 8 https://${lan}/
+    probe private curl -sS -f -k -m 8 https://10.0.0.1/
+    probe http curl -sS -f -m 8 http://203.0.113.9/
+  `
+  const sandbox = await openTestSandbox(t, prepared)
+  const spec = { ...sh(paths, script), policy: { ...sh(paths, script).policy, internet: true } }
+  const result = await sandbox.run(spec)
+  assert.equal(result.code, 0, result.stderr)
+  for (const probe of ['metadata', 'lan', 'private', 'http']) assert.ok(result.stdout.includes(`${probe}: refused`), result.stdout)
+  const logged = readNetworkLog(paths, { from: Date.now() - 600_000, to: Date.now() + 1000 }).entries
+  t.diagnostic(logged.map(entry => JSON.stringify(entry)).join('\n'))
+  // No answer came from any of them.
+  assert.deepEqual(logged.filter(entry => entry.event === 'response'), [])
+  assert.ok(logged.some(entry => entry.event === 'refused' && entry.host === '203.0.113.9' && entry.reason === "plain HTTP isn't allowed"))
 })
 
 test('sandbox: a timeout closes the VM, and leaves no QEMU and no temporary files', options, async t => {
@@ -341,6 +383,16 @@ test("sandbox: a VM that doesn't start in time fails the run as one that couldn'
   await waitFor(() => fs.readdirSync(paths.runnerTmp).length === 0, 'the temporary folder to empty', 10_000)
   // The log says it never started, not that a program exited.
   assert.deepEqual(prepared.entries.filter(entry => entry.event === 'sandbox.vm_closed').map(entry => entry.ended), ['not_started'])
+
+  // The run's own time running out first, as when it is no longer than the start limit, is the
+  // same (the second review of milestone 7, smaller point 2).
+  const restore = overrideLimits({ VM_START_TIMEOUT: 600_000 })
+  try {
+    await assert.rejects(sandbox.run(sh(paths, 'true', { timeoutMs: 200 })), /^Error: the VM couldn't start: it didn't boot within the run's time/)
+  } finally {
+    restore()
+  }
+  await waitFor(() => fs.readdirSync(paths.runnerTmp).length === 0, 'the temporary folder to empty', 10_000)
 })
 
 test('sandbox: a VM lost under its program, as when its QEMU is killed, ends the run, and the log says so', options, async t => {
@@ -408,7 +460,7 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
     settings: { ...settings, batchSeconds: 1 },
     clock,
     log,
-    openSandbox: options => openTestSandbox(t, { ...prepared, ...options, network: fakeModelNetwork(model) }),
+    openSandbox: async options => openTestSandbox(t, { ...prepared, ...options, network: await fakeModelNetwork(t, model, options) }),
   })
   atEnd(t, () => runner.close())
 
@@ -443,6 +495,44 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   // The VM is closed, and the request went to the fake model with the placeholder, not the key.
   assert.ok(entries.some(entry => entry.event === 'sandbox.vm_closed'))
   assert.ok(!JSON.stringify(model.requests.map(request => request.headers)).includes(KEY))
+  // pi's own requests passed the policy, which asked for zero data retention in each, and the log
+  // has each of them, with OpenRouter's answer.
+  assert.equal(model.modelRequests.length, 3)
+  for (const request of model.modelRequests) assert.deepEqual(request.body.provider, { zdr: true, data_collection: 'deny' })
+  const logged = readNetworkLog(paths, { from: Date.now() - 600_000, to: Date.now() + 1000 }).entries
+  assert.deepEqual(
+    logged.map(entry => entry.event),
+    ['request', 'response', 'end', 'request', 'response', 'end', 'request', 'response', 'end'],
+  )
+  assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'request').map(entry => `${entry.method} ${entry.host}${entry.path}`))], ['POST openrouter.ai/api/v1/messages'])
+  assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'response').map(entry => entry.status))], [200])
+})
+
+test("sandbox: pi in a VM reaches OpenRouter through the policy, OpenRouter answers 401, and the runner takes it as a setup error", options, async t => {
+  const prepared = prepare(t)
+  const { paths, settings, log } = prepared
+  fs.rmSync(paths.agents, { recursive: true })
+  const model = createFakeModel([{ status: 401, message: 'User not found.' }])
+  const runner = await openRunner({
+    settings: { ...settings, batchSeconds: 1 },
+    clock: systemClock,
+    log,
+    openSandbox: async options => openTestSandbox(t, { ...prepared, ...options, network: await fakeModelNetwork(t, model, options) }),
+  })
+  atEnd(t, () => runner.close())
+  let outcome
+  for (let n = 0; n < 20 && outcome === undefined; n++) {
+    outcome = (await runner.tick()).outcome
+    if (outcome === undefined) await sleep(200)
+  }
+  assert.deepEqual(outcome, { ok: false, cause: 'setup' })
+  const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
+  assert.equal(state.paused.cause, 'setup')
+  assert.equal(state.paused.reason, 'OpenRouter: User not found.')
+  assert.equal(state.retry[0].attempts, 0)
+  const logged = readNetworkLog(paths, { from: Date.now() - 600_000, to: Date.now() + 1000 }).entries
+  assert.deepEqual(logged.map(entry => entry.event), ['request', 'response', 'end'])
+  assert.equal(logged[1].status, 401)
 })
 
 function spawnText(program, args, env) {

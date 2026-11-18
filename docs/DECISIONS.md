@@ -1012,7 +1012,7 @@ An unexpected file after a run that exited with 0 is pi's own failure, whatever 
 
 *The short reason* is OpenRouter's error whenever its last answer was one, a status of 400 or more, whatever the cause: also a 400 or a 413, for a prompt or an image too large, which is pi's own failure (the review of this milestone, 4.6). It is OpenRouter's own words when the last line pi printed on stderr is its error for the same status (`401 {…}` or `401: {…}`, pi 5), as `OpenRouter: No endpoints found matching your data policy`, and otherwise `OpenRouter answered 429`. Without an error from OpenRouter it is `OpenRouter didn't answer`, `timed out`, `pi exited with code 3`, `pi was stopped`, or `unexpected file views/.gitignore`. OpenRouter's words go into the notice and the state, cut to `REASON_MAX_CHARS`, and never into Scooter's logs, which carry the cause and the status.
 
-*Cost:* a run that times out while the model is still streaming its answer counts as an outage if milestone 8 writes the `response` line at the end of the stream. It is then tried every 30 minutes and never ends in `failed`. Writing the line when the status arrives avoids that; milestone 8 chooses.
+*Cost:* a run that times out while the model is still streaming its answer counts as an outage if milestone 8 writes the `response` line at the end of the stream. It is then tried every 30 minutes and never ends in `failed`. Writing the line when the status arrives avoids that; milestone 8 chooses. *Settled in milestone 8* (D158, D160): the `response` line is written when the status arrives, and a request the policy refused at OpenRouter is read too.
 *Reason:* 6.9, with what milestone 0 found. The window can't take in another run's lines, because runs are at least `POLL_INTERVAL` apart (D93), so no second holds lines of two runs.
 
 **D83. Pauses.**
@@ -1846,6 +1846,7 @@ What the milestone left in the repository:
 *Question:* the network policy is milestone 8's, and this milestone builds `scooter runner`.
 *Choice:* the sandbox takes the network as `network(policy)`, which gives the options of Gondolin's `createHttpHooks` apart from the secrets. Its default, `refuseNetwork`, allows no host: every request is refused before it goes out, DNS is answered inside the runner with made-up addresses, and the key, registered as the policy's secret, is swapped in nowhere. The tests give the scripted fake model as the network (`fakeModelNetwork`). Milestone 8 makes the policy the default.
 *Reason:* the simplest option that keeps principles 2 and 4 and the zero data retention of section 2: a runner with no policy sends nothing. *Cost:* until milestone 8, `scooter runner` runs pi, which exits with 1 at once when OpenRouter can't be reached, and with no network log the run is pi's own failure: every message's attempts are used up and it ends in `failed`. So it isn't to be run on real messages before milestone 8. It was run once by hand, on a dummy message (7.5).
+*Since milestone 8* the policy is the default (D153), and `refuseNetwork` is gone.
 
 **D142. `AGENT_ACCEL`, by opening `/dev/kvm`.**
 *Choice:* KVM can be used when the runner can open `/dev/kvm` for reading and writing and it is a character device. `auto` takes it, or else emulation, and logs `sandbox.emulation` with the reason; `kvm` and `emulation` are taken as they are; a forced KVM that can't be used, and `hvf`, stop the runner with an error that says how to enable it, natively and in Docker, and points at `doctor`. Gondolin is always told which (`accel`), so it never chooses by itself.
@@ -1858,6 +1859,7 @@ What the milestone left in the repository:
 **D144. pi's pin, read strictly.**
 *Choice:* the build file's `postBuild.commands` must name `@earendil-works/pi-coding-agent` exactly once, counting every mention with or without a version, a path among them, and that once as `@earendil-works/pi-coding-agent@<x.y.z>`, with an exact version, in a command that begins `npm install` and has `--ignore-scripts`, and no other word about scripts, such as `--ignore-scripts=false` or `--no-ignore-scripts`, which npm would take last. That command is plain words, letters, digits and `@/._=:+,-` apart by spaces, so the shell reads it as that one command: no `;`, `&` or `|`, newline, quote, `$`, backquote or redirection. Otherwise `build-image` and the runner refuse, naming the command. The build file must not name `arch` or `container`, which `build-image` chooses (D5).
 *Reason:* the plan's rule: the runner reads the version from there, strictly. A range or `latest` would let two builds hold different pis under one pin; a command without `--ignore-scripts` would run pi's packages' code as root in a native build (row 8). Counting only mentions with a version, and looking only for the word `--ignore-scripts`, let pass a second install of pi without either, `… ; echo --ignore-scripts`, and `… && node /usr/local/bin/pi --version`, each of which runs pi's code as root in a native build (the review of this milestone, smaller point 4). The build file is the owner's, so this guards against a slip, not an attacker: the other commands are still the owner's to choose.
+*Since milestone 8* (the second review of this milestone, smaller point 1): "no other word about scripts" still let pass `--ignore-scripts false`, `--no-ignore-s` and `--ignore-s=false`, each of which npm 10.9.8 reads as turning the scripts back on: it takes a word after a switch as its value, and a switch by the start of its name. So the install command is now `npm install`, pi's package with its version, and switches from a short list, the build file's own and `-g` (`--global`, `-g`, `--ignore-scripts`, `--omit=dev`, `--no-audit`, `--no-fund`), `--ignore-scripts` among them, and no other word.
 
 **D145. `scooter build-image`.**
 *Choice:*
@@ -1866,7 +1868,7 @@ What the milestone left in the repository:
 - **One at a time.** It holds `runner/runner.sock` while it builds (D90), so it refuses while a runner runs, and no runner starts during it. As root it refuses when `runner/` doesn't exist, rather than make the runner's folder as root; `setup` makes it.
 - **Beside the runner's folder.** It builds into `.image-build/image/` in the data folder, records the image (D143) and its packages (D147) there, checks that the pi in it is the pinned one, gives it to `scooter-runner` when root, and then renames it in place of `runner/image/`, which it first renames out into `.image-build/old` and removes there. Leftovers of a build cut short are removed at the next. Until the review of this milestone it built in `runner/image.new/`, in the runner's own folder (D151).
 - **Reading the image.** pi's `package.json`, the zone files, Alpine's repositories and its record of the base packages are read out of `rootfs.ext4` with `debugfs`, from e2fsprogs, which 8.3 and 8.5 already need for the build: no mount, no root, and nothing in the image runs. `debugfs` is looked for in `/usr/sbin` and `/sbin` too, which a user's `PATH` may lack.
-- **Exit codes.** 2 for a fault in how it is set up or called (the build file, no method, no `debugfs`, a runner running), 1 for a build that fails.
+- **Exit codes.** 2 for a fault in how it is set up or called (the build file, no method, no `debugfs`, a runner running, a folder it may not write), 1 for a build that fails. Since milestone 8 (the second review of this milestone, smaller point 3), a user who may not write the data folder or the runner's, which since D151 is every user but root on a native install, `scooter-runner` among them, is told that it runs as root there, with 2, where it got Node's `EACCES` and 1.
 
 *Reason:* 6.12, row 8 and the plan's rules for this milestone. Holding the socket keeps a running runner from booting an image it didn't check at its start.
 
@@ -1885,7 +1887,7 @@ What the milestone left in the repository:
 *Reason:* the plan's rule for this milestone. With `-p` pi prints its answer alone, a few kilobytes; 25 texts of 14,000 characters (D85, D99) are under 1.4 MB at the very most, and an answer near the limit is already one the runner wouldn't send whole. stderr's end holds OpenRouter's error, which the notice quotes (D82).
 
 **D149. The VMs' size, and how long one may take to boot.**
-*Choice:* `VM_MEMORY_BYTES`, 2 GB, and `VM_CPUS`, 2, which milestone 0's checks used, pi 8 with images included; `VM_START_TIMEOUT`, 1 minute, or the run's own timeout when that is shorter.
+*Choice:* `VM_MEMORY_BYTES`, 2 GB, and `VM_CPUS`, 2, which milestone 0's checks used, pi 8 with images included; `VM_START_TIMEOUT`, 1 minute, or the run's own timeout when that is shorter. A run whose own time ends before its VM has booted is one whose VM couldn't start too, since milestone 8 (the second review of this milestone, smaller point 2): with `timeout_minutes: 1`, the lowest `agents.yaml` takes, the two limits are equal, the run's timer is set first, and such a run was recorded as timed out, pi's own failure with an attempt counted, where 6.9 makes it a setup error.
 *Reason:* Gondolin's default start limit is 2 minutes (0.5), which a VM that never starts would spend at every try, and which the review of milestone 0 noted held no test (7.3). A VM boots in about 2 seconds with KVM and 6 under emulation (13.4), so a minute leaves room for a loaded machine and a VM inside a VM (G3).
 
 **D150. Eight constants.**
@@ -2028,3 +2030,126 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean cl
 | `scooter build-image`, as `agentw`, with `DATA_DIR` in a scratch folder | Gondolin's container build under rootless Docker, now into `.image-build/image`: 16.5 seconds, 527 MB, pi 1.5.2, and 100 packages in `packages.txt`. Afterwards the data folder held only `runner/image/`. The sandbox tests' `pi --version` and end to end pass on that image, with boots of 1.8 to 2.1 seconds |
 
 Not verified, besides what 7.5 lists: a native build as root with Gondolin's real builder (gate G2), which the root test stands in for with the fake builder. The test swaps its links in at one moment of the build, from inside the builder, and as root, not as the runner's user; what D151 leaves to a swap doesn't depend on the moment, since root takes no step in `runner/` but the two renames.
+
+## Milestone 8: network policy and log
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.6, 6.9, 6.13, 8.6, and sections 10 and 14, to say what this milestone settled (8.4 here). It also settled the four smaller points of the second review of milestone 7, and the points earlier reviews had left for it (8.3).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/runner/sandbox/policy.mjs` | The network policy: hosts, the key, OpenRouter's two routes and their checks, the hook's own encoding of the body, ZDR, the internet switch, and the bounds on what a run sends |
+| `src/runner/sandbox/netlog.mjs` | Writing the log, and following each request the policy lets out to its answer, from undici's diagnostics channels |
+| `src/common/netlog.mjs` | The format, with `response` at the status, and two new events, `end` and `unlogged` |
+| `src/runner/sandbox/gondolin.mjs` | The policy as the sandbox's network, a placeholder for the key new at each run, the request body's limit, and a VM that doesn't boot within the run's time |
+| `src/runner/failures.mjs`, `src/bridge/status.mjs` | A refusal at OpenRouter in the cause of a failure; refusals a run only counted in `/status` |
+| `src/runner/sandbox/image.mjs` | The pin of pi, stricter; `build-image` where it can't write |
+| `src/common/limits.mjs` | Three constants |
+| `test/policy.test.mjs`, `test/support/policy.mjs` | The policy's tests, with Gondolin's handling of the key around the hook and a fake upstream on this machine |
+| `test/live/openrouter.mjs` | The live check: pi in a VM, through the runner and the policy, against the real OpenRouter with a dummy key |
+| `test/support/sandbox.mjs`, `pi-stub.mjs` | The fake model behind the policy for the sandbox's tests; the stub writes the new format, and policy refusals |
+
+### 8.1 Decisions
+
+**D153. The policy is the sandbox's network.**
+*Choice:* `openGondolinSandbox` takes `policyNetwork({ paths, clock, log })` as its network unless a test gives another, and `refuseNetwork` (D141) is gone. For each run it makes a new placeholder for each secret, `scooter-openrouter-api-key-placeholder-<48 hex digits>`, gives it to Gondolin as the secret's `placeholder` and to the network as `placeholders`, so the hook knows what the VM sees; and calls the network's `close()` once the VM has closed, on every path. The VM's `maxHttpBodyBytes` is `MODEL_REQUEST_MAX_BYTES`: Gondolin refuses a longer body with 413 before the hook sees the request, which leaves no line, and nothing goes out.
+*Reason:* the plan's list for this milestone. Gondolin's own placeholder could only be read back once the hooks were made; giving one is plainer, and Gondolin checks it as its own.
+
+**D154. Hosts.**
+*Choice:* `openrouter.ai`, exactly, over HTTPS, by its two routes (D155). With `AGENT_INTERNET=on`, any other host over HTTPS, on any port, and Gondolin then refuses a private address, whether named or resolved, with `allowedHosts: ['*']`; off, `allowedHosts` is `openrouter.ai`. Refused whatever the switch: plain HTTP; OpenRouter's other hosts, `*.openrouter.ai`; and `openrouter.ai.`, with a dot at the end, which Gondolin's host patterns could take for `openrouter.ai`, and send the key to. A method that isn't all capitals is refused: every method a tool uses is, and the log keeps no other.
+*Reason:* 6.13, which reaches OpenRouter only by its two checked routes. Without OpenRouter's other names refused, a request with internet access on could reach OpenRouter past the checks.
+
+**D155. What a request to OpenRouter may be.**
+*Choice:*
+- **Routes:** `POST /api/v1/messages`, with no query string or `?beta=true`, and `POST /api/v1/chat/completions`, with none, on port 443. Anything else on `openrouter.ai` gets 403.
+- **Allowlists:** the top-level fields and `anthropic-beta` values the pinned pi sends on each route for any model of its catalog, at the three thinking levels milestone 0 asked (`catalog.json`), which is the choice D10 left: messages, `max_tokens`, `messages`, `model`, `output_config`, `stream`, `system`, `thinking` and `tools`, with three `anthropic-beta` values; chat, `max_completion_tokens`, `messages`, `model`, `reasoning`, `store`, `stream`, `stream_options` and `tools`, with none. A test compares them with the catalog.
+- **Tools:** each a function on the chat route, and without a `type` on the messages route, where a type names a server tool.
+- **Content:** each block of a message, or of a tool result, or of the system prompt, is a kind pi sends, or another inline medium: on the messages route `text`, `image`, `document`, `tool_use`, `tool_result`, `thinking` and `redacted_thinking`, an image or document only with a `base64` source; on the chat route `text`, `image_url` with a `data:` URL, `file` with nothing but `filename` and a `data:` URL in `file_data`, and `input_audio`. Anything else, such as `video_url` or a `search_result`, is refused.
+- `plugins` and `mcp_servers` are refused by name, so the log says so, though the allowlist would refuse them too.
+
+*Reason:* an allowlist from one model would refuse others a configured model could need, such as `interleaved-thinking-2025-05-14`, which `anthropic/claude-sonnet-4.5` sends; every value in the union is one pi sends, and none has OpenRouter fetch anything. Kinds of content are allowlisted so that a new one that could make OpenRouter, or the model's provider, fetch a URL fails closed. Message fields and roles aren't checked: 6.13 doesn't ask it, and none fetches. *Cost:* a thinking level milestone 0 didn't ask, or a model added to OpenRouter after pi 1.5.2, could send a field outside the union. Its first request is then refused, and runs pause with the policy's reason (D160).
+
+**D156. The key goes only where pi sends it.**
+*Choice:* on `openrouter.ai`, the key's header for the route, `x-api-key` on the messages route and `authorization` on the chat route, must be exactly the placeholder, `Bearer <placeholder>` on the chat route; the other header must be absent; no other header may hold the placeholder, nor any the key itself. To any other host, no header may hold the placeholder or the key. Each is refused with 403 and its own reason.
+*Reason:* the plan's rule, "A key of pi's own" (the third review of milestone 4, point 3): a request with a key a misled agent found would get 401 from OpenRouter, which is a setup error. Gondolin swaps the placeholder wherever it is in a header of a request to `openrouter.ai`, so one in, say, `X-Title`, which OpenRouter shows as the app's name, would put the key there. The key itself in a header is what a redirect from OpenRouter would carry to its next hop, which Gondolin hands to the hook again (8.2). Gondolin refuses the placeholder to another host too, but after the hook, with no line in the log.
+
+**D157. The body that goes out.**
+*Choice:* the body is read whole, up to `MODEL_REQUEST_MAX_BYTES`, decoded as UTF-8 that must be valid, parsed, checked, and sent as `JSON.stringify` of what was checked, with `content-length` and `content-encoding` dropped; a body with a `content-encoding` but `identity` is refused, since it can't be read. With `OPENROUTER_ZDR=on`, `provider` is `{ zdr: true, data_collection: 'deny' }` on the routes `ZDR_ROUTES` names, both for now. pi sends no `provider`, so a body with one is refused as a field pi doesn't send, and "whatever pi sent" (6.13) holds by refusing, not by overriding.
+*Reason:* 6.13, and the plan's per-route switch. Refusing a `provider` of the request's own is the simpler of the two, and leaves nothing of the agent's choosing in the routing.
+
+**D158. The log's format, as the policy writes it.**
+*Choice:* D81's format, changed where milestone 4 left it to this milestone:
+- `response` is written when the status arrives, with `ms` to the status, and no byte counts;
+- `end`, new, when the answer is over: `sent` and `received`, the bytes of the request and the answer on the connection, heads included, and `ms` from the request line, with a `reason` when the answer was cut short (the client's error code, or `run_ended`);
+- `error` also says `not_sent`, for a request the policy let out that never reached the client, as when Gondolin couldn't resolve its host, and `run_ended`, for one with no status when the run ended;
+- `unlogged`, new: `{ at, event, refused }`, the refusals of a run past `RUN_REFUSALS_LOGGED_MAX`;
+- a host is written in lower case, with any character but letters, digits and `._:[]-` as a URL writes a byte, so the reader's test now takes `_` and `%` too; it is cut at 253 characters, DNS's longest name.
+
+*Reason:* D82's cost: with the status written at the end of the stream, a run that timed out while the model streamed would read as an outage, and be tried every 30 minutes for good. The bytes come from the connection, since undici says nothing of a body's size as it passes, and on a connection a request has to itself, as undici's are, they are the request's own. *Cost:* no product had written the log before, so no reader of an older format is kept.
+
+**D159. Following a request to its answer.**
+*Question:* the hook writes the `request` line. What comes of the request is undici's, inside Gondolin, which the hook doesn't see, and the design logs it from undici's diagnostics events (13.4). The two must be told apart.
+*Choice:* the hook sets a header of its own, `x-scooter-request`, holding the request's ID, on every request it lets out, in place of any the VM sent. The runner subscribes to `undici:request:create`, which undici publishes as it makes a request, before it has a connection, takes the header out of the request's list of headers, which undici writes only once it has a connection, and follows that request by undici's own object: `undici:client:sendHeaders` for the connection's byte counts, `undici:request:headers` for the `response` line, and `undici:request:trailers` or `undici:request:error` for the `end` or `error` line. When the run's network closes, what is left is written: `not_sent` for what never reached undici, `run_ended` for what was still waiting.
+*Reason:* matching undici's requests to the hook's by method and URL fails two ways: a request Gondolin let out and then didn't send, which happens when a host doesn't resolve, as when the machine is offline and pi tries again, takes the next request's answer; and two requests to one URL at once can swap. Both lead the failure handling to the wrong status. A hook of Gondolin's that makes the request itself, its `fetch` option, would lose the guarded connection Gondolin makes only with its own client, which keeps a name that resolved to a public address from connecting to a private one. *Cost:* taking the header out reaches into undici's request, whose headers are a list of names and values in undici 6.28.0 (Node 22.23.2), 6.29.1 (Gondolin's) and 7.30.2 (Node 24.22.3), each checked by a test or a run (8.2). If a later undici keeps them otherwise, the header goes out as it is, an ID of no use to anyone, and the request has no answer in the log; the policy's tests would fail first.
+
+**D160. A refusal at OpenRouter, in the cause of a failure.**
+*Question:* the plan's rule: a request the policy refuses on `openrouter.ai` has a `refused` line and no `request` line, so a run that ends on one read as pi's own failure; when the refused request is the pinned pi's own, that is nearer a setup error (the first review of milestone 4, point 6).
+*Choice:* the failure handling reads the last request to OpenRouter, or the last the policy refused there, whichever came later. A refusal before any request had gone to OpenRouter in the run is a setup error, "the network policy refused pi's request: <reason>"; a later one is pi's own failure, "the network policy refused a request: <reason>". What pi left, an answer cut short and a run that wrote too much still come first, as before.
+*Reason:* nothing the agent does can run before the model's first answer, which needs a request that went out, so a refusal before one is pi's own. pi asks the same way all run long (0.4, pi 6), so the policy refusing pi shows at its first request, and no try of the batch can mend it: pausing, with the reason in the notice, holds the messages without using their attempts. A later refusal may be the agent's, from a command it ran, and reading that as a setup error would pause runs for as long as the message that misled it is in the batch, as D156 is there to prevent. *Cost:* a pi whose later requests differ in shape from its first, which pi 1.5.2's don't, would use the items' attempts.
+
+**D161. What one request, and one run, add to the log.**
+*Choice:* a path is cut at `NETLOG_PATH_MAX_CHARS`, 1,000 characters, a host at 253, a reason at `REASON_MAX_CHARS`, with what the VM chose, such as a field's name, at its end; a line the writer would make longer than `NETLOG_LINE_MAX_BYTES` is an error, and no request goes out without its line. One run may make `RUN_REQUESTS_MAX`, 1,000, requests that go out; past them the policy refuses. It writes its first `RUN_REFUSALS_LOGGED_MAX`, 100, refusals one by one, and counts the rest in one `unlogged` line when the run's network closes. `/status` counts those with the others.
+*Reason:* the plan's rule, from the fifth review of milestone 4: a line a reader skips is a request the failure handling doesn't see. A request that goes out has a line before it goes, so requests can't be counted instead of written; they are bounded instead. A run makes a request a turn: a few hundred in the longest run `agents.yaml` allows. So a run adds at most about a megabyte, where a misled one could have added hundreds. *Cost:* a run past 1,000 requests fails as pi's own failure.
+
+**D162. Three constants.** `NETLOG_PATH_MAX_CHARS`, `RUN_REQUESTS_MAX` and `RUN_REFUSALS_LOGGED_MAX` (D161). 8.6 of DESIGN.md lists them. The longest DNS name, 253, isn't one: it is a fact of DNS, as the socket path of D150 is of Linux.
+
+**D163. What a refusal answers.**
+*Choice:* an error in OpenRouter's shape, `{"error":{"message":"Scooter's network policy refused this request: <reason>","code":<status>}}`: 403 for a host, a path, a method or the key; 400 for what the body or its headers hold; 500 when the policy itself fails, and 503 when the request's line can't be written, neither of which lets anything out.
+*Reason:* pi prints an error it gets on stderr (0.4, pi 5), where the owner and the logs can see why a run failed; 6.13 gives the two statuses.
+
+### 8.2 Facts found
+
+On the Linux machine, with Gondolin 0.14.0, Node 22.23.2 and, in the plan's root container, Node 24.22.3:
+- undici publishes `undici:request:create` in the request's constructor, with its headers as a list of names and values, which it writes when the request has a connection: taking a header out there keeps it off the wire, with Node's own undici 6.28.0 and 7.30.2 and with Gondolin's 6.29.1. A connection refused gives `undici:request:error` with `ECONNREFUSED`; a body cancelled after the status gives it with an `AbortError`, whose code is a number. `fetch` refuses a port on the Fetch standard's list of bad ones, such as 1 or 9, before it makes a request at all.
+- By Gondolin's source: with an `onRequest` hook of the caller's, every HTTP(S) request reaches the hook before any lookup or check of an address, and Gondolin follows a redirect itself, handing each hop to the hook again, with the headers of the hop before, the key among them. It refuses a request whose body is longer than `maxHttpBodyBytes` before the hook, and substitutes a placeholder anywhere in any header of a request to the secret's hosts, after the hook. An answer the hook gives itself is read whole before the VM gets it.
+- HTTPS from the VM to a private address given as a number, `10.0.0.1`, `169.254.169.254` or the host's own on the LAN, is refused by Gondolin before the hook sees anything of it.
+- OpenRouter answered pi's first request on each route, with a well-formed key it doesn't know and the `provider` fields of ZDR, with 401 "User not found." in 100 to 260 ms. It decides that before the body, so the run doesn't show the messages route takes the fields (section 14). pi's first request was about 15.8 KB on the connection, the answer 1.2 KB.
+- pi 1.5.2's real requests pass the policy, on the messages route, in the sandbox's end-to-end test, and on both routes in the live check.
+
+### 8.3 The reviews of the pull requests merged before this one
+
+Pull request 8, milestone 7, was approved by its second review with four smaller points:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | The pin still passes `--ignore-scripts false`, `--no-ignore-s` and `--ignore-s=false`, which npm reads as turning the scripts back on | Settled, the review's first way: the install command is `npm install`, pi, and switches from a short list, the build file's own and `-g`, `--ignore-scripts` among them (D144). Cases in `image`, the review's three among them |
+| 2 | With `timeout_minutes: 1`, a VM that never boots is a run that timed out, not one the sandbox couldn't run | Settled, the review's first way: a run whose time ends before its VM has booted rejects as "the VM couldn't start" (D149; DESIGN.md 6.6, 6.9, section 10). Sandbox test, with the run's time at 200 ms and the start limit at ten minutes |
+| 3 | Without root, in a data folder it can't write, `build-image` fails with Node's own error and 1 | Settled: it says it runs as root on a native install, with 2, for the data folder and for the runner's (D145). Test in `image`, which skips itself as root |
+| 4 | `test/paths.test.mjs` lost the space after a colon | Settled |
+
+Its first review's seven smaller points and must-fix were settled in milestone 7 (7.6), and the second review found them so. Pull request 7's second review's eight points were settled or left with a reason in milestone 7 (7.3).
+
+The points the reviews of milestones 0 to 6 left, as 7.3 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 4, first review, point 6 | A request the policy refuses on `openrouter.ai` reads as pi's own failure | Settled (D160): pi's first, refused, is a setup error; a later one pi's own. Tests in `failures` and `runner` |
+| Milestone 4, third review, point 3 | A request to `openrouter.ai` with a key of pi's own would read as a setup error | Settled (D156): refused, with every other place the key or its placeholder could go. Tests in `policy` |
+| Milestone 4, fifth review, point 1, as the plan carried it | Bound what one request, and one run, add to the log | Settled (D161). Tests in `policy` and `limits` |
+| D82's cost, as the plan carried it | A run that times out while the model streams would be an outage | Settled (D158): the `response` line is written at the status. Tests in `policy` and `failures` |
+| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
+| Milestone 4, first review, points 4 and 5 | `RestartSec`; a runner started during `rebuild` | Left, for milestones 12 and 9 |
+| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
+
+### 8.4 Changes to DESIGN.md
+
+None changes what Scooter does beyond what 6.13 and the plan left open:
+- 6.6: a VM that doesn't boot within the run's own time is one that couldn't start (D149).
+- 6.9: a refusal at OpenRouter in the cause of a failure (D160); the VM that doesn't start within the run's time.
+- 6.13: OpenRouter's other hosts and its name with a dot at the end (D154); the key's header (D156); the allowlists for any model of pi's catalog, and the kinds of content (D155); what a refusal answers (D163); `provider` and the per-route switch (D157); the log's format, its bounds, and how the runner follows a request (D158, D159, D161).
+- 8.6: the three constants of D162.
+- Section 10, Network policy: the key's other places, the `response` line at the status, the bounds, and a refusal in the cause; Sandbox: the run's own time.
+- Section 14: the live check sent the ZDR fields on the messages route and got 401, which doesn't settle the item.
+
+ARCHITECTURE.md 2.8 says the same in a few words. `runner.env.example` says what `AGENT_INTERNET` leaves refused either way, and where the log is.

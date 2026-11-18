@@ -20,6 +20,10 @@
 // |                        |                        | does, with OpenRouter's words on stderr            |
 // | `UNREACHABLE`          | `{"unreachable": true}`| can't reach OpenRouter, and fails                  |
 // | `NOANSWER`             | `{"noAnswer": true}`   | gets no answer from OpenRouter, and waits for ever |
+// | `REFUSED`              | `{"refused": "first"}` | has its first request refused by the policy, and   |
+// |                        |                        | fails as pi does on a 400                          |
+// | `REFUSEDLATER`         | `{"refused": "later"}` | gets an answer to its first request, then has one  |
+// |                        |                        | refused by the policy, and fails                   |
 // | `CRASH`                | `{"crash": 3}`         | files the items, then exits with that code         |
 // | `HANG`                 | `{"hang": true}`       | files the items, then waits for ever               |
 // | `DOTFILE`, `SYMLINK`,  | `{"leave": "FIFO"}`    | leaves a file git wouldn't record: `views/.hidden`,|
@@ -192,7 +196,25 @@ function request() {
 }
 const wait = () => setInterval(() => {}, 1 << 30)
 
+// What OpenRouter answered a request: its status at once, as the policy writes it, then the end of
+// the answer.
+function answered(id, status, received) {
+  logLine({ id, at: isoSeconds(NOW), event: 'response', status, ms: 80 })
+  logLine({ id, at: isoSeconds(NOW), event: 'end', sent: 4000, received, ms: 700 })
+}
+function refusedByPolicy() {
+  logLine({ at: isoSeconds(NOW), event: 'refused', host: 'openrouter.ai', method: 'POST', path: '/api/v1/messages', reason: 'a field the pinned pi doesn\'t send: "web_search_options"' })
+  process.stderr.write(`400 ${JSON.stringify({ error: { message: "Scooter's network policy refused this request", code: 400 } })}\n`)
+  process.exit(1)
+}
+
 const status = Number(valueOf('OPENROUTER') ?? behavior.openrouter ?? 200)
+const refused = has('REFUSED') ? 'first' : has('REFUSEDLATER') ? 'later' : behavior.refused
+if (refused === 'first') refusedByPolicy()
+if (refused === 'later') {
+  answered(request(), 200, 900)
+  refusedByPolicy()
+}
 if (has('UNREACHABLE') || behavior.unreachable) {
   logLine({ id: request(), at: isoSeconds(NOW), event: 'error', reason: 'ECONNREFUSED', ms: 3 })
   process.stderr.write('Connection error.\n')
@@ -203,12 +225,12 @@ if (has('NOANSWER') || behavior.noAnswer) {
   fs.writeFileSync(path.join(CONTROL, 'hung'), '')
   wait()
 } else if (status !== 200) {
-  logLine({ id: request(), at: isoSeconds(NOW), event: 'response', status, sent: 4000, received: 120, ms: 80 })
+  answered(request(), status, 120)
   const message = behavior.message ?? (status === 404 ? 'No endpoints found matching your data policy' : `stub error ${status}`)
   process.stderr.write(`${status} ${JSON.stringify({ type: 'error', error: { type: 'error', message }, request_id: null })}\n`)
   process.exit(1)
 } else {
-  logLine({ id: request(), at: isoSeconds(NOW), event: 'response', status: 200, sent: 4000, received: 900, ms: 700 })
+  answered(request(), 200, 900)
   act()
 }
 

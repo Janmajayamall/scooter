@@ -99,12 +99,16 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
   const { status, write, netlog, paths } = setup(t)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
-  // Within the last 24 hours: three requests to two hosts, and one refused. One older is left out.
+  // Within the last 24 hours: three requests to two hosts, with what came of them, and one refused
+  // and four more a run only counted. One older is left out.
   netlog('2026-11-08', [request('20261108T155000000-0001', '2026-11-08T15:50:00Z'), request('20261108T160000000-0001', '2026-11-08T16:00:00Z')])
   netlog('2026-11-09', [
     request('20261109T120000000-0001', '2026-11-09T12:00:00Z'),
+    { id: '20261109T120000000-0001', at: '2026-11-09T12:00:01Z', event: 'response', status: 401, ms: 120 },
+    { id: '20261109T120000000-0001', at: '2026-11-09T12:00:01Z', event: 'end', sent: 9000, received: 300, ms: 130 },
     request('20261109T120100000-0001', '2026-11-09T12:01:00Z', 'example.com'),
     { at: '2026-11-09T12:02:00Z', event: 'refused', host: 'example.org', reason: 'host not allowed' },
+    { at: '2026-11-09T12:03:00Z', event: 'unlogged', refused: 4 },
   ])
   assert.equal(
     status(),
@@ -116,7 +120,7 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
       '',
       'Runner: started 11:30. VMs run with KVM; their image was built Sun 8 Nov 18:01.',
       "Zero data retention: on. The agent's internet access: off.",
-      'Network, last 24 hours: 3 requests to 2 hosts, and 1 refused.',
+      'Network, last 24 hours: 3 requests to 2 hosts, and 5 refused.',
       '',
       'lifelog: last run 21:18, failed, 1 message, 48 s.',
       'Runs are paused since 21:18: OpenRouter: No endpoints found matching your data policy. Next try 21:48.',

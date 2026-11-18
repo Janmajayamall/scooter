@@ -438,7 +438,7 @@ Use the prompt shown in 6.5 as the first expected output.
 - both services start; `doctor` in the runner container reports emulation, and why;
 - wacli and the email reader run as their users in the bridge container and can't read the other folders;
 - the runner container works with its read-only root file system (14);
-- pi in a VM in the runner container reaches OpenRouter with a dummy key, and `https://example.com` is refused;
+- pi in a VM in the runner container reaches OpenRouter with a dummy key, and `https://example.com` is refused (`test/live/openrouter.mjs`, which milestone 8 ran on the machine itself);
 - the mounts work with the data under `/data` (row 14).
 
 **Not verifiable there:** KVM inside a container, which gate G3 covers in the root VM; and the arm64 image, which nothing here can cover. Record the arm64 gap in `docs/DECISIONS.md`.
