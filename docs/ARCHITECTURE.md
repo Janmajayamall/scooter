@@ -177,6 +177,8 @@ Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter b
 - **Environment:** a short fixed list, with a placeholder where the key would be.
 - **Acceleration:** KVM when the runner can open `/dev/kvm`, otherwise emulation, which is announced. A forced accelerator that can't be used stops the runner.
 - **Lifetime:** the runner closes the VM when pi exits or the timeout passes. Nothing inside it survives.
+- **Limits:** the sandbox keeps the start of pi's answer and the end of its errors, and closes the VM of a run that writes more, or makes more files, than a run may, so nothing pi does can stop the runner or fill the disk the bridge writes on (6.6).
+- **The image:** `build-image` builds it, natively as root or in a container, and records what it holds beside it. The runner refuses to start with a missing image, one built for another pi, or one that doesn't know the owner's time zone (6.12).
 
 The runner reaches it through one small interface: run this command, with these mounts, this environment, this timeout and this policy, and return the exit code and output. Tests use a fake that runs a stub of pi as a local process.
 
