@@ -200,6 +200,11 @@ const values = {
   // writes `packages.txt` after a build (6.12). It holds `runner/runner.sock` meanwhile, so no
   // runner can start, and an index of a couple of megabytes comes in seconds.
   APK_INDEX_TIMEOUT: 1 * MINUTE,
+  // The longest `doctor` waits for OpenRouter's list of the endpoints that keep no data, and the
+  // largest it reads (8.4). The list was 1.2 MB on 2026-11-18, and a host that doesn't answer is
+  // one of the things doctor reports.
+  DOCTOR_TIMEOUT: 30 * SECOND,
+  DOCTOR_RESPONSE_MAX_BYTES: 32 * MB,
   // The values a number in `agents.yaml` may take, lowest and highest (6.1). A run can't be given
   // less than a minute, and a slip of the hand can't keep a backup waiting for hours (5.5).
   CONFIG_RANGES: {

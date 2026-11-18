@@ -16,6 +16,7 @@
 //     syncExit   when set, `sync` exits at once with this code
 //     sendFailures  how many sends, `send text` and `send react` together, fail before they work
 //     sendNoId   when true, a send succeeds with no `id` in its answer
+//     authExit   the exit code of `auth`, which `scooter pair` runs (default 0)
 //   A send that works answers `{sent: true, to, id}`, with the IDs `SENT1`, `SENT2`… in the order
 //   of the sends, failed ones included.
 // - as `sync --follow`, posts each file that appears in `webhooks/` to its webhook, signed with the
@@ -156,6 +157,10 @@ switch (command) {
     break
   case 'send react':
     send('react')
+    break
+  case 'auth':
+    // `scooter pair`: wacli would show a QR code on the terminal, and wait to be linked.
+    process.exitCode = fixtures.authExit ?? 0
     break
   case 'auth status':
     ok(fixtures.paired ? { authenticated: true, linked_jid: '15550100000:3@s.whatsapp.net', phone: '15550100000' } : { authenticated: false })

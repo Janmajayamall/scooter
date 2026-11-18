@@ -3,7 +3,7 @@
 //
 // Commands reach the bridge as command lines in the datastore, written by intake like any other
 // line. The bridge handles those newer than `commandSeq`, in its state, as the runner does with its
-// own (6.4): it writes the reply to the outbox, then records the command as handled. So a command
+// own (6.4): it writes the reply to its outbox, then records the command as handled. So a command
 // is answered once, also across a restart; a crash between the two can answer it twice, and never
 // leaves it unanswered. The reply is `by: "bridge"`, with `about` set to the command, so it goes
 // back where the command was sent (5.3).
@@ -36,7 +36,8 @@ export const HELP_TEXT = [
 // Returns the commands' handler. Options:
 // - `store`: the open store, whose index holds the command lines.
 // - `state`: the bridge's state (`state.mjs`), which keeps `commandSeq`.
-// - `paths`, `ids`: for the outbox (`writeOutboxEntry`); `ids` is the bridge's one generator.
+// - `paths`, `ids`: for the bridge's own outbox (`writeOutboxEntry`, D205); `ids` is the bridge's
+//   one generator.
 // - `status()`: the reply to `/status` (`status.mjs`).
 // - `backup(seq)`: what `/backup`, the command line `seq`, does (`createBackups().ask`): the reply
 //   to give now, or null when the backup gives it once it is over.
@@ -60,7 +61,7 @@ export function createCommands({ store, state, paths, ids, log, clock = systemCl
       const command = store.index.get(seq).line.text
       const text = await reply(command, seq)
       if (text !== null) {
-        const entry = await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'bridge', text, about: seq } })
+        const entry = await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'bridge', text, about: seq }, outbox: paths.bridgeOutbox })
         log.info('bridge.replied', { command, seq, entry })
       }
       state.update({ commandSeq: seq })

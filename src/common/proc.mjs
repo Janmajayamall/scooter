@@ -234,25 +234,39 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
     return { stop, done }
   }
 
-  // The uid and gid of a user of this machine, by name, such as `scooter-wacli`. When this process
-  // isn't root it returns null, with the one warning: there's no switching to do, and whoever
-  // asked skips it.
-  async function lookupUser(name) {
-    if (!isRoot()) {
-      warnNotRoot()
-      return null
-    }
+  // The uid and gid of a user of this machine, by name, such as `scooter-wacli`, whoever asks; null
+  // when there is no such user. `setup` and `doctor` ask it (8.4).
+  async function findUser(name) {
     if (!USER_NAME.test(name)) throw new Error(`not a user name: ${name}`)
     const ids = []
     for (const flag of ['-u', '-g']) {
       const result = await run('id', [flag, '--', name])
-      if (result.code !== 0 || !/^\d+\n?$/.test(result.stdout)) {
-        throw new Error(`there is no user ${name} on this machine`)
-      }
+      if (result.code !== 0 || !/^\d+\n?$/.test(result.stdout)) return null
       ids.push(Number(result.stdout))
     }
     return { uid: ids[0], gid: ids[1] }
   }
 
-  return { run, supervise, lookupUser }
+  // The uid and gid of a user of this machine, by name, to run a program as, or give a file to.
+  // When this process isn't root it returns null, with the one warning: there's no switching to
+  // do, and whoever asked skips it. Throws when there is no such user.
+  async function lookupUser(name) {
+    if (!isRoot()) {
+      warnNotRoot()
+      return null
+    }
+    const user = await findUser(name)
+    if (user === null) throw new Error(`there is no user ${name} on this machine`)
+    return user
+  }
+
+  // The gid of a group of this machine, by name, such as `kvm`, or null when there is none.
+  async function findGroup(name) {
+    if (!USER_NAME.test(name)) throw new Error(`not a group name: ${name}`)
+    const result = await run('getent', ['group', '--', name])
+    const gid = /^[^:\n]*:[^:\n]*:(\d+):/.exec(result.stdout)?.[1]
+    return result.code === 0 && gid !== undefined ? Number(gid) : null
+  }
+
+  return { run, supervise, lookupUser, findUser, findGroup }
 }

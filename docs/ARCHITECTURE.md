@@ -289,14 +289,14 @@ Paths are under the data folder: `DATA_DIR` natively, `/data` in Docker.
 |---|---|---|---|---|---|---|
 | `datastore` | root, group `scooter-runner`; 0750 and 0640 | writes | reads | reads | no | no |
 | `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | reads, except `sessions/`; writes `views/`, `memory/`, `run/session/` | no | no |
-| `exchange` | `scooter-runner`, 0700 | takes entries; writes its own entries and `backup.lock` | writes entries and `run.lock` | no | no | no |
+| `exchange` | `scooter-runner`, 0700 | takes entries, and keeps its record of each in `bridge/`; writes `backup.lock` | writes entries and `run.lock` | no | no | no |
 | `runner` | `scooter-runner`, 0700 | reads the log and `status.json` | writes | no | no | no |
 | `bridge` | root, 0700 | writes | no | no | no | no |
 | `wacli` | `scooter-wacli`, 0700 | copies media out of `staging/` | no | no | writes | no |
 | `mail` | `scooter-mail`, 0700 | takes spool folders | no | no | no | writes |
 | `config` | root; readable by `scooter-runner` | no | reads | sees only the run's copy | no | no |
 
-The bridge, as root, takes what it needs out of three folders other users control: `mail/spool/`, `wacli/staging/` and `exchange/outbox/`. It uses each only while it is that user's folder and not a link, reads every file without following a link, and removes only the names it knows, a folder only once that empties it. So a link put in a folder's place can't turn its removals on anything else (`docs/DECISIONS.md`, D136).
+The bridge, as root, takes what it needs out of three folders other users control: `mail/spool/`, `wacli/staging/` and `exchange/outbox/`. It uses each only while it is that user's folder and not a link, reads every file without following a link, and removes only the names it knows, a folder only once that empties it. So a link put in a folder's place can't turn its removals on anything else (`docs/DECISIONS.md`, D136). It writes nothing in them: its record of an outbox entry, and its own entries, are in `bridge/` (D205). Where root makes a folder in another user's folder, as `setup` and the bridge make wacli's, it sets the folder's owner and mode through what it opened, which follows no link (D206).
 
 `build-image`, as root on a native install, builds the VM image in `.image-build/`, a folder of root's beside `runner/`, and gives it to `scooter-runner` there. In `runner/`, which that user controls, it only holds its socket and renames the old image out and the new one in, so a link put there leads it nowhere (`docs/DECISIONS.md`, D151).
 
@@ -440,7 +440,7 @@ The owner gets one notice for the first failure in a row, and one when items are
 
 1. The bridge takes outbox entries in order, one message every 5 seconds.
 2. It finds the channel from the line the entry points at. A reply goes to that line's channel if it can send; everything else goes to `DEFAULT_CHANNEL`.
-3. It renames `entry.json` to `sending.json`, sends, appends an `out` line, and deletes the entry. Long texts go out in chunks, and a text is at most four chunks long, four to eight messages: a longer one is cut when it is written. Every text goes out with wacli's link previews off.
+3. It records the entry in `sending.json`, in its own folder, sends, appends an `out` line, and deletes the entry. Its own entries, such as its replies to commands, are in its own outbox, `bridge/outbox/`, and go in the order of their IDs with the runner's. Long texts go out in chunks, and a text is at most four chunks long, four to eight messages: a longer one is cut when it is written. Every text goes out with wacli's link previews off.
 4. After a crash, an entry still marked as sending is sent again, from the first chunk not recorded as sent.
 5. An entry waits while its channel can't send. A send that fails is tried again, with waits that double; after 8 tries the entry no longer holds back the rest, and is given up on and logged once a later entry's message has gone out and it fails again. Before an entry behind ones passed over is tried, they are tried again, so that once sends work they go first. An outage, during which nothing goes out, gives up on nothing, and the entries then go in order, but for one tried in the look during which sends began to work again.
 

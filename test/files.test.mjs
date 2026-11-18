@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { checkOwnFolder, copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeHandOff, removeTree, startsWithId, writeFileAtomic } from '../src/common/files.mjs'
+import { checkOwnFolder, copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeHandOff, removeTree, settleFolder, startsWithId, writeFileAtomic } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { deepChain, deepTree } from './support/deep-tree.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
@@ -196,6 +196,24 @@ test('files: an owner is given to what is created', { skip: skipUnlessRoot }, t 
   }
   // What was already there keeps its owner.
   assert.equal(fs.statSync(dir).uid, 0)
+})
+
+test('files: a folder\'s mode and owner are set through what was opened, so a link put in its place is changed, followed, nowhere', t => {
+  // Root makes folders in folders other users own, such as `wacli/store` in `wacli/`, and that user
+  // can swap a link in between the folder's making and the setting of its owner (D206).
+  const dir = makeTestDir(t)
+  const target = path.join(dir, 'elsewhere')
+  fs.mkdirSync(target, { mode: 0o755 })
+  const link = path.join(dir, 'store')
+  fs.symlinkSync(target, link)
+  // Linux says ENOTDIR, the link not being a folder; another system may say ELOOP.
+  assert.throws(() => settleFolder(link, { mode: 0o700 }), error => ['ENOTDIR', 'ELOOP'].includes(error.code))
+  assert.equal(modeOf(target), 0o755)
+  fs.writeFileSync(path.join(dir, 'file'), '', { mode: 0o644 })
+  assert.throws(() => settleFolder(path.join(dir, 'file'), { mode: 0o700 }), { code: 'ENOTDIR' })
+  assert.equal(modeOf(path.join(dir, 'file')), 0o644)
+  settleFolder(target, { mode: 0o711 })
+  assert.equal(modeOf(target), 0o711)
 })
 
 test('files: a file another program wrote is copied out of its folder whole, with the mode asked for', async t => {

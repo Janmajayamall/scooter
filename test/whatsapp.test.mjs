@@ -18,6 +18,8 @@ import {
   fromListRow,
   fromWebhook,
   ownerIds,
+  pairingPhone,
+  runPair,
   toRecord,
   verifySignature,
   wacliEnv,
@@ -974,4 +976,65 @@ test('whatsapp: as root, wacli runs as its own user, and its folders are its own
   fs.writeFileSync(path.join(paths.wacliStaging, 'root-owned'), 'root')
   const { copyUntrustedFile } = await import('../src/common/files.mjs')
   await assert.rejects(copyUntrustedFile(path.join(paths.wacliStaging, 'root-owned'), target, { owner: wacliUser, maxBytes: 100 }), { code: 'EUNTRUSTED' })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Pairing: `scooter pair` (8.4)
+
+function pairContext(t, fixtures) {
+  const root = makeTestDir(t)
+  const stub = createWacliStub(t, root)
+  stub.fixtures(fixtures)
+  const { log } = createTestLog()
+  const proc = createProc({ log })
+  const out = { stdout: '', stderr: '' }
+  const settings = { side: 'bridge', dataDir: path.join(root, 'data'), configDir: path.join(root, 'config'), timeZone: 'Asia/Kolkata', ownerNumber: OWNER_NUMBER }
+  const pair = args =>
+    runPair({
+      args,
+      settings,
+      proc: isRoot ? { ...proc, lookupUser: async () => null } : proc,
+      log,
+      stdout: { write: text => (out.stdout += text) },
+      stderr: { write: text => (out.stderr += text) },
+    })
+  return { stub, pair, out, paths: makePaths(settings) }
+}
+
+test('pair: runs wacli auth with wacli\'s environment alone, with --phone as wacli takes it, once wacli says it isn\'t linked', async t => {
+  const { stub, pair, out, paths } = pairContext(t, { paired: false })
+  assert.equal(await pair(['--phone', '+91 98123-45678']), 0)
+  assert.deepEqual(stub.calls().map(call => call.args), [
+    ['--json', '--read-only', 'auth', 'status'],
+    ['auth', '--phone', '919812345678'],
+  ])
+  // Nothing but wacli's own environment, on every call (5.1).
+  for (const call of stub.calls()) assert.deepEqual(call.env, wacliEnv(paths))
+  assert.match(out.stdout, /^Linked\./)
+  // Its folders are made, as the channel makes them.
+  for (const dir of [paths.wacli, paths.wacliStore, paths.wacliStaging]) assert.ok(fs.statSync(dir).isDirectory(), dir)
+
+  // A QR code, without --phone.
+  assert.equal(await pair([]), 0)
+  assert.deepEqual(stub.calls().at(-1).args, ['auth'])
+})
+
+test('pair: does nothing when wacli is linked already, and says so', async t => {
+  const { stub, pair, out } = pairContext(t, { paired: true })
+  assert.equal(await pair([]), 0)
+  assert.deepEqual(stub.calls().map(call => call.command), ['auth status'])
+  assert.match(out.stdout, /linked already/)
+})
+
+test('pair: wrong arguments, a number that isn\'t one, and a wacli auth that fails', async t => {
+  const { stub, pair, out } = pairContext(t, { paired: false, authExit: 1 })
+  assert.equal(await pair(['--phone']), 2)
+  assert.equal(await pair(['--phone', 'nine']), 2)
+  assert.equal(await pair(['--qr']), 2)
+  assert.deepEqual(stub.calls(), [])
+  assert.match(out.stderr, /--phone takes the bot's number in international format/)
+  assert.equal(await pair(['--phone=+447700900123']), 1)
+  assert.deepEqual(stub.calls().at(-1).args, ['auth', '--phone', '447700900123'])
+  assert.match(out.stderr, /wacli auth ended with exit code 1/)
+  assert.equal(pairingPhone('(0) 123'), null)
 })

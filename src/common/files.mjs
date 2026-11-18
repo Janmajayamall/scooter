@@ -30,8 +30,27 @@ export function setOwner(target, owner) {
   if (owner) fs.chownSync(target, owner.uid, owner.gid)
 }
 
+// Opens the folder at `dir` without following a link, and sets its mode and, if one is given, its
+// owner through what was opened. A link put in the folder's place, or anything else that isn't a
+// folder, makes it throw (`ENOTDIR`, or `ELOOP`), and nothing is changed then.
+//
+// Root makes folders in folders other users own, such as `wacli/store` in `wacli/`, and that user
+// can rename what root made and put a link in its place at any moment. A `chown` or `chmod` by the
+// path would then follow the link, and give that user whatever it leads to (D206). One made through
+// the descriptor reaches only the folder that was opened.
+export function settleFolder(dir, { mode, owner } = {}) {
+  const fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW)
+  try {
+    if (mode !== undefined) fs.fchmodSync(fd, mode)
+    if (owner) fs.fchownSync(fd, owner.uid, owner.gid)
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 // Creates a folder and every missing folder above it. Each folder it creates gets `mode`, whatever
-// the umask is, and `owner` (`{ uid, gid }`) if one is given. Folders already there are left alone.
+// the umask is, and `owner` (`{ uid, gid }`) if one is given, both set without following a link
+// (`settleFolder`). Folders already there are left alone.
 export function ensureDir(dir, { mode = 0o700, owner } = {}) {
   const missing = []
   let current = path.resolve(dir)
@@ -46,8 +65,7 @@ export function ensureDir(dir, { mode = 0o700, owner } = {}) {
       if (error.code === 'EEXIST') continue
       throw error
     }
-    fs.chmodSync(folder, mode)
-    setOwner(folder, owner)
+    settleFolder(folder, { mode, owner })
   }
 }
 

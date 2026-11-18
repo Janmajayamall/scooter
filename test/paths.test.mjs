@@ -46,6 +46,8 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
     bridgeSocket: '/data/bridge/bridge.sock',
     bridgeIncoming: '/data/bridge/incoming',
     backupCache: '/data/bridge/backup-cache',
+    bridgeOutbox: '/data/bridge/outbox',
+    bridgeSending: '/data/bridge/sending',
     wacli: '/data/wacli',
     wacliStore: '/data/wacli/store',
     wacliStaging: '/data/wacli/staging',

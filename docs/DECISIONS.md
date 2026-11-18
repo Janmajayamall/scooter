@@ -2698,7 +2698,7 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 
 | Command | Result |
 |---|---|
-| `npm ci && npm test` | 719 tests: 673 pass, none fail. 46 skip themselves: 35 need the image (18 of milestone 0, 17 of the sandbox), 10 need root, and 1 needs root and `SCOOTER_ROOT_TESTS=1` |
+| `npm ci && npm test` | 719 tests: 673 pass, none fail. 46 skip themselves: 35 need the image (18 of milestone 0, 17 of the sandbox), 8 need root, and 3 need root and `SCOOTER_ROOT_TESTS=1` (corrected in milestone 12, for the review of this milestone, smaller point 8: it said 10 and 1) |
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 721 tests: 710 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left. The new sandbox test passes: pi in a VM, run by the runner with the files of `config/`, is given the protocol, the prompt and the memory in that order, is offered the six skills at their copies in `run/config/` with their descriptions, reads `expenses/SKILL.md` there, finds the six programs the instructions name, writes `expenses.csv` and a day page, and the runner commits both and reacts ✅ |
 | The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 719 tests, 663 pass, none fail. 56 skip themselves: 35 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. This milestone's tests all run there, and pass |
 | The `instructions`, `config`, `backup`, `agentdir`, `answer`, `planning`, `runner` and `backfill` tests, 16 times, 8 at once | No failure |
@@ -2721,3 +2721,209 @@ Not verified:
 - **A real model with these instructions** (gate G4). Whether it reads a skill when it should, files a receipt, a run's screenshot, a ticket and an email as the skills say, keeps the CSV rules and the day pages, asks as the protocol says, and ends its answers with lines the parser reads. The sandbox test's model follows a script, and with a dummy key OpenRouter answers 401 before any model sees the prompt. The same holds for whether a rebuild's prompt needs a line of its own (D202).
 - **What the instructions cost.** pi's first request with them is about 24 KB, its system prompt, its tools and the prompt, and every request of a run sends it again. Prompt caching, which ZDR allows (13.3), would make most of it cheap; how much, the first real runs will show.
 - **arm64 and macOS.** Nothing here knows the architecture.
+
+## Milestone 12: native install
+
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
+
+What the milestone left in the repository:
+
+| Path | What |
+|---|---|
+| `src/ops/setup.mjs` | `scooter setup [--no-services]`: the checks, the users, the folders, the env files, the command and the services (D209 to D213) |
+| `src/ops/doctor.mjs` | `scooter doctor` (D214) |
+| `deploy/systemd/scooter-bridge.service`, `scooter-runner.service` | The two units (D207) |
+| `src/bridge/channels/whatsapp.mjs` | `scooter pair` (D215) |
+| `src/bridge/outbox.mjs`, `commands.mjs`, `backup.mjs`; `src/common/outbox.mjs`, `paths.mjs` | The bridge writes nothing in the runner's outbox: its record of an entry is in `bridge/sending/`, and its own entries in `bridge/outbox/` (D205) |
+| `src/common/files.mjs` | `settleFolder`, and `ensureDir` setting modes and owners through it (D206) |
+| `src/common/proc.mjs` | `findUser`, which any user may ask, and `findGroup` |
+| `src/common/limits.mjs` | `DOCTOR_TIMEOUT` and `DOCTOR_RESPONSE_MAX_BYTES` |
+| `src/cli.mjs` | `setup`, `doctor` and `pair` built: every command of 8.4 is |
+| `src/runner/config.mjs` | The review of milestone 11, points 3 to 5 (D208) |
+| `config/prompts/lifelog.md`, `config/skills/day-pages/SKILL.md` | The review of milestone 11, points 1, 2 and 7 (D216) |
+| `test/setup.test.mjs`, `doctor.test.mjs`, `units.test.mjs` | This milestone's tests, the root test among them |
+| `test/delivery.test.mjs`, `files.test.mjs`, `whatsapp.test.mjs`, `config.test.mjs` | The record in `bridge/`, and the link swapped in once an entry is taken; `settleFolder`; `pair`; the skill checks |
+
+### 12.1 Decisions
+
+**D205. The bridge writes nothing in the runner's outbox** (the plan's rule for this milestone; D136's cost, the review of milestone 6).
+*Question:* the bridge, as root, wrote `sending.json` into an entry's folder in `exchange/outbox/` before each message (D101), and handed its own entries off into that outbox. The runner's user owns the outbox and could swap a link in between the bridge's look and its write, steering the write, as root, into the folder the link leads to.
+*Choice:*
+- The bridge keeps its record of a runner's entry, `{ entry, sent }` as before, in its own folder, as `bridge/sending/<id>.json`. It reads `entry.json` once, as before, without following a link, writes the record before anything goes out, and from then on the record wins over what the entry's folder holds: what the runner's user does to the folder changes nothing the bridge sends. It writes the record after the last message too, so a crash while the entry is removed sends nothing again.
+- The bridge's own entries, its replies to commands and its backup messages, go to its own outbox, `bridge/outbox/`, in the same form, with their `sending.json` in their folders there. `writeOutboxEntry` takes the outbox to write to.
+- The two outboxes and the records are taken together, in the order of their IDs; of a bridge's entry and a runner's with the same ID, made in the same millisecond, the bridge's goes first.
+- The runner's entry is removed as before, by the name it holds, now only `entry.json`, and its record once nothing of it is left to take again: its folder gone, no folder any more, such as a link put in its place, or holding no `entry.json`. A link in an entry's place is left, and logged once, as D136 has it.
+*Reason:* the plan's example. The bridge then writes nothing in the folders other users control but `backup.lock`, which the runner must see where it looks (below). A root test isn't needed to show it: the test of the swap, the review's case, runs as any user, the folder the link leads to being one the bridge must not write. Against `main`, a probe of that case (12.5) saw the bridge write `sending.json` where the link led; on this branch nothing.
+*Not changed:* `backup.lock` in `exchange/locks/`, which the bridge makes as root while that folder is the runner's and not a link (D184): a link swapped in between that check and the lock's making could steer where it is made, under that name, with the lock's text. The lock coordinates with the runner, so it must be in the folder the runner looks in. DESIGN.md section 9 says so.
+*Cost:* two entries of the two services made in the same millisecond go in no set order between them; within each service, entries keep their order. No install has entries of the old form: a folder of the runner's outbox holding a `sending.json` of an older bridge would be refused, as holding no `entry.json`, and left.
+
+**D206. Root sets a folder's mode and owner through what it opened.**
+*Question:* found while settling D205. `ensureDir` made a folder, then set its mode and owner by its path. The bridge makes wacli's folders in `wacli/`, and the email reader's spool in `mail/`, if they are missing, as root, at every start of the channel, nightly after the backup among them; and the outbox and `exchange/locks/` in the runner's `exchange/`. The folder's owner could rename what root made, and put a link in its place, between the making and the `chmod` and `chown`, which followed the link: a malicious wacli, deleting `wacli/cache` and racing the next start, could have been given whatever its link led to, `/etc/shadow` among them.
+*Choice:* `settleFolder` opens the folder without following a link, as a folder (`O_DIRECTORY | O_NOFOLLOW`), and sets its mode and owner through the descriptor; a link in its place, or anything that isn't a folder, makes it throw, changing nothing. `ensureDir` sets every folder it makes so, and `setup` every folder it makes or sets.
+*Reason:* the descriptor reaches only the folder that was opened. A folder another user swaps in for root's is one of theirs, given to them again. Linux answers `ENOTDIR` for a link opened so, not `ELOOP`.
+
+**D207. The two units, and how they restart** (the first review of milestone 4, point 4; the plan's rule for this milestone).
+*Choice:* `deploy/systemd/scooter-bridge.service` runs `/usr/local/bin/scooter bridge` as root; `scooter-runner.service` runs `/usr/local/bin/scooter runner` as `scooter-runner`, with its group and `SupplementaryGroups=kvm`. Both: `Type=exec`, `Environment=TZ=UTC`, `KillMode=control-group`, `Restart=on-failure`, after `network-online.target`, wanted by `multi-user.target`, and no `EnvironmentFile`: each service reads its own env file (8.2). The restarts:
+- the runner's after 1 minute, then about 5½, then 30 minutes, and every 30 after (`RestartSec=1min`, `RestartSteps=2`, `RestartMaxDelaySec=30min`): OpenRouter's outage waits (6.9);
+- the bridge's after 5 seconds, doubling to 5 minutes (`RestartSec=5s`, `RestartSteps=6`, `RestartMaxDelaySec=5min`): `RESTART_BACKOFF`, as the bridge restarts wacli and the email reader.
+
+The runner's home and temporary folder aren't set in its unit: the runner sets both under `runner/` when it opens the sandbox, from `DATA_DIR` (D140), which the plan's rule allows, and one place says where they are.
+*Reason:* the runner stops on an error and leans on its service manager (D93). A fault that stays after pi has run, such as a disk too full to record the run, runs pi again at every start, and each start waits out the quiet period first, so systemd's start limit, 5 starts in 10 seconds, never stops it. A minute's wait would run pi, and spend on OpenRouter, up to sixty times an hour; these waits spend at most twice an hour, as an outage does, with a first try a minute after the crash. `Type=exec` makes a start fail when the command can't be run.
+*Cost:* systemd counts the restarts until the unit is started by hand or the machine starts again, not after a run that lasted (12.2): from a third crash since then, the runner comes back after 30 minutes. Messages wait meanwhile, and none is lost. `RestartSteps` needs systemd 254; Ubuntu 24.04 has 255, and an older systemd warns of the two settings and restarts every minute.
+
+**D208. The skill checks the review of milestone 11 asked for** (its points 3, 4 and 5).
+*Choice:* the runner's check of a skill's `SKILL.md` (D197) now:
+- refuses `disable-model-invocation: true`, which keeps pi from offering the skill to the model; `false` is accepted;
+- takes a name YAML reads as a number, such as `42` for a folder named `42`, as written, as pi does;
+- says a description over 1,024 characters passes what the Agent Skills format allows, which pi warns of, where it said pi takes no more;
+- makes a `SKILL.md` it can't read a fault that names the field, listed with the others, where it stopped the runner with `EACCES` and exit code 1;
+- writes the byte-order mark as `﻿`, in the check and its test.
+*Reason:* the review's ways. Each is a case where the runner would start and the agent never see a skill, or where the message didn't say what pi does.
+
+**D209. Where `setup` puts things, and what a second run does.**
+*Choice:* the data in `/var/lib/scooter`, the env files in `/etc/scooter`, the config in `/etc/scooter/config`, the command in `/usr/local/bin`, the units in `/etc/systemd/system` (8.5). Every step is safe to repeat:
+- the checks come first, and make nothing (D210);
+- users and the `kvm` group's membership are added when missing (D212);
+- the folders of 3.2 in the data folder are made when missing, and those directly in it given their owners and modes again; a folder in another user's folder, such as `wacli/store`, is made when missing, through `settleFolder` (D206), and otherwise left alone, as that user's; the data folder itself may be a link the owner made to another disk;
+- the config is copied, through a temporary folder renamed into place, only when `/etc/scooter/config` isn't there, root's with the runner's group, folders 0750 and files 0640: it is the owner's from then on;
+- the env files are written only when missing, and otherwise given their owners and modes again, their text left alone (D211);
+- the command and the units are written again each time, so a moved Node or a changed unit is taken up.
+`--no-services` leaves the units out and doesn't need systemd; `setup` prints what to do next, and starts nothing.
+*Reason:* 8.4 and the plan. Owners and modes put right by a second run are what a restore or a hand's slip can change, and the folders directly in the data folder can be set safely: only root can write the data folder. *Not done:* a data folder elsewhere: `setup` refuses env files that name another (D211). Moving it is the owner's, by hand.
+
+**D210. What `setup` checks of Node and the code** (row 16).
+*Choice:* before it makes anything, `setup` refuses, listing every problem, unless:
+- it runs as root, and systemd runs the machine (`/run/systemd/system`), unless `--no-services`;
+- the Node running it, which `/usr/local/bin/scooter` will run, is 22.19 or later; every folder above its real path can be passed through by every user; it can be run by every user; and it and those folders are root's and writable by root alone, a sticky folder such as `/tmp` allowed above;
+- the code, the folder holding `src/cli.mjs`, is the same: every folder above it as Node's, and every folder and file in it, `.git` aside, readable by every user, root's and writable by root alone; and the dependencies of its `package.json` are installed in its `node_modules`.
+*Reason:* row 16: the service users must run Node and read the code, which they can't in someone's home folder; and the bridge runs both as root, so a user who could change either could run code as root. *Cost:* a file of the code someone made writable by its group stops `setup` with its name, and up to ten such are listed.
+
+**D211. The env files.**
+*Choice:* written from `bridge.env.example` and `runner.env.example`, with their `# DATA_DIR=` and `# CONFIG_DIR=` lines made settings of the folders `setup` uses, nothing else changed; `bridge.env` root's and `runner.env` the runner's, mode 0600, written to a temporary file and linked into place, so one that appears meanwhile isn't written over. One that is there already must name those two folders, or `setup` stops at its check, saying to set them or remove the file.
+*Reason:* 8.2 and the plan. A file copied by hand from an example names neither, and the service would then use `/data` and `/config`.
+
+**D212. Scooter's users.**
+*Choice:* `useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin`, the shell `/sbin/nologin` or `/bin/false` where that isn't there; `scooter-runner` added to `kvm` with `usermod --append --groups`. A machine with no `kvm` group, such as a container, gets none: `setup` says pi's VMs will run under emulation, that `doctor` says how to enable KVM, and that running `setup` again adds the runner to the group. The names are `USERS`; the root test gives names of its own.
+*Reason:* 3.2 and row 4: system users, which the system numbers, named everywhere. No home: wacli's is given by the bridge, the runner's set by the runner, and the email reader's by the bridge (5.1, 5.6, 6.6); `/nonexistent` is Debian's way. Creating a `kvm` group where the kernel offers no KVM would change nothing.
+
+**D213. `/usr/local/bin/scooter`.**
+*Choice:* a shell script, root's, mode 0755, that `exec`s the real path of the Node that ran `setup` with the code's `src/cli.mjs`, both in single quotes, and refuses a path that holds one. The first `setup` is run as `sudo node /opt/scooter/src/cli.mjs setup`, or `sudo /opt/scooter/src/cli.mjs setup`, since it writes the command.
+*Reason:* the plan's rule (D196): with `exec`, Node is the service's main process, which `systemctl kill --kill-whom=main -s USR1 scooter-bridge` reaches. G2 shows it (12.5).
+
+**D214. `doctor`.**
+*Choice:* it runs as the runner's user, with the runner's settings, and reports, in order, each check as `ok`, `warn` or `fail`, with a fix for what isn't `ok`: `agents.yaml`, as the runner checks it; the accelerator; QEMU, the system emulator and `qemu-img`; the image, as the runner checks it; the folders of 3.2 against `setup`'s own table (D209), those it can look at; the env files, the runner's its own and 0600, the bridge's out of its reach, none in Docker; whether `openrouter.ai` answers; and, with ZDR on, the configured model's endpoints in OpenRouter's public list of the endpoints that keep no data, `GET /api/v1/endpoints/zdr`, with those with safety retention marked. It exits with 1 when something failed, and 0 otherwise.
+- Emulation under `AGENT_ACCEL=auto` is a warning: the runner runs. A forced accelerator that can't be used, and a model with no endpoint that keeps no data under ZDR, are failures.
+- How to enable KVM depends on where it runs: natively, the `kvm` group, through `setup` and the unit; in Docker (`/.dockerenv`), the device and `group_add` for rootful Docker, or the README's udev rule for rootless; and the firmware, or nested virtualization, when there is no `/dev/kvm`.
+- The fixes name `sudo scooter setup` and `sudo scooter build-image` natively, and in Docker the command that would do it.
+- It sends OpenRouter no key and nothing of the owner's, and reads at most `DOCTOR_RESPONSE_MAX_BYTES` within `DOCTOR_TIMEOUT`.
+*Reason:* 8.4. The runner's own checks, of the config, the image and the accelerator, are what it uses: `src/cli.mjs` hands them to `doctor` as `runner`, as it hands `runRunner` its sandbox, so `src/ops` still imports only `src/common` (ARCHITECTURE.md 4.2), as `setup.mjs` does.
+
+**D215. `pair`.**
+*Choice:* it asks `wacli --json --read-only auth status` first, and when wacli is linked says so and does nothing; otherwise it runs `wacli auth`, or `wacli auth --phone <digits>`, as `scooter-wacli`, with wacli's environment alone (5.1) and the terminal attached. `--phone` takes the number in international format, as `OWNER_NUMBER` is read, and gives wacli its digits. It makes wacli's folders when missing, as the channel does. It lives in `whatsapp.mjs`, the only module that runs wacli.
+*Reason:* 8.4. A running bridge finds the link at its next pairing check, within a minute (D45). Linking again over a live link is unlinking first, which is the owner's to do on the phone.
+
+**D216. The day page's travel line, and two sentences of the prompt** (the review of milestone 11, points 1, 2 and 7).
+*Choice:*
+- The template of 7.3, and of the `day-pages` skill, has the "Booked:" line, on the page of the day of booking, with the flight's date as a Saturday: `- Booked: ✈ 6E 2135 BLR → DEL, Sat 14 Nov 06:10, seat 12A, PNR ABC123`. The skill gives the line of the day of departure too: `- ✈ 6E 2135 BLR → DEL 06:10, seat 12A, PNR ABC123`.
+- The prompt says `pdftoppm` writes one image a page, and to list `$HOME` for their names: it pads the number to the last page's width.
+- A newer line of `preferences.md` overrides older lines, and the prompt's rules for the views and the files, never the protocol before them.
+*Reason:* the review's ways. The test holds the skill's template to 7.3's, so both changed.
+
+### 12.2 Facts found
+
+- **systemd's restart counter** (systemd 255, on the Linux machine, with a unit of the user's own manager that failed at once, then after running 8 seconds): with `RestartSteps` and `RestartMaxDelaySec` the waits grow as D207 has them, 1, 2, 4 and 8 seconds for 1 second, 3 steps and 8 seconds; and the counter doesn't go back after a run that lasted: the waits stayed at their longest. It goes back when the unit is started by hand.
+- **`systemd-analyze verify`** exits with 0 when a unit has a setting it doesn't know, or a value it can't take, and says so on stderr; it fails when the command isn't there. So the test gives each unit a stand-in command, and wants nothing on either stream.
+- **A link opened with `O_DIRECTORY | O_NOFOLLOW`** fails with `ENOTDIR` on Linux, not `ELOOP` (D206).
+- **Scooter's VMs don't boot inside the root VM.** Under nested KVM, in the Ubuntu 24.04 VM of gate G2 (QEMU 8.2.2 on the machine, `-cpu host`, 4 processors), QEMU's `microvm` machine, as Gondolin 0.14.0 starts it with KVM and `VM_CPUS` 2, hangs in the guest kernel's APIC setup, after `ACPI: Core revision`: every run there failed as "the VM couldn't start", a setup error, and runs paused, as 6.9 says. Booted by hand, the image's kernel boots with 1 processor, or with the machine's ACPI off (`acpi=off`), and not with other CPU models, kernel switches or a `q35` machine around it. Gondolin's `machineType: "q35"` booted a VM there in 2.1 seconds, and ran a command in it. On the machine itself, `microvm` boots in about 2 seconds (milestone 7). Nothing in G2 needs a VM to boot; G3 does: the plan's milestone 13 has it.
+- **A native image build as root**, in the root VM: 16 seconds, 527 MB, and `.image-build/` gone afterwards (D151).
+- Ubuntu 24.04's cloud image has no `bzip2`, which restic's release needs to be unpacked; G1 installs it with the rest.
+
+### 12.3 The reviews of the pull requests merged before this one
+
+Pull request 12, milestone 11, was approved by its review with eight smaller points. All eight are settled:
+
+| # | Point | What became of it |
+|---|---|---|
+| 1 | The page images' names are wrong for a PDF of ten pages or more | Settled (D216): the prompt says to list `$HOME` for their names |
+| 2 | The day page's template and the skill's "Booked:" line disagree; 14 November 2026 is a Saturday | Settled (D216): the template's line is the "Booked:" one, on a Saturday, in 7.3 and the skill; the skill gives the departure day's line too |
+| 3 | A skill with `disable-model-invocation: true` passes the check, and the model never sees it | Settled (D208): refused. Test in `config` |
+| 4 | An unreadable `SKILL.md`, a name of digits, and the words about 1,024 characters | Settled (D208): a fault that names the field; the name taken as written; the format's limit. Tests in `config` |
+| 5 | The byte-order mark written as the character | Settled (D208): `﻿` in both |
+| 6 | The plan's note for the README holds natively only | Settled: the plan's milestone 14 says what an upgrade does to `./config` in Docker |
+| 7 | "These instructions" could take in the protocol | Settled (D216): the prompt's rules for the views and the files, never the protocol |
+| 8 | 11.4's count of the skips is off by two | Settled: 8 and 3, corrected in 11.4 |
+
+The points earlier reviews and milestones left, as 11.2 has them:
+
+| From | Point | What became of it |
+|---|---|---|
+| Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Settled (D207) |
+| Milestone 6, D136's cost; the plan's rule for this milestone | The bridge's writes into the outbox | Settled (D205); with D206, found on the way |
+| Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
+| Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
+| Milestone 10, 10.4 | A native restore | Run at G2 (12.5) |
+
+### 12.4 Changes to DESIGN.md
+
+None changes what Scooter does beyond what this milestone settled:
+- 5.3: the bridge keeps `sending.json` in `bridge/sending/`, and its own entries in `bridge/outbox/`, and removes only `entry.json` from the runner's outbox (D205).
+- 6.1: a skill doesn't set `disable-model-invocation: true` (D208).
+- 7.3: the template's travel line is the "Booked:" one, on a Saturday (D216).
+- 8.4: `setup`'s steps and `--no-services`; what `doctor` checks, and its exit code (D209, D214).
+- 8.5: the first `setup`, the units' restarts, and the command's `exec` (D207, D213).
+- 8.6: `DOCTOR_TIMEOUT` and `DOCTOR_RESPONSE_MAX_BYTES`.
+- Section 9: the bridge writes nothing in other users' folders but `backup.lock`, and sets the owner and mode of a folder it makes there through what it opened (D205, D206).
+- Section 10: Least privilege, with `setup`'s root test; Delivery, with the link swapped in once an entry is taken.
+
+ARCHITECTURE.md 3.3 and 5.3 say the same. The plan's milestone 13 has what 12.2 found of Scooter's VMs in the root VM, and its milestone 14 what this milestone leaves for the README.
+
+### 12.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, systemd 255. `4ef9630` holds all the code and tests; the commit after it records this section and nothing else. The code was the same at `515dcb8`, where the runs marked so were made.
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, on a clean clone of the branch from GitHub at `4ef9630` | 744 tests: 697 pass, none fail. 47 skip themselves: 35 need the image, 8 need root, and 4 need root and `SCOOTER_ROOT_TESTS=1`. `systemd-analyze verify` runs, and finds nothing to say of either unit |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, at `515dcb8` | 746 tests: 734 pass, none fail, in 113 seconds. The 12 that need root skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clean clone at `4ef9630`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 744 tests, 684 pass, none fail. 60 skip themselves: 35 need the image, 4 `mke2fs`, 4 wacli, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 14 are about what root can read or write anyway. `setup`'s root test runs, and passes; so do the restic round trip and the restore of owners by name |
+| The same, at `515dcb8`, without restic | 744 tests, 681 pass, none fail, 63 skip |
+| A probe of D205's case, the runner's entry swapped for a link once the bridge has sent its first message, against `main`'s `outbox.mjs` and this branch's | On `main` the bridge wrote `sending.json` where the link led, and removed it with the entry; on this branch nothing was written there. Both sent the whole entry |
+| By hand, a user unit of systemd 255 restarted with `RestartSteps` | 12.2: the waits grew, and didn't go back after runs that lasted |
+
+**Gate G1**, in a throwaway Ubuntu 24.04 VM on the Linux machine: the official cloud image, checked against its `SHA256SUMS`, on a fresh 40 GB disk, with KVM, `-cpu host`, 4 processors and 8 GB, user-mode networking, SSH on `127.0.0.1` only, booted in 12 seconds; `/dev/kvm` there.
+- Node 22.23.2, the official tarball, checked against its `SHASUMS256.txt`, unpacked into `/usr/local`, root's.
+- `bzip2`, `lz4`, `qemu-system-x86`, `qemu-utils`, `cpio`, `e2fsprogs` and `git` from `apt`: QEMU 8.2.2, e2fsprogs 1.47.0.
+- restic 0.19.1 and wacli 0.26.0, the releases of milestone 0, checked against their checksums there, in `/usr/local/bin`.
+- `/opt/scooter`, cloned as root from the pull request's branch at `515dcb8`, with `npm ci --omit=dev --ignore-scripts`.
+
+**Gate G2**, in the same VM:
+
+| Step | What was run | What happened |
+|---|---|---|
+| 1 | `sudo /opt/scooter/src/cli.mjs setup`, then `sudo scooter setup`; the two env files filled in, a dummy number and a dummy key | The first made the three users (system users, `/nonexistent`, `nologin`), `scooter-runner` in `kvm`, the 16 folders with the owners and modes of 3.2, the config's copy, root's with the runner's group, `bridge.env` root's and `runner.env` the runner's, both 0600, `/usr/local/bin/scooter`, and the two units, enabled and not started. The second changed nothing. Exit code 0 both times |
+| 2 | `sudo scooter build-image` | The first native build as root: 16 seconds, 527 MB, the image the runner's, `.image-build/` gone |
+| 3 | `sudo systemctl start scooter-bridge scooter-runner`, then `sudo -u scooter-runner scooter doctor` | Both active; their main processes are Node, the runner's with the `kvm` group. The bridge waits for `pair`; the runner uses KVM. `doctor` passed every check, with 6 endpoints of the model that keep no data, and exited with 0 |
+| 4 | As `scooter-wacli` and as `scooter-mail`: `ls` on `datastore`, `agents`, `exchange`, `runner` and `bridge`; `cat` on the agent's `state.json`, the bridge's, both env files and `agents.yaml` | Every one: permission denied. Each lists its own folder. The runner can't read `bridge.env` |
+| 5 | A `once` task added to the config, the runner restarted, and once its QEMU was there, 0.4 seconds in, `sudo systemctl kill --kill-whom=main --signal=SIGKILL scooter-runner` | systemd stopped the rest of the unit: within 3 seconds no process of `scooter-runner` and no QEMU was left. The unit restarted a minute later, removed the `run.lock` the killed runner left, and ran the task again |
+
+Also in G2: `SIGUSR1` with `--kill-whom=main` started a backup to a local restic repository, which stopped and started the WhatsApp channel and made a snapshot; with both services stopped, `sudo scooter restore` refused a folder that wasn't empty, `--force` restored the snapshot, removing a file made since and putting back one removed, every folder with its owner; with the services running it refused, naming the bridge's socket. The VM was then shut down and its disk deleted; no QEMU of `agentw` was left.
+
+The tests the plan asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Hermetic: the decisions `setup` and `doctor` make, such as which users, modes, mounts and settings | `setup.test.mjs`: the folders of 3.2 with their owners and modes, the config's and the env files', the env files' text, the command, and the checks of Node, the code and existing env files; `doctor.test.mjs` |
+| Hermetic: `doctor` reports each missing piece with its fix | `doctor.test.mjs`: no accelerator, natively and in Docker; no QEMU; no image, and one for another pi; wrong folder modes; no users; a bad `agents.yaml`; OpenRouter out of reach; no endpoint that keeps no data; the env files |
+| Root, in a container: `setup` without services creates the users and folders | `setup.test.mjs`, the root test, run twice over |
+| Root: wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge` | The same test, as the two users, on each folder and a file in it |
+| Root: each service reads only its own env file | The same test: the runner reads `runner.env` and not `bridge.env`, wacli and the email reader neither, and each side loads its own; and `setup.test.mjs`, the second test, without root |
+| `systemd-analyze verify` on both units | `units.test.mjs`, which skips itself where systemd isn't installed |
+| What the bridge writes in the outbox, with a root test | `delivery.test.mjs`, the test of the swap; it runs as root in the container too |
+
+Beyond those: `pair`, in `whatsapp.test.mjs`; `settleFolder`, in `files.test.mjs`; the bridge's own outbox and its record, in `delivery.test.mjs`; the units' settings, in `units.test.mjs`; the review's points in `config.test.mjs`.
+
+Not verified:
+- **A pi run in the root VM.** No VM of Scooter's booted there (12.2); runs failed as setup errors, as 6.9 says. Runs through the real sandbox were verified on the machine itself, with KVM (the run above), as in milestones 7 to 11.
+- **`pair` against WhatsApp**, and the bridge with a paired wacli (gate G4). The tests run the wacli stub; in G2 wacli was unpaired.
+- **The units on another systemd.** `RestartSteps` needs 254; on an older one the runner restarts every minute (D207).
+- **The install on the machine Scooter will live on**, which stays with the owner (section 6 of the plan), and **arm64**.

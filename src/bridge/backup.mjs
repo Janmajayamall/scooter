@@ -453,12 +453,12 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     }
   }
 
-  // Writes an outbox entry of the bridge's, trying again after a wait that doubles when it can't,
-  // as a command's reply is (5.4), until the bridge stops.
+  // Writes an outbox entry of the bridge's, into its own outbox (D205), trying again after a wait
+  // that doubles when it can't, as a command's reply is (5.4), until the bridge stops.
   async function send(entry) {
     for (let failures = 1; ; failures++) {
       try {
-        const id = await writeOutboxEntry({ paths, ids, entry })
+        const id = await writeOutboxEntry({ paths, ids, entry, outbox: paths.bridgeOutbox })
         log.info('backup.told', { entry: id, about: entry.about ?? null })
         return
       } catch (error) {
