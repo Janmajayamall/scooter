@@ -192,11 +192,11 @@ The VM has no network of its own. Gondolin's host side, inside the runner's proc
 
 The rules for what goes out:
 - **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS.
-- **The key:** swapped in for the placeholder only on requests to `openrouter.ai`.
+- **The key:** swapped in for the placeholder only on requests to `openrouter.ai`, and only in the header pi sends it in. A request there with a key of its own is refused, as is one elsewhere that carries the placeholder or the key.
 - **Requests to OpenRouter:** only the two chat routes, only the configured model, only the fields and tools the pinned pi sends, and only inline images and documents. The runner forwards its own re-encoding of the body it checked.
 - **Zero data retention:** set on every request.
 
-Every request is logged before it leaves, without headers, bodies or query strings. Three things read the log: the runner, to learn why a run failed; the bridge, for the counts in `/status`; and the owner.
+Every request is logged before it leaves, without headers, bodies or query strings, and its status as soon as it arrives, from the HTTP client's diagnostics events, which hold back no streamed answer. What one run adds to the log is bounded. Three things read the log: the runner, to learn why a run failed; the bridge, for the counts in `/status`; and the owner. The policy is `src/runner/sandbox/policy.mjs`, and the log's writer `netlog.mjs` beside it (`docs/DECISIONS.md`, milestone 8).
 
 ### 2.9 pi and its instructions
 

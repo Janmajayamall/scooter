@@ -48,7 +48,7 @@ function counts(index, state, reads) {
 }
 
 // The requests in the network log over the last `STATUS_WINDOW`, the hosts they went to, and the
-// requests the policy refused (6.13).
+// requests the policy refused (6.13): those written one by one, and those a run only counted.
 function network(paths, now) {
   let requests = 0
   let refused = 0
@@ -59,6 +59,8 @@ function network(paths, now) {
       hosts.add(entry.host)
     } else if (entry.event === 'refused') {
       refused += 1
+    } else if (entry.event === 'unlogged') {
+      refused += entry.refused
     }
   })
   return { requests, hosts: hosts.size, refused }
@@ -105,7 +107,7 @@ export function statusText({ now, settings, paths, channels, index, backups }) {
   }
   try {
     const net = network(paths, now)
-    const refused = net.refused === 0 ? '' : `, and ${plural(net.refused, 'refused')}`
+    const refused = net.refused === 0 ? '' : `, and ${net.refused} refused`
     lines.push(`Network, last 24 hours: ${plural(net.requests, 'request')} to ${plural(net.hosts, 'host')}${refused}.`)
   } catch (error) {
     lines.push(`Network log: it can't be read (${error.code ?? error.name}).`)

@@ -263,6 +263,28 @@ test('failures: a 408, 429, 5xx or no answer is tried after 1, 5 and 30 minutes,
   }
 })
 
+test("failures: the network policy refusing pi's first request at OpenRouter pauses runs; refusing a later one counts an attempt", async t => {
+  const reason = 'a field the pinned pi doesn\'t send: "web_search_options"'
+  await t.test('first', async t => {
+    const { runner, clock, state, outbox, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+    sandbox.behave({ refused: 'first' })
+    assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'setup' })
+    const why = `the network policy refused pi's request: ${reason}`
+    assert.equal(state().paused.reason, why)
+    assert.deepEqual(state().retry, [{ seq: 1042, attempts: 0, due: '2026-11-09T15:50:38Z', reason: why }])
+    assert.deepEqual(outbox(), [
+      { type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (${why}). Runs are paused until this is fixed. I'll try again every 30 minutes.` },
+    ])
+  })
+  await t.test('after a request went out', async t => {
+    const { runner, clock, state, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+    sandbox.behave({ refused: 'later' })
+    assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+    assert.equal(state().paused, undefined)
+    assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: `the network policy refused a request: ${reason}` }])
+  })
+})
+
 test('failures: a run that times out waiting for OpenRouter is an outage', async t => {
   const { runner, clock, state, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee NOANSWER')])
   await runner.tick()

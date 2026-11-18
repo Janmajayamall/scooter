@@ -76,6 +76,10 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     RUN_NAMES_MAX_COUNT: 100000,
     // Milestone 7, after its review.
     APK_INDEX_TIMEOUT: MINUTE,
+    // Milestone 8: docs/DECISIONS.md, milestone 8.
+    NETLOG_PATH_MAX_CHARS: 1000,
+    RUN_REQUESTS_MAX: 1000,
+    RUN_REFUSALS_LOGGED_MAX: 100,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
@@ -99,6 +103,13 @@ test('limits: a text at its longest is a few chunks, and its entry far under wha
 test('limits: a run may write what the runner accepts after it several times over', () => {
   assert.ok(limits.RUN_WRITE_MAX_BYTES >= 4 * (limits.AGENT_FILES_MAX_BYTES + limits.SESSION_MAX_BYTES))
   assert.ok(limits.RUN_NAMES_MAX_COUNT >= 4 * limits.AGENT_FILES_MAX_COUNT)
+})
+
+test('limits: a line the network policy writes, at its longest, fits what a reader of the log takes', () => {
+  // A path, a host of DNS's longest written as `%` and two hex digits a byte, a reason of
+  // `REASON_MAX_CHARS` characters of four bytes each, and the rest of a refused line.
+  const longest = limits.NETLOG_PATH_MAX_CHARS + 3 + 253 * 3 + limits.REASON_MAX_CHARS * 4 + 200
+  assert.ok(longest < limits.NETLOG_LINE_MAX_BYTES)
 })
 
 test('limits: the prompt fits in one command-line argument', () => {

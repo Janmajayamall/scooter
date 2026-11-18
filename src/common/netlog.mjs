@@ -2,27 +2,39 @@
 // handles it, in `runner/log/YYYY-MM-DD.jsonl` by UTC date.
 //
 //   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:12Z","event":"request","host":"openrouter.ai","method":"POST","path":"/api/v1/messages"}
-//   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:19Z","event":"response","status":200,"sent":48211,"received":5340,"ms":7012}
+//   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:13Z","event":"response","status":200,"ms":812}
+//   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:19Z","event":"end","sent":48211,"received":5340,"ms":7012}
 //   {"id":"20261109T155013502-0001","at":"2026-11-09T15:50:14Z","event":"error","reason":"ECONNREFUSED","ms":31}
-//   {"at":"2026-11-09T15:51:02Z","event":"refused","host":"example.com","reason":"host not allowed"}
+//   {"at":"2026-11-09T15:51:02Z","event":"refused","host":"example.com","method":"GET","path":"/","reason":"host not allowed"}
+//   {"at":"2026-11-09T16:00:40Z","event":"unlogged","refused":5120}
 //
-// - `request`: written before the request goes out, so nothing leaves without a line.
-// - `response`: the answer to the request with the same `id`, by its status.
-// - `error`: the request with the same `id` got no answer: the host couldn't be reached, or the
-//   connection broke before a status came. `reason` is a short code from Scooter's own code.
-// - `refused`: the policy refused a request and nothing went out. `method` and `path` are there
-//   when the policy got that far.
+// - `request`: the policy let a request out. Written before it goes out, so nothing leaves without
+//   a line, even if the runner crashes.
+// - `response`: the status of the request with the same `id`, written when it arrives, before the
+//   answer's body: a run that ends while the model is still streaming has its status in the log
+//   (6.9; `docs/DECISIONS.md`, D82). `ms` is the time from the request line to the status.
+// - `end`: the answer's body is over. `sent` and `received` are the bytes of the request and the
+//   answer, head and body, each way; `ms` the time from the request line. `reason` says why the
+//   answer was cut short, when it was.
+// - `error`: the request with the same `id` got no answer: the host couldn't be reached, the
+//   connection broke before a status came, it was never sent, or the run ended first. `reason` is
+//   a short code from Scooter's own code, or the HTTP client's, such as `ECONNREFUSED`.
+// - `refused`: the policy refused a request, and nothing went out. `method` and `path` are there
+//   when they could be read.
+// - `unlogged`: how many more requests a run made that the policy refused, past those it writes one
+//   by one (`RUN_REFUSALS_LOGGED_MAX`), so what one run adds to the log is bounded.
 //
 // Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never
-// headers, bodies or query strings. The runner writes the log (`src/runner/sandbox/`), and reads
-// it to learn why a run failed (6.9). The bridge reads it for `/status`, which is why its format
-// is here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
+// headers, bodies or query strings. A path is cut at `NETLOG_PATH_MAX_CHARS`, so every line fits
+// within `NETLOG_LINE_MAX_BYTES`. The runner writes the log (`src/runner/sandbox/netlog.mjs`), and
+// reads it to learn why a run failed (6.9). The bridge reads it for `/status`, which is why its
+// format is here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
 
 import fs from 'node:fs'
 import { limits } from './limits.mjs'
 import { parseIsoSeconds, utcDate } from './time.mjs'
 
-export const NETLOG_EVENTS = ['request', 'response', 'error', 'refused']
+export const NETLOG_EVENTS = ['request', 'response', 'end', 'error', 'refused', 'unlogged']
 
 const DAY = 24 * 60 * 60 * 1000
 const NEWLINE = 0x0a
@@ -32,14 +44,18 @@ const READ_BYTES = 64 * 1024
 // The fields of each event, in the order they are written, and those that may be left out.
 const FIELDS = {
   request: ['id', 'at', 'event', 'host', 'method', 'path'],
-  response: ['id', 'at', 'event', 'status', 'sent', 'received', 'ms'],
+  response: ['id', 'at', 'event', 'status', 'ms'],
+  end: ['id', 'at', 'event', 'sent', 'received', 'ms', 'reason'],
   error: ['id', 'at', 'event', 'reason', 'ms'],
   refused: ['at', 'event', 'host', 'method', 'path', 'reason'],
+  unlogged: ['at', 'event', 'refused'],
 }
-const OPTIONAL = { refused: ['method', 'path'] }
+const OPTIONAL = { refused: ['method', 'path'], end: ['reason'] }
 
 const ID = /^\d{8}T\d{9}-\d{4}$/
-const HOST = /^[a-z0-9.:[\]-]+$/
+// A host as the writer leaves it: in lower case, with anything else a URL's host may hold written
+// as `%` and two hex digits (`hostForLog` in `src/runner/sandbox/netlog.mjs`).
+const HOST = /^[a-z0-9._%:[\]-]+$/
 const isCount = value => Number.isSafeInteger(value) && value >= 0
 const isText = value => typeof value === 'string' && value !== '' && !/\p{C}/u.test(value)
 
@@ -54,6 +70,7 @@ const TESTS = {
   received: [isCount, 'a count of bytes'],
   ms: [isCount, 'a whole number of milliseconds'],
   reason: [isText, 'a short reason on one line'],
+  refused: [isCount, 'a count of requests'],
 }
 
 // What is wrong with a line of the log, as a list of statements that name fields. An empty list

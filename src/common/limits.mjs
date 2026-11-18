@@ -124,6 +124,18 @@ const values = {
   // as a line that isn't one is. The policy writes lines of a few hundred bytes; the bound is what
   // keeps a reader's memory fixed however the log was written (6.9, 6.13).
   NETLOG_LINE_MAX_BYTES: 16 * KB,
+  // The longest path a line of the network log keeps, in characters. A path is pi's to choose, and
+  // could be as long as a request's head; cut here, every line the policy writes fits within
+  // `NETLOG_LINE_MAX_BYTES`, so no reader skips one (6.13).
+  NETLOG_PATH_MAX_CHARS: 1000,
+  // The most requests one run may make that the network policy lets out, and the most it refuses
+  // that the log takes one by one. A request that goes out takes a line before it goes, and up to
+  // two more after, so the requests past the first are refused; refusals past the second are
+  // counted, and the count written once, when the run ends. A run of pi makes a request a turn, a
+  // few hundred at most in the longest run `agents.yaml` allows; a misled one could make tens of
+  // thousands, each a line the runner and `/status` read (6.9, 6.13).
+  RUN_REQUESTS_MAX: 1000,
+  RUN_REFUSALS_LOGGED_MAX: 100,
   // The most of each memory file, `preferences.md` and `needs-review.md`, that goes into the
   // agent's system prompt. pi writes them, and one that grew without bound would make every run's
   // request too large, with no run left that could shorten it (6.5).

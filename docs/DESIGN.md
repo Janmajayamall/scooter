@@ -479,7 +479,7 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
 - **Session ID:** `lifelog-<day>`, where `<day>` is the local date of the current time minus `SESSION_ROLLOVER_HOUR` hours, with `-<n>` appended after `/new`. With `session: none`, use `--no-session` instead.
 - **Sessions belong to the runner.** pi never sees `sessions/`: the mounts hide it. Before a run, the runner empties `run/session/` and copies the current session's file into it, if there is one. After a successful run, once the files pass the check in 6.8 and are committed, it copies that one file back if it's a regular file (not a symlink), and ignores anything else in `run/session/`, which it then empties. After a failed run it copies nothing back (6.9). So a run can only extend the session it continues; it can't change another session or plant one for a later day.
 - **Nothing carries over between runs.** Each run is a new VM from the same image. pi's home, `/tmp`, anything it installed and any process it left running are gone when the VM closes.
-- **Timeout:** after `timeout_minutes`, the runner closes the VM. A VM that hasn't booted within `VM_START_TIMEOUT` is closed too, and the run counts as one the sandbox couldn't run (6.9).
+- **Timeout:** after `timeout_minutes`, the runner closes the VM. A VM that hasn't booted within `VM_START_TIMEOUT`, or within the run's own time when that ends first, is closed too, and the run counts as one the sandbox couldn't run (6.9).
 - **What a run may take from the runner** (`docs/DECISIONS.md`, milestone 7). Nothing pi does may stop the runner, or keep the bridge from writing:
   - The sandbox keeps the start of pi's stdout, its answer, up to `SANDBOX_STDOUT_MAX_BYTES`, and the end of its stderr, where OpenRouter's error is, up to `SANDBOX_STDERR_MAX_BYTES`. An answer cut there fails the run as pi's own failure.
   - A run may write at most `RUN_WRITE_MAX_BYTES`, and make at most `RUN_NAMES_MAX_COUNT` files, folders and links, through its writable mounts. Past either, the write is refused, the VM closed, and the run fails as pi's own failure, so a misled run can't fill the disk the bridge writes on. What it wrote is freed by the clean-up (6.9). The VM's own disk is a copy-on-write overlay no larger than the image, and its `/tmp` and `/root` are in its memory.
@@ -539,7 +539,8 @@ Steps 1 and 2 read what pi left, so an error in either, such as a git command th
   - **Setup error:** OpenRouter answered 401, 402, 403 or 404. For example, a revoked key, no credit left, a model the key's guardrail doesn't allow, a model that's gone, or no endpoint meeting ZDR. No item counts an attempt. Runs pause: the runner starts nothing until the next try, every 30 minutes and whenever it restarts, until a run gets through.
   - **Outage:** OpenRouter answered 408, 429 or a 5xx, or couldn't be reached. No item counts an attempt, and the runner tries again after 1, 5 and 30 minutes, then every 30 minutes.
   - **Anything else:** pi crashed or timed out while OpenRouter was answering normally, or it left an unexpected file, or files that couldn't be checked or committed, or its answer was longer than the sandbox keeps, or it wrote more than a run may (6.6). Every item in the batch counts one attempt, and is due again a minute later (6.8).
-  - A sandbox that can't run pi at all, such as a VM that doesn't start, counts as a setup error, with the reason "the VM couldn't start": it is the machine's fault, and spending every message's attempts on it wouldn't help.
+  - A sandbox that can't run pi at all, such as a VM that doesn't start, also within the run's own time, counts as a setup error, with the reason "the VM couldn't start": it is the machine's fault, and spending every message's attempts on it wouldn't help.
+  - **A request the network policy refused** at `openrouter.ai` (6.13), when it is the last request to OpenRouter in the run: if no request had gone out to OpenRouter before it, it was pi's own, since nothing the agent does can run before the model's first answer, and the policy and the pinned pi disagree, which no try of the batch can mend: a setup error, with the policy's reason. A later one may be the agent's, from a command it ran, and counts as pi's own failure, so that a message that misled the agent uses its attempts rather than hold runs back for good (`docs/DECISIONS.md`, D160).
 
   After a setup error or an outage, the batch's items wait in `retry` for the next try, with their attempt counts unchanged. Each try builds its batch as usual (6.5), so those items come first and messages that arrived meanwhile join in. So the whole batch is handled once OpenRouter works again, and nothing a setup error or an outage holds up ends in `failed`.
 
@@ -604,29 +605,32 @@ pi's VM has no network of its own. Gondolin's host side, inside the runner, hand
 - **HTTP(S)** goes out only to allowed hosts. The runner terminates the VM's TLS with its own certificate authority, which the image trusts, so it sees each request in full before passing it on.
 
 The rules:
-- **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS. Plain HTTP is refused.
-- **The key:** Gondolin swaps the placeholder in `OPENROUTER_API_KEY` for the real key only in requests to `openrouter.ai`, in the `Authorization` or `x-api-key` header. Anything else the VM sends carries only the placeholder.
-- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages`, which pi uses for Anthropic's models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline, and answers 400, logging the reason but never the body, unless all of these hold:
+- **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS. Plain HTTP is refused. OpenRouter's other hosts, and its name with a dot at the end, are refused even with internet access on: OpenRouter is reached only by its two routes, below.
+- **The key:** Gondolin swaps the placeholder in `OPENROUTER_API_KEY` for the real key only in requests to `openrouter.ai`, in the `Authorization` or `x-api-key` header. Anything else the VM sends carries only the placeholder. The hook lets it go there only in the header pi sends it in, `x-api-key` on the messages route and `Authorization: Bearer` on the other, as exactly the placeholder: a request to `openrouter.ai` with a key of its own gets 403, so that a key a misled agent found can't make OpenRouter answer 401 and runs pause for good (6.9). So does one with the placeholder in any other header, and a request to another host that carries the placeholder or the key (`docs/DECISIONS.md`, D156).
+- **Requests to OpenRouter:** an `onRequest` hook allows only `POST /api/v1/chat/completions` and `POST /api/v1/messages` (with pi's `?beta=true`), which pi uses for Anthropic's models (13.2). Anything else on `openrouter.ai` gets 403. The hook reads the whole body, up to 50 MB since images are sent inline, and answers 400, logging the reason but never the body, unless all of these hold:
   - `model` is exactly the agent's configured model;
-  - the body has only the top-level fields, and the request only the `anthropic-beta` values, that the pinned pi sends (13.2; `test/fixtures/pi-requests/`);
-  - every tool is one pi runs itself: `type: "function"` on chat completions, and no server-tool `type` (such as `web_search_*`, `web_fetch_*` or `openrouter:*`) on messages;
+  - the body has only the top-level fields, and the request only the `anthropic-beta` values, that the pinned pi sends on that route for any model of its catalog (13.2; `test/fixtures/pi-requests/`; `docs/DECISIONS.md`, D155);
+  - every tool is one pi runs itself: `type: "function"` on chat completions, and no `type` at all on messages, where a type names a server tool (such as `web_search_*`, `web_fetch_*` or `openrouter:*`);
   - there's no `plugins` or `mcp_servers` field;
-  - every image or document is inline: a `data:` URL, or a `base64` source.
+  - every kind of content in the messages is one pi sends, or another inline medium, and every image or document is inline: a `data:` URL, or a `base64` source.
 
-  The hook then forwards its own re-encoding of the checked JSON, so a body with a duplicated key can't show the check one value and OpenRouter another. Without these checks, OpenRouter could fetch from the web for the agent, past this policy and its log (13.3).
-- **Zero data retention:** with `OPENROUTER_ZDR=on`, the default, the hook also sets `provider.zdr` to `true` and `provider.data_collection` to `"deny"` in every body it forwards, on both routes, whatever pi sent. OpenRouter then routes the request only to endpoints that keep no prompts or responses (13.3).
+  The hook then forwards its own re-encoding of the checked JSON, so a body with a duplicated key can't show the check one value and OpenRouter another. Without these checks, OpenRouter could fetch from the web for the agent, past this policy and its log (13.3). A refused request is answered with an error in OpenRouter's shape, so pi prints the policy's reason.
+- **Zero data retention:** with `OPENROUTER_ZDR=on`, the default, the hook also sets `provider.zdr` to `true` and `provider.data_collection` to `"deny"` in every body it forwards, on both routes, whatever pi sent: pi sends no `provider` field, so a body with one of its own is refused. OpenRouter then routes the request only to endpoints that keep no prompts or responses (13.3). Each route has its own switch in the code, so if the messages route turns out to refuse these fields (section 14), they are left out there, and the key's guardrail enforces ZDR on that route alone.
   - If the configured model has no endpoint that qualifies, OpenRouter refuses every request, so runs pause and the owner gets one notice with OpenRouter's reason (6.9). There's no separate startup check. `doctor` can list the model's qualifying endpoints, from OpenRouter's public list (`GET /api/v1/endpoints/zdr`).
   - A request can only tighten OpenRouter's own settings, never loosen them, so the owner also enforces ZDR there. Scooter gets its own OpenRouter key, with a guardrail that enforces ZDR for every model group and excludes Safety Retention ("ZDR only"), allows only the configured model, and caps spending. The account's own prompt logging stays off. Then even a request without the flag can't reach an endpoint that keeps data.
   - With `OPENROUTER_ZDR=off`, the hook leaves routing to OpenRouter's settings.
 - **The log:** the runner appends to `/data/runner/log/YYYY-MM-DD.jsonl` (the UTC date):
   ```jsonl
   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:12Z","event":"request","host":"openrouter.ai","method":"POST","path":"/api/v1/messages"}
-  {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:19Z","event":"response","status":200,"sent":48211,"received":5340,"ms":7012}
-  {"at":"2026-11-09T15:51:02Z","event":"refused","host":"example.com","reason":"host not allowed"}
+  {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:13Z","event":"response","status":200,"ms":812}
+  {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:19Z","event":"end","sent":48211,"received":5340,"ms":7012}
+  {"at":"2026-11-09T15:51:02Z","event":"refused","host":"example.com","method":"GET","path":"/","reason":"host not allowed"}
   ```
   - The `request` line is written before the request goes out, so nothing leaves without a line, even if the runner crashes.
-  - Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never headers, bodies or query strings.
-  - Logging must not hold back streamed responses. In Gondolin 0.14.0 an `onResponse` hook buffers the whole response, so the runner logs from the HTTP client's diagnostics events instead (13.4).
+  - The `response` line is written when the status arrives, before the body, so a run that ends while the model is still streaming has OpenRouter's status in the log (6.9). The `end` line follows when the body is over, with the bytes each way, the heads included, and a `reason` when it was cut short. A request that got no answer has an `error` line instead: the host couldn't be reached, the connection broke before a status came, it was never sent, or the run ended first.
+  - Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never headers, bodies or query strings. A path is cut at `NETLOG_PATH_MAX_CHARS`, so every line fits within `NETLOG_LINE_MAX_BYTES`.
+  - What one run adds is bounded: it may make `RUN_REQUESTS_MAX` requests that go out, and the policy refuses the rest; it writes the first `RUN_REFUSALS_LOGGED_MAX` refusals one by one, and counts the others in one `unlogged` line when the run ends.
+  - Logging must not hold back streamed responses. In Gondolin 0.14.0 an `onResponse` hook buffers the whole response, so the runner logs from the HTTP client's diagnostics events instead (13.4). The hook marks each request it lets out with a header of its own, holding the request's ID, which the runner takes out of the HTTP client's request before it is written on a connection (`docs/DECISIONS.md`, D159).
   - The owner reads it with `cat`; in Docker, `docker compose exec runner cat /data/runner/log/<date>.jsonl`. `/status` shows the last 24 hours' counts. It's backed up with the rest.
 
 ## 7. The agent's instructions
@@ -873,6 +877,8 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
 | `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
 | `NETLOG_LINE_MAX_BYTES` | 16 KB | 6.9, 6.13 | The longest line of the network log a reader takes, so reading it needs the same memory however large pi made it |
+| `NETLOG_PATH_MAX_CHARS` | 1,000 | 6.13 | The longest path a line of the network log keeps, so every line the policy writes fits within `NETLOG_LINE_MAX_BYTES` |
+| `RUN_REQUESTS_MAX`, `RUN_REFUSALS_LOGGED_MAX` | 1,000; 100 | 6.13 | The most requests one run may make that go out, and the most refusals the log takes from it one by one; the rest are counted in one line, so what a run adds to the log is bounded |
 | `SESSION_MAX_BYTES` | 100 MB | 6.6 | The largest session file copied back from a run. The whole session goes to the model on every request, so a larger one couldn't be sent anyway |
 | `ANSWER_MAX_TEXTS` | 25 | 6.7 | The most texts one answer sends, so a misled run can't flood the owner's chat |
 | `AGENT_FILES_MAX_BYTES` | 100 MB | 6.8 | The most `views/` and `memory/` may hold together after a run. git reads every byte of a file to add it, and pi can make a file of any size in an instant |
@@ -986,16 +992,18 @@ Required tests, at least:
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.
   - Each refusal: another model, an `:online` model, a tool that isn't `function` or is a server tool, `plugins`, `mcp_servers`, an unknown top-level field or `anthropic-beta` value, an image or document given by URL, another path or method on `openrouter.ai`, another host with internet access off, and plain HTTP with it on.
   - A body with a duplicated key goes out only as the hook's own re-encoding.
-  - The placeholder is replaced only on requests to `openrouter.ai`.
+  - The placeholder is replaced only on requests to `openrouter.ai`. A request there with a key of its own, or the placeholder in another header, is refused, and so is one elsewhere that carries the placeholder or the key.
   - With `OPENROUTER_ZDR=on`, every forwarded body carries `provider.zdr: true` and `data_collection: "deny"`, overriding anything pi sent; with it off, routing is left alone. When OpenRouter refuses a request because no endpoint meets ZDR, runs pause, and the owner's notice gives that reason.
-  - The `request` line is written before the request goes out, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
+  - The `request` line is written before the request goes out, the `response` line when the status arrives, streamed responses aren't held back, and `/status` reports the last 24 hours' counts.
+  - What one run adds to the log is bounded: a path is cut, requests past `RUN_REQUESTS_MAX` are refused, and refusals past `RUN_REFUSALS_LOGGED_MAX` are counted in one line.
+  - A refusal of pi's first request at `openrouter.ai` pauses runs as a setup error; a refusal after a request went out counts an attempt.
 - **Sandbox** (these need QEMU, and skip themselves without it):
   - A VM boots from the built image and runs `pi --version`.
   - The mounts: the datastore and the agent's folder are read-only, except `views/`, `memory/` and `run/session/`. `sessions/` isn't there, and a link made in a writable folder doesn't lead to it. They sit at the host's paths, also when the data folder is `/data`.
   - Nothing survives between runs: neither files outside the mounts nor background processes.
   - From inside the VM: another host, DNS to an outside resolver, UDP, and private addresses (the host's loopback, `169.254.169.254`, a LAN address) are all refused, and the environment holds only the placeholder.
   - `AGENT_ACCEL`: `auto` picks the fastest available and says which; a forced accelerator that isn't available stops the runner with an error.
-  - A timeout closes the VM, and stopping the runner's process group leaves no QEMU behind. A VM that doesn't boot in time fails the run as one the sandbox couldn't run.
+  - A timeout closes the VM, and stopping the runner's process group leaves no QEMU behind. A VM that doesn't boot in time, its start limit's or the run's own, fails the run as one the sandbox couldn't run.
   - A run that writes more than `RUN_WRITE_MAX_BYTES`, or makes more than `RUN_NAMES_MAX_COUNT` names, through its writable mounts is stopped. The sandbox keeps the start of stdout and the end of stderr, and says when an answer was cut.
   - A missing image, or one built for another pi version, stops the runner, and so does a `SCOOTER_TZ` the image doesn't know.
   - As root, `build-image` builds outside the runner's folder, and links the runner's user puts in that folder during the build lead it nowhere: nothing they lead to is written, given away or removed. This one needs root, not QEMU.
@@ -1169,7 +1177,7 @@ Milestone 0 settled five of them on the Linux machine, marked "Checked" below: t
 - The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused. *Checked: captured for every model, and pi needs no other path (pi 6).*
 - `--skill` together with `--no-skills` in the pinned pi version. *Checked: they work together (pi 1).*
 - A real batch end to end, with the owner's key, in the sandbox.
-- Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13).
+- Whether OpenRouter's messages route accepts `provider.zdr` and `provider.data_collection`. Its reference shows a `provider` object there, but only with `allow_fallbacks`. If it refuses them, the hook leaves them out on that route, and the key's guardrail enforces ZDR on its own (6.13). *Milestone 8's live check sent them on both routes with a dummy key, and OpenRouter answered 401, which it decides before it reads the body, so this stays open.*
 - That ZDR-only routing works for the configured model, and how much latency it adds.
 - KVM inside a container: rootful Docker with `devices` and `group_add`, and rootless Docker with the udev rule (8.3).
 - Building the VM image natively, as root (6.12), and in the runner container, where the build may need more privileges than the service has (8.3). *`scooter build-image` with Gondolin's container build, under rootless Docker, was run in milestone 7.*

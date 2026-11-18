@@ -106,10 +106,17 @@ const PI_MENTION = new RegExp(`${PI_PACKAGE.replace('/', '\\/')}(?![a-z0-9._~-])
 // else: no `;`, `&` or `|`, newline, quote, `$`, backquote, redirection or pattern.
 const PLAIN_COMMAND = /^[A-Za-z0-9@/._=:+,\- ]+$/
 
+// The switches the command that installs pi may give npm: those the build file uses, and `-g`.
+// npm takes a word after a switch as its value, and a switch by the start of its name, so any other
+// word, such as `false` after `--ignore-scripts`, or `--ignore-s=false`, could turn pi's install
+// scripts back on (the second review of milestone 7, smaller point 1).
+const INSTALL_SWITCHES = ['--global', '-g', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund']
+
 // pi's version, as the build file pins it, strictly: the commands name pi once, with or without a
 // version, and that is in an install command of plain words that pins it to an exact version, such
-// as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install scripts (row 8).
-// Throws an `ImageError` that names the command otherwise.
+// as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install scripts (row 8):
+// `npm install`, pi, and switches from `INSTALL_SWITCHES`, `--ignore-scripts` among them, and no
+// other word. Throws an `ImageError` that names the command otherwise.
 export function pinnedPiVersion(build, file = 'config/image/build.json') {
   const found = []
   build.postBuild.commands.forEach((command, n) => {
@@ -124,10 +131,12 @@ export function pinnedPiVersion(build, file = 'config/image/build.json') {
   if (!PLAIN_COMMAND.test(command)) {
     throw new ImageError(`${where} must be one npm install command, of plain words: no ;, &, |, newline, quote, $ or anything else the shell reads as more`)
   }
-  const words = command.trim().split(/ +/)
-  const scripts = words.filter(word => word.includes('ignore-scripts'))
-  if (words[0] !== 'npm' || words[1] !== 'install' || scripts.length === 0 || scripts.some(word => word !== '--ignore-scripts')) {
-    throw new ImageError(`${where} must install pi with npm install --ignore-scripts, so the build runs none of its packages' code`)
+  const [npm, install, ...rest] = command.trim().split(/ +/)
+  const known = word => INSTALL_SWITCHES.includes(word) || word === `${PI_PACKAGE}@${version}`
+  if (npm !== 'npm' || install !== 'install' || !rest.includes('--ignore-scripts') || !rest.every(known)) {
+    throw new ImageError(
+      `${where} must install pi with npm install --ignore-scripts, so the build runs none of its packages' code, and give npm no other word than pi and ${INSTALL_SWITCHES.join(', ')}`,
+    )
   }
   return version
 }
@@ -460,6 +469,23 @@ function openStaging(paths, isRoot) {
   return staging
 }
 
+// Runs `step`, which writes in `dir`, and returns what it returns. A user who may not write there
+// gets an error that says who builds the image, with exit code 2: since D151 that is every user but
+// root on a native install, `scooter-runner` among them (the second review of milestone 7, smaller
+// point 3). Any other error is passed on.
+function canWrite(dir, step) {
+  try {
+    return step()
+  } catch (error) {
+    if (refusedWriting(error)) throw cantWrite(dir, error)
+    throw error
+  }
+}
+
+const refusedWriting = error => ['EACCES', 'EPERM', 'EROFS'].includes(error?.code)
+const cantWrite = (dir, error) =>
+  new ImageError(`build-image can't write in ${dir} (${error.code}): on a native install it runs as root, as sudo scooter build-image; otherwise, as a user who can write the data folder`)
+
 // The names in `paths.imageStaging`: the image being built, and the old one once it is set aside.
 const STAGED_IMAGE = 'image'
 const STAGED_OLD = 'old'
@@ -482,7 +508,7 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
   readImage ??= imageReader(proc)
   if (!fs.existsSync(paths.runner)) {
     if (isRoot) throw new ImageError(`${paths.runner} doesn't exist: run scooter setup first`)
-    ensureDir(paths.runner, { mode: 0o700 })
+    canWrite(paths.runner, () => ensureDir(paths.runner, { mode: 0o700 }))
   }
   if (isRoot) checkDataFolder(paths.dataDir)
 
@@ -490,10 +516,11 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
   try {
     instance = await holdInstance(paths.runnerSocket, 'runner')
   } catch (error) {
+    if (refusedWriting(error)) throw cantWrite(paths.runner, error)
     throw new ImageError(`build-image can't run while the runner does (${error.message}): stop the runner first`)
   }
   try {
-    const staging = openStaging(paths, isRoot)
+    const staging = canWrite(paths.dataDir, () => openStaging(paths, isRoot))
     const fresh = path.join(staging, STAGED_IMAGE)
     const old = path.join(staging, STAGED_OLD)
     const config = { ...structuredClone(build), arch: machineArch(), container: method.native ? { force: false } : { force: true, runtime: method.runtime } }

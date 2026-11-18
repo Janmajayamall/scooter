@@ -40,7 +40,7 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
     networkLogDir: '/data/runner/log',
     networkLog: '/data/runner/log/2026-11-09.jsonl',
     imageStaging: '/data/.image-build',
-    bridge:'/data/bridge',
+    bridge: '/data/bridge',
     bridgeState: '/data/bridge/state.json',
     bridgeSocket: '/data/bridge/bridge.sock',
     bridgeIncoming: '/data/bridge/incoming',

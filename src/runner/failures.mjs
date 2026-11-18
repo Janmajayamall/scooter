@@ -7,8 +7,8 @@
 //
 // | Cause   | Sign                                            | What happens                        |
 // |---------|-------------------------------------------------|-------------------------------------|
-// | setup   | 401, 402, 403 or 404                            | Runs pause, and are tried every 30  |
-// |         |                                                 | minutes and at each start           |
+// | setup   | 401, 402, 403 or 404; or the network policy     | Runs pause, and are tried every 30  |
+// |         | refused pi's first request                      | minutes and at each start           |
 // | outage  | 408, 429, a 5xx, or no answer                   | Tried after 1, 5 and 30 minutes,    |
 // |         |                                                 | then every 30                       |
 // | other   | pi crashed or timed out while OpenRouter was    | Each item counts an attempt, and is |
@@ -35,12 +35,22 @@ const isOutageStatus = status => status === 408 || status === 429 || status >= 5
 // ---------------------------------------------------------------------------------------------
 // The cause
 
-// OpenRouter's last answer among `entries`, lines of the network log: the outcome of the last
-// request to OpenRouter. Returns null when there was none, and otherwise one of
+// OpenRouter's last answer among `entries`, lines of the network log: what came of the last
+// request to OpenRouter, or of the last the policy refused there. Returns null when there was
+// neither, and otherwise one of
 //
-//   { status }           OpenRouter answered with this status
-//   { answer: 'none' }   the request got no answer: it couldn't be sent, or the connection broke,
-//                        or the run ended while it waited
+//   { status }                OpenRouter answered with this status
+//   { answer: 'none' }        the request got no answer: it couldn't be sent, or the connection
+//                             broke, or the run ended while it waited
+//   { refused, first }        the network policy refused it, for the reason `refused`; `first` when
+//                             no request had gone to OpenRouter before it in the run
+//
+// A refusal that comes before any request has gone out is pi's own request: nothing the agent
+// does can run before the model's first answer, which pi asks for itself. pi asks the same way all
+// run long (0.4, pi 6), so the policy refusing it there means the policy and the pinned pi don't
+// agree, which no try of the batch can mend. A later refusal may be the agent's, from a command it
+// ran, and reads as pi's own failure, so that a message that misled the agent uses its attempts
+// rather than hold runs back for good (the plan's rules for milestone 8).
 export function lastOpenRouterAnswer(entries) {
   const answers = openRouterAnswers()
   for (const entry of entries) answers.add(entry)
@@ -53,16 +63,24 @@ export function lastOpenRouterAnswer(entries) {
 function openRouterAnswers() {
   let request = null
   let outcome = null
+  let refused = null
+  let sent = false
   return {
     add(entry) {
-      if (entry.event === 'request' && entry.host === OPENROUTER_HOST) {
+      if (entry.host === OPENROUTER_HOST && entry.event === 'request') {
         request = entry.id
         outcome = null
+        refused = null
+        sent = true
+      } else if (entry.host === OPENROUTER_HOST && entry.event === 'refused') {
+        refused = { refused: entry.reason, first: !sent }
+        request = null
       } else if (request !== null && outcome === null && entry.id === request && (entry.event === 'response' || entry.event === 'error')) {
         outcome = entry
       }
     },
     last() {
+      if (refused !== null) return refused
       if (request === null) return null
       return outcome?.event === 'response' ? { status: outcome.status } : { answer: 'none' }
     },
@@ -103,7 +121,8 @@ export function openRouterMessage(stderr, status) {
 //
 // The reason is OpenRouter's error whenever its last answer was one (6.9), in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
-// 413 for a prompt or an image too large, which is pi's own failure.
+// 413 for a prompt or an image too large, which is pi's own failure. When the network policy
+// refused the last request to OpenRouter, it is the policy's reason, from the log.
 //
 // A sandbox that couldn't run pi at all, such as a VM that doesn't boot, is a setup error: it is
 // the machine's, not the message's, and trying every message four times wouldn't help.
@@ -117,6 +136,13 @@ export function failureCause({ result, unexpected = null, filesError = null, ans
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
   if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 
+  // A request the network policy refused at OpenRouter: pi's first, which no try can mend, is a
+  // setup error; a later one pi's own failure (`lastOpenRouterAnswer`).
+  if (answer?.refused !== undefined) {
+    return answer.first
+      ? { cause: 'setup', reason: shortReason(`the network policy refused pi's request: ${answer.refused}`), status }
+      : { cause: 'other', reason: shortReason(`the network policy refused a request: ${answer.refused}`), status }
+  }
   if (status !== null && status >= 400) {
     const words = openRouterMessage(result.stderr ?? '', status)
     return {
