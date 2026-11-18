@@ -2319,3 +2319,38 @@ None changes what Scooter does beyond what 6.10, 6.11 and the review of mileston
 - Section 10, Network policy: a body with a `provider` of its own is refused (9.2, point 4).
 
 ARCHITECTURE.md 5.5 says where the two live. The plan's milestone 14 has what this milestone leaves for the README (D167, D168), and the review's first point.
+
+### 9.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean clones of the branch at `44e270d`; the root tests and the repeated runs at `3be1461`, which `44e270d` changes only in one line the rebuild prints when it is stopped, and its test:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 668 tests: 624 pass, none fail. 44 skip themselves: 34 need the image (18 of milestone 0, 16 of the sandbox) and 10 need root |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 670 tests: 660 pass, none fail, in 113 seconds. The 10 root tests skip themselves. The fastest of three boots: 2.0 seconds. No QEMU left. The new sandbox test, a rebuild's batch in a VM, passes |
+| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 613 pass, none fail. 55 skip themselves: 34 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. The 21 tests of `rebuild`, `backfill` and `replay` run there, and pass |
+| The `rebuild`, `backfill`, `replay`, `policy`, `run`, `runner`, `failures`, `batch`, `image`, `cli`, `imports`, `planning` and `triggers` tests, 16 times, 8 at once | No failure, and no test folder left behind |
+| The new test of `RUN_REQUESTS_MAX`, against the policy of `d8595dd` | Fails: eight requests at once with the limit at 2 all go out, as the review found |
+| `scooter rebuild lifelog` as a process, by a script run by hand, with the Gondolin sandbox, the test image and KVM, the real network policy and the real OpenRouter, with a dummy key, on a datastore of two messages on two days | The rebuild tagged the commit and said so; pi's request from the VM passed the policy and reached OpenRouter, which answered 401; the rebuild paused as a setup error, "2026-11-07 #1: paused (OpenRouter: User not found.) until 11:51"; `SIGINT` stopped it in 4 seconds with exit code 1. The state had `cursor` and `commandSeq` at #2, nothing was in the outbox, `run.lock` was gone, and no QEMU was left |
+
+The tests section 10 of DESIGN.md asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Rebuilds: a rebuild stops at the `seq` that was newest when it started, so later messages get normal replies | `rebuild.test.mjs`, the first test: a message the bridge stores during the rebuild's first batch is in no batch, and the runner started afterwards answers it with a reply; no old command is answered again |
+| Rebuilds: `Now:` is each batch's own time, and batches don't cross the owner's days | `replay.test.mjs`: three days in Kolkata, two of them on one UTC day, and the same messages in New York; a retry of another day a batch of its own; 20 a batch; `until`; a message brought in from another day. `rebuild.test.mjs`, through the stub. `sandbox.test.mjs`, a rebuild's batch in a VM with the real pi |
+| Backfills: `until` is the live cursor when the backfill starts, and every message up to it is covered once | `backfill.test.mjs`, the first test; `agentstate.test.mjs` (milestone 3), `until` at a start |
+| Backfills: its batches run only when nothing live is waiting, and a message that arrives during one is handled right after it | `backfill.test.mjs`, the second test; `triggers.test.mjs` (milestone 3) |
+| Backfills: a batch that changes anything outside its `writes` and the day pages, `memory/` included, fails and is discarded | `backfill.test.mjs`: `views/notes.csv`, then four attempts and `skipped`; `memory/preferences.md` |
+| Backfills: it sends nothing until its summary, its progress survives a restart, and removing its entry drops it | `backfill.test.mjs`: the first test, and "its progress survives a restart" |
+
+Beyond section 10: the rebuild's exclusion of a runner and `run.lock`, its failures, pauses and wait for a backup, its stop, and `scooter rebuild`'s arguments, in `rebuild.test.mjs`; a backfill's setup error and the live notice after it, its lane, its summary's parts, and what it may change, in `backfill.test.mjs`; a replay's sessions, in `replay.test.mjs`.
+
+The milestone's "done when", those tests passing with the fake sandbox: all of `rebuild.test.mjs`, `backfill.test.mjs` and `replay.test.mjs`.
+
+Not verified:
+- **A replay read by a real model.** The stub stands in for pi in the tests, and the scripted fake model in the sandbox test; whether a model files old messages well against `Now:` in the past, and keeps a backfill's batch to its view, waits for a real key (gate G4) and milestone 11's prompt and skills.
+- **A backfill's batch in a VM.** A rebuild's batch ran in one; a backfill's differs in the prompt's first line, the skills it gets, and the check after it, which run on the host.
+- **A rebuild of a datastore of months:** how long it takes and what it costs; and how much git's reflog keeps of the commits folded away (D169).
+- **`scooter rebuild` in Docker,** as `docker compose run --rm runner rebuild lifelog` (milestone 13), and natively as `scooter-runner` (milestone 12).
+- **arm64 and macOS.** Nothing here knows the architecture.
