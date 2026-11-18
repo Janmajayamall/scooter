@@ -2691,3 +2691,33 @@ None changes what Scooter does beyond what section 7 and the review left open:
 - 7.2: the CSV files, and where a guess's ❓ goes (D200).
 
 ARCHITECTURE.md 2.11 says the same of `restore`. The plan's milestone 14 has what this milestone leaves for the README, and the review's third point.
+
+### 11.4 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `0d19ccd`, which holds all the files and code; the commit after it changes only this section:
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test` | 719 tests: 673 pass, none fail. 46 skip themselves: 35 need the image (18 of milestone 0, 17 of the sandbox), 10 need root, and 1 needs root and `SCOOTER_ROOT_TESTS=1` |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 721 tests: 710 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left. The new sandbox test passes: pi in a VM, run by the runner with the files of `config/`, is given the protocol, the prompt and the memory in that order, is offered the six skills at their copies in `run/config/` with their descriptions, reads `expenses/SKILL.md` there, finds the six programs the instructions name, writes `expenses.csv` and a day page, and the runner commits both and reacts ✅ |
+| The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 719 tests, 663 pass, none fail. 56 skip themselves: 35 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. This milestone's tests all run there, and pass |
+| The `instructions`, `config`, `backup`, `agentdir`, `answer`, `planning`, `runner` and `backfill` tests, 16 times, 8 at once | No failure |
+| The new tests against the code of `main` | The test of D198 fails against `backup.mjs` of `main`, and that of D197 against its `config.mjs`. The tests of the files need `config/`, which `main` doesn't have |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'node test/live/openrouter.mjs'`, with the network | The plan's "done when". On each route the runner, with the files of `config/` and a dummy key, ran the pinned pi in a VM through the real policy. pi's request, 23,934 bytes on the messages route and 23,872 on the chat route, reached OpenRouter, which answered 401; the runner took it as a setup error, paused runs and counted no attempt; and `curl https://example.com/` in a VM of the same sandbox was refused. Exit code 0, no QEMU left |
+| By hand: `debugfs` on the test image, which `config/image/build.json` built | `pdftotext`, `pdftoppm`, `heif-convert`, `curl`, `git`, `rg`, `fd`, `node`, and busybox's `sort`, `awk` and `sed` are there (D203) |
+
+The tests the plan asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Every skill folder has a `SKILL.md` with `name` and `description` | `instructions.test.mjs`, the second test, for the files of `config/`; `config.test.mjs`, the test of D197, for the runner's check of any skill |
+| The default config validates | `instructions.test.mjs`, the first test: it validates, and is 6.1's example, which it holds line for line |
+| Each view in the prompt names a skill that exists | `instructions.test.mjs`, the third test, with 7.2's list taken from DESIGN.md |
+| Each CSV header matches 7.3 | `instructions.test.mjs`, the fourth test, with the headers and the categories taken from 7.3 |
+
+Beyond those: the day page's template and its links, checked against the paths of a native and a Docker data folder; a run's system prompt and its copy of the skills; and the protocol against the parser, its example answer and each thing it says of a line, in `instructions.test.mjs`. Section 10's Config, each validation error naming the field, covers D197's faults in `config.test.mjs`.
+
+Not verified:
+- **A real model with these instructions** (gate G4). Whether it reads a skill when it should, files a receipt, a run's screenshot, a ticket and an email as the skills say, keeps the CSV rules and the day pages, asks as the protocol says, and ends its answers with lines the parser reads. The sandbox test's model follows a script, and with a dummy key OpenRouter answers 401 before any model sees the prompt. The same holds for whether a rebuild's prompt needs a line of its own (D202).
+- **What the instructions cost.** pi's first request with them is about 24 KB, its system prompt, its tools and the prompt, and every request of a run sends it again. Prompt caching, which ZDR allows (13.3), would make most of it cheap; how much, the first real runs will show.
+- **arm64 and macOS.** Nothing here knows the architecture.
