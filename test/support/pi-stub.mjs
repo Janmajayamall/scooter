@@ -50,6 +50,7 @@
 // | `MEMORY`               |                        | adds a line to `memory/preferences.md`             |
 // | `UNKNOWN`              |                        | reports numbers that weren't in the batch          |
 // | `REPLYTO=<seq>`        |                        | replies to that number                             |
+// | `LONGANSWER`           |                        | starts its answer with 64 KB of text               |
 //
 // It writes OpenRouter's answers to the network log as the runner's policy would, in its format,
 // and keeps its session as pi 1.5.2 does (`docs/DECISIONS.md`, 0.4, pi 2). Every absolute path it
@@ -309,5 +310,6 @@ function act() {
   if (done.length > 0) lines.push(`DONE: ${done.map(seq => `#${seq}`).join(' ')}`)
   lines.push(...failed)
   if (has('UNKNOWN')) lines.push('DONE: 999999', 'FAILED: 888888 not mine')
+  if (has('LONGANSWER')) lines.unshift('x'.repeat(64 * 1024))
   process.stdout.write(`${lines.join('\n')}\n`)
 }

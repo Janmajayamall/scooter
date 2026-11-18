@@ -27,7 +27,17 @@ export const COMMANDS = {
     summary: 'Run the bridge',
     load: async () => (await import('./bridge/main.mjs')).runBridge,
   },
-  runner: { side: 'runner', usage: 'runner', where: 'runner', summary: 'Run the runner' },
+  runner: {
+    side: 'runner',
+    usage: 'runner',
+    where: 'runner',
+    summary: 'Run the runner',
+    // The runner, with pi's runs in Gondolin VMs (6.6).
+    load: async () => {
+      const [{ runRunner }, { openGondolinSandbox }] = await Promise.all([import('./runner/main.mjs'), import('./runner/sandbox/gondolin.mjs')])
+      return ({ settings, stderr }) => runRunner({ settings, stderr, openSandbox: openGondolinSandbox })
+    },
+  },
   setup: {
     side: 'host',
     usage: 'setup [--no-services]',
@@ -40,6 +50,7 @@ export const COMMANDS = {
     usage: 'build-image',
     where: 'the host, as root; in Docker, the runner container',
     summary: 'Build the VM image that pi runs in',
+    load: async () => (await import('./runner/sandbox/image.mjs')).runBuildImage,
   },
   pair: {
     side: 'bridge',

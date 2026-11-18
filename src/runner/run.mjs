@@ -188,7 +188,8 @@ export async function performRun(context) {
       return { state, outcome: 'stopped' }
     }
 
-    const exited = !result.error && result.code === 0
+    // A run whose answer was cut, or that wrote more than a run may, failed, whatever pi's exit code.
+    const exited = !result.error && result.code === 0 && !result.stdoutCut && !result.wroteTooMuch
     const files = exited ? await commitFiles(context) : null
     const timing = { now: endedAt, startedAt, durationMs: Math.max(0, Math.round(endedAt - startedAt)) }
     if (files !== null && files.committed !== undefined) return await afterSuccess(context, { result, sessionId: id, seqs, timing, committed: files.committed })
@@ -290,6 +291,8 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     status: failure.status,
     exitCode: result.code,
     timedOut: result.timedOut,
+    stdoutCut: result.stdoutCut || undefined,
+    wroteTooMuch: result.wroteTooMuch || undefined,
     // A name pi chose, cut as the reason is: it could hold a message's words.
     file: unexpected === null ? undefined : shortReason(unexpected),
     ms: timing.durationMs,

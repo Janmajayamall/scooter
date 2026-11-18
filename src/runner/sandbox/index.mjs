@@ -32,11 +32,75 @@
 //   and the sandbox puts `value` in its place only on requests to `hosts`.
 // - `signal` aborts the run: the VM is closed, as for a timeout.
 //
-// It resolves with `{ code, signal, stdout, stderr, timedOut }`. `code` is the program's exit code,
-// or null when it didn't exit by itself: it timed out, was aborted, or the VM was lost. It rejects
-// only when the command couldn't be run at all, such as when the VM doesn't start.
+// It resolves with `{ code, signal, stdout, stderr, timedOut, stdoutCut, wroteTooMuch }`. `code` is
+// the program's exit code, or null when it didn't exit by itself: it timed out, was aborted, went
+// past what a run may write, or the VM was lost. It rejects only when the command couldn't be run
+// at all, such as when the VM doesn't start.
+//
+// Nothing pi does may stop the runner (`docs/DECISIONS.md`, 4.7), so a sandbox bounds what a run
+// can take from it:
+// - **Output.** It keeps the start of stdout, pi's answer, and the end of stderr, where OpenRouter's
+//   error is, up to `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (`createOutput`).
+//   `stdoutCut` says the answer was cut, which fails the run as pi's own failure.
+// - **Writes.** The real sandbox stops a run that writes more than `RUN_WRITE_MAX_BYTES`, or makes
+//   more than `RUN_NAMES_MAX_COUNT` names, through its writable mounts: it refuses the write, closes
+//   the VM, and says `wroteTooMuch`, which fails the run as pi's own failure too.
 
 import path from 'node:path'
+import { limits } from '../../common/limits.mjs'
+
+// A sandbox that can't run anything as it is set up: no image, an image built for another pi, an
+// accelerator that was forced and isn't there. The runner doesn't start, and says why (exit code 2).
+export class SandboxSetupError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'SandboxSetupError'
+  }
+}
+
+// Collects a program's output as both sandboxes keep it: the first `SANDBOX_STDOUT_MAX_BYTES` of
+// stdout and the last `SANDBOX_STDERR_MAX_BYTES` of stderr. `add(stream, chunk)` takes each piece
+// as it comes, so the memory it holds is bounded whatever the program prints; `result()` gives
+// `{ stdout, stderr, stdoutCut }`, as text.
+export function createOutput() {
+  const stdoutMax = limits.SANDBOX_STDOUT_MAX_BYTES
+  const stderrMax = limits.SANDBOX_STDERR_MAX_BYTES
+  const stdout = []
+  let stdoutBytes = 0
+  let stdoutCut = false
+  let stderr = []
+  let stderrBytes = 0
+  return {
+    add(stream, chunk) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (stream === 'stdout') {
+        const room = stdoutMax - stdoutBytes
+        if (bytes.length > room) stdoutCut = true
+        if (room > 0) {
+          const kept = bytes.subarray(0, room)
+          stdout.push(kept)
+          stdoutBytes += kept.length
+        }
+        return
+      }
+      stderr.push(bytes)
+      stderrBytes += bytes.length
+      if (stderrBytes > 2 * stderrMax) {
+        const joined = Buffer.concat(stderr)
+        stderr = [joined.subarray(joined.length - stderrMax)]
+        stderrBytes = stderrMax
+      }
+    },
+    result() {
+      const err = Buffer.concat(stderr)
+      return {
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: err.subarray(Math.max(0, err.length - stderrMax)).toString('utf8'),
+        stdoutCut,
+      }
+    },
+  }
+}
 
 // The one host pi's requests to the model go to, and the only one its key is sent to (6.13).
 export const OPENROUTER_HOST = 'openrouter.ai'

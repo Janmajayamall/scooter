@@ -317,3 +317,22 @@ export function loadSettings(side, { env = process.env } = {}) {
   if (problems.length > 0) throw new SettingsError(problems)
   return settings
 }
+
+// Only where one side's files are, `{ dataDir, configDir }`, from its env file or the environment,
+// for a command that needs nothing else: `build-image`, which runs as root, and so reads no secret
+// it doesn't use. The file is checked as `loadSettings` checks it; its other values are left alone.
+export function loadFolders(side, { env = process.env } = {}) {
+  if (!Object.hasOwn(VARIABLES, side)) throw new Error(`no such side: ${side}`)
+  const problems = []
+  const fromFile = readEnvFile(side, env[ENV_DIR_VARIABLE] || DEFAULT_ENV_DIR, problems)
+  const folder = (name, fallback) => {
+    const raw = env[name] !== undefined ? env[name] : fromFile.get(name)
+    const value = raw === undefined || raw.trim() === '' ? fallback : raw
+    if (path.isAbsolute(value)) return path.resolve(value)
+    problems.push({ variable: name, message: `${name} must be an absolute path` })
+    return undefined
+  }
+  const folders = { dataDir: folder('DATA_DIR', '/data'), configDir: folder('CONFIG_DIR', '/config') }
+  if (problems.length > 0) throw new SettingsError(problems)
+  return folders
+}

@@ -13,7 +13,9 @@
 // |         |                                                 | then every 30                       |
 // | other   | pi crashed or timed out while OpenRouter was    | Each item counts an attempt, and is |
 // |         | answering, or it left an unexpected file, or    | due again a minute later            |
-// |         | files that couldn't be checked or committed     |                                     |
+// |         | files that couldn't be checked or committed,    |                                     |
+// |         | or wrote too much, or answered at too great a   |                                     |
+// |         | length                                          |                                     |
 //
 // Neither a setup error nor an outage counts an attempt: the batch's items wait in `retry` for the
 // next try, with their counts unchanged, so nothing they hold up ends in `failed`.
@@ -108,6 +110,10 @@ export function openRouterMessage(stderr, status) {
 export function failureCause({ result, unexpected = null, filesError = null, answer = null }) {
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
+  // What pi did, whatever OpenRouter answered: its VM was closed for writing too much, or its
+  // answer was longer than the sandbox keeps (6.6).
+  if (result.wroteTooMuch) return { cause: 'other', reason: 'pi wrote more than a run may', status }
+  if (result.code === 0 && result.stdoutCut) return { cause: 'other', reason: "pi's answer was too long", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
   if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 

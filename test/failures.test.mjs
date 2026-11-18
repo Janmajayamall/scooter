@@ -184,6 +184,24 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
   })
   // A sandbox that couldn't run pi at all.
   assert.deepEqual(failureCause({ result: { error: new Error('no QEMU') } }), { cause: 'setup', reason: "the VM couldn't start", status: null })
+  // A run the sandbox stopped for writing too much, whatever OpenRouter said last: the VM was
+  // closed in the middle of whatever pi was doing (6.6).
+  assert.deepEqual(failureCause({ result: failed(null, { wroteTooMuch: true }), answer: { answer: 'none' } }), {
+    cause: 'other',
+    reason: 'pi wrote more than a run may',
+    status: null,
+  })
+  // An answer longer than the sandbox keeps, after pi exited with 0; after a failure, the failure.
+  assert.deepEqual(failureCause({ result: failed(0, { stdoutCut: true }), answer: { status: 200 } }), {
+    cause: 'other',
+    reason: "pi's answer was too long",
+    status: 200,
+  })
+  assert.deepEqual(failureCause({ result: failed(1, { stdoutCut: true }), answer: { status: 429 } }), {
+    cause: 'outage',
+    reason: 'OpenRouter answered 429',
+    status: 429,
+  })
 })
 
 // ---------------------------------------------------------------------------------------------
