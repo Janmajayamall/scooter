@@ -10,24 +10,28 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { HELP_TEXT, BACKUP_NOT_BUILT } from '../src/bridge/commands.mjs'
+import { BACKUP_NOT_BUILT, HELP_TEXT, createCommands } from '../src/bridge/commands.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
-import { listHandOffs } from '../src/common/files.mjs'
+import { openStore } from '../src/bridge/store.mjs'
+import { createIds, listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
+import { createMailReaderStub } from './support/mail-reader.mjs'
+import { AUTHSERV, OWNER_ADDRESSES, appleMailAudio, gmailPlain } from './support/mail-samples.mjs'
 import { isRoot } from './support/root.mjs'
+import { line, writeDatastore } from './support/runner.mjs'
 import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url))
 
-function bridgeSettings(root) {
+function bridgeSettings(root, extra = {}) {
   return {
     side: 'bridge',
     dataDir: path.join(root, 'data'),
@@ -39,8 +43,13 @@ function bridgeSettings(root) {
     email: null,
     backupTime: '03:30',
     backup: null,
+    ...extra,
   }
 }
+
+// The mailbox's settings, for the bridge with email on. The reader is its stub, which reaches no
+// mailbox (`support/mail-reader.mjs`).
+const EMAIL = { host: 'imap.example.com', port: 993, user: 'scooter.inbox@example.com', password: 'app-password', ownerAddresses: OWNER_ADDRESSES, authservId: AUTHSERV, checkSeconds: 60 }
 
 async function start(t, root, { clock = createFakeClock('2026-11-09T15:45:00Z') } = {}) {
   const { log, entries, events } = createTestLog({ clock })
@@ -123,21 +132,24 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
 
 // The runner of `test/support/test-runner.mjs`, with the fake sandbox and the pi stub, and the
 // bridge with the wacli stub, on one data folder and one fake clock.
-async function startBoth(t, { fixtures = { paired: true, messages: [] } } = {}) {
+async function startBoth(t, { fixtures = { paired: true, messages: [] }, email = false } = {}) {
   const prepared = prepareTestRunner(t, { start: '2026-11-09T15:50:30Z' })
   const stub = createWacliStub(t, prepared.root)
   stub.fixtures(fixtures)
+  const reader = email ? createMailReaderStub(prepared.root) : null
   // The clock jumps ahead while wacli calls run in real time; only the test of the timeout keeps it.
   atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * 3600_000 }))
   const runner = await startTestRunner(t, prepared)
   const { log, events } = createTestLog({ clock: prepared.clock })
   const proc = createProc({ log, clock: prepared.clock })
-  const bridge = await startBridge({ settings: bridgeSettings(prepared.root), clock: prepared.clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
+  const settings = bridgeSettings(prepared.root, email ? { email: EMAIL } : {})
+  const bridge = await startBridge({ settings, clock: prepared.clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc, emailReader: reader?.reader })
   atEnd(t, () => bridge.stop())
   await waitFor(() => stub.callsOf('sync').length > 0 && events().includes('whatsapp.caught_up'), 'the bridge to start')
   const both = {
     ...runner,
     stub,
+    reader,
     bridge,
     bridgeEvents: events,
     // Has wacli post a payload, and waits until the bridge has stored it and answered any command.
@@ -191,6 +203,69 @@ test('bridge: a signed webhook goes through the runner and comes back as a quote
   assert.deepEqual(both.state().retry, [])
   assert.equal(both.state().cursor, 1)
   await both.runner.tick()
+})
+
+test('bridge: emails go through the reader, the bridge and the runner, and what is said about them reaches WhatsApp unquoted', async t => {
+  const both = await startBoth(t, { email: true })
+  const email = both.bridge.channels.get('email')
+  await waitFor(() => email.status().startsWith('Email: connected'), 'the reader to connect')
+  // The owner emails a receipt the agent asks about, and a voice memo it files.
+  both.reader.deliver(gmailPlain({ body: 'Dinner with Sam, 3200. ASK' }))
+  both.reader.deliver(appleMailAudio())
+  await waitFor(
+    async () => {
+      await both.clock.advance(SECOND)
+      await email.idle()
+      await both.bridge.intake.idle()
+      return both.lines().length === 2
+    },
+    'the two emails to be stored',
+  )
+  const [receipt, memo] = both.lines()
+  assert.deepEqual([receipt.source, receipt.subject, receipt.files.map(file => file.path)], ['email', 'Dinner at Bombay Canteen', ['1.eml']])
+  assert.deepEqual([memo.source, memo.subject, memo.files.map(file => file.path)], ['email', 'Call with Sam', ['2.eml', '2-2.m4a']])
+
+  assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
+  // The agent read the whole emails and the recording from the datastore.
+  const [seen] = both.sandbox.seen()
+  const day = path.join(both.paths.datastore, '2026/11/09')
+  assert.ok(
+    seen.prompt.endsWith(
+      [
+        'New messages:',
+        `#1 21:12 email "Dinner at Bombay Canteen": "Dinner with Sam, 3200. ASK"`,
+        `      whole email ${day}/1.eml`,
+        `#2 21:42 email "Call with Sam": "Recording from today's call.\\n\\n\\n\\nSent from my iPhone"`,
+        `      attachment "Call with Sam.m4a" ${day}/2-2.m4a (audio/x-m4a)`,
+        `      whole email ${day}/2.eml`,
+      ].join('\n'),
+    ),
+    seen.prompt,
+  )
+  // A question about the receipt, and a ✅ for the memo.
+  assert.deepEqual(both.outbox(), [
+    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 },
+    { type: 'react', by: 'lifelog', target: 2, emoji: '✅' },
+  ])
+  await both.deliver()
+
+  // Email sends nothing: both reach WhatsApp, the question without a quote, and the reaction as a
+  // text that names the email.
+  assert.deepEqual(both.sent(), [
+    ['--json', 'send', 'text', '--to', OWNER, '--message', 'Work or personal?', '--no-preview'],
+    ['--json', 'send', 'text', '--to', OWNER, '--message', '✅ Email: Call with Sam', '--no-preview'],
+  ])
+  assert.deepEqual(both.stub.callsOf('send react'), [])
+  const out = both.lines().filter(line => line.dir === 'out')
+  assert.deepEqual(
+    out.map(({ at: _, ...line }) => line),
+    [
+      { seq: 3, kind: 'message', dir: 'out', source: 'whatsapp', sourceId: 'SENT1', by: 'lifelog', text: 'Work or personal?' },
+      { seq: 4, kind: 'message', dir: 'out', source: 'whatsapp', sourceId: 'SENT2', by: 'lifelog', text: '✅ Email: Call with Sam' },
+    ],
+  )
+  assert.deepEqual([both.state().cursor, both.state().retry], [2, []])
+  assert.match(email.status(), /; 2 stored and 0 skipped since the bridge started, /)
 })
 
 test('bridge: /status reports the runner\'s state, /help lists the commands, /backup says it isn\'t built, and /new is the runner\'s', async t => {
@@ -268,6 +343,41 @@ test('bridge: a command is answered once, also across a restart, and one left un
   await bridge.commands.idle()
   assert.equal(entries(), 2)
   assert.equal(bridge.state.get().commandSeq, 1)
+})
+
+test('bridge: a reply to a command that can\'t be written is tried again after waits that grow, without another command', async t => {
+  // The review of milestone 5, point 7.
+  const root = makeTestDir(t)
+  const paths = makePaths(bridgeSettings(root))
+  const clock = createFakeClock('2026-11-09T15:45:00Z')
+  const { log, entries } = createTestLog({ clock })
+  writeDatastore(paths, [line.command(1, '2026-11-09T15:44:00Z', '/help')])
+  fs.mkdirSync(paths.bridge, { recursive: true })
+  const store = openStore({ paths, clock, log })
+  const state = openBridgeState({ paths, clock, log })
+  const commands = createCommands({ store, state, paths, ids: createIds(clock), log, clock, status: async () => 'status' })
+  atEnd(t, () => commands.stop())
+  // The outbox can't be written, as on a full disk: a file where its folder should be.
+  fs.mkdirSync(paths.exchange, { recursive: true })
+  fs.writeFileSync(paths.outbox, 'not a folder')
+  await commands.handle()
+  const failures = () => entries.filter(entry => entry.event === 'bridge.command_failed').map(entry => entry.failures)
+  assert.deepEqual(failures(), [1])
+  await clock.advance(5 * SECOND)
+  await commands.idle()
+  assert.deepEqual(failures(), [1, 2])
+  assert.equal(state.get().commandSeq, 0)
+  // The disk is back: the next try, 10 seconds later, writes the reply.
+  fs.rmSync(paths.outbox)
+  await clock.advance(9 * SECOND)
+  assert.deepEqual(listHandOffs(paths.outbox), [])
+  await clock.advance(SECOND)
+  await commands.idle()
+  assert.equal(listHandOffs(paths.outbox).length, 1)
+  assert.equal(state.get().commandSeq, 1)
+  // Stopped, it tries nothing more.
+  await commands.stop()
+  assert.deepEqual(clock.sleeping(), [])
 })
 
 test('bridge: the state records the first start, and keeps it', async t => {

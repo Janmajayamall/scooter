@@ -21,7 +21,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { copyUntrustedFile, createIds, ensureDir } from '../../common/files.mjs'
+import { checkOwnFolder, copyUntrustedFile, createIds, ensureDir, startsWithId } from '../../common/files.mjs'
 import { limits } from '../../common/limits.mjs'
 import { errorFields } from '../../common/log.mjs'
 import { isoSeconds, parseIsoSeconds, systemClock } from '../../common/time.mjs'
@@ -472,6 +472,37 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   // The ID wacli gives a message it sent, in `data.id` (13.1), or null when it gives none.
   const sentId = data => (isObject(data) ? idOf(data.id) : null)
 
+  // Removes a download the bridge asked for from wacli's staging folder, by unlinking it, which
+  // neither follows a link nor removes a folder. A folder wacli made in its place is wacli's own,
+  // and stays. Returns whether it is gone.
+  function unstage(file) {
+    try {
+      fs.unlinkSync(file)
+    } catch (error) {
+      if (error.code !== 'ENOENT') return false
+    }
+    return true
+  }
+
+  // What a bridge stopped in the middle of a download left in staging. Its message wasn't stored,
+  // and catch-up hands it over again. wacli owns the folder above staging, and could put a link in
+  // its place, or swap one in later: so nothing is removed unless staging is its folder and not a
+  // link, and only names the bridge gives its downloads (`startsWithId`), by unlinking them. Only
+  // outbox entries have such names besides, and they are folders, which unlinking refuses. Anything
+  // else there is wacli's, and stays.
+  function clearStaging() {
+    try {
+      checkOwnFolder(paths.wacliStaging, user)
+      let kept = 0
+      for (const name of fs.readdirSync(paths.wacliStaging)) {
+        if (!startsWithId(name) || !unstage(path.join(paths.wacliStaging, name))) kept += 1
+      }
+      if (kept > 0) log.warn('whatsapp.staging_kept', { names: kept })
+    } catch (error) {
+      log.warn('whatsapp.staging_not_cleared', errorFields(error))
+    }
+  }
+
   return {
     name: 'whatsapp',
     takesCommands: true,
@@ -486,9 +517,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       for (const dir of [paths.wacli, paths.wacliStore, paths.wacliStaging, paths.wacliConfig, paths.wacliState, paths.wacliCache]) {
         ensureDir(dir, { mode: 0o700, owner: user })
       }
-      // What a bridge stopped in the middle of a download left in staging. Its message wasn't
-      // stored, and catch-up hands it over again. Removing doesn't follow links.
-      for (const name of fs.readdirSync(paths.wacliStaging)) fs.rmSync(path.join(paths.wacliStaging, name), { recursive: true, force: true })
+      clearStaging()
       const secret = crypto.randomBytes(32).toString('hex')
       const server = await listen(secret, onRecord)
       const url = `http://127.0.0.1:${server.address().port}${WEBHOOK_PATH}`
@@ -537,8 +566,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
         if (!isObject(data) || data.path !== staged) throw Object.assign(new Error('wacli media download: saved elsewhere'), { code: 'EWACLI' })
         await copyUntrustedFile(staged, target, { owner: user, maxBytes: limits.ATTACHMENT_MAX_BYTES })
       } finally {
-        // Whatever is there, a folder included.
-        fs.rmSync(staged, { recursive: true, force: true })
+        if (!unstage(staged)) log.warn('whatsapp.staging_kept', { names: 1 })
       }
     },
 

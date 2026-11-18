@@ -7,6 +7,10 @@
 // read, and says so when one of them isn't there yet or can't be read. Before the runner has ever
 // started there is no `status.json`, and so no agent to report on.
 //
+// The bridge reads these as root, and the runner's user writes them, so each is read without
+// following a link, without waiting on a FIFO, and only if it is a regular file of a bounded size
+// (`readUntrustedFile`): one that isn't is said to be unreadable, and the rest is reported.
+//
 // Times are in `SCOOTER_TZ` (section 2). The reply is text for the owner, and a function of the
 // files and the clock, so a test can give it both.
 
@@ -88,7 +92,7 @@ export function statusText({ now, settings, paths, channels, index, backups }) {
 
   let status = null
   try {
-    status = readRunnerStatus(paths.runnerStatus)
+    status = readRunnerStatus(paths.runnerStatus, { maxBytes: limits.STATUS_FILE_MAX_BYTES })
     if (status === null) lines.push("Runner: it hasn't started yet, so there is nothing to say about the agent or its VMs.")
   } catch (error) {
     lines.push(`Runner: its status.json can't be read (${error instanceof RunnerStatusError ? 'not a status' : (error.code ?? error.name)}).`)
@@ -111,7 +115,7 @@ export function statusText({ now, settings, paths, channels, index, backups }) {
     lines.push('')
     let state
     try {
-      state = readAgentState(paths.agentState(name))
+      state = readAgentState(paths.agentState(name), { maxBytes: limits.STATUS_FILE_MAX_BYTES })
     } catch (error) {
       lines.push(`${name}: its state.json can't be read (${error instanceof AgentStateError ? 'not a state' : (error.code ?? error.name)}).`)
       continue

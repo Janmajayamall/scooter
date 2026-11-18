@@ -106,7 +106,8 @@ test('failures: a network log that can\'t be read counts as no answer from OpenR
   const log = { warn: (event, fields) => warnings.push({ event, ...fields }), info() {}, error() {} }
   const failure = readFailureCause({ paths, result: { code: 1, stderr: '', timedOut: false }, startedAt: TIMING.startedAt, endedAt: NOW, log })
   assert.deepEqual(failure, { cause: 'other', reason: 'pi exited with code 1', status: null })
-  assert.deepEqual(warnings, [{ event: 'runner.netlog_unreadable', error: 'Error', code: 'EISDIR', syscall: 'read' }])
+  // A folder isn't a regular file, and isn't read (the review of milestone 5, point 3).
+  assert.deepEqual(warnings, [{ event: 'runner.netlog_unreadable', error: 'Error', code: 'EUNTRUSTED' }])
 })
 
 // ---------------------------------------------------------------------------------------------

@@ -33,18 +33,22 @@ const values = {
   SEND_INTERVAL: 5 * SECOND,
   // The longest piece of a reply, in characters, under WhatsApp's limit (5.3).
   CHUNK_CHARS: 3500,
-  // The longest text one outbox entry sends, in characters: four chunks. A longer one is cut, with
-  // a line that says so, when it is written. The agent's answers are its own to make as long as it
-  // likes, and one text of a megabyte would otherwise take the bot number half an hour of sending,
-  // one chunk every `SEND_INTERVAL` (5.3, 6.7).
+  // The longest text one outbox entry sends, in characters: four chunks of `CHUNK_CHARS`, which go
+  // out as four to eight messages, since a text is cut at a break in the second half of each
+  // chunk. A longer one is cut, with a line that says so, when it is written. The agent's answers
+  // are its own to make as long as it likes, and one text of a megabyte would otherwise take the
+  // bot number half an hour of sending, one message every `SEND_INTERVAL` (5.3, 6.7).
   TEXT_MAX_CHARS: 14000,
   // The largest `entry.json` or `sending.json` the bridge reads. A text at its longest takes far
   // less, so a larger file was written by something else than `writeOutboxEntry` (5.3).
   OUTBOX_ENTRY_MAX_BYTES: 1 * MB,
-  // A send that fails is tried again after a wait that starts at `first` and doubles up to `max`,
-  // and an entry is given up on after `SEND_ATTEMPTS` failed tries of the same message, made while
-  // its channel was linked. Entries are sent in order, so one that can never go out would
-  // otherwise hold back every one after it, the replies to `/status` among them (5.3).
+  // A send that fails is tried again after a wait that starts at `first` and doubles up to `max`.
+  // After `SEND_ATTEMPTS` failed tries of the same message, made while its channel was linked, the
+  // entry no longer holds back the ones after it, and is given up on once one of theirs goes and
+  // it fails again. Entries are sent in order, so one that can never go out would otherwise hold
+  // back every one after it, the replies to `/status` among them (5.3). The same waits space out
+  // the tries of a look at the outbox that failed, and of a reply to a command that couldn't be
+  // written (5.4).
   SEND_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
   SEND_ATTEMPTS: 8,
   // Where wacli posts its webhooks, on loopback (5.1, 5.2).
@@ -71,6 +75,36 @@ const values = {
   ATTACHMENT_EXT_MAX_CHARS: 10,
   // Where an email's body is cut, in characters (5.6).
   EMAIL_TEXT_MAX_CHARS: 20000,
+  // Where an email's subject is cut, in characters (5.6). Nothing else bounds it: it goes into the
+  // datastore, the agent's prompt, and the `✅ Email:` text that stands for a reaction to an email,
+  // which would otherwise go out as a message every `CHUNK_CHARS` (5.3).
+  EMAIL_SUBJECT_MAX_CHARS: 1000,
+  // The most of an email's header block that the bridge reads for the sender check (5.6). The
+  // owner's mail has a few kilobytes of headers; one whose header block doesn't end within this is
+  // ambiguous, and skipped.
+  EMAIL_HEADER_MAX_BYTES: 256 * KB,
+  // The largest `parsed.json` the bridge reads from the mail spool (5.6). The reader keeps an
+  // email's text and subject one character past where the bridge cuts them, and hands over an
+  // email whose description would be larger as one it couldn't parse, so a larger file was written
+  // by something else than the reader.
+  EMAIL_PARSED_MAX_BYTES: 1 * MB,
+  // The longest original file name of an email's attachment, in characters: the reader cuts a
+  // longer one, and the bridge refuses a `parsed.json` with one (5.6). The bridge names the stored
+  // file itself (4.1), so this is only what the owner called it, as a line's `name` (4.2).
+  ATTACHMENT_NAME_MAX_CHARS: 255,
+  // A spool folder the bridge couldn't take for a reason of its own, such as a full disk, is
+  // tried again after a wait that starts at `first` and doubles up to `max`. The folder stays,
+  // so the email isn't lost, and the folders after it wait (5.6).
+  SPOOL_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
+  // How many of the mailbox's newest messages `email-check` lists, and how long its run of the
+  // email reader may take before it is stopped, so a server that doesn't answer can't hold the
+  // command for the five minutes imapflow waits on a quiet connection (8.4).
+  EMAIL_CHECK_COUNT: 5,
+  EMAIL_CHECK_TIMEOUT: 2 * MINUTE,
+  // The largest `state.json` or `status.json` of the runner's, or `state.json` of the email
+  // reader's, that the bridge reads for `/status` (5.4). They are a few kilobytes each, written by
+  // another user, and the bridge reads them as root, as files that user controls.
+  STATUS_FILE_MAX_BYTES: 4 * MB,
   // The largest model request the network policy reads (6.13).
   MODEL_REQUEST_MAX_BYTES: 50 * MB,
   // Restart waits for wacli and the email reader: the first wait, then doubling up to `max`

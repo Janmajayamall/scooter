@@ -16,7 +16,9 @@
 // - Each attachment is downloaded, with `MEDIA_DOWNLOAD_RETRIES` more tries if that fails, and
 //   handed to the store, which copies it into the day folder. An attachment that can't be stored
 //   leaves a `media` object on the line saying why: too large, not a file, a failed download, or a
-//   copy that failed.
+//   copy that failed. A channel that keeps a message until it is stored, as email's spool does
+//   (5.6), is the exception: when a copy fails on the bridge's side, such as on a full disk,
+//   nothing of the message is stored, and the channel hands it over again later, files and all.
 // - Duplicates, which the webhook and catch-up both deliver (4.4), are the store's to skip. A
 //   message already stored is recognized before its attachments are downloaded again.
 
@@ -34,6 +36,8 @@ export const MEDIA_ERRORS = {
   tooLarge: 'too large, not downloaded',
   downloadFailed: 'download failed',
   notStored: 'could not be stored',
+  // An email the reader couldn't parse, stored with its `.eml` (5.6).
+  notParsed: 'could not be parsed',
 }
 
 // Returns intake. Options:
@@ -101,6 +105,10 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         fs.rmSync(file, { force: true })
         log.warn('intake.download_failed', { source: record.source, n, attempt, ...errorFields(error) })
         if (error.code === 'EFBIG') return { error: MEDIA_ERRORS.tooLarge }
+        // A copy that failed on the bridge's side, such as on a full disk, from a channel that
+        // keeps the message until it is stored: nothing of it is stored now, and the channel hands
+        // it over again, with its files (5.6).
+        if (error.bridgeSide && channel.keepsUntilStored) throw error
       }
     }
     return { error: MEDIA_ERRORS.downloadFailed }
@@ -131,9 +139,16 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         if (attachment.error !== null) result = { error: attachment.error }
         else if (attachment.bytes !== null && attachment.bytes > limits.ATTACHMENT_MAX_BYTES) result = { error: MEDIA_ERRORS.tooLarge }
         else result = await download(channel, record, n)
-        if (result.file) downloaded.push(result)
+        if (result.file) downloaded.push({ ...result, n })
         // The line has room for one `media` object: the first attachment that couldn't be stored.
         else media ??= mediaOf(attachment, result.error)
+      }
+      // An email's files start with the whole message, `<seq>.eml` (5.6), which the agent's prompt
+      // names as the whole email. Without it the files would be numbered from its first part, so
+      // none is kept, and `media` says why.
+      if (record.source === 'email' && downloaded.length > 0 && downloaded[0].n !== 1) {
+        log.warn('intake.email_parts_dropped', { files: downloaded.length })
+        for (const { file } of downloaded.splice(0)) fs.rmSync(file, { force: true })
       }
       const files = downloaded.map(({ file, attachment }) => ({ path: file, mime: attachment.mime, name: attachment.name }))
       try {
@@ -141,7 +156,9 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
       } catch (error) {
         if (error instanceof DatastoreError || files.length === 0) throw error
         // An attachment couldn't be copied into the day folder. The store wrote nothing and used
-        // up no `seq` (D29), and the message is kept without its files.
+        // up no `seq` (D29). A channel that keeps the message until it is stored hands it over
+        // again (5.6); otherwise the message is kept without its files.
+        if (channel.keepsUntilStored) throw error
         log.warn('intake.attachment_not_stored', { source: record.source, ...errorFields(error) })
         return await append({ ...fields, media: media ?? mediaOf(downloaded[0].attachment, MEDIA_ERRORS.notStored) })
       }
@@ -195,8 +212,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         }
         return { stored: false, reason: 'the store stopped' }
       }
-      // A bug, or the disk. The record is lost to this delivery, and catch-up brings a WhatsApp
-      // message back within `CATCHUP_INTERVAL`.
+      // A bug, or the disk. The record is lost to this delivery: catch-up brings a WhatsApp
+      // message back within `CATCHUP_INTERVAL`, and an email stays in the spool.
       log.error('intake.failed', { source: record?.source, ...errorFields(error) })
       return { stored: false, reason: 'failed' }
     }

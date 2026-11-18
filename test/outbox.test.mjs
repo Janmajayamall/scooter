@@ -98,3 +98,16 @@ test('outbox: sending.json holds the entry and how many of its messages have gon
   assert.deepEqual(checkSendingFile({ entry: EXAMPLES[0], sent: 1.5 }), ['sent must be a whole number, 0 or more'])
   assert.deepEqual(checkSendingFile({ entry: { type: 'text', by: 'x' }, sent: 0, extra: 1 }), ["extra doesn't belong in sending.json", 'entry: text is missing'])
 })
+
+test('outbox: a text or an emoji with U+0000 in it is no entry, and a text is written with U+FFFD in its place', async t => {
+  // No program takes a command-line argument with U+0000 in it, so such a text could never be
+  // sent (the review of milestone 5, point 2).
+  assert.deepEqual(checkOutboxEntry({ type: 'text', by: 'lifelog', text: 'a\0b' }), ["text can't hold U+0000"])
+  assert.deepEqual(checkOutboxEntry({ type: 'react', by: 'lifelog', target: 1, emoji: '✅\0' }), ["emoji can't hold U+0000"])
+  assert.equal(cutText('a\0b\0'), 'a�b�')
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: root, configDir: path.join(root, 'config') })
+  const ids = createIds(createFakeClock())
+  const id = await writeOutboxEntry({ paths, ids, entry: { type: 'text', by: 'lifelog', text: '\0' } })
+  assert.equal(JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')).text, '�')
+})

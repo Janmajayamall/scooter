@@ -36,7 +36,7 @@
 // day in `SCOOTER_TZ`. The runner alone writes the file, atomically. The bridge reads it for
 // `/status`, which is why its format is here.
 
-import { readJsonFile } from './files.mjs'
+import { readJsonFile, readUntrustedFile } from './files.mjs'
 import { isDate, parseIsoSeconds } from './time.mjs'
 
 export const PAUSE_CAUSES = ['setup', 'outage']
@@ -201,11 +201,12 @@ export class AgentStateError extends Error {
 
 // Reads a `state.json`. Returns null when there is none, and throws an `AgentStateError` that
 // names the file when it isn't a state. The file is written atomically, so a crash doesn't leave
-// half of one.
-export function readAgentState(file) {
+// half of one. With `maxBytes`, it is read as a file another user controls (`readUntrustedFile`):
+// so the bridge, as root, reads the runner's for `/status` (5.4).
+export function readAgentState(file, { maxBytes = null } = {}) {
   let state
   try {
-    state = readJsonFile(file)
+    state = readJson(file, maxBytes)
   } catch (error) {
     if (error instanceof SyntaxError) throw new AgentStateError(`${file} is not JSON`)
     throw error
@@ -214,4 +215,18 @@ export function readAgentState(file) {
   const problems = checkAgentState(state)
   if (problems.length > 0) throw new AgentStateError(`${file}: ${problems.join('; ')}`)
   return state
+}
+
+// A JSON file, or undefined when there is none: read as it is, or, with `maxBytes`, with the care
+// of `readUntrustedFile`.
+function readJson(file, maxBytes) {
+  if (maxBytes === null) return readJsonFile(file)
+  let text
+  try {
+    text = readUntrustedFile(file, { maxBytes })
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  }
+  return JSON.parse(text)
 }

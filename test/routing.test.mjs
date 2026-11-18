@@ -10,7 +10,8 @@ import test from 'node:test'
 import { defaultChannelProblem } from '../src/bridge/channels/index.mjs'
 import { BridgeConfigError, runBridge, startBridge } from '../src/bridge/main.mjs'
 import { routeEntry } from '../src/bridge/outbox.mjs'
-import { overrideLimits } from '../src/common/limits.mjs'
+import { limits, overrideLimits } from '../src/common/limits.mjs'
+import { CUT_NOTE, textLength } from '../src/common/outbox.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createFakeChannel } from './support/fake-channel.mjs'
@@ -88,6 +89,17 @@ test('routing: a reaction goes to its target\'s channel, as a reaction to the me
 test('routing: a reaction to an email becomes a ✅ Email: text on DEFAULT_CHANNEL', () => {
   assert.deepEqual(route(react(2)), ['whatsapp', null, '✅ Email: Call with Sam'])
   assert.deepEqual(route(react(7)), ['whatsapp', null, '✅ Email: (no subject)'])
+})
+
+test('routing: the ✅ Email: text is cut as an entry\'s text is, whatever subject the datastore holds', () => {
+  // The review of milestone 5, point 6: made after the entry was written, from a subject the
+  // datastore bounds only since milestone 6.
+  const lines = [...LINES, line.email(10, AT, `a\0${'s'.repeat(60000)}`, 'long', { sourceId: 'mail-3@example.com' })]
+  const [channel, quote, text] = route(react(10), { lines })
+  assert.deepEqual([channel, quote], ['whatsapp', null])
+  assert.equal(textLength(text), limits.TEXT_MAX_CHARS)
+  assert.ok(text.startsWith('✅ Email: a\ufffdsss'))
+  assert.ok(text.endsWith(CUT_NOTE))
 })
 
 test('routing: a reaction to an unknown line, to what Scooter sent, or to a reaction is dropped', () => {

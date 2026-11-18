@@ -250,7 +250,9 @@ export function loadSettings(side, { env = process.env } = {}) {
       const forEmail = ' when EMAIL_IMAP_HOST is set'
       const addresses = commaList('EMAIL_OWNER_ADDRESSES', EMAIL_ADDRESS, 'email addresses')
       if (addresses?.length === 0) fault('EMAIL_OWNER_ADDRESSES', `EMAIL_OWNER_ADDRESSES is required${forEmail}`)
-      const authservId = required('EMAIL_AUTHSERV_ID', forEmail)
+      // The bridge needs it for its sender check, and refuses to start without it; `email-check`
+      // runs without it, since that is how the owner finds it (8.4).
+      const authservId = get('EMAIL_AUTHSERV_ID')
       settings.email = {
         host: HOSTNAME.test(host) ? host : fault('EMAIL_IMAP_HOST', 'EMAIL_IMAP_HOST must be a host name, such as imap.gmail.com'),
         port: integer('EMAIL_IMAP_PORT', 993),
@@ -259,7 +261,7 @@ export function loadSettings(side, { env = process.env } = {}) {
         ownerAddresses: addresses?.map(address => address.toLowerCase()),
         authservId:
           authservId === undefined || /^[^\s;]+$/.test(authservId)
-            ? authservId
+            ? (authservId ?? null)
             : fault('EMAIL_AUTHSERV_ID', 'EMAIL_AUTHSERV_ID must be a server name, such as mx.google.com'),
         checkSeconds: integer('EMAIL_CHECK_SECONDS', 60),
       }

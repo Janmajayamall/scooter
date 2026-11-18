@@ -23,7 +23,7 @@
 // format is here.
 
 import { SOURCES } from './datastore/line.mjs'
-import { readJsonFile } from './files.mjs'
+import { readJsonFile, readUntrustedFile } from './files.mjs'
 import { parseIsoSeconds } from './time.mjs'
 
 export const ACCELERATORS = ['kvm', 'emulation']
@@ -91,11 +91,13 @@ export class RunnerStatusError extends Error {
 }
 
 // Reads a `status.json`. Returns null when there is none, which is so until the runner first
-// starts, and throws a `RunnerStatusError` that names the file when it isn't a status.
-export function readRunnerStatus(file) {
+// starts, and throws a `RunnerStatusError` that names the file when it isn't a status. With
+// `maxBytes`, it is read as a file another user controls (`readUntrustedFile`): so the bridge, as
+// root, reads it for `/status` (5.4).
+export function readRunnerStatus(file, { maxBytes = null } = {}) {
   let status
   try {
-    status = readJsonFile(file)
+    status = readJson(file, maxBytes)
   } catch (error) {
     if (error instanceof SyntaxError) throw new RunnerStatusError(`${file} is not JSON`)
     throw error
@@ -104,4 +106,18 @@ export function readRunnerStatus(file) {
   const problems = checkRunnerStatus(status)
   if (problems.length > 0) throw new RunnerStatusError(`${file}: ${problems.join('; ')}`)
   return status
+}
+
+// A JSON file, or undefined when there is none: read as it is, or, with `maxBytes`, with the care
+// of `readUntrustedFile`.
+function readJson(file, maxBytes) {
+  if (maxBytes === null) return readJsonFile(file)
+  let text
+  try {
+    text = readUntrustedFile(file, { maxBytes })
+  } catch (error) {
+    if (error.code === 'ENOENT') return undefined
+    throw error
+  }
+  return JSON.parse(text)
 }

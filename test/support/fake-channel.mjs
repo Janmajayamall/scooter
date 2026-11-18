@@ -39,12 +39,14 @@ export function createFakeChannel({ name = 'whatsapp', takesCommands = true, can
   const sends = []
   let ready = true
   let failures = []
+  let failingAll = null
   let withoutId = 0
+  let givenIds = []
   let sent = 0
   async function send(call) {
     if (!ready) throw Object.assign(new Error('not ready'), { code: 'ENOTREADY' })
     call.at = clock?.now() ?? null
-    const failure = failures.shift()
+    const failure = failures.length > 0 ? failures.shift() : failingAll
     if (failure) {
       sends.push({ ...call, failed: true })
       if (failure.unready) ready = false
@@ -55,6 +57,7 @@ export function createFakeChannel({ name = 'whatsapp', takesCommands = true, can
       withoutId -= 1
       return null
     }
+    if (givenIds.length > 0) return givenIds.shift()
     return `${name.toUpperCase()}-OUT-${++sent}`
   }
   return {
@@ -94,6 +97,14 @@ export function createFakeChannel({ name = 'whatsapp', takesCommands = true, can
     // to stop being ready too.
     failNext(...items) {
       failures = items
+    },
+    // Every send fails, with `{ code }`, until it is given null, as during an outage.
+    failAll(failure) {
+      failingAll = failure
+    },
+    // The next sends work, and give these IDs, one each.
+    idsNext(...ids) {
+      givenIds = ids
     },
     // The next `count` sends work, and give no ID.
     noIdNext(count = 1) {

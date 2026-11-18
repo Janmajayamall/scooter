@@ -101,7 +101,7 @@ export function formatNetworkLogLine(entry) {
 // Lines that aren't lines of the log are skipped, and so are lines too long to take and part of a
 // line that a crash left at the end of a file: the log is a record for reading, and one bad line
 // shouldn't hide the rest. Returns `{ skipped }`, how many were skipped. Throws when a file can't
-// be read; a missing day is no lines.
+// be read, or is a link or anything but a regular file (`EUNTRUSTED`); a missing day is no lines.
 export function scanNetworkLog(paths, { from, to }, each) {
   const start = Math.floor(from / 1000) * 1000
   let skipped = 0
@@ -123,12 +123,16 @@ export function scanNetworkLog(paths, { from, to }, each) {
   for (let day = Date.parse(`${utcDate(start)}T00:00:00Z`); day <= to; day += DAY) {
     let fd
     try {
-      fd = fs.openSync(paths.networkLog(utcDate(day)), 'r')
+      // Without following a link, and without waiting on a FIFO: the bridge, as root, reads the
+      // runner's log for `/status` (5.4).
+      fd = fs.openSync(paths.networkLog(utcDate(day)), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
     } catch (error) {
       if (error.code === 'ENOENT') continue
+      if (error.code === 'ELOOP' || error.code === 'EMLINK') throw Object.assign(new Error('not read: a symbolic link'), { code: 'EUNTRUSTED' })
       throw error
     }
     try {
+      if (!fs.fstatSync(fd).isFile()) throw Object.assign(new Error('not read: not a regular file'), { code: 'EUNTRUSTED' })
       // Taken first: `take` counts what it skips as it goes.
       const passed = readLines(fd, take)
       skipped += passed
