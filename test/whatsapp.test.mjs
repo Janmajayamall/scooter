@@ -636,17 +636,26 @@ async function untilNextCatchUp(clock) {
   await clock.advance(limits.CATCHUP_INTERVAL)
 }
 
-// Puts lines in the datastore before the bridge starts.
-function seedLines(lines) {
+// The first start of a bridge that has run for a while.
+const FIRST_START = '2026-11-01T00:00:00Z'
+
+// Puts lines in the datastore before the bridge starts, and the state a bridge that wrote them
+// keeps, as an older bridge wrote it: its first start, and nothing of where catch-up had got to,
+// so catch-up starts from the newest incoming WhatsApp line, as it did (D179). `catchUp`, when
+// given, is where it had got to.
+function seedLines(lines, { catchUp, ownerChat = null } = {}) {
   return async (paths, { clock, log }) => {
     const store = openStore({ paths, clock, log })
     for (const line of lines) await store.append(line)
+    fs.mkdirSync(paths.bridge, { recursive: true })
+    const state = { firstStart: FIRST_START, ownerChat, lastBackup: null, ...(catchUp ? { catchUp } : {}) }
+    fs.writeFileSync(paths.bridgeState, JSON.stringify(state))
   }
 }
 
 const incoming = (at, sourceId, text, extra = {}) => ({ kind: 'message', dir: 'in', at, source: 'whatsapp', sourceId, trust: 'owner', text, ...extra })
 
-test('whatsapp: catch-up after a gap starts from the newest incoming WhatsApp line, even when emails came after it', async t => {
+test('whatsapp: catch-up after a gap, for a state an older bridge wrote, starts from the newest incoming WhatsApp line, even when emails came after it, and then from where it got to', async t => {
   const rows = [
     listRow({ MsgID: 'OLD', Timestamp: '2026-11-09T09:00:00Z', Text: 'before the gap, stored' }),
     listRow({ MsgID: 'G1', Timestamp: '2026-11-09T10:05:00Z', Text: 'missed one' }),
@@ -673,7 +682,9 @@ test('whatsapp: catch-up after a gap starts from the newest incoming WhatsApp li
     ],
   )
 
-  // The next catch-up, ten minutes later, starts from the newest line now, and stores nothing twice.
+  // Where it got to is kept: the owner's newest row it listed, not the bot's reply after G1.
+  assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T11:30:00Z' })
+  // The next catch-up, ten minutes later, starts from there, and stores nothing twice.
   await untilNextCatchUp(clock)
   await caughtUp(2)
   assert.equal(stub.callsOf('messages list')[1].args[7], '2026-11-09T11:28:00Z')
@@ -769,6 +780,174 @@ test('whatsapp: catch-up lists the chat of the owner\'s newest message', async t
   assert.equal(list.args[list.args.indexOf('--chat') + 1], LID)
   // Before the first incoming line, from the first start.
   assert.equal(list.args[list.args.indexOf('--after') + 1], '2026-11-01T00:00:00Z')
+})
+
+// Where catch-up got to (D179). The rows the webhook missed, after a catch-up that found nothing
+// new at 15:30; and a record the webhook hands over, newer than them by more than
+// CATCHUP_OVERLAP.
+const MISSED = [
+  listRow({ MsgID: 'R1', Timestamp: '2026-11-09T15:40:00Z', Text: 'one' }),
+  listRow({ MsgID: 'R2', Timestamp: '2026-11-09T15:41:00Z', Text: 'two' }),
+  listRow({ MsgID: 'R3', Timestamp: '2026-11-09T15:42:00Z', Text: 'three' }),
+]
+const NEWER = toRecord(fromWebhook(webhookPayload({ ID: 'N1', Timestamp: '2026-11-09T15:59:00Z', Text: 'newer' })))
+const gotTo = (at = '2026-11-09T15:30:00Z') => seedLines([incoming('2026-11-09T15:30:00Z', 'W0', 'before')], { catchUp: { [OWNER]: at } })
+
+// Starts the channel again with `take`, once stopped, as a backup does.
+async function startAgain({ bridge, whatsapp }, take = record => bridge.intake.take(record)) {
+  bridge.intake.started('whatsapp')
+  await whatsapp.start(take)
+}
+
+// The `--after` of the latest catch-up of `chat`.
+const lastAfter = (stub, chat = OWNER) => {
+  const list = stub.callsOf('messages list').filter(call => call.args.includes(chat)).at(-1)
+  return list.args[list.args.indexOf('--after') + 1]
+}
+
+test('whatsapp: a catch-up a stop cut short between its rows lists them again when the channel starts, whatever the webhook stored meanwhile (D179)', async t => {
+  // The second review of milestone 10, smaller point 3: a stop between catch-up's rows, just after
+  // the webhook stored a message more than CATCHUP_OVERLAP newer than the rows not listed yet.
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo(), start: '2026-11-09T16:00:00Z' })
+  const { stub, lines, bridge, whatsapp, caughtUp } = context
+  await caughtUp()
+  await whatsapp.stop()
+  stub.fixtures({ messages: MISSED })
+  let stopping = null
+  await startAgain(context, async record => {
+    const result = await bridge.intake.take(record)
+    if (record.id === 'R2') {
+      await bridge.intake.take(NEWER)
+      stopping = whatsapp.stop()
+    }
+    return result
+  })
+  await waitFor(() => stopping !== null, 'the stop')
+  await stopping
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'R1', 'R2', 'N1'])
+  const stopped = bridge.state.get().catchUp
+
+  await startAgain(context)
+  await caughtUp(2)
+  assert.equal(lastAfter(stub), '2026-11-09T15:39:00Z')
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'R1', 'R2', 'N1', 'R3'])
+  // At the stop it had got to R2, whatever was stored after it.
+  assert.deepEqual(stopped, { [OWNER]: '2026-11-09T15:41:00Z' })
+})
+
+test('whatsapp: after a crash between catch-up\'s rows, the next start lists them from where catch-up had last saved it got to (D179)', async t => {
+  // The review's case by a crash: the bridge dies while catch-up hands over R2, after the webhook
+  // stored N1. A crash leaves nothing in memory: the next start reads the state as it was on disk.
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo(), start: '2026-11-09T16:00:00Z' })
+  const { stub, bridge, whatsapp, caughtUp, paths, settings, clock, log, proc } = context
+  await caughtUp()
+  await whatsapp.stop()
+  stub.fixtures({ messages: MISSED })
+  let onDisk = null
+  let stopping = null
+  await startAgain(context, async record => {
+    const result = await bridge.intake.take(record)
+    if (record.id === 'R2') {
+      await bridge.intake.take(NEWER)
+      onDisk = fs.readFileSync(paths.bridgeState)
+      stopping = whatsapp.stop()
+    }
+    return result
+  })
+  await waitFor(() => stopping !== null, 'the crash')
+  await stopping
+  await bridge.stop()
+  fs.writeFileSync(paths.bridgeState, onDisk)
+  assert.deepEqual(JSON.parse(onDisk).catchUp, { [OWNER]: '2026-11-09T15:30:00Z' })
+
+  const again = await startBridge({ settings, clock, log, proc })
+  atEnd(t, () => again.stop())
+  await caughtUp(2)
+  assert.equal(lastAfter(stub), '2026-11-09T15:28:00Z')
+  assert.deepEqual([...again.store.index.entries()].map(entry => entry.line.sourceId), ['W0', 'R1', 'R2', 'N1', 'R3'])
+})
+
+test('whatsapp: a message whose webhook never came is listed by the next catch-up, though a newer one was stored meanwhile (D179)', async t => {
+  // wacli waits 5 seconds for the webhook, and never tries again (5.2 step 1).
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo() })
+  const { stub, lines, clock, caughtUp, synced } = context
+  await synced()
+  await caughtUp()
+  stub.fixtures({ messages: [listRow({ MsgID: 'M1', Timestamp: '2026-11-09T15:50:00Z', Text: 'missed' }), listRow({ MsgID: 'M2', Timestamp: '2026-11-09T15:53:00Z', Text: 'came' })] })
+  await post(context, webhookPayload({ ID: 'M2', Timestamp: '2026-11-09T15:53:00Z', Text: 'came' }))
+  await untilNextCatchUp(clock)
+  await caughtUp(2)
+  assert.equal(lastAfter(stub), '2026-11-09T15:28:00Z')
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'M2', 'M1'])
+  assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:53:00Z' })
+})
+
+test('whatsapp: the bot\'s own rows don\'t move catch-up on, so the owner\'s messages wacli receives after a reply, with older times, are still listed (D179)', async t => {
+  // After downtime, a reply waiting in the outbox can go out before wacli has received the owner's
+  // messages from while it was down; wacli stores the reply with the time it was sent.
+  const bot = listRow({ MsgID: 'BOT', Timestamp: '2026-11-09T15:50:00Z', Text: 'a reply', FromMe: true, SenderJID: '15550100000@s.whatsapp.net' })
+  const context = await setup(t, { fixtures: { paired: true, messages: [bot] }, seed: gotTo() })
+  const { stub, lines, clock, caughtUp } = context
+  await caughtUp()
+  assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:30:00Z' })
+  stub.fixtures({ messages: [listRow({ MsgID: 'O1', Timestamp: '2026-11-09T15:40:00Z', Text: 'from the backlog' }), bot] })
+  await untilNextCatchUp(clock)
+  await caughtUp(2)
+  assert.equal(lastAfter(stub), '2026-11-09T15:28:00Z')
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'O1'])
+  assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:40:00Z' })
+})
+
+test('whatsapp: catch-up lists every chat the owner has written from, each from where it got to there (D179)', async t => {
+  // A message in the first chat the webhook missed, then one the webhook delivered from an `@lid`
+  // chat, which becomes the chat replies go to.
+  const seed = seedLines([incoming('2026-11-09T15:30:00Z', 'W0', 'before')], { catchUp: { [OWNER]: '2026-11-09T15:30:00Z' }, ownerChat: { jid: OWNER, at: '2026-11-09T15:30:00Z' } })
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed, settings: { ownerJids: [LID] } })
+  const { stub, lines, clock, caughtUp, synced, whatsapp } = context
+  await synced()
+  await caughtUp()
+  const fromLid = { MsgID: 'L1', Timestamp: '2026-11-09T15:55:00Z', Text: 'from the lid', ChatJID: LID, SenderJID: LID }
+  stub.fixtures({ messages: [listRow({ MsgID: 'A1', Timestamp: '2026-11-09T15:50:00Z', Text: 'missed' }), listRow(fromLid)] })
+  await post(context, webhookPayload({ ID: 'L1', Timestamp: '2026-11-09T15:55:00Z', Text: 'from the lid', Chat: LID, SenderJID: LID }))
+  assert.equal(whatsapp.ownerChat(), LID)
+  const seen = context.bridge.state.get().catchUp
+  await untilNextCatchUp(clock)
+  await waitFor(() => context.events().filter(event => event === 'whatsapp.caught_up').length >= 2, 'the next catch-up')
+  await waitFor(() => lines().length === 3, 'the missed message')
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'L1', 'A1'])
+  assert.equal(lastAfter(stub, OWNER), '2026-11-09T15:28:00Z')
+  assert.equal(lastAfter(stub, LID), FIRST_START)
+  // The new chat was listed from the bridge's first start, as the first was.
+  assert.deepEqual(seen, { [OWNER]: '2026-11-09T15:30:00Z', [LID]: FIRST_START })
+  assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:50:00Z', [LID]: '2026-11-09T15:55:00Z' })
+})
+
+test('whatsapp: catch-up doesn\'t go on past a row intake must be handed again, and lists it at the next one (D179)', async t => {
+  const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo() })
+  const { stub, lines, bridge, whatsapp, caughtUp, entries } = context
+  await caughtUp()
+  await whatsapp.stop()
+  stub.fixtures({ messages: MISSED })
+  // R1 fails, as for a bug, the first time; the rows after it are stored.
+  let failed = false
+  await startAgain(context, async record => {
+    if (record.id === 'R1' && !failed) {
+      failed = true
+      return { stored: false, reason: 'failed', again: true }
+    }
+    return bridge.intake.take(record)
+  })
+  await caughtUp(2)
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'R2', 'R3'])
+  assert.deepEqual(bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:30:00Z' })
+  assert.deepEqual(entries.filter(entry => entry.event === 'whatsapp.catchup_held').map(entry => entry.id), ['R1'])
+
+  await whatsapp.stop()
+  await startAgain(context)
+  await caughtUp(3)
+  assert.equal(lastAfter(stub), '2026-11-09T15:28:00Z')
+  assert.deepEqual(lines().map(line => line.sourceId), ['W0', 'R2', 'R3', 'R1'])
+  assert.deepEqual(bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:42:00Z' })
 })
 
 test('whatsapp: a catch-up that fails is tried again at the next one, and not while unpaired', async t => {

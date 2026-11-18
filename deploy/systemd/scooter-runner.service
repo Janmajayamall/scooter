@@ -12,7 +12,9 @@
 #   to record the run, runs pi again at every start, and each start waits out the quiet period, so
 #   systemd's start limit never stops it; these waits bound what such a fault spends (D207).
 #   systemd keeps counting the restarts until the unit is started by hand or the machine starts
-#   again.
+#   again. SCOOTER_RESTART_WAITS=systemd tells the runner that systemd keeps these waits, so it
+#   keeps none of its own, which it does where its service manager doesn't wait, as in Docker
+#   (D229): a start by hand brings it back at once.
 
 [Unit]
 Description=Scooter runner: the agent's runs, in VMs
@@ -26,6 +28,7 @@ Group=scooter-runner
 SupplementaryGroups=kvm
 ExecStart=/usr/local/bin/scooter runner
 Environment=TZ=UTC
+Environment=SCOOTER_RESTART_WAITS=systemd
 KillMode=control-group
 Restart=on-failure
 RestartSec=1min

@@ -23,6 +23,11 @@ const values = {
   OUTAGE_RETRY_WAITS: [1 * MINUTE, 5 * MINUTE, 30 * MINUTE],
   // The wait between tries after a setup error (6.9).
   SETUP_RETRY_WAIT: 30 * MINUTE,
+  // The waits before a runner that stopped on an error goes on again, after one stop, two, and
+  // three or more in a row, where its service manager doesn't wait: those the native unit has
+  // systemd keep (D207), 1 minute, then 1 minute × √30, about 5½, then 30. A fault that stays
+  // after pi has run then spends on OpenRouter at most twice an hour, as an outage does (D229).
+  RUNNER_RESTART_WAITS: [1 * MINUTE, Math.round(MINUTE * Math.sqrt(30)), 30 * MINUTE],
   // How many entries `failed` keeps (6.8).
   FAILED_KEEP: 100,
   // How often the runner looks for new lines, and the bridge checks the outbox and the email
@@ -55,7 +60,8 @@ const values = {
   WEBHOOK_PORT: 8787,
   // The largest webhook body accepted from wacli (5.2).
   WEBHOOK_MAX_BYTES: 2 * MB,
-  // WhatsApp catch-up: how often, how far back before the newest line, and how many rows (5.2).
+  // WhatsApp catch-up: how often, how far back before where catch-up had got to, and how many
+  // rows a page (5.2; D179).
   CATCHUP_INTERVAL: 10 * MINUTE,
   CATCHUP_OVERLAP: 2 * MINUTE,
   CATCHUP_LIMIT: 500,
@@ -92,6 +98,10 @@ const values = {
   // longer one, and the bridge refuses a `parsed.json` with one (5.6). The bridge names the stored
   // file itself (4.1), so this is only what the owner called it, as a line's `name` (4.2).
   ATTACHMENT_NAME_MAX_CHARS: 255,
+  // The most of a name the bridge logs, in characters, of one it leaves in a folder another user
+  // controls, such as a folder in the runner's outbox that isn't an entry's (D226). Its length in
+  // bytes is logged beside it.
+  LOGGED_NAME_MAX_CHARS: 64,
   // A spool folder the bridge couldn't take for a reason of its own, such as a full disk, is
   // tried again after a wait that starts at `first` and doubles up to `max`. The folder stays,
   // so the email isn't lost, and the folders after it wait (5.6).

@@ -238,9 +238,9 @@ test('intake: a download its channel\'s stop cut short leaves the message unstor
   // Taken while the download runs, as a webhook's record is.
   const results = await Promise.all([intake.take(record), intake.take(later), intake.take(makeRecord({ id: 'S3', text: '/status' }))])
   assert.deepEqual(results, [
-    { stored: false, reason: 'its channel stopped during a download' },
-    { stored: false, reason: 'its channel stopped during a download before it' },
-    { stored: false, reason: 'its channel stopped during a download before it' },
+    { stored: false, reason: 'its channel stopped during a download', again: true },
+    { stored: false, reason: 'its channel stopped during a download before it', again: true },
+    { stored: false, reason: 'its channel stopped during a download before it', again: true },
   ])
   assert.deepEqual(lines(), [])
   assert.deepEqual(clock.sleeping(), [])
@@ -361,15 +361,30 @@ test('intake: logs say what was stored, never what it said', async t => {
   assert.ok(!text.includes('Sam'), text)
 })
 
+test('intake: a record that fails for a reason of the bridge\'s, such as a bug, is for its channel to hand over again, and the next one is stored (D179)', async t => {
+  const { whatsapp, store, lines, entries, fatal } = setup(t)
+  const append = store.append
+  const mock = t.mock.method(store, 'append', async () => {
+    throw new Error('a bug')
+  })
+  assert.deepEqual(await whatsapp.deliver(makeRecord({ id: 'B1', text: 'one' })), { stored: false, reason: 'failed', again: true })
+  mock.mock.restore()
+  assert.equal(store.append, append)
+  assert.equal((await whatsapp.deliver(makeRecord({ id: 'B1', text: 'one' }))).stored, true)
+  assert.deepEqual(lines().map(line => line.sourceId), ['B1'])
+  assert.ok(entries.some(entry => entry.event === 'intake.failed'))
+  assert.deepEqual(fatal, [])
+})
+
 test('intake: once the store stops taking lines, the bridge is told, once', async t => {
   const { whatsapp, fatal, store } = setup(t)
   await whatsapp.deliver(makeRecord({ text: 'one' }))
   const writeSync = fs.writeSync
   const mock = t.mock.method(fs, 'writeSync', (fd, bytes) => writeSync(fd, bytes.subarray(0, 3)))
-  assert.deepEqual(await whatsapp.deliver(makeRecord({ text: 'two' })), { stored: false, reason: 'the store stopped' })
+  assert.deepEqual(await whatsapp.deliver(makeRecord({ text: 'two' })), { stored: false, reason: 'the store stopped', again: true })
   mock.mock.restore()
   assert.equal(store.broken, true)
-  assert.deepEqual(await whatsapp.deliver(makeRecord({ text: 'three' })), { stored: false, reason: 'the store stopped' })
+  assert.deepEqual(await whatsapp.deliver(makeRecord({ text: 'three' })), { stored: false, reason: 'the store stopped', again: true })
   assert.equal(fatal.length, 1)
 })
 

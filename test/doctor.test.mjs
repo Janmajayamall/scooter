@@ -159,6 +159,43 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
   assert.equal(byName(checks, 'VM image')[0].fix, 'docker compose run --rm build-image, with the runner stopped')
 })
 
+test('doctor: stopped during the boot check, it hands the boot check its signal, which closes the VM, and makes no check after it', async t => {
+  // The review of milestone 13, smaller point 2: `bootCheck` closes its VM on the signal (sandbox.test.mjs).
+  const { check, runner } = install(t)
+  const stopping = new AbortController()
+  const given = []
+  const bootCheck = async ({ signal }) => {
+    given.push(signal)
+    stopping.abort()
+    throw new Error('doctor was stopped during the boot')
+  }
+  const checks = await check({ runner: { ...runner, bootCheck }, signal: stopping.signal })
+  assert.deepEqual(given, [stopping.signal])
+  assert.deepEqual(checks.map(entry => entry.name), ['config', 'accelerator', 'QEMU', 'VM image'])
+})
+
+test("doctor: stopped while it waits for OpenRouter's answer, it stops waiting, and makes no check of OpenRouter", async t => {
+  // The review of milestone 14, smaller point 6: its handlers took Ctrl-C's own ending away, and the
+  // wait went on for up to DOCTOR_TIMEOUT.
+  const { check } = install(t)
+  const stopping = new AbortController()
+  const given = []
+  const fetch = (url, { signal }) => {
+    given.push(signal)
+    stopping.abort()
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) reject(signal.reason)
+      signal.addEventListener('abort', () => reject(signal.reason))
+    })
+  }
+  const started = Date.now()
+  const checks = await check({ fetch, signal: stopping.signal })
+  assert.ok(Date.now() - started < 5000)
+  assert.equal(given.length, 1)
+  assert.equal(given[0].aborted, true)
+  assert.deepEqual(checks.map(entry => entry.name), ['config', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files'])
+})
+
 test("doctor: a VM boots from the image with the runner's accelerator, in its own folder; one that doesn't is a failure, with its fix", async t => {
   const { check, runner, paths, booted } = install(t)
   await check()

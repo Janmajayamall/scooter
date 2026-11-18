@@ -502,6 +502,7 @@ test('status: status.json holds what /status shows of the runner\'s settings', a
     internet: true,
     imageBuiltAt: '2026-11-09T10:00:00Z',
     agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, reads: ['whatsapp', 'email'] } },
+    restart: null,
   })
   assert.equal(fs.statSync(paths.runnerStatus).mode & 0o777, 0o600)
 })

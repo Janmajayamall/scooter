@@ -14,6 +14,9 @@
 // 7. It brings the state up to date: scheduled tasks already past, a pause tried again at once, and
 //    backfills started or dropped (6.4, 6.9, 6.11).
 // 8. It reads the datastore.
+// 9. Where its service manager doesn't wait between its starts, as Docker's doesn't, and this start
+//    follows a stop on an error, it waits as the native unit would have, then records itself as the
+//    next stop in a row until a run is recorded (`restarts.mjs`; D229). Nothing before this runs pi.
 //
 // Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, asks the planner what
 // is next (`nextAction`), and does it. One thing at a time, so runs never overlap.
@@ -40,6 +43,7 @@ import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
 import { loadProtocol } from './prompt.mjs'
 import { removeReplaySessions } from './replay.mjs'
+import { openRestarts } from './restarts.mjs'
 import { performRun } from './run.mjs'
 import { SandboxSetupError } from './sandbox/index.mjs'
 import { loadState, saveState, startupState } from './state.mjs'
@@ -76,7 +80,9 @@ export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
 // - `openSandbox({ paths, settings, log, clock })`: opens the sandbox runs go through (`sandbox/`),
 //   checking what it needs.
 // - `clock`, `log`, `proc`: tests give their own.
-export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }) }) {
+// - `restartWaits`: whether the runner keeps its own waits between starts, where its service
+//   manager doesn't wait (`restarts.mjs`; D229). `scooter runner` says, by its environment.
+export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }), restartWaits = false }) {
   const paths = makePaths(settings)
   const { agents } = loadConfig({ paths })
   // There is exactly one agent in v2 (6.1).
@@ -94,6 +100,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     }
 
     const ids = createIds(clock)
+    const restarts = restartWaits ? openRestarts({ paths, clock, log, ids, timeZone: settings.timeZone }) : null
     let previous = null
     try {
       previous = readRunnerStatus(paths.runnerStatus)
@@ -101,7 +108,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       if (!(error instanceof RunnerStatusError)) throw error
       log.warn('runner.status_unreadable', errorFields(error))
     }
-    const status = runnerStatus({ settings, agents, sandbox, now: clock.now() })
+    const status = runnerStatus({ settings, agents, sandbox, now: clock.now(), restarts })
     const notice = emulationNotice({ previous, status, accelSetting: settings.agentAccel })
     if (notice) await writeOutboxEntry({ paths, ids, entry: notice })
     writeRunnerStatus(paths, status)
@@ -210,7 +217,19 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       agent,
       sandbox,
       datastore,
+      restarts,
       tick,
+      // A start stopped while it waited (D229) no longer waits, and `/status` mustn't go on saying
+      // it does until the next start: `status.json` loses its `restart` (the review of milestone 14,
+      // smaller point 8). As best it can: the stop goes on if it can't be written.
+      endRestartWait() {
+        if (status.restart === null) return
+        try {
+          writeRunnerStatus(paths, { ...status, restart: null })
+        } catch (error) {
+          log.error('runner.status_not_saved', errorFields(error))
+        }
+      },
       get state() {
         return state
       },
@@ -233,15 +252,42 @@ export async function startRunner(options) {
   let reportFatal
   const fatal = new Promise(resolve => (reportFatal = resolve))
 
+  const { restarts } = runner
+  const fail = error => {
+    log.error('runner.failed', errorFields(error))
+    restarts?.failed(error)
+    reportFatal(error)
+  }
+
+  // Whether this start is still waiting before it goes on (`restarts.mjs`).
+  let waiting = false
   const loop = (async () => {
-    while (!stopping.signal.aborted) {
+    if (restarts) {
+      waiting = true
       try {
-        await runner.tick({ signal: stopping.signal })
-      } catch (error) {
-        log.error('runner.failed', errorFields(error))
-        reportFatal(error)
+        await restarts.wait({ signal: stopping.signal })
+      } catch {
         return
       }
+      waiting = false
+      // Recorded as the next stop in a row before anything can run pi; if it can't be, nothing runs.
+      try {
+        restarts.begin()
+      } catch (error) {
+        fail(error)
+        return
+      }
+    }
+    while (!stopping.signal.aborted) {
+      let done
+      try {
+        done = await runner.tick({ signal: stopping.signal })
+      } catch (error) {
+        fail(error)
+        return
+      }
+      // A run was recorded: what stops the runner from here on isn't a fault that stops every run.
+      if (typeof done.outcome === 'object') restarts?.ranThrough()
       try {
         await clock.sleep(limits.POLL_INTERVAL, { signal: stopping.signal })
       } catch {
@@ -262,6 +308,9 @@ export async function startRunner(options) {
       (stopped ??= (async () => {
         stopping.abort()
         await loop
+        // Asked to stop, it ends the waits; after a failure, which `fail` recorded, it doesn't.
+        restarts?.stopped()
+        if (waiting) runner.endRestartWait()
         await runner.close()
         log.info('runner.stopped')
       })()),
@@ -271,12 +320,13 @@ export async function startRunner(options) {
 // `scooter runner`: runs the runner until SIGTERM or SIGINT. Exits with 2 for a bad `agents.yaml`,
 // or a sandbox that can't run as it is set up (no VM image, one for another pi, a forced
 // accelerator that isn't there), and with 1 if it can't start or can't go on for another reason.
-// `openSandbox` opens the sandbox its runs go through.
-export async function runRunner({ settings, stderr, openSandbox, clock = systemClock }) {
+// `openSandbox` opens the sandbox its runs go through; `restartWaits`, whether the runner keeps its
+// own waits between starts (`restarts.mjs`).
+export async function runRunner({ settings, stderr, openSandbox, clock = systemClock, restartWaits = false }) {
   const log = createLog({ component: 'runner', clock })
   let runner
   try {
-    runner = await startRunner({ settings, openSandbox, clock, log })
+    runner = await startRunner({ settings, openSandbox, clock, log, restartWaits })
   } catch (error) {
     if (error instanceof ConfigError) {
       for (const problem of error.problems) stderr.write(`scooter runner: ${problem.message}\n`)

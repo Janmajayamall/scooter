@@ -63,6 +63,11 @@ test('docker: the image is built as 8.3 says: its two stages, restic checked aga
   }
   assert.match(DOCKERFILE, /sha256sum -c -/)
   assert.match(DOCKERFILE, /^RUN npm ci --omit=dev --ignore-scripts /m)
+  // The app is readable by every user, writable by root alone, whatever the checkout's modes, and
+  // after everything is copied in (the review of milestone 13, smaller point 4).
+  const lines = DOCKERFILE.split('\n')
+  const chmod = lines.indexOf('RUN chmod -R a+rX,go-w /app')
+  assert.ok(chmod > lines.indexOf('COPY src ./src') && lines.indexOf('COPY src ./src') > 0)
   assert.match(DOCKERFILE, /^ENV TZ=UTC$/m)
   assert.match(DOCKERFILE, /^ENTRYPOINT \["tini", "--", "node", "\/app\/src\/cli\.mjs"\]$/m)
   // Only what the image copies goes to the build, never an env file.

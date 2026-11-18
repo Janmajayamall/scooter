@@ -148,14 +148,16 @@ async function readBody(response, maxBytes) {
 
 // Asks OpenRouter for its list of the endpoints that keep no data. Returns `{ status, endpoints }`,
 // `endpoints` being null when the answer isn't the list; or `{ error }` when OpenRouter can't be
-// reached, within `DOCTOR_TIMEOUT`.
-export async function fetchZdrEndpoints({ fetch = globalThis.fetch } = {}) {
-  const signal = AbortSignal.timeout(limits.DOCTOR_TIMEOUT)
+// reached, within `DOCTOR_TIMEOUT`. `stop`, a signal, ends the wait sooner, as `doctor`'s stop does.
+export async function fetchZdrEndpoints({ fetch = globalThis.fetch, stop = null } = {}) {
+  const timeout = AbortSignal.timeout(limits.DOCTOR_TIMEOUT)
+  const signal = stop === null ? timeout : AbortSignal.any([timeout, stop])
   let response
   try {
     response = await fetch(ZDR_ENDPOINTS_URL, { signal, headers: { accept: 'application/json' } })
   } catch (error) {
-    return { error: signal.aborted ? `no answer within ${limits.DOCTOR_TIMEOUT / 1000} seconds` : (error.cause?.code ?? error.code ?? error.message) }
+    if (stop?.aborted) return { error: 'doctor was stopped' }
+    return { error: timeout.aborted ? `no answer within ${limits.DOCTOR_TIMEOUT / 1000} seconds` : (error.cause?.code ?? error.code ?? error.message) }
   }
   let endpoints = null
   try {
@@ -204,8 +206,9 @@ export function openRouterChecks(zdr, { model, zdrOn }) {
 // - `runner`: the runner's own checks, which `src/cli.mjs` gives it: `loadConfig`, `ConfigError`,
 //   `readBuildFile`, `pinnedPiVersion`, `checkImage`, `qemuProgram`, `kvmProblem` and `bootCheck`,
 //   which tests may leave out.
+// - `signal`: stops the checks; the VM the boot check started is closed first.
 // - `proc`, `fetch`, `docker`, `envDir`, and `root`, root's `{ uid, gid }`: for tests.
-export async function runChecks({ settings, runner, proc, fetch = globalThis.fetch, docker = inDocker(), envDir, root = { uid: 0, gid: 0 } }) {
+export async function runChecks({ settings, runner, proc, fetch = globalThis.fetch, docker = inDocker(), envDir, root = { uid: 0, gid: 0 }, signal = null }) {
   const paths = makePaths(settings)
   const checks = []
 
@@ -232,11 +235,13 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
   // A VM boots from the image, when everything it needs is there.
   if (runner.bootCheck && checks.every(check => check.status !== 'fail' || check.name === 'config')) {
     try {
-      checks.push(bootCheckResult({ booted: await runner.bootCheck({ paths, settings }), docker }))
+      checks.push(bootCheckResult({ booted: await runner.bootCheck({ paths, settings, signal }), docker }))
     } catch (error) {
+      if (signal?.aborted) return checks
       checks.push(bootCheckResult({ error, docker }))
     }
   }
+  if (signal?.aborted) return checks
 
   const ids = { root }
   const missing = []
@@ -249,7 +254,10 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
 
   checks.push(envFileCheck(envDir))
 
-  const zdr = await fetchZdrEndpoints({ fetch })
+  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too (the review of
+  // milestone 14, smaller point 6): `runDoctor`'s handlers have taken the signals' own ending away.
+  const zdr = await fetchZdrEndpoints({ fetch, stop: signal })
+  if (signal?.aborted) return checks
   checks.push(...openRouterChecks(zdr, { model, zdrOn: settings.zdr }))
   return checks
 }
@@ -288,7 +296,28 @@ export async function runDoctor({ settings, env = process.env, stdout = process.
     return 2
   }
   const envDir = env[ENV_DIR_VARIABLE] || DEFAULT_ENV_DIR
-  const checks = await runChecks({ settings, runner, proc, envDir })
-  stdout.write(reportText(checks))
-  return checks.some(check => check.status === 'fail') ? 1 : 0
+  // Stopped, by a signal of the terminal's or a `kill`, it closes the VM its boot check started
+  // before it ends: nothing else stops a VM of Gondolin's whose starter was killed (6.6; the review
+  // of milestone 13, smaller point 2).
+  const stopping = new AbortController()
+  let stoppedBy = null
+  const handlers = ['SIGTERM', 'SIGINT', 'SIGHUP'].map(name => {
+    const handler = () => {
+      stoppedBy ??= name
+      stopping.abort()
+    }
+    process.on(name, handler)
+    return [name, handler]
+  })
+  try {
+    const checks = await runChecks({ settings, runner, proc, envDir, signal: stopping.signal })
+    stdout.write(reportText(checks))
+    if (stoppedBy !== null) {
+      stderr.write(`scooter doctor: stopped by ${stoppedBy}, before every check was made\n`)
+      return 1
+    }
+    return checks.some(check => check.status === 'fail') ? 1 : 0
+  } finally {
+    for (const [name, handler] of handlers) process.off(name, handler)
+  }
 }

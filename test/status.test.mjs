@@ -137,6 +137,23 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
   )
 })
 
+test('status: a runner that waits before it goes on, after stopping on an error, says until when and why, and nothing once the wait is over (D229)', t => {
+  const { status, write, paths } = setup(t)
+  const runnerLines = () => status().split('\n').filter(text => text.startsWith('Runner') || text.startsWith('The runner'))
+  write(paths.runnerStatus, { ...STATUS, startedAt: '2026-11-09T15:50:00Z', restart: { stops: 3, until: '2026-11-09T16:20:00Z', reason: 'ENOSPC' } })
+  assert.deepEqual(runnerLines(), [
+    'Runner: started 21:20. VMs run with KVM; their image was built Sun 8 Nov 18:01.',
+    'The runner waits until 21:50 before it goes on: it stopped on an error (ENOSPC), 3 times in a row. Restarting it ends the wait.',
+  ])
+  write(paths.runnerStatus, { ...STATUS, restart: { stops: 1, until: '2026-11-09T15:51:00Z', reason: null } })
+  assert.equal(runnerLines()[1], "The runner waits until 21:21 before it goes on: it stopped, and couldn't record why. Restarting it ends the wait.")
+  // Over, or none: nothing is said. A status an older runner wrote has no `restart`.
+  write(paths.runnerStatus, { ...STATUS, restart: { stops: 1, until: '2026-11-09T15:50:30Z', reason: 'ENOSPC' } })
+  assert.equal(runnerLines().length, 1)
+  write(paths.runnerStatus, { ...STATUS, restart: null })
+  assert.equal(runnerLines().length, 1)
+})
+
 test('status: the same files in another time zone', t => {
   const { status, write, paths } = setup(t)
   write(paths.runnerStatus, { ...STATUS, accel: 'emulation', zdr: false, internet: true, imageBuiltAt: null })

@@ -6,6 +6,12 @@
 //   docker compose stop runner
 //   docker compose run --rm -v ./test:/app/test:ro --entrypoint node runner /app/test/live/data-mounts.mjs
 //
+// `--entrypoint node` makes Node the container's first process in place of tini, the image's entry
+// point, which is fine for this check: it closes its one VM itself. Something that kills a QEMU
+// and waits for it to go, as the sandbox tests' check of a stopped process group does, needs tini
+// first, to reap it: `--entrypoint tini`, with `node …` as the command (the review of milestone
+// 13, smaller point 5).
+//
 // It holds runner/runner.sock, as the runner does, so it refuses while a runner runs. It opens the
 // sandbox as the runner does, on the runner's own settings and data folder, and runs a shell in a
 // VM with the mounts of a run of `lifelog` (`piMounts`). What the VM sees is checked against 6.6:

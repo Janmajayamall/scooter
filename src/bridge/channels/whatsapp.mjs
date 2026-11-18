@@ -5,8 +5,8 @@
 // - checks that wacli is paired, and keeps `wacli sync --follow` running while it is;
 // - serves the webhook that sync posts each message to, on loopback, signed with a secret that is
 //   new on every start;
-// - catches up at startup and every 10 minutes by listing the owner's chat, since the webhook is
-//   best-effort;
+// - catches up at startup and every 10 minutes by listing the owner's chats, since the webhook is
+//   best-effort, each from where catch-up itself had got to there, kept in the bridge's state;
 // - turns what wacli says into a normalized message, and drops everything that isn't the owner's
 //   one-to-one chat before it reaches the core;
 // - downloads media into wacli's staging folder, and copies it out with care;
@@ -239,9 +239,11 @@ export function toRecord(message) {
 // - `settings`: the bridge's settings; `ownerNumber` and `ownerJids` are used here.
 // - `paths`: what `makePaths` returns.
 // - `proc`: what `createProc` returns. Every wacli call goes through it.
-// - `state`: the bridge's state (`../state.mjs`), for the owner's chat and the first start.
+// - `state`: the bridge's state (`../state.mjs`), for the owner's chat, the first start, and where
+//   catch-up has got to.
 // - `user`: `{ uid, gid }` of `scooter-wacli`, or null when the bridge isn't root (section 10).
 // - `newestIncomingAt()`: the `at` of the newest incoming WhatsApp line in the datastore, or null.
+//   Catch-up starts from it only for a state an older bridge wrote (D179).
 export function createWhatsApp({ settings, paths, proc, log, clock = systemClock, state, user = null, newestIncomingAt = () => null }) {
   const owners = ownerIds(settings)
   const env = wacliEnv(paths)
@@ -315,8 +317,29 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     return state.get().ownerChat?.jid ?? `${settings.ownerNumber}@s.whatsapp.net`
   }
 
+  // Where catch-up has got to in each of the owner's chats it lists: the time of the newest of the
+  // owner's rows it has listed there, with every row before it handled (D179). A state an older
+  // bridge wrote says nothing of it: that bridge went on from the newest incoming WhatsApp line, in
+  // the chat it listed, and so does this one. It is saved at once, and kept here if it can't be.
+  const legacy = state.get().catchUp === undefined ? { [ownerChat()]: newestIncomingAt() ?? state.get().firstStart } : null
+  const points = () => state.get().catchUp ?? legacy
+  if (legacy) savePoint(ownerChat(), legacy[ownerChat()])
+
+  function savePoint(chat, at) {
+    try {
+      state.update({ catchUp: { ...points(), [chat]: at } })
+    } catch (error) {
+      // Catch-up lists from where it had got to before, and stores nothing twice.
+      log.error('whatsapp.state_not_saved', errorFields(error))
+    }
+  }
+
   function rememberChat(message) {
     const jid = canonicalJid(message.chat)
+    // A chat of the owner's that catch-up doesn't list yet, such as an `@lid` one: it is listed from
+    // the bridge's first start, as the first chat was, so that a message there the webhook missed
+    // isn't passed for good (D179).
+    if (!Object.hasOwn(points(), jid)) savePoint(jid, state.get().firstStart)
     const at = message.at ?? isoSeconds(clock.now())
     const known = state.get().ownerChat
     if (known && (at < known.at || (at === known.at && jid === known.jid))) return
@@ -329,7 +352,9 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   }
 
   // Hands a normalized message to the core, unless it is dropped. Resolves when the core is done
-  // with it. Returns what happened: `delivered`, or why it was dropped.
+  // with it. Returns what happened: `delivered`; `again`, when the core didn't store it and must be
+  // handed it again (`intake.mjs`), such as after a stop cut its download short; or why it was
+  // dropped.
   async function deliver(message, onRecord, via) {
     const reason = dropReason(message, owners)
     if (reason === 'not the owner') {
@@ -344,8 +369,8 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     rememberChat(message)
     const record = toRecord(message)
     chats.set(record, message.chat)
-    await onRecord(record)
-    return 'delivered'
+    const result = await onRecord(record)
+    return result?.again === true ? 'again' : 'delivered'
   }
 
   // A webhook body, after its signature has been checked.
@@ -424,44 +449,81 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     })
   }
 
-  // Catch-up (5.2 step 7): lists the owner's chat from 2 minutes before the newest incoming
-  // WhatsApp line, or from the bridge's first start before there is one, and passes every row
-  // through the same steps as a webhook.
-  async function catchUp(onRecord, signal) {
-    const newest = newestIncomingAt()
-    let after = newest !== null ? parseIsoSeconds(newest) - limits.CATCHUP_OVERLAP : parseIsoSeconds(state.get().firstStart)
+  // Catch-up of one chat (5.2 step 7; D179): lists it from `CATCHUP_OVERLAP` before where catch-up
+  // had got to there, never before the bridge's first start, and passes every row through the
+  // same steps as a webhook.
+  //
+  // Where it has got to moves on only by what catch-up itself lists, never by what the webhook
+  // stored: a stop or a crash between its rows, a webhook that never came, or a message stored
+  // out of turn would otherwise move the start past a row that was never stored, for good. So it
+  // moves on to a row's time once the row, and every row listed before it, has been handled:
+  // stored, skipped as a duplicate, or dropped as 5.2 drops it. It doesn't move past a row intake
+  // must be handed again (`again`), such as one whose download a stop cut short, nor by the bot's
+  // own rows, which wacli stores with the time they were sent: after downtime, a reply can be sent
+  // before wacli has received the owner's messages from while it was down, which have older times.
+  // It is saved after each page and when the catch-up ends, so a crash lists again from the last
+  // save, which stores nothing twice.
+  async function catchUp(chat, onRecord, signal) {
+    const firstStart = state.get().firstStart
+    const from = points()[chat] ?? firstStart
+    let listed = from
+    let held = false
+    let after = Math.max(parseIsoSeconds(firstStart), parseIsoSeconds(from) - limits.CATCHUP_OVERLAP)
     const counts = { rows: 0, delivered: 0, dropped: 0 }
-    const chat = ownerChat()
-    for (;;) {
-      const args = ['--read-only', 'messages', 'list', '--chat', chat, '--after', isoSeconds(after), '--asc']
-      const data = await wacli([...args, '--limit', String(limits.CATCHUP_LIMIT)], { signal })
-      // wacli answers `null`, not an empty list, when there is nothing (0.6).
-      const rows = isObject(data) ? (data.messages ?? []) : null
-      if (!Array.isArray(rows)) throw Object.assign(new Error('wacli messages list: the answer has no list'), { code: 'EWACLI' })
-      for (const row of rows) {
-        if (signal.aborted) return
-        for (const message of fromListRow(row)) {
-          if ((await deliver(message, onRecord, 'catch-up')) === 'delivered') counts.delivered += 1
-          else counts.dropped += 1
+    const save = () => {
+      if (listed !== (points()[chat] ?? firstStart)) savePoint(chat, listed)
+    }
+    try {
+      for (;;) {
+        const args = ['--read-only', 'messages', 'list', '--chat', chat, '--after', isoSeconds(after), '--asc']
+        const data = await wacli([...args, '--limit', String(limits.CATCHUP_LIMIT)], { signal })
+        // wacli answers `null`, not an empty list, when there is nothing (0.6).
+        const rows = isObject(data) ? (data.messages ?? []) : null
+        if (!Array.isArray(rows)) throw Object.assign(new Error('wacli messages list: the answer has no list'), { code: 'EWACLI' })
+        for (const row of rows) {
+          if (signal.aborted) return
+          let handled = true
+          let bots = false
+          let at = null
+          for (const message of fromListRow(row)) {
+            const outcome = await deliver(message, onRecord, 'catch-up')
+            if (outcome === 'delivered') counts.delivered += 1
+            else counts.dropped += 1
+            if (outcome === 'again') handled = false
+            if (outcome === 'from the bot') bots = true
+            at = message.at
+          }
+          if (!handled && !held) {
+            held = true
+            log.warn('whatsapp.catchup_held', { id: idOf(row.MsgID) })
+          }
+          if (!held && !bots && at !== null && at > listed) listed = at
         }
+        counts.rows += rows.length
+        save()
+        if (rows.length < limits.CATCHUP_LIMIT) break
+        // A full page: go on from the last row's time. `--after` is strict, to the second, so the
+        // next page starts a second earlier and the rest of that second is listed too; the rows
+        // listed twice are duplicates. A page that is all one second moves past it instead.
+        const last = parseIsoSeconds(fromListRow(rows.at(-1))[0]?.at ?? null)
+        if (last === null) break
+        // A page that ends no later than what was asked for would be asked for again, for ever, or
+        // further back each time. The real wacli filters in SQL; one that doesn't is stopped here.
+        if (last <= after) {
+          log.warn('whatsapp.catchup_stopped', { reason: 'a full page that ends before the time asked for' })
+          break
+        }
+        after = last - 1000 > after ? last - 1000 : last
       }
-      counts.rows += rows.length
-      if (rows.length < limits.CATCHUP_LIMIT) break
-      // A full page: go on from the last row's time. `--after` is strict, to the second, so the
-      // next page starts a second earlier and the rest of that second is listed too; the rows
-      // listed twice are duplicates. A page that is all one second moves past it instead.
-      const last = parseIsoSeconds(fromListRow(rows.at(-1))[0]?.at ?? null)
-      if (last === null) break
-      // A page that ends no later than what was asked for would be asked for again, for ever, or
-      // further back each time. The real wacli filters in SQL; one that doesn't is stopped here.
-      if (last <= after) {
-        log.warn('whatsapp.catchup_stopped', { reason: 'a full page that ends before the time asked for' })
-        break
-      }
-      after = last - 1000 > after ? last - 1000 : last
+    } finally {
+      save()
     }
     log.info('whatsapp.caught_up', counts)
   }
+
+  // The chats catch-up lists: every chat of the owner's it has a place in, and the one replies go
+  // to. Usually one.
+  const catchUpChats = () => [...new Set([ownerChat(), ...Object.keys(points())])]
 
   async function catchUpLoop(onRecord, signal, checked) {
     await new Promise(resolve => {
@@ -471,11 +533,14 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     for (;;) {
       // Not paired, there is nothing to list, and the store wacli would read may not exist.
       if (link !== 'unpaired') {
-        try {
-          await catchUp(onRecord, signal)
-        } catch (error) {
+        for (const chat of catchUpChats()) {
+          try {
+            await catchUp(chat, onRecord, signal)
+          } catch (error) {
+            if (signal.aborted) return
+            log.warn('whatsapp.catchup_failed', errorFields(error))
+          }
           if (signal.aborted) return
-          log.warn('whatsapp.catchup_failed', errorFields(error))
         }
       }
       try {
