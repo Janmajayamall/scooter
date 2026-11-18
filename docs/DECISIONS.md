@@ -2876,3 +2876,54 @@ None changes what Scooter does beyond what this milestone settled:
 - Section 10: Least privilege, with `setup`'s root test; Delivery, with the link swapped in once an entry is taken.
 
 ARCHITECTURE.md 3.3 and 5.3 say the same. The plan's milestone 13 has what 12.2 found of Scooter's VMs in the root VM, and its milestone 14 what this milestone leaves for the README.
+
+### 12.5 What was run to verify the milestone, and what wasn't verified
+
+Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, systemd 255. `4ef9630` holds all the code and tests; the commit after it records this section and nothing else. The code was the same at `515dcb8`, where the runs marked so were made.
+
+| Command | Result |
+|---|---|
+| `npm ci && npm test`, on a clean clone of the branch from GitHub at `4ef9630` | 744 tests: 697 pass, none fail. 47 skip themselves: 35 need the image, 8 need root, and 4 need root and `SCOOTER_ROOT_TESTS=1`. `systemd-analyze verify` runs, and finds nothing to say of either unit |
+| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, at `515dcb8` | 746 tests: 734 pass, none fail, in 113 seconds. The 12 that need root skip themselves. No QEMU left |
+| The root-test command of section 3 of the plan, on a second clean clone at `4ef9630`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 744 tests, 684 pass, none fail. 60 skip themselves: 35 need the image, 4 `mke2fs`, 4 wacli, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 14 are about what root can read or write anyway. `setup`'s root test runs, and passes; so do the restic round trip and the restore of owners by name |
+| The same, at `515dcb8`, without restic | 744 tests, 681 pass, none fail, 63 skip |
+| A probe of D205's case, the runner's entry swapped for a link once the bridge has sent its first message, against `main`'s `outbox.mjs` and this branch's | On `main` the bridge wrote `sending.json` where the link led, and removed it with the entry; on this branch nothing was written there. Both sent the whole entry |
+| By hand, a user unit of systemd 255 restarted with `RestartSteps` | 12.2: the waits grew, and didn't go back after runs that lasted |
+
+**Gate G1**, in a throwaway Ubuntu 24.04 VM on the Linux machine: the official cloud image, checked against its `SHA256SUMS`, on a fresh 40 GB disk, with KVM, `-cpu host`, 4 processors and 8 GB, user-mode networking, SSH on `127.0.0.1` only, booted in 12 seconds; `/dev/kvm` there.
+- Node 22.23.2, the official tarball, checked against its `SHASUMS256.txt`, unpacked into `/usr/local`, root's.
+- `bzip2`, `lz4`, `qemu-system-x86`, `qemu-utils`, `cpio`, `e2fsprogs` and `git` from `apt`: QEMU 8.2.2, e2fsprogs 1.47.0.
+- restic 0.19.1 and wacli 0.26.0, the releases of milestone 0, checked against their checksums there, in `/usr/local/bin`.
+- `/opt/scooter`, cloned as root from the pull request's branch at `515dcb8`, with `npm ci --omit=dev --ignore-scripts`.
+
+**Gate G2**, in the same VM:
+
+| Step | What was run | What happened |
+|---|---|---|
+| 1 | `sudo /opt/scooter/src/cli.mjs setup`, then `sudo scooter setup`; the two env files filled in, a dummy number and a dummy key | The first made the three users (system users, `/nonexistent`, `nologin`), `scooter-runner` in `kvm`, the 16 folders with the owners and modes of 3.2, the config's copy, root's with the runner's group, `bridge.env` root's and `runner.env` the runner's, both 0600, `/usr/local/bin/scooter`, and the two units, enabled and not started. The second changed nothing. Exit code 0 both times |
+| 2 | `sudo scooter build-image` | The first native build as root: 16 seconds, 527 MB, the image the runner's, `.image-build/` gone |
+| 3 | `sudo systemctl start scooter-bridge scooter-runner`, then `sudo -u scooter-runner scooter doctor` | Both active; their main processes are Node, the runner's with the `kvm` group. The bridge waits for `pair`; the runner uses KVM. `doctor` passed every check, with 6 endpoints of the model that keep no data, and exited with 0 |
+| 4 | As `scooter-wacli` and as `scooter-mail`: `ls` on `datastore`, `agents`, `exchange`, `runner` and `bridge`; `cat` on the agent's `state.json`, the bridge's, both env files and `agents.yaml` | Every one: permission denied. Each lists its own folder. The runner can't read `bridge.env` |
+| 5 | A `once` task added to the config, the runner restarted, and once its QEMU was there, 0.4 seconds in, `sudo systemctl kill --kill-whom=main --signal=SIGKILL scooter-runner` | systemd stopped the rest of the unit: within 3 seconds no process of `scooter-runner` and no QEMU was left. The unit restarted a minute later, removed the `run.lock` the killed runner left, and ran the task again |
+
+Also in G2: `SIGUSR1` with `--kill-whom=main` started a backup to a local restic repository, which stopped and started the WhatsApp channel and made a snapshot; with both services stopped, `sudo scooter restore` refused a folder that wasn't empty, `--force` restored the snapshot, removing a file made since and putting back one removed, every folder with its owner; with the services running it refused, naming the bridge's socket. The VM was then shut down and its disk deleted; no QEMU of `agentw` was left.
+
+The tests the plan asks of this milestone, and where they are:
+
+| Required | Where |
+|---|---|
+| Hermetic: the decisions `setup` and `doctor` make, such as which users, modes, mounts and settings | `setup.test.mjs`: the folders of 3.2 with their owners and modes, the config's and the env files', the env files' text, the command, and the checks of Node, the code and existing env files; `doctor.test.mjs` |
+| Hermetic: `doctor` reports each missing piece with its fix | `doctor.test.mjs`: no accelerator, natively and in Docker; no QEMU; no image, and one for another pi; wrong folder modes; no users; a bad `agents.yaml`; OpenRouter out of reach; no endpoint that keeps no data; the env files |
+| Root, in a container: `setup` without services creates the users and folders | `setup.test.mjs`, the root test, run twice over |
+| Root: wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge` | The same test, as the two users, on each folder and a file in it |
+| Root: each service reads only its own env file | The same test: the runner reads `runner.env` and not `bridge.env`, wacli and the email reader neither, and each side loads its own; and `setup.test.mjs`, the second test, without root |
+| `systemd-analyze verify` on both units | `units.test.mjs`, which skips itself where systemd isn't installed |
+| What the bridge writes in the outbox, with a root test | `delivery.test.mjs`, the test of the swap; it runs as root in the container too |
+
+Beyond those: `pair`, in `whatsapp.test.mjs`; `settleFolder`, in `files.test.mjs`; the bridge's own outbox and its record, in `delivery.test.mjs`; the units' settings, in `units.test.mjs`; the review's points in `config.test.mjs`.
+
+Not verified:
+- **A pi run in the root VM.** No VM of Scooter's booted there (12.2); runs failed as setup errors, as 6.9 says. Runs through the real sandbox were verified on the machine itself, with KVM (the run above), as in milestones 7 to 11.
+- **`pair` against WhatsApp**, and the bridge with a paired wacli (gate G4). The tests run the wacli stub; in G2 wacli was unpaired.
+- **The units on another systemd.** `RestartSteps` needs 254; on an older one the runner restarts every minute (D207).
+- **The install on the machine Scooter will live on**, which stays with the owner (section 6 of the plan), and **arm64**.
