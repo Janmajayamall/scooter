@@ -153,7 +153,10 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
 //
 // A file that has no name left when it is looked at was replaced after it was opened, as a write
 // that renames a new file into place replaces it: the reader's `state.json` and the runner's
-// `status.json` are written so. It is opened again, once, which finds the new one.
+// `status.json` are written so. It is opened again, once. On tmpfs that nearly always finds the new
+// file; on ext4 the name can still lead to the old one, with no name left, for the moment the
+// rename takes, and the second look is refused as well (D138). The window is microseconds, about
+// once a minute for the reader's file, only `/status` reads then, and a refusal is the safe side.
 function openUntrusted(file, owner, again = true) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
   const refuse = why => Object.assign(new Error(`not read: ${why}`), { code: 'EUNTRUSTED' })

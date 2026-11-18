@@ -392,6 +392,12 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   fs.symlinkSync('/etc/hostname', path.join(context.paths.mailSpool, linked, 'parsed.json'))
   // A file where a folder should be.
   fs.writeFileSync(path.join(context.paths.mailSpool, '20261109T161500000-0900'), 'x')
+  // A link where a folder should be, to a folder laid out as a spool folder outside the spool: the
+  // bridge, as root, reads and removes nothing it leads to (section 10).
+  const elsewhere = path.join(context.root, 'elsewhere')
+  fs.mkdirSync(elsewhere)
+  for (const [file, content] of [['message.eml', gmailPlain()], ['parsed.json', '{}'], ['part-1', 'x']]) fs.writeFileSync(path.join(elsewhere, file), content)
+  fs.symlinkSync(elsewhere, path.join(context.paths.mailSpool, '20261109T161500000-0901'))
   // Original names that would lead elsewhere are names, never paths.
   spool(context, {
     parsed: { attachments: [{ name: '../../../etc/cron.d/x.sh', mime: 'text/x-sh', bytes: 2 }, { name: 'notes.txt/..', mime: 'text/plain', bytes: 2 }] },
@@ -411,6 +417,7 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
       [linked, 'parsed.json can\'t be read (EUNTRUSTED)', false],
       // Left where it is, for the reader to remove, and said once, not at every look.
       ['20261109T161500000-0900', 'it is not a folder', true],
+      ['20261109T161500000-0901', 'it is not a folder', true],
     ],
   )
   const [line] = context.lines()
@@ -425,7 +432,8 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
     ],
   )
   assert.deepEqual(fs.readdirSync(context.dayDir).sort(), ['1-2.sh', '1-3.txt', '1.eml', 'log.jsonl'])
-  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), ['20261109T161500000-0900'])
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool).sort(), ['20261109T161500000-0900', '20261109T161500000-0901'])
+  assert.deepEqual(fs.readdirSync(elsewhere).sort(), ['message.eml', 'parsed.json', 'part-1'])
   // The link was removed as a link.
   assert.ok(fs.existsSync('/etc/hostname'))
 })
@@ -589,6 +597,47 @@ test('email: an email whose files the bridge can\'t copy, as on a full disk, sta
     { text: 'Recording.', files: ['2.eml', '2-2.m4a'], media: undefined },
   )
   assert.deepEqual(fs.readFileSync(path.join(context.dayDir, '2-2.m4a')), M4A)
+  assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
+})
+
+test('email: a spool file the bridge can\'t open for a reason of its own, such as no file descriptors left, keeps the email whole in the spool', async t => {
+  const context = await setup(t)
+  atEnd(t, overrideLimits({ MEDIA_DOWNLOAD_RETRIES: 0 }))
+  spool(context, { parsed: { text: 'first' } })
+  await context.take()
+  const id = spoolMemo(context)
+  // Opening the spool's file fails with EMFILE, an error with the file's path that isn't about
+  // the file (the second review of milestone 6, smaller point 1).
+  const open = fs.promises.open
+  let out = true
+  fs.promises.open = (target, flags, ...rest) =>
+    out && String(target).startsWith(path.join(context.paths.mailSpool, id))
+      ? Promise.reject(Object.assign(new Error(`EMFILE: too many open files, open '${target}'`), { code: 'EMFILE', syscall: 'open', path: String(target) }))
+      : open(target, flags, ...rest)
+  atEnd(t, () => (fs.promises.open = open))
+  await context.take()
+  assert.deepEqual(context.lines().map(line => line.text), ['first'])
+  assert.deepEqual(fs.readdirSync(path.join(context.paths.mailSpool, id)).sort(), ['message.eml', 'parsed.json', 'part-1'])
+
+  out = false
+  await context.take(5)
+  const [, line] = context.lines()
+  assert.deepEqual({ files: line.files.map(file => file.path), media: line.media }, { files: ['2.eml', '2-2.m4a'], media: undefined })
+})
+
+test('email: a part missing from the spool is the email\'s own, and isn\'t tried again: the email is stored without it at once', async t => {
+  const context = await setup(t)
+  // Three parts listed, none there: before, each was tried three times, 10 seconds apart.
+  spool(context, {
+    parsed: { text: 'Three files.', attachments: [1, 2, 3].map(n => ({ name: `f${n}.txt`, mime: 'text/plain', bytes: 1 })) },
+    files: {},
+  })
+  await context.take()
+  const [line] = context.lines()
+  assert.deepEqual(line.files.map(file => file.path), ['1.eml'])
+  assert.deepEqual(line.media, { type: 'document', mime: 'text/plain', error: 'download failed' })
+  const failures = context.entries.filter(entry => entry.event === 'intake.download_failed')
+  assert.deepEqual(failures.map(entry => [entry.n, entry.attempt]), [[2, 1], [3, 1], [4, 1]])
   assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
 })
 
