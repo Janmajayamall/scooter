@@ -1,6 +1,6 @@
 // What Gondolin and the VM image do, which the sandbox will rely on.
 //
-// These are the VM checks of milestone 0 in docs/plans/active/v2-linux-implementation.md, and
+// These are the VM checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
 // docs/DECISIONS.md says what each one settled. They run the pinned Gondolin against an image
 // built from config/image/build.json, so they are also what to run again after upgrading either.
 

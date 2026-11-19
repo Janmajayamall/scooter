@@ -1,6 +1,6 @@
 # Scooter v2 on Linux: implementation plan
 
-Status: active. Written 2026-11-15.
+Status: completed. Written 2026-11-15. Milestones 0 to 14 were merged by 2026-11-18, and the plan moved to this folder on 2026-11-19. Gate G4, the first real run, is left, and it is the owner's (section 6).
 
 This plan turns `docs/DESIGN.md` into an ordered list of milestones for the agent, or agents, that build Scooter v2. Read these first:
 
@@ -486,7 +486,7 @@ Use the prompt shown in 6.5 as the first expected output.
 **Final check:**
 1. Re-read DESIGN.md section by section and tick off every requirement. List anything not done in `docs/DECISIONS.md`.
 2. Run `npm test` from a clean checkout on the Linux machine, then the root tests, the sandbox tests and the live check.
-3. Leave this plan where it is in the pull request: the loop's agents read it at this path until the milestone is merged. After the merge, the owner or the session that runs the loop moves it to `docs/plans/completed/`, with the `v2-linux-implementation/` folder and `milestone-loop.workflow.js` beside it.
+3. Move this plan to `docs/plans/completed/`. Done on 2026-11-19, after the milestone was merged: the plan and the loop's script (`milestone-loop.workflow.js`) are together in `docs/plans/completed/v2-linux-implementation/`. During the milestone the plan stayed in `docs/plans/active/`, where the loop's agents read it.
 
 ## 5. Where each required test lands
 

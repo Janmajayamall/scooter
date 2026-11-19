@@ -1,6 +1,6 @@
 # Decisions
 
-This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. It also records the changes made to DESIGN.md while building, each with the question put to the owner and the answer. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (6.6), are sections of DESIGN.md. "Row 8" is row 8 of the table in section 8 of ARCHITECTURE.md. "The plan" is `docs/plans/active/v2-linux-implementation.md`.
+This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. It also records the changes made to DESIGN.md while building, each with the question put to the owner and the answer. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (6.6), are sections of DESIGN.md. "Row 8" is row 8 of the table in section 8 of ARCHITECTURE.md. "The plan" is `docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md`.
 
 ## Milestone 0: check the tools
 
@@ -311,7 +311,7 @@ Not verified:
 
 ### 0.8 Questions for the owner, and the answers
 
-Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4. Both went to the owner on 2026-11-16, each with a proposal, through the milestone workflow (`docs/plans/active/milestone-loop.workflow.js`). The owner was asked "Accept both proposals for milestone 0's two questions?" and answered "Yes, both", having been told that DESIGN.md would then be changed to match.
+Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4. Both went to the owner on 2026-11-16, each with a proposal, through the milestone workflow (`docs/plans/completed/v2-linux-implementation/milestone-loop.workflow.js`). The owner was asked "Accept both proposals for milestone 0's two questions?" and answered "Yes, both", having been told that DESIGN.md would then be changed to match.
 
 **1. wacli's link previews (5.3; before milestone 5).**
 *The question, as asked:*
@@ -1320,7 +1320,7 @@ The fourth review, at `dc85a21`, found every point of the third settled, asked f
 
 ### 4.7 The question for the owner, and the answer
 
-After the third review, the pull request wasn't approved, and the milestone stopped on a question for the owner, through the milestone workflow (`docs/plans/active/milestone-loop.workflow.js`), on 2026-11-18.
+After the third review, the pull request wasn't approved, and the milestone stopped on a question for the owner, through the milestone workflow (`docs/plans/completed/v2-linux-implementation/milestone-loop.workflow.js`), on 2026-11-18.
 
 *The question, as asked:*
 > Pull request 5 was not approved after three reviews. Each review found a new case of one kind of problem: something pi leaves in `views/`, `memory/` or `run/` stops the runner, or makes it run the same batch again without counting an attempt. The points of the first and the second review were fixed. The third review's two points are open: enough names in a folder with nothing committed make the clean-up's `git rm` time out, and the modes pi sets stay after a successful run. Should the next fix cover only those two points, or the whole kind of problem?

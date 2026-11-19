@@ -1,6 +1,6 @@
 // What the pinned wacli does, which the WhatsApp module will rely on.
 //
-// These are the wacli checks of milestone 0 in docs/plans/active/v2-linux-implementation.md, and
+// These are the wacli checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
 // docs/DECISIONS.md says what each one settled. They run the real wacli against an empty store,
 // which needs no pairing and no network, and skip themselves when wacli isn't installed.
 

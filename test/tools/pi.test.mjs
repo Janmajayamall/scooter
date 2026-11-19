@@ -1,6 +1,6 @@
 // What the pinned pi does, which the runner will rely on.
 //
-// These are the pi checks of milestone 0 in docs/plans/active/v2-linux-implementation.md, and
+// These are the pi checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
 // docs/DECISIONS.md says what each one settled. They run the real pi in a VM, with the command
 // line and the environment of section 6.6 of DESIGN.md, against the scripted fake model. Run them
 // again after changing pi's version in config/image/build.json.

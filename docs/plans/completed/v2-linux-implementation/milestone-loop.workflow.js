@@ -1,7 +1,7 @@
 export const meta = {
   name: 'scooter-milestone-loop',
   description: 'Build Scooter v2 one milestone at a time: implement, open a pull request, review, fix, merge',
-  whenToUse: 'Run from a checkout of this repository on the Linux machine, with gh signed in. Covers milestones 0 to 14 of docs/plans/active/v2-linux-implementation.md.',
+  whenToUse: 'Run from a checkout of this repository on the Linux machine, with gh signed in. Covers milestones 0 to 14 of docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md.',
   phases: [
     { title: 'Progress' },
     { title: 'Milestone 0: check the tools' },
@@ -51,10 +51,13 @@ export const meta = {
 //   reviewer    the same, for the reviewing agents
 //   dryRun      true starts no agent: it returns the milestones it would run and the prompts it would send
 //
-// Which model and effort level to pass as coder and reviewer, and the evidence for the choice, are in
-// docs/plans/active/v2-linux-implementation/model-and-effort.md.
+// For v2 the owner chose, on 2026-11-16: coder { model: 'opus', effort: 'xhigh' }, which is Opus 5.5,
+// and no reviewer option. The reviewing agents then take the model and effort of the session that
+// runs the loop, which was Fable 5.2 at high effort. What the implementing model gets wrong, and what
+// a plan can say to prevent it, is in docs/plans/implementer-mistakes.md.
 //
-// It lives here, and not under .claude/workflows/, because this repository's .gitignore leaves .claude/ out.
+// It lives with its plan, and not under .claude/workflows/, because this repository's .gitignore leaves
+// .claude/ out. The plan is completed, and every milestone is merged, so a run now finds nothing to do.
 
 const NAMES = [
   'check the tools',
@@ -92,7 +95,7 @@ if (cfg.to > LAST) {
 }
 
 const BASE = 'main'
-const PLAN = 'docs/plans/active/v2-linux-implementation.md'
+const PLAN = 'docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md'
 const READ = `Read \`docs/DESIGN.md\`, \`docs/ARCHITECTURE.md\`, \`${PLAN}\`, and \`docs/DECISIONS.md\` if it exists.`
 const DONE = '"Every milestone is done when" in section 2 of the plan'
 const ASK =
