@@ -29,7 +29,12 @@ These are what the bridge, as root, uses in a folder another user controls; when
 - **A file replaced by a rename as it was opened** has no name left, and isn't a hard link to anything: it is opened again, once. Found so again, it is refused, as `a file replaced as it was opened, twice`. *Why:* the email reader writes its `state.json` so, and the runner its `status.json` and `state.json`, which `/status` reads. On ext4 a name can still lead to the old file, with no name left, for the moment the rename takes, so the second open often doesn't find the new one; on tmpfs it nearly always does. *Cost:* little: the window is microseconds, the writers replace their files about once a minute, only `/status` reads then, and a refusal is the safe side.
 - **`checkOwnFolder`** checks that a folder is a folder, not a link to one, and, when an owner is given, that user's. Otherwise it throws, with `EUNTRUSTED`.
 - **`removeHandOff`** removes a handed-over folder by the names its writer gives the files in one: each such name is unlinked, which neither follows a link nor removes a folder, and then the folder, which goes only once it is empty. Nothing else is removed, and a folder holding anything else is left.
-- **`removeTree` and `emptyFolder`** remove what pi wrote, however deep it goes and whatever it holds, and make nothing new; when the runner uses them is the runner's ([the runner](runner.md) (not yet written)).
+- **`removeTree` and `emptyFolder`** remove what pi wrote, however deep it goes and whatever it holds, and make nothing new: `removeTree` a folder and everything under it, and `emptyFolder` everything in a folder, which it leaves. Neither follows a link, uses git or has a time limit. When the runner uses them is the runner's ([the runner](runner.md) (not yet written)).
+  - Each folder is given back the runner's read, write and search before it is read, since pi can take them away.
+  - Each folder is read as a stream, and each entry is removed as it comes, so a folder of millions of names costs time, not memory.
+  - Each entry is reached by its path, so a folder whose path would pass 767 bytes is first moved to the top of what is being emptied, under a short name (`moved-<n>`), and emptied from there. Every path then stays within what Linux takes, and what macOS takes, 1,023 bytes, since a name is at most 255. The folders being read are kept in a list, not one call inside another. 767 isn't a tuning number: it follows from what the system takes, not from a choice of how Scooter behaves, so it is in `files.mjs`, with how it is worked out.
+  - An entry it can't remove is passed over, so the rest still goes, and the first error is thrown at the end.
+  - *Cost:* time: 900,000 files take about 6 seconds and 105 MB, and a chain of 100,000 folders 3 seconds and at most about 380 open folders.
 
 ## Running programs
 
@@ -55,7 +60,7 @@ These are what the bridge, as root, uses in a folder another user controls; when
 
 ## Logging
 
-Every log line is one JSON object on stderr: `at`, `level`, `component`, `event` and the caller's fields. stderr leaves stdout to the commands that print results.
+Every log line is one JSON object on stderr: `at`, `level`, `component`, `event` and the caller's fields. stderr leaves stdout to the CLI commands that print results.
 
 - **Logs carry no content:** IDs, kinds, sizes and timings, never message text or file contents. That rule is the caller's to keep, in every component, and three things here make the common slips harmless:
   - a field named `text`, `subject` or `quoted`, the content fields of a datastore line, is written as `[withheld]`, so logging a whole line leaks nothing;

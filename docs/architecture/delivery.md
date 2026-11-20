@@ -32,8 +32,8 @@ The rule that a reply follows the message it answers and everything else goes to
 
 ## Chunks
 
-A text is split into pieces of at most `CHUNK_CHARS` characters, a character being a Unicode code point, so an emoji is never split (`splitText`). A piece that would be too long is cut at the last paragraph break in its second half, or else the last line break there, or else the last space, or else at the limit. The breaks where it is cut, and blank lines at the start of a piece, are left out, and so is a piece of nothing but spaces. Each piece is sent with the channel's `sendText`, quoting only with the first.
-*Why:* looking only in the second half keeps every piece but the last at least half full; without it, a break near the start of a long piece would make a piece of a few characters. So a text at its longest, four chunks, goes out as four to eight messages. Filling pieces further would cut texts in the middle of a paragraph more often.
+A text is split into chunks of at most `CHUNK_CHARS` characters, a character being a Unicode code point, so an emoji is never split (`splitText`). A chunk that would be too long is cut at the last paragraph break in its second half, or else the last line break there, or else the last space, or else at the limit. The breaks where it is cut, and blank lines at the start of a chunk, are left out, and so is a chunk of nothing but spaces. Each chunk is sent with the channel's `sendText`, quoting only with the first.
+*Why:* looking only in the second half keeps every chunk but the last at least half full; without it, a break near the start of a long chunk would make a chunk of a few characters. So a text of `TEXT_MAX_CHARS`, four times `CHUNK_CHARS`, goes out as four to eight chunks. Filling chunks further would cut texts in the middle of a paragraph more often.
 
 ## Pacing
 

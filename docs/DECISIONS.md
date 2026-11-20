@@ -307,7 +307,6 @@ What the milestone left in the repository:
 | `package.json`, `package-lock.json` | `bin`, and the four libraries pinned |
 | `src/cli.mjs` | The command table of 8.4. No command is built yet |
 | `src/common/` | `limits`, `settings`, `paths`, `time`, `log`, `files`, `proc`, `locks`, and `datastore/` with the line format, the reader and the index |
-| `src/bridge/store.mjs` | The datastore's single writer |
 | `bridge.env.example`, `runner.env.example` | Every variable of 8.2, explained |
 | `test/support/` | The fake clock, a log that keeps its entries, the switches for root tests, and the checker for the import rules |
 | `test/*.test.mjs` | One file for each module, and `imports.test.mjs` |
@@ -425,7 +424,6 @@ The review of milestone 0 (pull request 1):
 |---|---|---|
 | 1 | DESIGN.md still lists as open what milestone 0 settled, and says `anthropic/*` models go to the messages route | Settled. 5.1, now [Running wacli](architecture/whatsapp.md#running-wacli), 6.6, 6.12, 6.13, 13.2 and 14 of DESIGN.md, and [Secrets](ARCHITECTURE.md#secrets), now say what milestone 0 found |
 | 2 | The image's contents leave out `tzdata` and `curl` | Settled. Both documents list them, with the reason (D7) |
-| 3 | wacli warns about sends closer than 5 seconds | Settled by the owner before this milestone ("Between milestones 1 and 2"). The related fact: `send text` and `send react` have `--post-send-wait`, default 2 seconds, which keeps wacli's connection open after a send, seen in the installed binary's help on 2026-11-16. Milestone 5's pacing will meet it; not run, since sending needs a paired number |
 | 4 | A fact about Gondolin that pi 6 rests on isn't written down | Settled. In 0.5, "Also found about Gondolin 0.14.0", as the review found it. Not run again |
 | 5 | `test/support/vm.mjs` makes a folder outside the test's own | Settled by recording the choice (D53) |
 | 6 | Three findings seen by hand and held by no test | Two settled: pi 5 asserts a 429, and VM 4 that a killed VM's entry in Gondolin's list stays behind. Both pass with KVM. Left: the 2-minute default start limit, which would add 2 minutes to every run of the VM tests |
@@ -448,7 +446,6 @@ What the milestone left in the repository:
 | `src/runner/commands.mjs` | Handling the commands: the reply to the outbox, then the state |
 | `src/runner/protocol.md` | The protocol of 7.1 |
 | `src/common/agentstate.mjs` | The format of `state.json`, its check and its reader, for the runner and for `/status` |
-| `src/common/outbox.mjs` | The format of an outbox entry, and writing one |
 | `src/common/time.mjs`, `src/common/datastore/index.mjs`, `src/common/limits.mjs` | `previousLocalTime`, `isDate`, `shiftDate`; each line's number in its log, and the commands; three constants |
 | `test/support/runner.mjs` | Fixtures: a datastore written from lines, a config folder, and the example of 6.5 as data |
 | `test/config.test.mjs`, `agentstate`, `triggers`, `batch`, `agentdir`, `outbox`, `planning` | The tests of this milestone |
@@ -525,7 +522,7 @@ What the milestone left in the repository:
 - **At startup**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, worked out in the zone the runner starts with. So a runner that starts after the time waits until the next day (6.4), and a changed `SCOOTER_TZ` takes effect at once. Entries for `at` values no longer in the config are dropped.
 - **While running**, a task is due when its last occurrence has a later date than `scheduled[at]`. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once.
 - The runner records the date once the task has run (milestone 4). A task that fails on a setup error or an outage keeps its old date, so it stays due (the plan's rule for milestone 4). A start during a pause keeps every date as it is, so that task stays due across the start too (D83).
-- `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` ([Time](architecture/shared-code.md#time)): a time skipped by the clocks comes due at the jump, and a time that comes twice at its first.
+- `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` ([Time](architecture/shared-code.md#time)).
 *Reason:* a date per task is what 6.3 stores, and comparing dates of the owner's day keeps one run a day across clock changes. Overwriting at startup instead of keeping the larger date lets a changed zone start from where it is: a date from a zone far ahead would otherwise hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all.
 
 **D68. `once` tasks.**
@@ -546,7 +543,7 @@ What the milestone left in the repository:
 - Every text the owner or the agent wrote is a JSON string, so a line break or a quote in it can't pass for the prompt's own lines. The example of 6.5 reads the same either way.
 - A file's kind comes from its MIME type: `photo`, `video`, `audio` or `document`. Further files of a message are `attachment` lines under it.
 - An edit is `edit of #1051, now: "<its own text>"`, and a deletion `deletion of #1051`. A deleted message is `(deleted in #1055)` in place of its content.
-- A time is `HH:MM` on the owner's day of `now`, `Sun 8 Nov 20:02` on another day, and `Sat 8 Nov 2025 20:02` in another year.
+- A time is shown by `shortLocalTime` ([Time](architecture/shared-code.md#time)).
 - A reply to a message Scooter doesn't have is `↳ reply to an earlier message: "<the quoted preview>"`. One to a photo shows the photo's path.
 - Media that couldn't be stored is `photo, not stored (download failed)`, with the caption if there is one.
 - An email is as 6.5 shows it; one that couldn't be read adds the line `email not stored (could not be parsed)`, from its `media`.
@@ -628,9 +625,7 @@ What the milestone left in the repository:
 | `src/runner/main.mjs` | Startup and the loop: `openRunner`, `startRunner` and `runRunner` |
 | `src/runner/sandbox/index.mjs` | The sandbox interface, and the check of a run's spec |
 | `src/common/netlog.mjs`, `src/common/runnerstatus.mjs` | The network log's format and reader; `status.json`'s format and reader |
-| `src/common/instance.mjs` | `holdInstance`, moved from the bridge, for both services |
 | `src/common/limits.mjs`, `src/common/paths.mjs` | Six constants; `runner/runner.sock` and `agents/.discarded/` |
-| `src/common/files.mjs` | `removeTree` and `emptyFolder`, which remove what pi wrote whatever it holds and however deep it goes, and make nothing new |
 | `test/support/` | The fake sandbox, the pi stub, a runner for tests, trees deeper than a path can name, and a full disk |
 | `test/answer`, `failures`, `run`, `runner`, `runnerfiles` | The tests of this milestone, with additions to `agentdir`, `agentstate`, `batch`, `config`, `triggers` and others |
 
@@ -704,7 +699,7 @@ A start during a pause keeps the scheduled tasks' dates as they are, instead of 
 - Notices are the runner's, `by: "runner"`, and go out also with `can_message: false`, as the reply to `/new` does (D62): that setting is about what the agent sends.
 
 **D87. Sessions after a run.**
-After the commit (D88), `keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile`: without following a link, and refusing anything but a regular file with one name, and anything over `SESSION_MAX_BYTES`. It reads the folder as a stream, so a folder of millions of names costs time, not memory. Any error is a refusal: a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, a socket, a `run/session/` it can't list, or a full disk. A refusal is logged as `runner.session_refused`, with the error's code, the run still counts as a success, and the session kept before stays. Then `run/session/` is emptied (`clearRunSession`), and after a failed run it is emptied first, before the clean-up (D88): either way before the run is recorded, because pi could have filled the disk there (4.7), and the folder itself stays, so emptying it makes nothing (the fourth review, 4.6). An error in emptying it is logged, and `prepareRun` tries again: it removes `run/` with `removeTree` (D88) before every run, so nothing pi leaves in `run/session/` can stop the next run, however deep it goes. A start empties `run/session/` too, before it makes any folder (D89). A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
+After the commit (D88), `keepSession` takes, from `run/session/`, the newest file pi named itself (`…_<session ID>.jsonl`), or else the copy under the session's ID, which pi continued (pi 2), and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile` ([Files another program controls](architecture/shared-code.md#files-another-program-controls)), up to `SESSION_MAX_BYTES`. It reads the folder as a stream, so a folder of millions of names costs time, not memory. Any error is a refusal: a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, a socket, a `run/session/` it can't list, or a full disk. A refusal is logged as `runner.session_refused`, with the error's code, the run still counts as a success, and the session kept before stays. Then `run/session/` is emptied (`clearRunSession`), and after a failed run it is emptied first, before the clean-up (D88): either way before the run is recorded, because pi could have filled the disk there (4.7), and the folder itself stays, so emptying it makes nothing (the fourth review, 4.6). An error in emptying it is logged, and `prepareRun` tries again: it removes `run/` with `removeTree` (D88) before every run, so nothing pi leaves in `run/session/` can stop the next run, however deep it goes. A start empties `run/session/` too, before it makes any folder (D89). A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
 
 *The session after the commit.* 6.8 copied the session back before the commit. Once an error in the commit fails the run (D88), a session kept before it would remember a run that was then thrown away, which 6.6 forbids; a crash between the two did the same. Kept after it, a crash between the two leaves the views committed and the session without the run, so the next try sees the rows it filed, which is what 6.8's order is for. 6.8, and ARCHITECTURE.md 5.1 and decision 26, say so now.
 
@@ -722,7 +717,7 @@ pi runs as root in its VM, and what it writes in the writable folders belongs to
 - *Errors:* everything from the walk to the commit reads what pi left. An error there, such as a git command stopped at `GIT_CALL_TIMEOUT`, fails the run as pi's own failure, with the reason `couldn't commit the run's files (<error>)`, counts an attempt, and is logged as `runner.files_failed` with the error's code (4.7). Before, it stopped the runner, which then ran pi on the same batch again at every start, without counting one. *Cost:* a git that fails for a reason of its own, such as a damaged repository or a full disk, now uses the items' attempts, four runs each, and the owner is told; a stopped runner ran pi again at every start, for good.
 - *Clean-up:* in five steps, none of which what pi left can slow down or stop (4.7). `run/session/` has been emptied just before (D87). Everything pi wrote is freed before anything new is made: pi may have filled the disk, and on ext4 a new folder needs a block of its own, which a full disk doesn't have (the fourth review, 4.6; 4.2).
   1. `views/` and `memory/` are set aside: each is renamed into `agents/.discarded/<agent>/`, under a name nothing there has, such as `views-1`. A rename takes the same time whatever the folder holds, and needs no room. It needs write access to the folder itself (4.2), which pi could have taken away, so the folder is given it first. `agents/.discarded/` is beside the agent's folder, on the same file system, so nothing is copied, and outside the VM's mounts and git (6.2). A start makes `agents/.discarded/<agent>/` and keeps it (D89), so the clean-up doesn't make it.
-  2. Everything in `agents/.discarded/<agent>/` is removed, with whatever an earlier clean-up couldn't remove, by `emptyFolder` in `src/common/files.mjs`: without git and with no time limit, giving each folder back the runner's access before it reads it, reading it as a stream and removing each entry as it comes. 900,000 files take about 6 seconds and 105 MB (4.5). Each entry is reached by its path, so a folder whose path would pass 767 bytes is first moved to the top of what is being emptied, under a short name (`moved-<n>`), and emptied from there. That leaves every path within what Linux takes, and what macOS takes, 1,023 bytes, since a name is at most 255. The folders being read are kept in a list, not one call inside another, so a chain of 100,000 folders takes 3 seconds and at most about 380 open folders (4.5). An entry it can't remove is passed over, so the rest still goes, and the first error is thrown at the end. If that happens, `agent.discarded_left` is logged and the next clean-up, or the next start, tries again; what is left is out of pi's sight and git's.
+  2. Everything in `agents/.discarded/<agent>/` is removed, with whatever an earlier clean-up couldn't remove, by `emptyFolder` ([Files another program controls](architecture/shared-code.md#files-another-program-controls)). If it can't remove everything, `agent.discarded_left` is logged and the next clean-up, or the next start, tries again; what is left is out of pi's sight and git's.
   3. `views/` and `memory/` are made again, empty, as the VM's mount points.
   4. The index is the last commit's again: `git read-tree HEAD`, in one step, whatever was staged. With 300,000 names staged it took 2 ms (4.2).
   5. The last commit's files in those folders are written back: `git restore --source=HEAD --staged --worktree`.
@@ -742,7 +737,7 @@ In order: the config; the runner's folders, which `setup` makes in an install; o
 
 **D90. One runner per data folder.**
 *Question:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts ([The locks](architecture/exchange.md#the-locks)), so a backup could start during a run.
-*Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket ([One service per data folder](architecture/shared-code.md#one-service-per-data-folder)). `holdInstance` moved to `src/common/instance.mjs`, and names the service in its error.
+*Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket ([One service per data folder](architecture/shared-code.md#one-service-per-data-folder)).
 
 **D91. `status.json`.**
 `{ startedAt, accel, zdr, internet, imageBuiltAt, agents: { <name>: { model, timeoutMinutes, reads } } }`, written atomically, mode 0600, at every start. `accel` is `kvm` or `emulation`. `imageBuiltAt` is null when the sandbox doesn't know it. The model is each agent's, as `agents.yaml` has it. A `status.json` that can't be read is logged and counts as none.
@@ -763,7 +758,7 @@ It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation
 *Reason:* a command that started and then always stopped for want of a sandbox would be a placeholder in production code.
 
 **D95. Six constants.**
-`SESSION_MAX_BYTES`, 100 MB (D87); `REASON_MAX_CHARS`, 200 (D82, D84); `NOTICE_QUOTE_CHARS`, 40 (D86); `AGENT_FILES_MAX_BYTES`, 100 MB, and `AGENT_FILES_MAX_COUNT`, 20,000 (D88); and `ANSWER_MAX_TEXTS`, 25 (D85). 8.6 of DESIGN.md lists them (the fourth review, 4.6). The length at which `emptyFolder` moves a folder up, 767 bytes (D88), isn't one: it follows from what the system takes, not from a choice of how Scooter behaves, so it is in `src/common/files.mjs`, with how it is worked out.
+`SESSION_MAX_BYTES`, 100 MB (D87); `REASON_MAX_CHARS`, 200 (D82, D84); `NOTICE_QUOTE_CHARS`, 40 (D86); `AGENT_FILES_MAX_BYTES`, 100 MB, and `AGENT_FILES_MAX_COUNT`, 20,000 (D88); and `ANSWER_MAX_TEXTS`, 25 (D85). 8.6 of DESIGN.md lists them (the fourth review, 4.6). The length at which `emptyFolder` moves a folder up isn't one ([Files another program controls](architecture/shared-code.md#files-another-program-controls)).
 
 **D96. Packing the agent's repository.**
 *Question:* `git commit` starts `git gc --auto` once the repository has enough loose objects, about 6,700, which some hundreds of commits make, and by default that goes on in the background after the commit has returned. It then works outside `run.lock`: a backup can read `.git` while packs are written and loose objects removed, and D89's ground for removing git's lock files at a start, that no git of the runner's is running, no longer holds (the third review, 4.6).
@@ -789,7 +784,7 @@ It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation
 
 ### 4.3 The review of milestone 3
 
-The pull request was approved with seven smaller points. Each is below, with what became of it. The points earlier milestones left stay as they were: the 2-minute start limit of the VM tests (milestone 0, point 6), zone names wrong in their later letters (milestone 1, point 3, for milestone 7), and what stopping the channels does to wacli's calls in progress (milestone 2, point 3, for milestone 10).
+The pull request was approved with seven smaller points. Each is below, with what became of it. The points earlier milestones left stay as they were: the 2-minute start limit of the VM tests (milestone 0, point 6), zone names wrong in their later letters (from the review of milestone 1, for milestone 7), and what stopping the channels does to wacli's calls in progress (from the review of milestone 2, for milestone 10).
 
 | # | Point | What became of it |
 |---|---|---|
@@ -1031,16 +1026,10 @@ What the milestone left in the repository:
 
 | Path | What |
 |---|---|
-| `src/bridge/outbox.mjs` | Delivery: routing, chunking, pacing, `sending.json`, `out` lines, waiting, failed sends, pausing |
-| `src/bridge/commands.mjs`, `src/bridge/status.mjs` | `/status`, `/help` and `/backup`, and the text of `/status` |
-| `src/bridge/channels/whatsapp.mjs`, `channels/index.mjs` | `sendText`, `react` and `ready`; the check of `DEFAULT_CHANNEL` |
-| `src/bridge/main.mjs`, `state.mjs`, `intake.mjs`, `store.mjs` | Delivery and the commands started with the bridge; `commandSeq` in the bridge's state |
-| `src/common/outbox.mjs`, `files.mjs` | The longest text and its cut, `sending.json`'s format; `readUntrustedFile` |
 | `src/common/netlog.mjs` | The network log read as a stream |
 | `src/common/limits.mjs`, `time.mjs`, `runnerstatus.mjs` | Five constants; `shortLocalTime`; agents' names checked in `status.json` |
 | `src/runner/answer.mjs`, `batch.mjs`, `prompt.mjs`, `failures.mjs`, `git.mjs` | The smaller points of the reviews of milestones 3 and 4 (5.2) |
 | `test/delivery`, `routing`, `status` | This milestone's tests, with additions to `bridge`, `whatsapp`, `outbox`, `files`, and the runner's tests for the reviews' points |
-| `test/support/fake-channel.mjs`, `wacli-stub.mjs` | Sends: the fake channel records them and fails as told; the stub answers `send text` and `send react` |
 
 ### 5.1 Decisions
 
@@ -1076,7 +1065,7 @@ The points the reviews of milestones 0 to 4 left, as each milestone's entry reco
 |---|---|---|
 | Milestone 3, point 7 | The search for the largest cut in D72 can cut a text a little more than it needs to | Settled (D113), with a test that fails on the search before |
 | Milestone 0, point 6 | The VM tests' 2-minute start limit | Left, for milestone 7, whose sandbox sets how long a VM may take to start |
-| Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Left, for milestone 7, which can look the zone up in the VM's image |
+| Milestone 1 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Left, for milestone 7, which can look the zone up in the VM's image |
 | Milestone 4, first review, points 4, 5 and 6 | `RestartSec` for the runner's unit; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8, as the plan says |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time, packing and the clean-up's removal | Left, for milestone 10, as the plan says. D112 adds `git prune` to the clean-up, under `run.lock`, which takes milliseconds |
 
@@ -1195,7 +1184,7 @@ The points the reviews of milestones 0 to 5 left:
 | From | Point | What became of it |
 |---|---|---|
 | Milestone 0, point 6 | The VM tests' 2-minute start limit, Gondolin's default, held by no test | Settled (D149): the sandbox sets its own limit, `VM_START_TIMEOUT`, and a sandbox test shows a VM that doesn't boot within it failing the run, and leaving nothing |
-| Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Settled (D143): the runner refuses a `SCOOTER_TZ` that isn't one of the image's zone files. Test in `image` |
+| Milestone 1 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Settled (D143): the runner refuses a `SCOOTER_TZ` that isn't one of the image's zone files. Test in `image` |
 | Milestone 4, first review, points 4, 5 and 6 | `RestartSec`; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8 |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
 
@@ -1216,7 +1205,7 @@ After the review of this milestone (7.6):
 - Section 9: the accepted risk of a native build says it builds where only root can write, so a link the runner's user puts in its folder leads it nowhere (D151).
 - Section 10, Sandbox: the root test of D151.
 
-ARCHITECTURE.md 2.7 says the same. The plan's milestones 8, 12 and 13 have what this milestone leaves for them, and milestone 13 the second review of milestone 6's point 3, the outbox's owner under rootless Docker. `runner.env.example` says how `SCOOTER_TZ` is checked and what `build-image` reads.
+ARCHITECTURE.md 2.7 says the same. The plan's milestones 8, 12 and 13 have what this milestone leaves for them, and milestone 13 a point of the second review of milestone 6, the outbox's owner under rootless Docker. `runner.env.example` says how `SCOOTER_TZ` is checked and what `build-image` reads.
 
 ### 7.5 What was run to verify the milestone, and what wasn't verified
 
@@ -1488,7 +1477,7 @@ What the milestone left in the repository:
 
 **D167. A rebuild holds `runner/runner.sock`, and refuses while `run.lock` is there.**
 *Question:* the plan's rules: `rebuild` refuses to start while `run.lock` exists, and can't tell whether an idle runner is up; a runner started during a rebuild removes the rebuild's `run.lock` and git's lock files, and throws away its uncommitted changes (D89); if `rebuild` holds `runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up (the first review of milestone 4, point 5).
-*Choice:* it holds the socket, as a runner and `build-image` do, so none of the three starts while another runs. Then it refuses while `run.lock` is there, as the plan says. Holding the socket, it knows no runner is running, so such a lock was left by one stopped by force: it says so, and to remove it. `holdInstance` names who holds the runner's socket, "runner, rebuild or build-image", and gives its error the code `EINSTANCE`, which the rebuild turns into a refusal that says to stop the runner first; `build-image`'s says the same.
+*Choice:* it holds the socket, as a runner and `build-image` do, so none of the three starts while another runs. Then it refuses while `run.lock` is there, as the plan says. Holding the socket, it knows no runner is running, so such a lock was left by one stopped by force: it says so, and to remove it. The rebuild turns the refusal of [One service per data folder](architecture/shared-code.md#one-service-per-data-folder) into one that says to stop the runner first; `build-image`'s says the same.
 *Reason:* the plan's way, which settles the review's point. The lock's refusal stays, though only a leftover can meet it now: removing it would be a second way to do what a runner's start does, for a case that needs a runner killed with `SIGKILL` and not started again. *Cost:* after such a kill, the owner removes `run.lock` by hand, or starts and stops the runner, before a rebuild.
 
 **D168. A rebuild keeps its progress in memory, and sets `cursor` to its `seq` at the start.**
@@ -1865,7 +1854,6 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 
 - **systemd's restart counter** (systemd 255, on the Linux machine, with a unit of the user's own manager that failed at once, then after running 8 seconds): with `RestartSteps` and `RestartMaxDelaySec` the waits grow as D207 has them, 1, 2, 4 and 8 seconds for 1 second, 3 steps and 8 seconds; and the counter doesn't go back after a run that lasted: the waits stayed at their longest. It goes back when the unit is started by hand.
 - **`systemd-analyze verify`** exits with 0 when a unit has a setting it doesn't know, or a value it can't take, and says so on stderr; it fails when the command isn't there. So the test gives each unit a stand-in command, and wants nothing on either stream.
-- **A link opened with `O_DIRECTORY | O_NOFOLLOW`** fails with `ENOTDIR` on Linux, not `ELOOP` ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)).
 - **Scooter's VMs don't boot inside the root VM.** Under nested KVM, in the Ubuntu 24.04 VM of gate G2 (QEMU 8.2.2 on the machine, `-cpu host`, 4 processors), QEMU's `microvm` machine, as Gondolin 0.14.0 starts it with KVM and `VM_CPUS` 2, hangs in the guest kernel's APIC setup, after `ACPI: Core revision`: every run there failed as "the VM couldn't start", a setup error, and runs paused, as 6.9 says. Booted by hand, the image's kernel boots with 1 processor, or with the machine's ACPI off (`acpi=off`), and not with other CPU models, kernel switches or a `q35` machine around it. Gondolin's `machineType: "q35"` booted a VM there in 2.1 seconds, and ran a command in it. On the machine itself, `microvm` boots in about 2 seconds (milestone 7). Nothing in G2 needs a VM to boot; G3 does: the plan's milestone 13 has it.
 - **A native image build as root**, in the root VM: 16 seconds, 527 MB, and `.image-build/` gone afterwards (D151).
 - Ubuntu 24.04's cloud image has no `bzip2`, which restic's release needs to be unpacked; G1 installs it with the rest.
@@ -1978,7 +1966,7 @@ What the milestone left in the repository:
 
 ### 13.1 Decisions
 
-**D217. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included** (the plan's rule for this milestone, the outbox's owner in rootless Docker; the second review of milestone 6, smaller point 3).
+**D217. The runner's user under rootless Docker** (the plan's rule for this milestone, the outbox's owner in rootless Docker, which the second review of milestone 6 raised).
 *Question:* 8.3 ran the runner as the container's root under rootless Docker, with no `user:`, because only the user that runs Docker could be given `/dev/kvm`. The runner then makes its folders, the outbox among them, as uid 0, and the bridge, which takes the runner's entries only while the outbox is `scooter-runner`'s ([Folders other users control](ARCHITECTURE.md#folders-other-users-control)), looks that user up as 10002 and refuses the outbox for good. Which user owns the runner's folders there, and how does the bridge know?
 *Choice:* the runner runs as `scooter-runner` under rootless Docker too, as [Processes and users](ARCHITECTURE.md#processes-and-users) has it; the bridge knows it as it always has, by its name. Rootless Docker gives each uid of a container a uid of its own on the host, from the range `/etc/subuid` gives the user that runs Docker: 10002 is that range's start plus 10001, 175537 on the Linux machine, whose range starts at 165536. The udev rule `compose.kvm-rootless.yaml` gives, and the README will, lets that uid read and write `/dev/kvm` with an ACL, set again at each of the device's events: `SUBSYSTEM=="misc", KERNEL=="kvm", RUN+="/usr/bin/setfacl -m u:<uid>:rw $devnode"`. The uid comes from Docker's own map, as the user that runs Docker: `docker run --rm --entrypoint awk scooter:local '$1 <= 10002 && 10002 < $1 + $3 { print $2 + 10002 - $1 }' /proc/self/uid_map`.
 *Reason:* the runner is its own unprivileged user everywhere ([Processes and users](ARCHITECTURE.md#processes-and-users); [Why it is built this way](ARCHITECTURE.md#why-it-is-built-this-way)), and the bridge's checks hold as they are, with no setting and no second case: nothing in the code changes. The runner as the container's root would be, on the host, the user that runs Docker and its daemon; it would make its files root's, which a later switch to another variant would leave the runner unable to write; and it would make one volume for the whole data folder (D219) unsafe, since the container's root reads every folder in it. An ACL for one host uid is the narrowest grant there is.
@@ -2076,7 +2064,7 @@ The points earlier reviews and milestones left, as 12.3 has them:
 
 | From | Point | What became of it |
 |---|---|---|
-| Milestone 6, second review, point 3 | The outbox's owner in rootless Docker | Settled (D217): the runner runs as `scooter-runner` there too |
+| Milestone 6, second review | The outbox's owner in rootless Docker | Settled (D217): the runner runs as `scooter-runner` there too |
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
 | Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
 | Milestone 10, what wasn't verified | Backups in Docker: the socket across containers, and `restore` | Run (D223; 13.5) |

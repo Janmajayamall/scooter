@@ -96,7 +96,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 
 | Process | User | Started by | Can reach |
 |---|---|---|---|
-| Bridge | root | systemd, or Docker | Every data folder, being root; it leaves `config/` alone |
+| Bridge | root | systemd, or Docker | Every data folder, being root |
 | wacli | `scooter-wacli` | the bridge | `wacli/` |
 | Email reader | `scooter-mail` | the bridge | `mail/` |
 | restic | root | the bridge | The folders it backs up |
@@ -168,7 +168,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 | OpenRouter key | `runner.env` | Gondolin's secret table in the runner; requests to `openrouter.ai` |
 | The policy's certificate authority key | the runner's home, under `runner/` | the runner |
 
-- The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, and neither reads the other's. The bridge reads neither `runner.env` nor `config/`.
+- The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, and neither reads the other's.
 - Within the bridge, each program gets only its own settings: [wacli](architecture/whatsapp.md#running-wacli), [the email reader](architecture/email.md#the-email-reader) and [restic](architecture/backups.md#running-restic).
 - pi sees a placeholder where the key would be, which is worthless outside the runner.
 - No secret goes on a command line, where every user of the machine can read it, except the webhook secret ([Running wacli](architecture/whatsapp.md#running-wacli)).
@@ -221,7 +221,7 @@ The rules, which `test/imports.test.mjs` checks by reading every file under `src
 ## Why it is built this way
 
 - **The datastore is the only source of truth.** Views, memory, sessions and state are derived, and a rebuild can recreate them. So a bug in the runner or a bad run can cost a rebuild, never data.
-- **Two services that share folders, not sockets.** The bridge and the runner never call each other: the datastore carries work one way and the outbox carries replies back. *Why:* each holds different secrets; either can be down or restart without losing anything, and neither needs the other to be up: without the runner messages are stored, and without the bridge replies wait in the outbox; nothing listens for connections; and the queue is plain files the owner can read. Every hand-off between them is atomic ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)).
+- **Two services that share folders, not sockets.** The bridge and the runner never call each other: the datastore carries work one way and the outbox carries replies back. *Why:* each holds different secrets; either can be down or restart without losing anything, and neither needs the other to be up: without the runner, messages are stored and handled once it is back, and without the bridge, replies wait in the outbox; nothing listens for connections; and the queue is plain files the owner can read. Every hand-off between them is atomic ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)).
 - **Polling, every `POLL_INTERVAL`.** No file watchers and no signals between the services. *Why:* the volume is a handful of messages a day, and a poll behaves the same on every system.
 - **`seq` is the only name a message has outside the bridge.** The agent, the outbox, the runner's state and the views' `source` column all use it; channel IDs stay in the datastore and the bridge. So the agent can't name a channel or a recipient, and adding a channel changes nothing past the bridge.
 - **Secrets are split by process.** Settled with the owner. The bridge has the WhatsApp session, the mailbox password and the backup credentials; the runner has the OpenRouter key; pi gets a placeholder ([Secrets](#secrets)). So no single compromise yields everything.
@@ -230,7 +230,7 @@ The rules, which `test/imports.test.mjs` checks by reading every file under `src
 - **The runner is its own unprivileged user.** A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner; there it would reach the OpenRouter key and the agents' folders, but not the bridge's secrets.
 - **One module per outside contact** ([The code's layers](#the-codes-layers)), and one module per channel, so another channel, such as Telegram, is one more module ([Channels](architecture/bridge.md#channels)).
 - **Everything third-party is pinned** to an exact version, and downloads are checked against published checksums.
-- **The bridge uses no third-party library.** It reads no YAML: `config/` is the runner's.
+- **The bridge uses no third-party library.** It reads no YAML: `config/` is the runner's ([Folders and their owners](#folders-and-their-owners)).
 
 ## The owner's fixed choices
 
@@ -322,6 +322,8 @@ The project's own names, each used one way in these documents.
 | A command the bridge answers, or `/status` | `src/bridge/commands.mjs` (`HELP_TEXT`), `src/bridge/status.mjs`, `COMMANDS` in `src/common/datastore/line.mjs` | `test/status.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md) |
 | Backups and restore | `src/bridge/backup.mjs` | `test/backup.test.mjs`, `test/support/restic-stub.mjs` | [backups](architecture/backups.md) |
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
+| A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
+| The runner's files that `/status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [the runner](architecture/runner.md) (not yet written), [/status](architecture/bridge.md#status) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [configuration](architecture/configuration.md) (not yet written) |
 | A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [configuration](architecture/configuration.md) (not yet written) |
 | A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
