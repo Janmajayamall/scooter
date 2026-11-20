@@ -46,9 +46,9 @@ The principles, which hold everywhere:
 
 1. The owner sends a receipt photo to the bot. wacli, a linked device of the bot's number, receives it and posts a signed webhook to the bridge on loopback ([The webhook](architecture/whatsapp.md#the-webhook)).
 2. The WhatsApp channel checks the signature and drops anything that isn't the owner's ([From a message to a record](architecture/whatsapp.md#from-a-message-to-a-record)). Intake downloads the photo, and the store gives the message the next `seq` and appends one line to the datastore ([Intake](architecture/bridge.md#intake), [Writing](architecture/datastore.md#writing)).
-3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch and a prompt, takes the run lock, boots a fresh VM and runs pi in it ([the runner](architecture/runner.md) (not yet written), [the sandbox](architecture/sandbox.md) (not yet written)).
-4. pi reads the photo from the datastore, which is mounted read-only, updates `views/expenses.csv` and the day page, and ends its answer with `DONE: 1042`. Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md) (not yet written)).
-5. The runner checks the files pi left, commits them, writes outbox entries, here a ✅ reaction, and updates its state ([Outbox entries](architecture/exchange.md#outbox-entries)).
+3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch and a prompt, takes the run lock, boots a fresh VM and runs pi in it ([When the agent runs](architecture/runner.md#when-the-agent-runs), [A run](architecture/run.md#a-run), [A VM for each run](architecture/sandbox.md#a-vm-for-each-run)).
+4. pi reads the photo from the datastore, which is mounted read-only, updates `views/expenses.csv` and the day page, and ends its answer with `DONE: 1042`. Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
+5. The runner checks the files pi left, commits them, writes outbox entries, here a ✅ reaction, and updates its state ([After a successful run](architecture/run.md#after-a-successful-run), [Outbox entries](architecture/exchange.md#outbox-entries)).
 6. The bridge takes the outbox entry, sends the reaction through wacli, and appends an `out` line to the datastore ([Sending an entry](architecture/delivery.md#sending-an-entry)).
 
 An email takes the same way from step 2, through the email reader's spool and the sender check ([The email channel](architecture/email.md)), and the reply about it reaches the owner on WhatsApp.
@@ -67,15 +67,16 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | The exchange | [exchange.md](architecture/exchange.md) | `src/common/outbox.mjs`, `src/common/locks.mjs` |
 | Backups | [backups.md](architecture/backups.md) | `src/bridge/backup.mjs` |
 | Shared code | [shared-code.md](architecture/shared-code.md) | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/instance.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/paths.mjs` |
-| The runner, and the agent's folder | [runner.md](architecture/runner.md) (not yet written) | `src/runner/main.mjs`, `src/runner/run.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/answer.mjs`, `src/runner/failures.mjs`, `src/runner/commands.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/runner/agentdir.mjs`, `src/runner/git.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
-| Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) (not yet written) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
-| The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) (not yet written) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
-| The network policy | [network-policy.md](architecture/network-policy.md) (not yet written) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
-| The agent and its instructions | [agent.md](architecture/agent.md) (not yet written) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/day-pages/SKILL.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
+| The runner | [runner.md](architecture/runner.md) | `src/runner/main.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/commands.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
+| A run, and the agent's folder | [run.md](architecture/run.md) | `src/runner/run.mjs`, `src/runner/answer.mjs`, `src/runner/failures.mjs`, `src/runner/agentdir.mjs`, `src/runner/git.mjs` |
+| Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
+| The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
+| The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
+| The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/day-pages/SKILL.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
 | Configuration and the CLI | [configuration.md](architecture/configuration.md) (not yet written) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
 | Install, native and Docker | [install.md](architecture/install.md) (not yet written) | `src/ops/setup.mjs`, `src/ops/doctor.mjs`, `deploy/systemd/scooter-bridge.service`, `deploy/systemd/scooter-runner.service`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` |
 
-The exchange, the folder the two services coordinate through, is a component of its own, since both services follow its two contracts. The agent's folder is the runner's: the runner owns it and is its only committer. `src/common/` is split by what each file defines: a format goes with the component that owns the contract, and what belongs to no side is shared code.
+The exchange, the folder the two services coordinate through, is a component of its own, since both services follow its two contracts. The runner is two components, its planner and service, and a run with the agent's folder, which the runner owns and is the only committer of: one document would be too long to read whole. `src/common/` is split by what each file defines: a format goes with the component that owns the contract, and what belongs to no side is shared code.
 
 ## The boundaries
 
@@ -124,7 +125,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | `mail` | `scooter-mail`, 0700 | takes spool folders | no | no | no | writes |
 | `config` | root, group `scooter-runner`; folders 0750, files 0640 | no | reads | sees only the run's copy | no | no |
 
-What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([the runner](architecture/runner.md) (not yet written)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
+What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
 
 The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner mounts into its VM.
 
@@ -143,7 +144,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 
 *Cost, accepted:* Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a user who controls one of these folders can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, which nothing else of Scooter's or the system's has, and empty folders, which are all a folder's removal takes; and where the bridge makes `backup.lock`, under that name. Only the runner's user controls `exchange/`, and an escape from pi's VM is needed to reach it.
 
-`build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [the VM image](architecture/sandbox.md) (not yet written).
+`build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [build-image](architecture/sandbox.md#build-image).
 
 ### The network
 
@@ -186,12 +187,12 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The outbox entry | runner, bridge → delivery | `src/common/outbox.mjs` | [Outbox entries](architecture/exchange.md#outbox-entries) |
 | The lock files | bridge ↔ runner | `src/common/locks.mjs` | [The locks](architecture/exchange.md#the-locks) |
 | The services' sockets | runner, rebuild, `build-image` ↔ bridge, `restore` | `src/common/instance.mjs` | [One service per data folder](architecture/shared-code.md#one-service-per-data-folder) |
-| `state.json` of an agent | runner → bridge (`/status`) | `src/common/agentstate.mjs` | [the runner](architecture/runner.md) (not yet written) |
-| `status.json` | runner → bridge (`/status`) | `src/common/runnerstatus.mjs` | [the runner](architecture/runner.md) (not yet written) |
-| The network log line | runner → bridge, owner | `src/common/netlog.mjs` | [the network policy](architecture/network-policy.md) (not yet written) |
-| The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [the sandbox](architecture/sandbox.md) (not yet written) |
-| The prompt | runner → pi | `src/runner/prompt.mjs` | [the runner](architecture/runner.md) (not yet written) |
-| The answer | pi → runner | `src/runner/answer.mjs` | [the runner](architecture/runner.md) (not yet written) |
+| `state.json` of an agent | runner → bridge (`/status`) | `src/common/agentstate.mjs` | [State](architecture/runner.md#state) |
+| `status.json` | runner → bridge (`/status`) | `src/common/runnerstatus.mjs` | [status.json](architecture/runner.md#statusjson) |
+| The network log line | runner → bridge, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
+| The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
+| The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
+| The answer | pi → runner | `src/runner/answer.mjs` | [Reading the answer](architecture/run.md#reading-the-answer) |
 | `agents.yaml` | owner → runner | `src/runner/config.mjs` | [configuration](architecture/configuration.md) (not yet written) |
 | The env files | owner → both services | `src/common/settings.mjs` | [configuration](architecture/configuration.md) (not yet written) |
 
@@ -312,10 +313,11 @@ The project's own names, each used one way in these documents.
 
 | To change | Modules | Tests | Documents |
 |---|---|---|---|
-| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs` | [datastore](architecture/datastore.md), [the runner](architecture/runner.md) (not yet written) |
+| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs` | [datastore](architecture/datastore.md), [The prompt](architecture/runner.md#the-prompt) |
 | What becomes a line, attachments, commands recognized | `src/bridge/intake.mjs`, `src/bridge/channels/index.mjs` | `test/intake.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md), [datastore](architecture/datastore.md) |
 | WhatsApp: webhook, filters, owner matching, catch-up, downloads, `pair` | `src/bridge/channels/whatsapp.mjs` | `test/whatsapp.test.mjs`, `test/support/wacli-stub.mjs`, `test/tools/wacli.test.mjs` | [whatsapp](architecture/whatsapp.md) |
 | Email: the reader, parsing, the spool, the sender check, `email-check` | `src/mail/`, `src/bridge/channels/email.mjs` | `test/email.test.mjs`, `test/mail-reader.test.mjs`, `test/mail-imap.test.mjs`, `test/mail-parse.test.mjs` | [email](architecture/email.md) |
+| The bridge's start, stop and state | `src/bridge/main.mjs`, `src/bridge/state.mjs` | `test/bridge.test.mjs` | [Starting up](architecture/bridge.md#starting-up), [The bridge's state](architecture/bridge.md#the-bridges-state) |
 | Another channel | a module in `src/bridge/channels/`, `src/bridge/main.mjs`, `SOURCES` in `src/common/datastore/line.mjs` | `test/support/fake-channel.mjs`, `test/routing.test.mjs` | [bridge](architecture/bridge.md), [delivery](architecture/delivery.md) |
 | Routing, chunks, pacing, failed sends | `src/bridge/outbox.mjs` | `test/delivery.test.mjs`, `test/routing.test.mjs` | [delivery](architecture/delivery.md) |
 | The outbox entry, or the locks | `src/common/outbox.mjs`, `src/common/locks.mjs`, and both services' users of them | `test/outbox.test.mjs`, `test/locks.test.mjs`, `test/delivery.test.mjs`, `test/backup.test.mjs`, `test/runner.test.mjs` | [exchange](architecture/exchange.md) |
@@ -323,17 +325,20 @@ The project's own names, each used one way in these documents.
 | Backups and restore | `src/bridge/backup.mjs` | `test/backup.test.mjs`, `test/support/restic-stub.mjs` | [backups](architecture/backups.md) |
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
 | A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
-| The runner's files that `/status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [the runner](architecture/runner.md) (not yet written), [/status](architecture/bridge.md#status) |
+| The runner's files that `/status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [/status](architecture/bridge.md#status) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [configuration](architecture/configuration.md) (not yet written) |
 | A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [configuration](architecture/configuration.md) (not yet written) |
 | A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
 | `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
-| When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) (not yet written) |
-| Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs` | [the runner](architecture/runner.md) (not yet written) |
-| Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) (not yet written) |
-| The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) (not yet written) |
-| The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) (not yet written) |
-| The agent's instructions | `src/runner/protocol.md`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) (not yet written) |
+| The runner's start, loop and restarts | `src/runner/main.mjs`, `src/runner/restarts.mjs`, `src/runner/status.mjs` | `test/runner.test.mjs`, `test/restarts.test.mjs`, `test/runnerfiles.test.mjs` | [the runner](architecture/runner.md) |
+| When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) |
+| Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
+| Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) |
+| The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
+| The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) |
+| The agent's instructions | `src/runner/protocol.md`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
+| pi's version | `config/image/build.json`, `src/runner/sandbox/policy.mjs`, `test/fixtures/pi-requests/` (`test/tools/capture-pi-requests.mjs`) | `test/tools/pi.test.mjs`, `test/tools/fixtures.test.mjs`, `test/policy.test.mjs`, `test/image.test.mjs` | [Facts about pi 1.5.2](architecture/agent.md#facts-about-pi-152), [What pi sends](architecture/network-policy.md#what-pi-sends), [The VM image](architecture/sandbox.md#the-vm-image) |
+| Gondolin's version | `package.json`, `src/runner/sandbox/` | `test/tools/vm.test.mjs`, `test/sandbox.test.mjs`, `test/policy.test.mjs` | [Facts about Gondolin 0.14.0](architecture/sandbox.md#facts-about-gondolin-0140), [Facts about Gondolin's network](architecture/network-policy.md#facts-about-gondolins-network) |
 | The native install or Docker | `src/ops/`, `deploy/systemd/`, `Dockerfile`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | `test/setup.test.mjs`, `test/doctor.test.mjs`, `test/units.test.mjs`, `test/docker.test.mjs` | [install](architecture/install.md) (not yet written), the [README](../README.md) |
 
 ## Deferred and out of scope
@@ -365,89 +370,9 @@ The project's own names, each used one way in these documents.
 
 ## Old text, still to be moved
 
-The text of the old `docs/ARCHITECTURE.md` for the components whose documents are still to be written, as it was, but for its headings, one level down, the rows and sentences of the bridge's side, which moved, and references that would otherwise lead nowhere. Numbers in parentheses, such as (6.6), are sections of `docs/DESIGN.md`. It goes as those documents are written.
+The text of the old `docs/ARCHITECTURE.md` for the components whose documents are still to be written, as it was, but for its headings, one level down, the rows and sentences of the bridge's side and the runner's, which moved, and references that would otherwise lead nowhere. Numbers in parentheses, such as (8.4), are sections of `docs/DESIGN.md`. It goes as those documents are written.
 
 ### 2. Components
-
-#### 2.6 The runner
-
-**Role:** the agent's supervisor and bookkeeper, and the only holder of the OpenRouter key.
-
-**Does:**
-- validates `agents.yaml` and refuses to start on any error;
-- watches the datastore, and decides when the agent runs: new messages after a quiet period, scheduled and one-off tasks, backfill batches when idle, and nothing while paused;
-- builds the batch and the prompt, and prepares the run's folder: the system prompt, a copy of the prompt and skills, and a copy of the current session;
-- runs pi in the sandbox, under the network policy;
-- reads pi's answer, checks the files it left, commits them, writes the outbox entries and updates `state.json`;
-- works out why a run failed, retries or pauses accordingly, and tells the owner once;
-- handles `/new`, and runs `rebuild` and backfills.
-
-**Structure:**
-- a **planner**: pure functions from the state, the datastore and the clock to the next action (which command, batch or task);
-- an **executor**: one run from lock to state update;
-- the **sandbox** (2.7) and the **network policy** (2.8).
-
-**Boundaries.** The runner never:
-- talks to WhatsApp or the mailbox, or writes the datastore;
-- reads `bridge/`, `wacli/` or `mail/`;
-- judges message content: it shows it to the model;
-- trusts pi beyond the protocol lines in its answer. The file check and git are the gate for what pi wrote.
-
-#### 2.7 The sandbox
-
-Every run gets a fresh Gondolin micro-VM on QEMU, booted from an image Scooter builds: Alpine with Node, the pinned pi, `pdftotext`, `heif-convert`, git, ripgrep, fd, `tzdata` and `curl` (6.6, 6.12).
-
-- **Mounts**, at the same paths as on the host: the agent's folder read-only, except `views/`, `memory/` and `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore read-only. Nothing else from the host is visible.
-- **Environment:** a short fixed list, with a placeholder where the key would be.
-- **Acceleration:** KVM when the runner can open `/dev/kvm`, otherwise emulation, which is announced. A forced accelerator that can't be used stops the runner.
-- **Lifetime:** the runner closes the VM when pi exits or the timeout passes. Nothing inside it survives.
-- **Limits:** the sandbox keeps the start of pi's answer and the end of its errors, and closes the VM of a run that writes more, or makes more files, than a run may, so nothing pi does can stop the runner or fill the disk the bridge writes on (6.6).
-- **The image:** `build-image` builds it, natively as root or in a container (in Docker, a privileged container of its own), in a folder beside the runner's, records what it holds beside it, and renames it into the runner's folder when it is complete. The runner refuses to start with a missing image, one built for another pi, or one that doesn't know the owner's time zone (6.12).
-
-The runner reaches it through one small interface: run this command, with these mounts, this environment, this timeout and this policy, and return the exit code and output. Tests use a fake that runs a stub of pi as a local process.
-
-#### 2.8 The network policy and its log
-
-The VM has no network of its own. Gondolin's host side, inside the runner's process, handles everything it sends (6.13):
-
-- DNS is answered inside the runner with made-up addresses.
-- UDP, raw TCP and private addresses are refused.
-- HTTP(S) goes out only to allowed hosts. The runner terminates the VM's TLS with its own certificate authority, so it sees each request in full.
-
-The rules for what goes out:
-- **Hosts:** `openrouter.ai`; with `AGENT_INTERNET=on`, also any public host over HTTPS.
-- **The key:** swapped in for the placeholder only on requests to `openrouter.ai`, and only in the header pi sends it in. A request there with a key of its own is refused, as is one elsewhere that carries the placeholder or the key.
-- **Requests to OpenRouter:** only the two chat routes, only the configured model, only the fields and tools the pinned pi sends, and only inline images and documents. The runner forwards its own re-encoding of the body it checked.
-- **Zero data retention:** set on every request.
-
-Every request is logged before it leaves, without headers, bodies or query strings, and its status as soon as it arrives, from the HTTP client's diagnostics events, which hold back no streamed answer. What one run adds to the log is bounded. Three things read the log: the runner, to learn why a run failed; the bridge, for the counts in `/status`; and the owner. The policy is `src/runner/sandbox/policy.mjs`, and the log's writer `netlog.mjs` beside it (`docs/DECISIONS.md`, milestone 8).
-
-#### 2.9 pi and its instructions
-
-pi is a third-party coding agent, run headless with every kind of discovery turned off and seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`.
-
-It is given:
-- the **prompt**: the batch, with times in the owner's time zone;
-- the **system prompt**: the protocol, which ships with the runner; the agent's prompt, from `config/`; and the current memory;
-- the **skills**, from that run's copy of `config/`.
-
-It produces changes to `views/` and `memory/`, and a final answer that ends with protocol lines (`DONE`, `FAILED`, `REPLY_TO`, `NO_REPLY`).
-
-**Boundaries.** pi holds no secret, has no network of its own, and can write only `views/`, `memory/` and its session copy. It can't change its config, the state, the git history, the datastore, the outbox or any other session. It can't read the other sessions either: `sessions/` is hidden from the VM.
-
-#### 2.10 The agent's folder
-
-`agents/lifelog/` is a git repository owned by the runner (6.2):
-
-| Path | Holds | In git |
-|---|---|---|
-| `views/` | The CSVs and the day pages | yes |
-| `memory/` | `preferences.md` and `needs-review.md` | yes |
-| `sessions/` | pi's sessions, hidden from the VM; pi only ever gets a copy of the current one | no |
-| `run/` | Rebuilt before each run: `system.md`, `config/`, `session/` | no |
-| `state.json` | The runner's bookkeeping | no |
-
-The runner is the only committer. Git history is the audit trail for everything the agent changed.
 
 #### 2.12 Configuration
 
@@ -469,67 +394,12 @@ The runner is the only committer. Git history is the audit trail for everything 
 
 ### 4. Dependencies
 
-#### 4.1 At run time
-
-| Component | Needs | For | When it's missing |
-|---|---|---|---|
-| Runner | the bridge | nothing | It works through what's in the datastore; replies wait in the outbox |
-| Runner | a valid `agents.yaml` | starting | It stops, naming the field |
-| Runner | the VM image, built for the pinned pi | starting | It stops, saying to run `build-image` |
-| Runner | an accelerator | speed | It falls back to emulation and tells the owner, unless one was forced |
-| Runner | OpenRouter | every run | A refused key, model or credit pauses runs; an outage is retried with backoff. Messages wait and none ends up failed |
-| pi | the policy, the mounts | everything | The run fails and is retried |
-
 #### 4.3 Third-party
 
 | Dependency | Version | Used by | Note |
 |---|---|---|---|
 | Node.js | ≥ 22.19 | everything | Gondolin and pi need it |
-| pi (`@earendil-works/pi-coding-agent`) | 1.5.2 | inside the VM image | The policy's allowlists match this version's requests |
-| Gondolin (`@earendil-works/gondolin`) | 0.14.0 | sandbox | Pre-1.0; the next version changes how hooks run |
-| QEMU | the host's | sandbox | With KVM where available |
 | `yaml` | 2.9.1 | runner config | |
-| OpenRouter | | runner | The model is configurable; default `anthropic/claude-sonnet-5.5` |
-
-#### 4.4 Starting up
-
-**Runner:** load `runner.env`; validate `agents.yaml`; free what pi left, then create the agent's folder if it's new and throw away a run's uncommitted changes; check the image and pick the accelerator; remove a leftover `run.lock`; write `status.json`; run any `once` task and start any backfill; then loop.
-
-### 5. Flows
-
-#### 5.1 A run
-
-1. **Trigger.** There are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least 8 seconds ago. Runs aren't paused.
-2. **Commands.** The runner handles command lines it hasn't handled yet. `/new` bumps the session.
-3. **Batch.** Due retries first, then new work items, oldest first, up to 20 and up to the prompt's size limit. An edit or deletion brings in the message it changes.
-4. **Lock.** Take `run.lock`, as [The locks](architecture/exchange.md#the-locks) says.
-5. **Prepare.** Write `run/system.md`, copy the prompt and skills into `run/config/`, and copy the current session into `run/session/`.
-6. **Run.** Boot the VM, run pi, close the VM.
-7. **After a successful run**, in this order: check the files, commit, copy the session back, write the outbox entries, update the state. A crash part-way only means the batch runs again. An error in checking or committing the files fails the run, as an unexpected file does.
-8. **Release** the lock.
-
-#### 5.2 A failed run
-
-The runner throws away the run's session changes and its uncommitted changes: it empties `run/session/`, sets `views/` and `memory/` aside, removes what it set aside, and takes the last commit's back. Nothing pi left can stop that, however deep it goes or however full it left the disk: everything pi wrote is freed before anything new is made. Then it reads OpenRouter's last response during the run from the network log:
-
-| Cause | Sign | What happens |
-|---|---|---|
-| Setup error | 401, 402, 403 or 404 | Runs pause. A try every 30 minutes and on restart. No item counts an attempt |
-| Outage | 408, 429, 5xx, or no answer | Tries after 1, 5 and 30 minutes, then every 30. No item counts an attempt |
-| Anything else | pi crashed or timed out, or left an unexpected file, or files that couldn't be checked or committed | Every item counts an attempt and is due again in a minute. After 4, it moves to `failed` |
-
-The owner gets one notice for the first failure in a row, and one when items are given up on.
-
-An error that stops the runner itself, such as a state it can't save, has its service manager start it again: natively systemd waits 1 minute, about 5½, then 30 between starts; where the service manager doesn't wait, as in Docker, the runner keeps the same waits itself, in `runner/restarts.json`, and `/status` shows them, so a fault that stays after pi has run can't run pi every few seconds (`docs/DECISIONS.md`, D207, D229).
-
-#### 5.5 Rebuild and backfill
-
-Both replay history through the agent, one of the owner's days at a time, with the prompt's `Now:` set to the time of the batch, and without sending anything.
-
-- **`rebuild`** runs with the runner stopped, and holds the runner's socket, so no runner starts during it. It tags the last commit, empties the views, memory and sessions, replays the whole datastore up to the newest `seq` at the time it started, keeping its progress in memory and waiting for an item tried again before it goes on, and commits the result as one commit (`src/runner/rebuild.mjs`). Its own steps, like its batches, take `run.lock` and give way to a backup.
-- **A backfill** fills one new view. It runs inside the runner, only when nothing live is waiting, with its own cursor and retry list, and may change only the paths it names and the day pages (`src/runner/backfill.mjs`).
-
-What the two share, the batches of one day, their time and sessions, is in `src/runner/replay.mjs`, and each batch is a run like a live one (`run.mjs`), which sends nothing.
 
 ### 6. Deployment on Linux
 
@@ -540,9 +410,6 @@ What the two share, the batches of one day, their time and sessions, is in `src/
 | Users | [Processes and users](#processes-and-users) | [Processes and users](#processes-and-users) | the developer's own ([Running programs](architecture/shared-code.md#running-programs)) |
 | Data and settings | `/var/lib/scooter`, `/etc/scooter` | one volume for the data folder ([Folders and their owners](#folders-and-their-owners)); `./config` bind-mounted; an env file for each service | `DATA_DIR`, `CONFIG_DIR` |
 | KVM | the `kvm` group, through `SupplementaryGroups` | `/dev/kvm` passed in: by group on rootful Docker, by a udev rule for the runner's host uid on rootless, each a Compose file of its own | the developer's `kvm` group |
-| The VM image | `sudo scooter build-image` | `docker compose run --rm build-image`, a privileged container of its own | `scooter build-image`, with Docker or Podman |
-| VMs die with the runner | `KillMode=control-group` | the runner is the container's main process | not guaranteed |
-| Waits between the runner's starts | systemd's (`RestartSec`, `RestartSteps`) | the runner's own: Docker's restart policy doesn't wait | the runner's own, after a stop on an error |
 
 In every mode there are no published ports.
 
@@ -552,32 +419,7 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 
 #### 7.4 The runner and the agent
 
-24. **The agent reports in four kinds of line** at the end of its answer: `DONE`, `FAILED`, `REPLY_TO` and `NO_REPLY`. The protocol that describes them ships with the runner, not in `config/`, because the runner parses it. (6.7, 7.1)
-25. **The agent never waits for the owner.** It files its best guess, marks it ❓, notes the question in `memory/needs-review.md`, and asks. An item it asked about counts as done. *So:* the runner has no "waiting for an answer" state. (7.1)
-26. **After a run: files, git, session, outbox, state, in that order.** *Why:* a crash at any point only causes the batch to run again, and the agent then sees the replies already sent and the rows already filed; and the session never remembers rows a crash threw away. An error in checking or committing the files fails the run rather than stopping the runner. (6.8; `docs/DECISIONS.md`, D88 and 4.7)
-27. **The cause of a failure comes from the network log.** OpenRouter's last response during the run decides between a pause, a backoff and a counted attempt. *So:* an outage or a revoked key never uses up a message's four attempts. (6.9)
-28. **A batch is what arrived before a quiet moment:** 8 seconds without a new message, retries first, at most 20 items and at most the prompt's size limit. An edit or deletion brings in the message it changes, so the two are never handled out of order. (6.4, 6.5; section 8, row 12)
-29. **Views and memory are in git, and the runner is the only committer.** A run that leaves anything git wouldn't record (a symlink, a dotfile, an ignored file) fails and is cleaned up. *So:* everything a run changes is visible and revertible, and nothing hidden carries over. (6.2, 6.8)
-30. **Sessions belong to the runner.** `sessions/` is hidden from the VM. pi gets a copy of the current day's session, and only that one file is copied back, after a successful run. *So:* a run can extend its own session but can't read or touch another, or plant one for later. (6.6)
-31. **The configuration belongs to the owner.** `config/` is read-only to the runner and invisible to pi, which sees a copy made for that run. ([What Scooter does](#what-scooter-does), 8.5)
-32. **Preferences need no approval.** Settled. Standing instructions the owner gives by message go into `memory/preferences.md`; git history is the audit trail. The runner doesn't check them. ([the owner's fixed choices](#the-owners-fixed-choices), 7.4)
 33. **One agent, in a format that allows more.** Settled. `agents.yaml` is a map of agents, and v2 refuses more than one. ([the owner's fixed choices](#the-owners-fixed-choices), 6.1)
-34. **Replays keep the past's clock.** In a rebuild or a backfill, a batch covers one of the owner's days and the prompt's `Now:` is the batch's own time, so "today" in an old message means what it meant then. Replays send nothing. (6.10, 6.11)
-35. **Quiet by default.** Settled. A handled message gets a ✅ reaction, and text is sent only for a question or an answer. ([What Scooter does](#what-scooter-does), 6.8)
-
-#### 7.5 The sandbox and the network
-
-36. **A fresh VM for every run.** Settled. Whatever pi does inside is gone when the VM closes, apart from what it wrote to the three writable folders. (6.6)
-37. **The same paths inside the VM as on the host.** *So:* the paths in the prompt, in pi's tool calls and in the day pages' links read the same everywhere. (6.6)
-38. **The VM has no network; the runner makes pi's requests.** DNS never leaves the runner, only HTTP(S) to allowed hosts goes out, and the runner sees every request in full because it terminates the VM's TLS. ([The network](#the-network), 6.13)
-39. **pi never holds the key.** Settled. The VM has a placeholder, and the runner swaps in the real key only on requests to `openrouter.ai`. (6.13)
-40. **An allowlist for what may be asked of OpenRouter.** Two routes, the configured model, the fields the pinned pi sends, client tools only and inline media only. The runner forwards its own re-encoding of the checked body, so a duplicated key can't show the check one value and OpenRouter another. *Why:* without this, OpenRouter could fetch from the web for the agent, past the policy and its log. *Cost:* every pi upgrade means capturing its requests again. (6.13)
-41. **Zero data retention, twice.** Settled. The runner sets it on every request, and the owner enforces it on Scooter's key, because a request can tighten OpenRouter's settings but not loosen them. (6.13)
-42. **Log before sending, and never log content.** The `request` line is written before the request leaves, so nothing goes out unrecorded even if the runner crashes. Lines hold hosts, paths, statuses, sizes and timings. Responses are logged from the HTTP client's events, because a response hook in Gondolin 0.14.0 would hold back streaming. (6.13)
-43. **A forced accelerator fails instead of falling back.** `auto` takes the fastest available and says which; `kvm` or `emulation` is taken literally. *Why:* Gondolin falls back to emulation silently, which is about ten times slower. (6.6)
-44. **VMs die with the runner.** Gondolin leaves QEMU running if the process that started it is killed, so the runner always runs under something that stops its whole process group. (6.6)
-45. **Scooter builds its own VM image,** from a build file with pinned versions. It includes ripgrep and fd, which pi would otherwise download while it runs. The runner refuses to start with a missing image or one built for another pi version. (6.12)
-46. **Internet is off unless the owner turns it on.** Settled. Off, the agent reaches only OpenRouter's two chat routes. On, it can also reach public HTTPS sites, and every request is still logged. ([the owner's fixed choices](#the-owners-fixed-choices), 6.13)
 
 #### 7.6 Operations
 
@@ -586,17 +428,10 @@ Each entry says what was decided, why, and what follows from it. "Settled" means
 
 ### 8. Changes made to DESIGN.md while planning
 
-DESIGN.md was updated on 2026-11-15 to include each row below. Rows 1 to 3, the owner's decisions of that day, and the other rows of the bridge's side, are beside their rules now, in the documents of [the map](#the-map). The rest were worked out while planning, each from a gap or a contradiction in DESIGN.md or from a fact about the tools, by its own rule: the simplest option that keeps the principles. The owner confirmed row 8 the same day, with the condition it states.
+DESIGN.md was updated on 2026-11-15 to include each row of a table here. Rows 1 to 3, the owner's decisions of that day, and the rows of the bridge's side and the runner's, are beside their rules now, in the documents of [the map](#the-map), row 8 with the owner's confirmation of that day. The row left was worked out while planning, from a gap in DESIGN.md, by its own rule: the simplest option that keeps the principles.
 
 | # | DESIGN.md said | It now says | Why |
 |---|---|---|---|
-| 6 | `/status` shows the accelerator and whether ZDR is on, and backups wait for "the agent's timeout" ([/status](architecture/bridge.md#status), [The locks](architecture/exchange.md#the-locks)), but the bridge reads neither `config/` nor `runner.env` | The runner writes `runner/status.json` (accelerator, ZDR, internet, model, the image's build time, each agent's timeout and sources). `AGENT_INTERNET` becomes the runner's setting alone, where 8.2 gave it to both services, and `/status` shows it from `status.json` | The bridge needs these facts and has no other way to learn them. A second copy of the internet setting in `bridge.env` could disagree with the one the runner uses |
-| 8 | `build-image` runs as the runner's user (8.4, 8.5) | Natively it runs as root and hands the image to the runner's user. Without root it uses Gondolin's container build when Docker or Podman is available. pi is installed with `--ignore-scripts`, as 8.3 does for Scooter's own packages, and the build's commands never run pi or anything else npm installed. If pi turns out not to work without its install scripts, the owner decides again | Gondolin 0.14.0 runs the build's install commands in a chroot, which needs root. *Cost:* a native build runs as root on the host, where DESIGN.md meant an unprivileged user, and a chroot doesn't contain root. What runs is Gondolin's builder, then Alpine's shell, npm and git inside the image's folder. Gondolin unpacks Alpine's packages itself and runs none of their scripts. With `--ignore-scripts`, pi's packages are only unpacked too, so none of their code runs as root. The build runs only when the owner starts it, never in a service. The owner confirmed this on 2026-11-15 |
-| 11 | `/new` is handled "before building a batch" (6.4) | `state.json` also keeps `commandSeq`, the newest command handled. A `/new` applies to all work not yet given to the agent. A rebuild sets `commandSeq` to the `seq` it stops at, so old commands aren't answered again (6.10) | Without it, a crash or a failed batch would handle the same `/new` twice |
-| 12 | A batch has at most 20 items (6.5), and the prompt is one command-line argument (6.6) | A batch also stops at `PROMPT_MAX_BYTES` (96 KB), always keeping at least one item. An item too long for that is shown cut, with the path to the rest | Linux refuses a single argument over 128 KB, checked on the target machine. A batch of long emails would fail on every attempt and end up in `failed` |
-| 13 | pi's flags (6.6) | Also `--no-mcp` | pi 1.5.2 has MCP support built in. 13.2 lists the flag; the command in 6.6 leaves it out |
-| 14 | Mounts at the host's paths (6.6) | The same, with Gondolin's own mount point moved off `/data` | Gondolin's file system mounts at `/data` by default, which is where Scooter's folders are in Docker |
-| 15 | Falling back to emulation sends a notice at every startup (6.6) | Only when the accelerator changes to emulation | A runner that keeps restarting would send the bot's number a message each time |
-| 16 | Where a native install keeps the code wasn't said (8.5) | The code lives in a root-owned folder every service user can read, with a system-wide Node. `setup` checks both. The runner's home and temporary folder are under `runner/` | The service users must be able to run Node and read the code. Gondolin needs a writable home and temporary folder, and its leftovers must be easy to sweep |
+| 16 | Where a native install keeps the code wasn't said (8.5) | The code lives in a root-owned folder every service user can read, with a system-wide Node. `setup` checks both. The runner's home and temporary folder are in [The runner's own folders](architecture/sandbox.md#the-runners-own-folders) | The service users must be able to run Node and read the code |
 
 Kept as designed, after being considered for cutting on 2026-11-15: Docker Compose as a deployment option, backfills, `once` tasks, and daily sessions with `/new`.

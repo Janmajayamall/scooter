@@ -25,7 +25,7 @@ In `bridge.env`. Email is on when `EMAIL_IMAP_HOST` is set; off, the other mailb
 | `EMAIL_AUTHSERV_ID` | required by the bridge for email | the bridge | The server name the mailbox's provider writes in `Authentication-Results`, such as `mx.google.com` |
 | `EMAIL_CHECK_SECONDS` | `60` | email reader | The longest the reader goes between looks, even with IDLE |
 
-`EMAIL_AUTHSERV_ID` isn't required by the settings, so `email-check` runs without it, to help find it. The bridge refuses to start with email on and without it, says to run `email-check`, and exits with 2.
+`EMAIL_AUTHSERV_ID` isn't required by the settings, so `email-check` runs without it, to help find it. The bridge refuses to start with email on and without it, and says to run `email-check` ([Starting up](bridge.md#starting-up)).
 
 ## The mailbox
 

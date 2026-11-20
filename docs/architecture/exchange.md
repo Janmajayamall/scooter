@@ -1,6 +1,6 @@
 # The exchange
 
-The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md); when the runner writes one is [the runner's](runner.md) (not yet written).
+The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md); when the runner writes one is [the runner's](run.md#reading-the-answer).
 
 ## Files
 
@@ -29,7 +29,7 @@ The exchange is the folder the two services coordinate through, `exchange/` in t
 
 ## The locks
 
-Two lock files in `locks/` keep runs and backups apart: `run.lock`, which the runner takes for each run, and a rebuild for its batches and its own steps ([rebuild and backfill](rebuild-and-backfill.md) (not yet written)); and `backup.lock`, which the bridge takes for each backup.
+Two lock files in `locks/` keep runs and backups apart: `run.lock`, which the runner takes for each run, and a rebuild for its batches and its own steps ([Rebuild](rebuild-and-backfill.md#rebuild)); and `backup.lock`, which the bridge takes for each backup.
 
 - **A lock** is one line of JSON: `{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}`, the times in UTC to the second, `deadline` null when there is none. It is written under a temporary name and hard-linked into place. *Why:* a link fails if the name exists, which makes taking the lock exclusive, and the name appears with its contents complete, so nobody reads half a lock. A lock that can't be read still counts as held.
 - **Each side takes its own lock first, and then looks for the other's.** *Why:* looking before taking would let a run and a backup start at the same instant. When the two appear together, the runner gives way: it releases `run.lock` and waits while `backup.lock` is there.
@@ -38,4 +38,4 @@ Two lock files in `locks/` keep runs and backups apart: `run.lock`, which the ru
   *Cost:* a runner that hangs while it holds `run.lock` holds backups back, but not for good: each check leaves a connection in the socket's queue, which Node makes 511 long, so a holder that takes no connection for 512 checks, one every `POLL_INTERVAL`, answers no more, and the backup goes ahead. Nothing the runner does after a run blocks its thread that long. The runner's user could hold backups back anyway, with a `run.lock` whose time is far ahead.
 - **Leftovers.** Each side removes its own leftover lock at its start: the bridge `backup.lock`, logged as `bridge.lock_removed`, since only the bridge takes it and only one bridge runs on a data folder; the runner `run.lock`. *Why:* a leftover `backup.lock` would stop the agent for good.
 - **The bridge in the runner's folder.** `locks/` is a folder the runner's user controls, and the bridge takes and removes `backup.lock` and reads `run.lock` there by the rules of [Folders other users control](../ARCHITECTURE.md#folders-other-users-control): `run.lock` with `readUntrustedFile`, up to `STATUS_FILE_MAX_BYTES`, whoever owns it, as it reads the runner's other files ([/status](bridge.md#status)).
-- What a backup does once it holds `backup.lock`, and what the runner does while it waits, are in [Consistency](backups.md#consistency) and [the runner](runner.md) (not yet written).
+- What a backup does once it holds `backup.lock`, and what the runner does while it waits, are in [Consistency](backups.md#consistency) and [The loop](runner.md#the-loop).
