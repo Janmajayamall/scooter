@@ -518,7 +518,7 @@ What the milestone left in the repository:
 *Reason:* `at` is when the message was sent, by the channel's clock. A message caught up after downtime has an old one, and a batch would start while catch-up is still storing lines. An email's comes from its `Date` header, which can lie in the future, and the batch would wait until then.
 
 **D65. Commands are never shown to the agent.**
-*Question:* 6.3 said commands are context that "the agent is shown"; 5.4 says commands are "never given to the agent", and 6.5's context is the `out` lines and reactions.
+*Question:* 6.3 said commands are context that "the agent is shown"; 5.4, now [Commands](architecture/bridge.md#commands), says commands are "never given to the agent", and 6.5's context is the `out` lines and reactions.
 *Choice:* 5.4 and 6.5. The cursor moves past a command, and the prompt never shows one. 6.3 of DESIGN.md now says so.
 
 **D66. What comes first.**
@@ -600,7 +600,7 @@ The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 | Runner: batching after the quiet period | `triggers.test.mjs`; `planning.test.mjs`, from files |
 | Runner: the batch's two limits, 20 items and the prompt's size, with an over-long item shown cut | `batch.test.mjs`: 20 items with retries first; six of ten 15 KB messages; one item cut, pointing at its line or its `.eml`; the oldest context left out; 40 random batches within a small limit; the last resort |
 | Runner: context lines and reply labels | `batch.test.mjs`: you, the owner and Scooter; a reply to a photo, to a deleted message, and to a message Scooter doesn't have; forwarded; reactions and a removed one; commands not shown |
-| Runner: emails in the prompt | `batch.test.mjs`: the email of 4.2 as 6.5 shows it, one that couldn't be read |
+| Runner: emails in the prompt | `batch.test.mjs`: the email of [the line format](architecture/datastore.md#the-line-format) as 6.5 shows it, one that couldn't be read |
 | Runner: an edit or deletion bringing in its message from `retry` or `failed`, shown as last edited | `batch.test.mjs`, also past 20 items |
 | Runner: `/new`, handled once | `agentstate.test.mjs`; `planning.test.mjs`, with the reply in the outbox and the state saved before the batch. That it stays handled when the batch after it fails is milestone 4's to show, with a run |
 | Runner: scheduled and `once` tasks | `triggers.test.mjs`; `planning.test.mjs` |
@@ -1051,7 +1051,7 @@ What the milestone left in the repository:
 
 **D110. The network log is read as a stream, and a log that can't be read doesn't keep a failed run from being recorded** (the fifth review of milestone 4, point 1).
 *Choice:* `scanNetworkLog` reads each day's file 64 KB at a time and calls back for each line in the window, taking a line only up to `NETLOG_LINE_MAX_BYTES`, 16 KB; a longer one is skipped and counted, as a line that isn't one is. The runner's failure handling keeps only the last request to OpenRouter and what came of it. An error in reading the log counts as no answer from OpenRouter, so the run is pi's own failure: recorded, its attempt counted, and logged as `runner.netlog_unreadable`. `/status` uses the same reader. The plan's milestone 8 now says to bound what one request, and one run, add to the log, since a `request` line a reader skips is one the failure handling doesn't see.
-*Reason:* the review's case, a day of 540 MB, stopped the round with `ERR_STRING_TOO_LONG` before the run was recorded, at every failed run until the day ended, and each start ran the batch again without counting an attempt. That is the kind of problem 4.7 closed. Now the same file takes 750 ms and 57 MB (5.4).
+*Reason:* the review's case, a day of 540 MB, stopped the round with `ERR_STRING_TOO_LONG` before the run was recorded, at every failed run until the day ended, and each start ran the batch again without counting an attempt. That is the kind of problem 4.7 closed. Now the same file takes 750 ms and 57 MB.
 
 **D111. Reading pi's answer takes time in step with its length** (the fifth review of milestone 4, point 2).
 *Choice:* the patterns for `DONE` and `FAILED` take every character (the `s` flag), so a carriage return or U+2028 after a long run of spaces can't make `FAILED` try every split of the spaces; and the items reported are kept in sets.
@@ -1059,7 +1059,7 @@ What the milestone left in the repository:
 
 **D112. The clean-up removes what staging copied into the repository** (the fifth review of milestone 4, point 3).
 *Choice:* once the clean-up has put back the last commit, it runs `git prune --expire=now`, which removes every object nothing refers to: what `git add` copied into `.git/objects` for the run that failed. Only the runner uses the repository, and no git of its own runs then. A failure is logged as `agent.prune_failed` and changes nothing else; the next clean-up tries again.
-*Reason:* each failed attempt left what it staged, up to `AGENT_FILES_MAX_BYTES`, for good: `git gc --auto` acts only once thousands of objects are loose, and then removes only what is two weeks old. The review's case, 90 MB staged beside `git~1` four times, left 360 MB; now nothing (5.4). *Cost:* every clean-up walks what the repository holds, which takes milliseconds for years of views. Objects someone staged by hand and left uncommitted go too, as their staging did already (D89).
+*Reason:* each failed attempt left what it staged, up to `AGENT_FILES_MAX_BYTES`, for good: `git gc --auto` acts only once thousands of objects are loose, and then removes only what is two weeks old. The review's case, 90 MB staged beside `git~1` four times, left 360 MB; now nothing. *Cost:* every clean-up walks what the repository holds, which takes milliseconds for years of views. Objects someone staged by hand and left uncommitted go too, as their staging did already (D89).
 
 **D113. An item too long on its own is cut as little as will do** (the review of milestone 3, point 7).
 *Choice:* the search for the cap on the item's texts (D72) goes a stretch at a time, between the lengths of the texts the cap applies to, which the prompt reports, from the highest down. Within a stretch the prompt grows with the cap, so the search holds there; at a text's whole length the prompt is shorter than just below, since the text is then shown without its note.
@@ -1071,7 +1071,7 @@ Pull request 5, milestone 4, was approved by its fifth review with three smaller
 
 | # | Point | What became of it |
 |---|---|---|
-| 1 | A day's network log too large to read keeps a failed run from being recorded; `/status` reads the same files | Settled (D110): read as a stream, and an error counts as no answer. The review's case, by its numbers, on `main` and on this branch (5.4). Tests in `failures` (a line too long, across pieces of the file; a log that can't be read) and `runner` (a failed run recorded with the log unreadable). The plan's milestone 8 says to bound what a request and a run add |
+| 1 | A day's network log too large to read keeps a failed run from being recorded; `/status` reads the same files | Settled (D110): read as a stream, and an error counts as no answer. The review's case, by its numbers, on `main` and on this branch. Tests in `failures` (a line too long, across pieces of the file; a log that can't be read) and `runner` (a failed run recorded with the log unreadable). The plan's milestone 8 says to bound what a request and a run add |
 | 2 | Reading an answer takes time that grows with the square of a line's length | Settled (D111). Test in `answer`: a megabyte of spaces with a carriage return and U+2028, and 160,000 numbers |
 | 3 | What a run staged stays in `.git/objects` when the run then fails | Settled (D112). Test in `agentdir`: a staged file is gone after the clean-up, and `git fsck --unreachable` finds nothing |
 
