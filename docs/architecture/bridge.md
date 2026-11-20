@@ -89,7 +89,7 @@ Intake also tells the bridge when it has stored a command, and keeps the time of
 
 ## Commands
 
-Commands come only from WhatsApp. They're logged as `command` lines, and the runner never shows them to the agent ([State](runner.md#state)). *Why:* a command is an instruction to Scooter, not a message to file.
+Commands come only from WhatsApp, and are logged as `command` lines. What the agent sees of them is in [State](runner.md#state).
 
 | Command | Handled by | Effect |
 |---|---|---|

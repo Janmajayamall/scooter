@@ -353,7 +353,7 @@ What the milestone left in the repository:
 
 **D207. The two units, and how they restart** (the first review of milestone 4; the plan's rule for this milestone).
 *Choice:* `deploy/systemd/scooter-bridge.service` runs `/usr/local/bin/scooter bridge` as root; `scooter-runner.service` runs `/usr/local/bin/scooter runner` as `scooter-runner`, with its group and `SupplementaryGroups=kvm`. Both: `Type=exec`, `Environment=TZ=UTC`, `KillMode=control-group`, `Restart=on-failure`, after `network-online.target`, wanted by `multi-user.target`, and no `EnvironmentFile`: each service reads its own env file (8.2). The restarts:
-- the runner's after 1 minute, then about 5½, then 30 minutes, and every 30 after (`RestartSec=1min`, `RestartSteps=2`, `RestartMaxDelaySec=30min`): the runner's waits ([Restarts](architecture/runner.md#restarts));
+- the runner's: `RestartSec=1min`, `RestartSteps=2`, `RestartMaxDelaySec=30min`, the runner's waits ([Restarts](architecture/runner.md#restarts));
 - the bridge's after 5 seconds, doubling to 5 minutes (`RestartSec=5s`, `RestartSteps=6`, `RestartMaxDelaySec=5min`): `RESTART_BACKOFF`, as the bridge restarts wacli and the email reader.
 
 The runner's home and temporary folder aren't set in its unit: the runner sets them itself ([The runner's own folders](architecture/sandbox.md#the-runners-own-folders)), which the plan's rule allows, and one place says where they are.

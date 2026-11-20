@@ -114,7 +114,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day, since the session and the schedule follow it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines, reactions and commands, isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context ([The prompt](#the-prompt)); commands never are ([Commands](bridge.md#commands)).
+**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines, reactions and commands, isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context ([The prompt](#the-prompt)); commands never are. *Why:* a command is an instruction to Scooter, not a message to file.
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 

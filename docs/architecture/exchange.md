@@ -1,6 +1,6 @@
 # The exchange
 
-The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md); when the runner writes one is [the runner's](run.md#reading-the-answer).
+The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md). The runner writes one for an answer's texts and reactions ([Reading the answer](run.md#reading-the-answer)), for a notice ([Notices](run.md#notices)), for its reply to `/new` ([Commands](runner.md#commands)) and for a backfill's summary ([Backfill](rebuild-and-backfill.md#backfill)).
 
 ## Files
 
