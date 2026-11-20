@@ -111,7 +111,7 @@ A record ([Channels](bridge.md#channels)) with `source: "email"`, which intake w
 
 ## What /status says of email
 
-`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started, 21:20` instead, with the time it started. Times past the window are dropped whenever one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps the times of one `STATUS_WINDOW` at most. *Why:* skips are stored nowhere else, and a record in memory is the simplest.
+`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started, 21:20` instead, with the time it started. Times past the window are dropped whenever one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps the times of one `STATUS_WINDOW` at most. *Why:* skips are stored nowhere else, and counts in memory are the simplest.
 
 ## email-check
 

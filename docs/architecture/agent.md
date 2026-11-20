@@ -56,7 +56,7 @@ pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-contex
 - Write only inside your folder, and no links and no dotfiles. Don't commit; the runner does. You can read history with `git log`. What you make for yourself, such as a converted photo, goes in `$HOME` or `/tmp`, since everything left in `views/` and `memory/` is committed.
 - When the owner gives a standing instruction ("start tracking coffee"), add it to `memory/preferences.md` as `- <date> (#<seq>): <rule>`, and follow it from then on.
 - How the prompt shows things: its three sections, `(edited in …)`, `(deleted in …)`, texts as JSON strings, cut texts, and who `Scooter` is ([The prompt](runner.md#the-prompt)).
-- "Today" is the date after `Now:`, not the machine's clock, which differs in a replay. *So:* a rebuild's batch, whose `Now:` is in the past, needs no line of its own ([Rebuild](rebuild-and-backfill.md#rebuild)).
+- "Today" is the date after `Now:`, not the machine's clock, which differs in a replay ([Rebuild](rebuild-and-backfill.md#rebuild)).
 - How the parser reads an answer, with an example answer:
   1. only the last message, after the last tool call, is read, since pi prints only the model's last message ([Facts about pi 1.5.2](#facts-about-pi-152)), so the whole answer goes there, and what the model writes before or between tool calls, instruction lines included, reaches no one;
   2. an instruction is read only at the start of a line, after trimming, in capitals with its colon: `**DONE: 1050**`, `- DONE: 1050`, `done: 1050` and `DONE 1050` are text, sent to the owner;
