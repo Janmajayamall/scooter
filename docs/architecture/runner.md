@@ -5,8 +5,6 @@ The runner is the agent's supervisor and bookkeeper. It watches the datastore an
 This document covers the planner, pure functions from the state, the datastore and the clock to the next action (`nextAction`), and the service around it: its start, its loop, its state and its restarts. [A run, and the agent's folder](run.md) covers the executor, one run from the lock to the state (`performRun`).
 
 The runner never:
-- talks to WhatsApp or the mailbox, or writes the datastore;
-- reads `bridge/`, `wacli/` or `mail/`;
 - judges what a message says: it shows it to the model;
 - trusts pi beyond the instruction lines of its answer. The file check and git are the gate for what pi wrote ([After a successful run](run.md#after-a-successful-run)).
 
