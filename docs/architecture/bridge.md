@@ -15,7 +15,7 @@ Which user it runs as, what it can reach and which secrets it holds are in [The 
 
 ## Channels
 
-The bridge reaches the owner through channels: WhatsApp, which receives and sends, and email, which only receives. Each channel is one module in `src/bridge/channels/`, and only that module deals with its service. The rest of the bridge, the **core** (the store, intake, delivery, the commands and the backups), calls every channel through the same object, so another channel, such as Telegram, is one more module. Tests drive the core with a fake channel, `test/support/fake-channel.mjs`.
+The bridge reaches the owner through channels: WhatsApp, which receives and sends, and email, which only receives. Each channel is one module in `src/bridge/channels/`, and only that module deals with its service. The rest of the bridge, the **core** (the store, intake, delivery, the commands and the backups), calls every channel through the same object ([Why it is built this way](../ARCHITECTURE.md#why-it-is-built-this-way)). Tests drive the core with a fake channel, `test/support/fake-channel.mjs`.
 
 | Member | What it is |
 |---|---|
