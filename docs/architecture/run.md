@@ -1,0 +1,173 @@
+# A run, and the agent's folder
+
+A run is one run of pi, in one VM, on one batch or task, from the lock to the state: the executor of [the runner](runner.md), `performRun`, which the runner calls when its planner says to run. This document covers the run, what the runner reads and accepts of what pi left, what it does after a failure, and the agent's folder, which the runner makes, owns, and is the only committer of. A rebuild's and a backfill's batches are runs too ([rebuild and backfill](rebuild-and-backfill.md)).
+
+## Files
+
+- `src/runner/run.mjs`: one run: the lock, the sandbox's spec, then what follows a success or a failure.
+- `src/runner/answer.mjs`: reading pi's answer, and the replies and reactions it asks for.
+- `src/runner/failures.mjs`: the cause of a failure, pauses, attempts, the state after a run, and the notices.
+- `src/runner/agentdir.mjs`: the agent's folder, `run/` before each run, and the session copied back.
+- `src/runner/git.mjs`: git, run on the agent's repository; the file check, the commit and the clean-up.
+
+## A run
+
+1. **The lock.** The runner takes `run.lock`, with the run's start plus the agent's `timeout_minutes` as its time, then looks for `backup.lock`, and gives way to a backup as [The locks](exchange.md#the-locks) says (`acquireRunLock`).
+2. **`run/`.** `prepareRun` removes `run/` with `removeTree` ([Files another program controls](shared-code.md#files-another-program-controls)), however deep what pi left there goes, and makes it again: `config/`, the run's copy of the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses`, a file that can be run keeping that; `session/`, with the session's copy ([The session's copy](#the-sessions-copy)); and `system.md` ([The prompt](runner.md#the-prompt)). A backfill's run copies only its skills. A link in a skill's folder isn't copied: `prepareRun` refuses it, since a copy that followed it would show pi whatever it leads to. *Why a copy:* pi sees only that run's copy, never the config folder itself, which belongs to the owner.
+3. **pi.** The runner gives the sandbox the run's spec: pi's command ([How pi is run](agent.md#how-pi-is-run)), the agent's folder as its working folder, the mounts and the environment ([Mounts](sandbox.md#mounts), [Environment](sandbox.md#environment)), `timeout_minutes`, and the network policy for the agent's model and the internet setting ([the network policy](network-policy.md)) (`runSpec`).
+4. **After it:** [After a successful run](#after-a-successful-run), or [Failures](#failures).
+5. **The lock** is let go of, after the packing ([After a successful run](#after-a-successful-run)) and the clean-up, which have no time limit.
+
+## The session's copy
+
+- **Sessions belong to the runner.** They are kept in `sessions/`, as `sessions/<session ID>.jsonl`, which pi never sees ([Mounts](sandbox.md#mounts)). Before a run, `run/session/` holds only a copy of the current session, if there is one, under that name, and only if it is a regular file.
+- **After a successful run**, once the files are committed, `keepSession` takes from `run/session/` the newest file pi named itself, `…_<session ID>.jsonl`, or else the copy, which pi continued, and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile` ([Files another program controls](shared-code.md#files-another-program-controls)), up to `SESSION_MAX_BYTES`. It reads the folder as a stream, so millions of names cost time, not memory. Anything else in the folder is ignored. Any error is a refusal: a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, a link, a socket, a folder it can't list, a full disk. A refusal is logged as `runner.session_refused`, with the error's code; the run still counts as a success, and the session kept before stays.
+- **After a failed run** nothing is copied back.
+- **Either way**, `run/session/` is emptied (`clearRunSession`) before the run is recorded, after a failed run before the clean-up, since pi could have filled the disk there. The folder itself stays, so emptying it makes nothing. An error in emptying it is logged, and the next run's `prepareRun` removes `run/` whole ([A run](#a-run)).
+
+So a run can only extend the session it continues: it can't change another session, or plant one for a later day. *Why after the commit:* a session kept before the commit would remember a run that a failed commit, or a crash between the two, then threw away. Kept after it, a crash between the two leaves the views committed and the session without the run, so the next try sees the rows it filed.
+
+*Facts about pi 1.5.2's sessions*, which this relies on, checked in a VM: pi writes one file into the session folder and nothing else, `<UTC time>_<session ID>.jsonl`, such as `2026-11-16T00-03-41-509Z_lifelog-2026-11-09.jsonl`, whose first line names the session and the working folder. It finds a session again by that first line, not by the file's name, so a copy under another name is continued; the working folder is part of the match, so after a restore to another data folder the day's session starts afresh, in a second file with the same ID, and the runner takes the file pi wrote, not the one it copied in. A new ID prints a warning on stderr, "Warning: No project session found…", which nothing reads. The system prompt and the skills aren't taken from the session: a continued session is sent with those of the current run, so the memory in the system prompt is current on every run of a day's session. pi sends the session's ID to OpenRouter in an `x-session-id` header.
+
+## Reading the answer
+
+The runner reads pi's final answer, its stdout as pi prints it ([Facts about pi 1.5.2](agent.md#facts-about-pi-152)), line by line. These lines, after trimming, are instructions:
+
+| Line | Meaning |
+|---|---|
+| `DONE: <seq> [<seq> …]` | These items are handled: filed, replied to, or waiting on a question the agent asked. A `#` before a number is allowed. |
+| `FAILED: <seq> <reason>` | The agent can't handle this item. It goes straight to `failed`. |
+| `REPLY_TO: <seq>` | The text after this line, up to the next `REPLY_TO` or the end, is one message, sent as a reply to `<seq>`. |
+| `NO_REPLY` | Send no text. |
+
+- An instruction's word is matched exactly: in capitals, with its colon, after trimming. `DONE:` takes numbers apart by spaces or commas. A line that begins with an instruction's word and can't be read, such as `DONE: soon` or `FAILED:` with no number, is counted and logged, and never sent: it was meant as an instruction. A `REPLY_TO:` with no number starts a message of its own, sent without a quote. Reading takes time in step with the answer's length, whatever characters a line holds.
+- Every other line is message text. Text before the first `REPLY_TO` is a plain message; in a batch its `about` is the batch's newest item, so it follows the owner's latest message ([Outbox entries](exchange.md#outbox-entries)). Empty messages are dropped.
+- `FAILED` wins over `DONE` for the same item. Its reason is the agent's, cut to one line of `REASON_MAX_CHARS`, or "no reason given". The agent explains it in its own answer, so the runner sends no notice.
+- `DONE` or `FAILED` for a `seq` that wasn't in the batch is ignored and logged.
+- `REPLY_TO` quotes a message. One that names an edit or a deletion quotes the message it changes. One that names a reaction, a command, or a number that doesn't exist sends its text without a quote, `about` the batch's newest item, like plain text.
+- `NO_REPLY` anywhere means no text is sent, `REPLY_TO` texts included. Reactions still go.
+- In quiet mode the runner also writes a `react` entry with `ack_reaction` for each item reported `DONE` that is a message, still there, and not answered by a `REPLY_TO`: those got a reply instead. Reacting to a message the owner has deleted would say nothing.
+- The texts go to the outbox first, in order, then the reactions, by `seq`.
+- One answer sends at most `ANSWER_MAX_TEXTS` texts, the first ones; the rest are dropped and counted in the log as `runner.answer_texts_dropped`, so a misled run can't flood the owner's chat. A message whose `REPLY_TO` was dropped gets its reaction instead. An answer of 2,000 `REPLY_TO` lines had made 2,000 outbox entries, nearly 3 hours of sending.
+- In a scheduled or `once` task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)).
+- With `can_message: false`, nothing the agent says is sent.
+
+## After a successful run
+
+pi runs as root in its VM, and what it writes in the writable folders is the runner's on the host, so pi chooses every name, mode and size there, how deep the folders go and how many files there are. Nothing it leaves may stop the runner, at the end of the run or at the next start, or make it run the same batch again without counting an attempt. So what the runner accepts is limited before git reads anything; what git doesn't record is put back once the check has passed; an error in checking or committing fails the run; and the clean-up can't be slowed down or stopped by what pi left.
+
+In this order:
+
+1. **The check.** If `views/` or `memory/` holds anything git wouldn't record, the run fails ([Failures](#failures)), with the reason `unexpected file <path>`. The two folders are walked in name order, by the bytes of the names, which reaches a name that isn't UTF-8 as it is on disk, without following links, and the first of these is the unexpected file:
+   - a name that starts with `.`, such as `.gitignore` or a nested `.git`;
+   - anything that isn't a regular file or a folder, such as a link or a FIFO;
+   - a file the runner can't read, or a folder it can't read and search: pi can take the runner's access away from what it writes;
+   - a file with more than one name, a hard link, which git would commit as two files, and a later write through one name would change the other;
+   - a path longer than the system takes: `mkdir` in the VM stops at the host's limit, but moving a folder into another doesn't;
+   - the name at which the files and folders of the two folders pass `AGENT_FILES_MAX_COUNT` together, each folder read as a stream and only that far, the name being the one in the order the folder gives them;
+   - the file at which their sizes, as the file system gives them, pass `AGENT_FILES_MAX_BYTES` together.
+
+   Then `git status --ignored=matching` names any file git ignores. Last comes staging, `git add -A -- views memory`, so a path git refuses, such as `git~1`, or a file it couldn't read, is left unstaged and named. Staging is part of the check because only git knows every name it refuses. The path is logged cut to `REASON_MAX_CHARS`: it is a name pi chose, which could hold a message's words.
+   *Why the limits:* git reads every byte of a file to add it, holes included, and pi can make a file of any size in an instant, all holes; some of git's work, such as taking names out of its index again, grows faster than their number, and pi can make hundreds of thousands of names in a run ([Facts about git, Node and Linux](#facts-about-git-node-and-linux)). They are on the two folders together, so that many small files can't add up to the same wait. Within the path limit a tree is at most about 2,000 folders deep, which the walk and git handle. *Cost:* a last commit past either limit, which only a commit by hand or a lower limit could make, or about 50 years of day pages, fails every run until it is smaller.
+   *Why ordinary runs pass:* pi 1.5.2's `edit` and `write` leave nothing beside the files they change, no temporary files, dotfiles or locks.
+2. **What git doesn't record, put back,** just before staging, once the rest of the check has passed:
+   - **the modes:** every folder 0700, and every file 0600, or 0700 when its owner may run it, which is all git keeps of a mode, setting only a mode that differs. *Why:* a folder left without write access, or a file left read-only, made every later run fail to write there, and nothing in git said why. A mode that keeps the runner from reading still fails the run: the check has to read what it checks. The files' times aren't put back: no later run depends on them;
+   - **the empty folders,** removed, the deepest first, after the modes, so a folder that held only empty folders goes too. They don't fail the run: an ordinary run can leave one, such as a month's folder once its only day page is gone.
+
+   So after a successful run `views/` and `memory/` hold nothing the commit doesn't, with the runner's modes, and nothing hidden carries over to later runs.
+3. **The commit,** only if what was staged differs from the last commit: `lifelog: #1050 #1051 #1053`, every item of the batch, `lifelog: scheduled task 21:30` or `lifelog: once task poems`, as `Scooter <scooter@localhost>`, unsigned. A backfill's and a rebuild's are in [rebuild and backfill](rebuild-and-backfill.md).
+4. **The session,** copied back ([The session's copy](#the-sessions-copy)).
+5. **The outbox:** the texts and reactions of [Reading the answer](#reading-the-answer).
+6. **The state:** items reported `DONE` leave `retry`; items reported `FAILED` go to `failed`; items not reported have used the attempt this run was ([Failures](#failures)); the cursor moves to what the batch covered; and `lastRun` is recorded.
+7. **Packing.** After a run that committed, once the state is saved, the runner runs `git gc --auto` itself, in the foreground, while it still holds `run.lock`, with no time limit. A failure is logged as `agent.pack_failed`, and changes nothing else. *Why:* `git commit` would otherwise start `git gc --auto` in the background once enough objects are loose, outside `run.lock`, where a backup could read `.git` while packs are written and loose objects removed, and a start could no longer take it that no git of the runner's is running. Turning packing off would leave every version of a view a whole object; packing inside the commit would let a slow pack fail a run that had committed. Stopped part-way, git would leave `repack` and `pack-objects` writing on their own, since only the program itself is signalled ([Running programs](shared-code.md#running-programs)). *Cost:* the next round of the loop waits for it. Packing and the clean-up's removal have no time limit and `run.lock` has one, so after a run that used most of its time a backup could read `.git` during a repack; how the backup tells a runner still at work is in [The locks](exchange.md#the-locks).
+
+*Why this order:* a crash at any point only means the batch runs again. The agent then sees the replies it already sent as context, and the rows it already filed in the views, so it doesn't file them twice; and the session never remembers rows a crash threw away.
+
+**Errors.** Everything from the walk to the commit reads what pi left. An error there, such as a git command stopped at `GIT_CALL_TIMEOUT`, fails the run as pi's own failure, with the reason `couldn't commit the run's files (<error>)`, counts an attempt, and is logged as `runner.files_failed`. *Why:* stopping the runner instead would run pi on the same batch again at every start, without counting one. *Cost:* a git that fails for a reason of its own, such as a damaged repository or a full disk, uses the items' attempts, and the owner is told.
+
+## Failures
+
+A run fails when pi exits with a code other than 0, times out, is stopped, or its VM is lost; when its answer was longer than the sandbox keeps, or it wrote more than a run may ([What a run may take](sandbox.md#what-a-run-may-take)); and when it leaves an unexpected file, or files that couldn't be checked or committed ([After a successful run](#after-a-successful-run)). Then the runner empties `run/session/` and runs [the clean-up](#the-clean-up), and works out the cause:
+
+- **What pi left comes first:** an unexpected file after a run that exited with 0, an error in checking or committing, an answer cut short, or a run that wrote too much, is pi's own failure, whatever the network log says.
+- **Otherwise the cause comes from OpenRouter's last answer during the run,** in the runner's own network log ([The log](network-policy.md#the-log)): from the run's start to its end, the last `request` to `openrouter.ai`, or the last request the policy refused there, whichever came later, and what came of it:
+  - **a setup error:** a `response` of 401, 402, 403 or 404, such as a revoked key, no credit left, a model the key's guardrail doesn't allow, a model that's gone, or no endpoint meeting ZDR;
+  - **an outage:** a `response` of 408, 429 or a 5xx, an `error` line, or nothing at all, because the run ended while it waited;
+  - **pi's own:** another status, or no request at all.
+  - **A refusal by the policy:** before any request had gone out to OpenRouter in the run, a setup error, "the network policy refused pi's request: <reason>"; after one had, pi's own failure, "the network policy refused a request: <reason>". *Why:* nothing the agent does can run before the model's first answer, so a refusal before one is pi's own request, and the policy and the pinned pi disagree, which no try of the batch can mend; pausing holds the messages without using their attempts. A later refusal may come from a command the agent ran, and reading it as a setup error would hold runs back for as long as the message that misled it is in the batch. *Cost:* a pi whose later requests differ in shape from its first, which pi 1.5.2's don't, would use the items' attempts.
+  - A request the agent makes itself, with the placeholder, in the shape of pi's, is read the same way: nothing tells it from pi's own. The owner accepted this on 2026-11-18, "this is ok"; what it costs is among the README's [Known limits](../README.md#known-limits).
+  - A log that can't be read counts as no answer from OpenRouter, so the run is pi's own failure, and is logged as `runner.netlog_unreadable`.
+
+  The window can't take in another run's lines, because runs are at least `POLL_INTERVAL` apart ([The loop](runner.md#the-loop)).
+- **A sandbox that can't run pi at all,** such as a VM that doesn't boot in time, also within the run's own time, is a setup error, "the VM couldn't start": it is the machine's fault, and spending every message's attempts on it wouldn't help.
+
+**The short reason** is OpenRouter's error whenever its last answer was a status of 400 or more, whatever the cause, a 400 or a 413 for a prompt or an image too large among them: OpenRouter's own words when the last line pi printed on stderr is its error for the same status ([Facts about pi 1.5.2](agent.md#facts-about-pi-152)), as `OpenRouter: No endpoints found matching your data policy`, and otherwise `OpenRouter answered 429`. Without an error from OpenRouter it is `OpenRouter didn't answer`, `timed out`, `pi exited with code 3`, `pi was stopped`, `pi's answer was too long`, `pi wrote more than a run may`, or `unexpected file views/.gitignore`. OpenRouter's words go into the notice and the state, cut to `REASON_MAX_CHARS`, and never into Scooter's logs, which carry the cause and the status.
+
+**What each cause does:**
+- **Setup error:** no item counts an attempt. Runs pause: nothing starts until the next try, every `SETUP_RETRY_WAIT` and at every start, until a run gets through.
+- **Outage:** no item counts an attempt, and the runner tries again after the waits of `OUTAGE_RETRY_WAITS`, by the number of tries, the last repeating.
+- **pi's own:** every item of the batch counts one attempt, its reason "not reported" for an item a successful run didn't report, or the failure's short reason, and is due again `RETRY_WAIT` later. *Why so soon:* these failures come from the model or the message, not from outside, and the model often succeeds on another try. After `MAX_ATTEMPTS` an item goes to `failed` with "not handled after 4 attempts", and the owner is told. `failed` keeps the newest `FAILED_KEEP`, in the order they were added.
+
+**Pauses.** A try that fails for the same cause continues the pause: one try more, `since` kept, and the wait that goes with it. Another cause starts a new pause. Any run that gets through ends it: a success, or a failure of pi's own, which means OpenRouter was answering. A paused batch's items wait in `retry`, due at once, their attempts unchanged, so they come first in the next try's batch, and messages that arrived meanwhile join in: the whole batch is handled once OpenRouter works again, and nothing a setup error or an outage holds up ends in `failed`. A start brings the next try forward, after the quiet period. A task that fails this way stays due.
+
+**The cursor** moves to what the batch covered after every run that finishes, failed or not, and the items it didn't handle wait in `retry`, which comes first in the next batch. Only a run cut short, by a crash or a stop, leaves the cursor and the state as they were. *Why:* the planner takes every work item after the cursor as new, so an item waiting in `retry` after the cursor would be given again at once, as attempt 1.
+
+## Notices
+
+Notices are outbox entries `by: "runner"`, which go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)), and go out also with `can_message: false`, as the reply to `/new` does ([Commands](runner.md#commands)).
+
+- **The first failure in a row** sends one notice; later failures send nothing until a run succeeds: "⚠️ I couldn't process your last messages (<short reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it, "run the scheduled task 21:30" or "run the task poems", and says when it runs again. A task is a live run, so a failing task can be the first failure of a row, and one that gets through ends the row.
+- **Items given up on:** one notice listing them: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds.
+- **The emulation notice** ([status.json](runner.md#statusjson)) and **the restart notice** ([Restarts](runner.md#restarts)).
+
+## The clean-up
+
+After a failed run, and at every start, the runner throws away the run's uncommitted changes in `views/` and `memory/`, so the next try starts from the last good state. Nothing pi left can slow it down or stop it, and everything pi wrote is freed before anything new is made, since pi may have filled the disk, and on a full disk a new folder has no room. `run/session/` has been emptied just before ([The session's copy](#the-sessions-copy)).
+
+1. **Set aside.** `views/` and `memory/` are each renamed into `agents/.discarded/<agent>/`, under a name nothing there has, such as `views-1`, after the folder is given write access, which a rename needs and pi could have taken away. A rename takes the same time whatever the folder holds, and no room. `agents/.discarded/` is beside the agent's folder, on the same file system, so nothing is copied, and outside the VM's mounts and git. A start makes `agents/.discarded/<agent>/` and keeps it, so the clean-up makes nothing before it has freed what pi wrote.
+2. **Removed.** Everything in `agents/.discarded/<agent>/` is removed with `emptyFolder` ([Files another program controls](shared-code.md#files-another-program-controls)), with whatever an earlier clean-up couldn't remove: without git, however deep it goes, reading each folder as a stream. If something can't be removed, the rest still is; `agent.discarded_left` is logged, and the next clean-up, or the next start, tries again. What is left is out of pi's sight and git's.
+3. **Made again.** `views/` and `memory/`, empty, as the VM's mount points.
+4. **Git's index** is the last commit's again: `git read-tree HEAD`, in one step, whatever the run staged.
+5. **The files:** the last commit's files in the two folders are written back: `git restore --source=HEAD --staged --worktree`.
+6. **The objects** nothing refers to, what `git add` copied into `.git/objects` for the run that failed, are removed: `git prune --expire=now`. A failure is logged as `agent.prune_failed`, changes nothing else, and the next clean-up tries again. *Why:* `git gc --auto` removes only what is two weeks old, so each failed attempt left what it staged, up to `AGENT_FILES_MAX_BYTES`, for good. *Cost:* every clean-up walks what the repository holds, milliseconds for years of views; objects someone staged by hand and left uncommitted go too.
+
+Then the folders are checked, without the limits. If anything is still there, or a step of git failed, the clean-up throws. After a failed run, the run is recorded first, with its attempt and its notice, and then the runner stops; at a start, the runner doesn't start; both say what is wrong. The clean-up comes before the run is recorded, so what pi left takes no room the state needs.
+
+*Why the same way every time:* one way instead of two, and its only step that depends on what pi left is the removal, which needs neither git nor a time limit. *Cost:* each clean-up writes back every committed file of the two folders, at most `AGENT_FILES_MAX_COUNT` and `AGENT_FILES_MAX_BYTES`; and `git read-tree HEAD` unstages anything staged outside the two folders, which only someone working in the repository by hand would have staged.
+
+These rules, and those of [After a successful run](#after-a-successful-run), answer the owner's choice of 2026-11-18, after reviews had found case after case of something pi leaves stopping the runner: "yes" to fixing the whole kind of problem, by these four rules:
+> - Limit what is accepted. Before git reads anything, check the number of files and their total size.
+> - Put back what git doesn't record. Reset the permissions once the check has passed.
+> - Fail the run, don't stop the runner. Any error that the agent's leftovers cause after it exits counts as a failed attempt.
+> - Make the clean-up unstoppable. If it can't finish in time, set the folders aside and restore them from the last commit.
+
+## The agent's folder
+
+`agents/<agent>/`, owned by the runner's user, 0700, is a git repository:
+
+| Path | Holds | In git |
+|---|---|---|
+| `views/` | `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv`, `people.csv`, and the day pages in `days/YYYY/MM/YYYY-MM-DD.md` | yes |
+| `memory/` | `preferences.md` and `needs-review.md` ([Memory](agent.md#memory)) | yes |
+| `sessions/` | pi's sessions, hidden from the VM ([The session's copy](#the-sessions-copy)) | no |
+| `run/` | made again before each run: `system.md`, `config/` and `session/` ([A run](#a-run)) | no |
+| `state.json` | the runner's state ([State](runner.md#state)) | no |
+
+What pi can reach of it is in [Mounts](sandbox.md#mounts). Beside it, `agents/.discarded/<agent>/` holds what a clean-up sets aside, only until it has removed it ([The clean-up](#the-clean-up)).
+
+- **Made at a start:** the folders, `git init`, a `.gitignore` listing `/sessions/`, `/run/` and `/state.json`, anchored with `/` so they can't match anything in `views/` or `memory/`, and a first commit, `lifelog: initial commit`, holding the `.gitignore` alone, on the branch `main`. Each step is safe to repeat, and a start finishes what a crash left: `git init` runs whenever there is no commit.
+- **Git runs** from an argument list, on the agent's repository named outright (`GIT_DIR` and `GIT_WORK_TREE`), with an environment of its own: no system or user config, no hooks, no signing, `Scooter <scooter@localhost>` as author and committer, the time from the runner's clock, and no maintenance started on its own (`maintenance.auto=false`, `gc.autoDetach=false` and `maintenance.autoDetach=false`). `GIT_CALL_TIMEOUT` bounds each command. *Why named outright:* without `GIT_DIR` git looks for a repository in the folders above, such as one holding the data folder.
+- **Git's lock files.** A git killed while it holds the index or a branch, by a power cut or a `SIGKILL`, leaves `index.lock`, `HEAD.lock` or `refs/heads/main.lock` in `.git`, and git then refuses to add, restore, remove or commit until it is gone, so the runner couldn't start again. So with the agent's folder, at a start, the runner removes and logs every `*.lock` file at the top of `.git` and under `.git/refs/`, before it uses git. It holds `runner/runner.sock`, and no git of its own goes on in the background, so no git of its own can be running then; a rebuild that uses git holds the same socket.
+- **The runner is the only committer.** Git history is the audit trail for everything the agent changed, and the owner can see and revert it there.
+
+## Facts about git, Node and Linux
+
+Checked on the Linux machine, with git 2.43.0 and Node 22.23.2, and in a VM from the image; the check, staging, the commit and the clean-up rely on them, and so do `removeTree` and `emptyFolder` ([Files another program controls](shared-code.md#files-another-program-controls)).
+
+- **git** `add` reads every byte of a file, holes included: 0.4 seconds for 100 MB of holes, 4.0 for 1 GB, 1.85 for 100 MB of random bytes, 32 for 8 GB of zeros; a file of holes past about 15 GB ran past `GIT_CALL_TIMEOUT`. `git add -A` of 300,000 empty files took 1.1 seconds, and of about 19,500 small files 0.1 seconds. `git rm -r --cached` of the names staged in a folder takes time that grows faster than their number: 7.6 seconds for 300,000, and past `GIT_CALL_TIMEOUT` for 800,000 and 900,000; `git read-tree HEAD` on the same index took 2 ms, and puts it back to the last commit whatever it held.
+- **git** `add -A` exits with 128 and stages nothing for a file it can't read, and for a file or folder named `git~1` in any case, `core.protectNTFS` being on by default on Linux too; for a folder it can't read it only warns and passes over what is inside. With `--ignore-errors` it stages the rest, exits with 1, and leaves those paths unstaged, where `git status` names them. It adds a name that isn't UTF-8 as it is. `git status` and `git clean` don't see FIFOs, and `git status` says nothing of an empty folder, which `git add -A` doesn't record. `git add -A -- views memory` works on empty folders and fails on a missing one; `git restore` has no `--ignore-unmatch`, and fails on a path with no committed file.
+- **git**'s leftover `index.lock` makes `git add`, `git restore`, `git rm` and `git commit` exit with 128, and a leftover `HEAD.lock` or `refs/heads/main.lock` makes `git commit` do so; `git status`, `git clean`, `git diff --cached` and `git ls-tree` work with any of them. `git rev-parse` on an empty `.git` exits with 128.
+- **git** `commit` starts `git gc --auto` once about 6,700 objects are loose, counted by those in `.git/objects/17/`, and by default it goes on in the background after the commit has returned; with `maintenance.auto=false` it starts none, and `git gc --auto` with `gc.autoDetach=false` packs in the foreground, leaving no `gc.pid`.
+- **Node** `readdir` gives a name that isn't UTF-8 with `�` in place of its bytes, a string that names nothing on disk (`ENOENT`); with `encoding: 'buffer'` it gives the bytes, which every `fs` call takes as a path. `fs.opendirSync` with `encoding: 'buffer'` reads a folder as a stream. `fs.rmSync` with `recursive` reads each folder whole into memory first, can't remove a folder whose mode is 000, and overflows the call stack on a tree about 1,980 folders deep, which a path within the limit can hold. Removing each entry as it comes, while the folder is read, works on ext4 and on tmpfs: 900,000 files in about 7 seconds with 105 MB.
+- **Linux** renames a folder into another folder only if the folder itself can be written, since its `..` changes: `EACCES` otherwise. Any call on a path longer than 4,095 bytes fails with `ENAMETOOLONG`, `lstat` and `access` included; in the VM `mkdir -p` stops there, but `mv` of a folder into one near the limit succeeds, and each move adds as much again. On ext4 a new folder needs a block of its own, so on a full disk `mkdir` fails with `ENOSPC`, while a rename into a folder that is there needs none.
+- **A guest** makes about 1,360 files a second, so about 800,000 in a run of the default timeout, and `truncate -s 40G` in the VM took 9 ms.
