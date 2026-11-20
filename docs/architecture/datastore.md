@@ -71,10 +71,10 @@ The store is the only module that appends a line, stores an attachment or trunca
 
 - **For each line:** take the next `seq`; copy any attachments into the day folder under a temporary name and rename each to its final name; then append the line with a single `write` call followed by `fsync`.
 - **`seq` and `files` are the store's to set.** The caller gives the line without them, and the attachments as files already downloaded, `{ path, mime, name }`. The store copies them and leaves the originals, which belong to whoever staged them.
-- **An attachment that can't be copied** stores nothing and uses up no `seq`. Intake then stores the message without it, or not at all ([Intake](bridge.md#intake)).
+- **An attachment that can't be copied** stores nothing and uses up no `seq`. What becomes of its message is intake's ([Intake](bridge.md#intake)).
 - **Never rewrite or delete a line.** Edits, deletions and reactions are new lines that point at their target.
 - **A target must be a message or a command.** The store refuses an edit, a deletion or a reaction whose target is any other kind of line.
-- **Owners and modes:** folders 0750 and files 0640, set explicitly, so the umask doesn't matter. The owner is given by whoever opens the store, as `{ uid, gid }`, and left alone without one. The bridge gives it root, with the group of `scooter-runner` ([Starting up](bridge.md#starting-up)).
+- **Owners and modes** are those of [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners), set explicitly on every folder and file the store makes, so the umask doesn't matter. The owner is given by whoever opens the store, as `{ uid, gid }`, and left alone without one ([Starting up](bridge.md#starting-up)).
 - **A failed write stops the store.** If a line's `write` or `fsync` fails, the log may end in part of a line, which only a start removes. So the store refuses every later append until the bridge restarts.
 
 ## Starting up
@@ -92,7 +92,7 @@ At startup the store reads every `log.jsonl` in date order and rebuilds the inde
   - a `delete` is skipped when its target is already deleted;
   - a `reaction` is skipped when its own `(source, sourceId)` is already stored.
 
-  An `out` line whose `sourceId` is taken is the store's to report as a duplicate; delivery then logs the line without it ([`out` lines](delivery.md#out-lines)).
+  An `out` line whose `sourceId` is taken is reported as a duplicate, for delivery to decide what to do ([`out` lines](delivery.md#out-lines)).
 - **Attachment names:** `<seq>.<ext>` for a message's first file, and `<seq>-<n>.<ext>` for the `n`th. The extension is the original file name's, in lower case, if it is letters and digits and no longer than `ATTACHMENT_EXT_MAX_CHARS`; otherwise it comes from the MIME type, by a table in `store.mjs`; otherwise it is `bin`. A file with no MIME type is recorded as `application/octet-stream`.
 - **What intake decides:** the size limit, which applies before a download, and what isn't stored at all both need to know the channel, so they are intake's and the channels' ([Intake](bridge.md#intake)).
 

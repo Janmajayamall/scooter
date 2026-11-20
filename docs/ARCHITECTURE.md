@@ -86,7 +86,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 | The owner | Their WhatsApp IDs ([Owner matching](architecture/whatsapp.md#owner-matching)); their email addresses, when the mail passes DMARC ([The sender check](architecture/email.md#the-sender-check)) | The only source of instructions and commands |
 | Scooter's own code | The bridge and the runner | Holds the secrets. The bridge's process loads no third-party library; the runner's loads `yaml` and Gondolin |
 | Third-party programs that face the outside | wacli; the email reader, with `imapflow` and `postal-mime` | Their own users, their own folders, only their own settings. What they hand over is validated |
-| A third-party program with the bridge's privileges | restic | Pinned and checksummed. Gets only the backup settings ([Running restic](architecture/backups.md#running-restic)) |
+| A third-party program with the bridge's privileges | restic | Pinned and checksummed ([Running restic](architecture/backups.md#running-restic)) |
 | The agent | pi, and the model behind it | No secrets, no network of its own, and only three writable folders. Its output passes the file check, git and the answer parser |
 | Content | Text in images, PDFs, documents, forwarded messages, quoted email and web pages | Data, never instructions. The protocol tells the model so; the sandbox limits what a misled model can do |
 
@@ -104,7 +104,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 | QEMU | `scooter-runner` | the runner, through Gondolin | What the runner mounts |
 | pi | the VM's own root | the runner | The mounts |
 
-Scooter has four users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user (uid 8 on Ubuntu 24.04, whose group can write the system's mail spool, `/var/mail`), and Debian 12's and Alpine 3.24's images have one too; sharing an account would share its files and its environment.
+Scooter has four users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user (uid 8 on Ubuntu 24.04, whose group can write the system's mail spool, `/var/mail`), and Debian 12's and Alpine 3.24's images have one too; the `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account. Sharing an account would share its files and its environment.
 - Natively, `setup` makes them as system users, which the system numbers, and everything refers to them by name ([install](architecture/install.md) (not yet written)).
 - In Docker, the image gives them the uids 10001, 10002 and 10003, so the data volume's files are theirs in every container. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included.
 - `scooter-runner` is also in the host's `kvm` group.
@@ -137,6 +137,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 - **It uses the folder only while it is that user's folder and not a link** (`checkOwnFolder`). Otherwise it takes and removes nothing there.
 - **It reads a file only without following a link**, and only a regular file with one name, of a bounded size, and the user's where it knows the user ([Files another program controls](architecture/shared-code.md#files-another-program-controls)).
 - **It removes only the names it gives or expects there**, a folder only once that empties it, and leaves what it doesn't know, logged once. It never removes what that user couldn't remove itself. *Why:* the review of the email channel made `mail/spool` a link to the data folder, and the bridge, removing everything under it as root, deleted `agents`, `bridge` and `datastore` within three looks.
+- **What it leaves there stays** until that user removes it; a well-behaved email reader, wacli or runner leaves nothing of the kind.
 - **It writes nothing in them**, but `backup.lock` in `exchange/locks/`, which the runner must see where it looks ([The locks](architecture/exchange.md#the-locks)). Its sending files, and its own entries, are in `bridge/` ([Sending an entry](architecture/delivery.md#sending-an-entry)).
 - **Where root makes a folder in a folder another user owns**, as `setup` and the bridge make wacli's, it sets the folder's owner and mode through what it opened, which follows no link (`settleFolder`). *Why:* the folder's owner could rename what root made and put a link in its place between the making and the `chmod` and `chown`, and be given whatever the link led to, `/etc/shadow` among them.
 
@@ -161,14 +162,14 @@ The bridge, as root, takes what it needs out of three folders other users contro
 | Secret | Kept in | Reaches |
 |---|---|---|
 | WhatsApp session | `wacli/` | wacli |
-| Webhook secret | the bridge's memory; new at every start of the channel | wacli's command line ([Running wacli](architecture/whatsapp.md#running-wacli)) |
+| Webhook secret | the bridge's memory ([Running wacli](architecture/whatsapp.md#running-wacli)) | wacli's command line |
 | Mailbox password | `bridge.env` | the email reader's environment |
 | Backup password and bucket keys | `bridge.env` | restic's environment |
 | OpenRouter key | `runner.env` | Gondolin's secret table in the runner; requests to `openrouter.ai` |
 | The policy's certificate authority key | the runner's home, under `runner/` | the runner |
 
 - The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, and neither reads the other's. The bridge reads neither `runner.env` nor `config/`.
-- Within the bridge, wacli gets none of `bridge.env`, the email reader only the mailbox's settings, and restic only the backup's.
+- Within the bridge, each program gets only its own settings: [wacli](architecture/whatsapp.md#running-wacli), [the email reader](architecture/email.md#the-email-reader) and [restic](architecture/backups.md#running-restic).
 - pi sees a placeholder where the key would be, which is worthless outside the runner.
 - No secret goes on a command line, where every user of the machine can read it, except the webhook secret, which wacli takes no other way.
 
@@ -339,6 +340,8 @@ The project's own names, each used one way in these documents.
 - Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Catch-up collects what arrived while it slept.
 - Docker Desktop gives containers no hypervisor, so on a Mac the native install is the fast one.
 - With Docker Desktop, OrbStack or Colima, keep the project folder in the home folder (Colima shares only that), and set Docker to start at login so `restart: unless-stopped` brings Scooter back.
+
+**Not run:** arm64, which the machine Scooter was built on can't run ([Known limits](../README.md#known-limits)). The code stays architecture-neutral.
 
 **Out of scope for v2:**
 - More than one agent, and channels other than WhatsApp and the owner's email, such as Telegram or bank alerts.

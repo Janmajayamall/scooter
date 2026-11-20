@@ -1,6 +1,6 @@
 # The exchange
 
-The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. It is the runner's folder, and pi can't reach it ([Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners)). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md); when the runner writes one is [the runner's](runner.md) (not yet written).
+The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md); when the runner writes one is [the runner's](runner.md) (not yet written).
 
 ## Files
 
@@ -25,7 +25,7 @@ The exchange is the folder the two services coordinate through, `exchange/` in t
 - **The check.** `checkOutboxEntry` is this format as code, strict, as `checkLine` is for lines. `writeOutboxEntry` writes every entry through it, and the bridge checks every entry it reads.
 - **A text is at most `TEXT_MAX_CHARS` characters**, a character being a Unicode code point, so an emoji counts once and is never split: four chunks ([Chunks](delivery.md#chunks)). `writeOutboxEntry` cuts a longer one, for the runner's entries and the bridge's alike, and ends it with `[The rest of this message was too long to send.]`; `checkOutboxEntry` refuses a longer one, so the bridge refuses an entry not written that way. *Why:* the agent's texts are its own to make as long as it likes, and one of a megabyte would take the bot's number half an hour to send. It is cut where it is written, not refused: a refusal would throw in the runner after a run that went well, and stop it. *Cost:* one answer can still send `ANSWER_MAX_TEXTS` texts of up to eight messages each.
 - **U+0000** in a text is written as U+FFFD by the same cut, which also keeps a text of nothing else from being empty; `checkOutboxEntry` refuses a text or an emoji that holds one, so the bridge drops such an entry at once. *Why:* the channel's program takes the text as a command-line argument, and no program takes one with U+0000 in it: the send could never start, and the entry would hold the outbox back for all its tries.
-- `writeOutboxEntry` makes the outbox folder, 0700, when it is missing, and takes the outbox to write to: the runner's, or the bridge's own ([The bridge's own entries](delivery.md#the-bridges-own-entries)).
+- `writeOutboxEntry` makes the outbox folder when it is missing, and takes the outbox to write to: the runner's, or the bridge's own ([The bridge's own entries](delivery.md#the-bridges-own-entries)).
 
 ## The locks
 

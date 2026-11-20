@@ -27,7 +27,7 @@ The bridge reaches the owner through channels: WhatsApp, which receives and send
 | `download(record, n, path)` | Saves the record's `n`th attachment, counting from 1, at `path`, a file in a folder only the bridge can write. Rejects if it can't: with the code `EFBIG` when it is too large to store, and with `bridgeSide: true` when the copy failed on the bridge's side, such as on a full disk |
 | `status()` | One line for `/status` |
 | `canSend`, `canReact` | Whether it can send text, and react to a message |
-| `ready()` | Whether it can send now; entries for it wait meanwhile |
+| `ready()` | Whether it can send now |
 | `sendText(text, quoteId, { signal })` | Sends `text`, quoting the message whose channel ID is `quoteId` when it isn't null, and resolves with the new message's channel ID, or null if the channel gave none. Rejects if it couldn't send. `signal` stops it, for a bridge that is stopping |
 | `react(id, emoji, { signal })` | Reacts with `emoji` to the owner's message whose channel ID is `id`, and resolves as `sendText` does |
 
@@ -51,8 +51,8 @@ A **record** is a message in channel-neutral form, the same for every channel. `
 
 1. It checks `EMAIL_AUTHSERV_ID` ([Settings](email.md#settings)).
 2. It looks up `scooter-wacli` and `scooter-runner`, and `scooter-mail` with email on. Not root, it finds none, and switching users and setting owners is skipped, with one warning ([Running programs](shared-code.md#running-programs)).
-3. It makes the data folder, 0755, if it is missing, since every service user passes through it to reach its own, and its own folder, 0700. `setup` makes both in an install.
-4. It makes `exchange/`, `exchange/outbox/` and `exchange/locks/`, if they are missing, 0700 and owned by `scooter-runner`. *Why:* had the bridge made them as root, the runner couldn't write its entries or take `run.lock` there, and would fail every run.
+3. It makes the data folder and its own folder, if they are missing, with the owners and modes of [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). `setup` makes both in an install.
+4. It makes `exchange/`, `exchange/outbox/` and `exchange/locks/`, if they are missing, with the runner's owner and mode ([Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners)). *Why:* had the bridge made them as root, the runner couldn't write its entries or take `run.lock` there, and would fail every run.
 5. It takes `bridge/bridge.sock`, so it is the only bridge on the data folder ([One service per data folder](shared-code.md#one-service-per-data-folder)). *Why:* two bridges on one datastore would give out the same `seq`, and neither would start again until the log was repaired by hand.
 6. It removes a leftover `backup.lock` ([The locks](exchange.md#the-locks)).
 7. It empties `bridge/incoming/`: attachments that waited for the store when it last stopped. Their messages weren't stored, and the channel hands them over again.
@@ -81,7 +81,7 @@ Intake turns records into datastore lines, the same for every channel, in `intak
   - `download failed`, after `MEDIA_DOWNLOAD_RETRIES` more tries, `MEDIA_DOWNLOAD_RETRY_WAIT` apart. *Why:* a download that fails for good leaves the message without its attachment for ever, and an immediate retry would meet the same reconnecting wacli;
   - `could not be stored`, when the store couldn't copy it, and the message is stored without its files.
 - **A channel that keeps its messages until they are stored** (`keepsUntilStored`), as email's spool does, is the exception: a failure on the bridge's side, any failure to copy a file into the day folder among them, stores nothing of the message, and the channel hands it over again later, files and all. A failure that isn't the bridge's, from such a channel, isn't tried again ([The spool, the bridge's side](email.md#the-spool-the-bridges-side)).
-- **A stop.** A download that its channel's stop cut short, with the code `ESTOPPED`, isn't tried again, and its message isn't stored as `download failed`: it is left, logged as skipped, for the channel to hand over again. From then on intake stores nothing of that channel, and leaves every record it takes from it, until the bridge says the channel starts again (`intake.started`), which it does before it starts a channel it stopped. *Why:* WhatsApp's catch-up brings back what was left, in order, as long as nothing of the channel after it is stored ([Catch-up](whatsapp.md#catch-up)).
+- **A stop.** A download that its channel's stop cut short, with the code `ESTOPPED`, isn't tried again, and its message isn't stored as `download failed`: it is left, logged as skipped, for the channel to hand over again. From then on intake stores nothing of that channel, and leaves every record it takes from it, until the bridge says the channel starts again (`intake.started`), which it does before it starts a channel it stopped. *Why:* WhatsApp's catch-up brings back what was left, in order, as long as nothing of the channel after it is stored ([Catch-up](whatsapp.md#catch-up)); a message stored after the one left would move catch-up past it. *Cost:* a message whose download a stop cut short, and those after it, are stored only when catch-up lists them, a few seconds after the channel starts again; a command among them is answered then.
 - **Handed again.** A record intake didn't store, and that its channel must hand over again, is said so, with `again: true`: one a stop left, one that failed for a reason of the bridge's, such as a bug, and one the store stopped for.
 - **A failed store** stops intake and the bridge ([Writing](datastore.md#writing)).
 
