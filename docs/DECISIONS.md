@@ -315,7 +315,7 @@ What the milestone left in the repository:
 ### 1.1 Decisions
 
 **D13. The four libraries, at the versions the documents give.**
-*Question:* section 4.3 of ARCHITECTURE.md says to pin a newer fix release where there is one.
+*Question:* the old architecture document's list of third-party code says to pin a newer fix release where there is one.
 *Choice:* `@earendil-works/gondolin` 0.14.0, `yaml` 2.9.1, `imapflow` 2.11.0 and `postal-mime` 4.2.1.
 *Reason:* on 2026-11-16 npm had no newer fix release of any of them. `imapflow` has 2.12.0 and 2.12.1, both of 2026-11-15. That is a new minor release, not a fix release of 2.11, so it isn't taken.
 
@@ -338,33 +338,28 @@ So a value can't contain a single quote at all.
 
 **D16. An empty value means the variable isn't set.**
 *Choice:* empty, or only spaces, takes the default, and for a required variable is the same as leaving it out. A variable set but empty in the environment still wins over the file (8.2).
-*Reason:* Compose passes `KEY=` on as an empty variable, and the example files have such lines. 8.2 already says that an empty `EMAIL_IMAP_HOST` turns email off.
+*Reason:* Compose passes `KEY=` on as an empty variable, and the example files have such lines. [The email channel's settings](architecture/email.md#settings) already say that an empty `EMAIL_IMAP_HOST` turns email off.
 
 **D17. Each numeric setting has a range. The ranges are in `limits.mjs`, and the defaults are in `settings.mjs`.**
 *Question:* 8.6 says a value becomes a setting only with a valid range and a test, and gives no ranges.
 *Choice:*
 
-| Setting | Range | Default |
-|---|---|---|
-| `BATCH_SECONDS` | 1 to 600 | 8 |
-| `SESSION_ROLLOVER_HOUR` | 0 to 23 | 4 |
-| `EMAIL_IMAP_PORT` | 1 to 65535 | 993 |
-| `EMAIL_CHECK_SECONDS` | 10 to 3600 | 60 |
-| `RESTIC_KEEP_DAILY` | 1 to 3650 | 7 |
-| `RESTIC_KEEP_WEEKLY` | 0 to 520 | 4 |
-| `RESTIC_KEEP_MONTHLY` | 0 to 1200 | 12 |
+| Setting | Range |
+|---|---|
+| `BATCH_SECONDS` | 1 to 600 |
+| `SESSION_ROLLOVER_HOUR` | 0 to 23 |
+| `EMAIL_IMAP_PORT` | 1 to 65535 |
+| `EMAIL_CHECK_SECONDS` | 10 to 3600 |
+| `RESTIC_KEEP_DAILY` | 1 to 3650 |
+| `RESTIC_KEEP_WEEKLY` | 0 to 520 |
+| `RESTIC_KEEP_MONTHLY` | 0 to 1200 |
 
-*Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, from the table in 8.2, so it stays with the setting's check.
-
-**D18. `DEFAULT_CHANNEL` must name a channel. Whether the channel can send is checked later.**
-*Choice:* the settings accept `whatsapp` or `email`, the two sources a line can have. The bridge's startup check, in milestone 5, refuses a channel that can't send, which leaves `whatsapp` ([Choosing the channel](architecture/delivery.md#choosing-the-channel)).
-*Reason:* the core is channel-neutral, and "can send" is something a channel module knows. Milestone 5 lists that check and its test.
+*Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, so it stays with the setting's check; the defaults are in the table in 8.2 for the runner's, and in the Settings of [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings) for the bridge's.
 
 **D19. Other settings rules.**
 - Loading returns an object and never changes the environment. A program the service starts gets only what it is handed ([Secrets](ARCHITECTURE.md#secrets)).
 - Every fault is reported at once, each naming its variable. No message repeats a value, because a value may be a secret.
-- Email is on when `EMAIL_IMAP_HOST` is set, and then the user, the password, the owner's addresses and the server name are required. Off, the other mailbox variables aren't looked at. Backups are the same with `RESTIC_REPOSITORY` and `RESTIC_PASSWORD`.
-- `OWNER_NUMBER` may be written with `+`, spaces, hyphens and brackets, and is kept as digits. The owner's email addresses are kept in lower case, since they are compared without regard to case.
+- When email and backups are on, and which of their settings each then needs, and how the owner's number and email addresses are read: the Settings of [the WhatsApp channel](architecture/whatsapp.md#settings), [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings).
 - `DATA_DIR` and `CONFIG_DIR` default to `/data` and `/config` and must be absolute paths.
 - `AGENT_ACCEL=hvf` passes the settings. The runner refuses it when it picks the accelerator (6.6), in milestone 7.
 - `SCOOTER_ENV_DIR` is read from the environment alone.
@@ -404,7 +399,7 @@ Lines outside the format:
 
 ## Milestone 2: bridge intake, WhatsApp
 
-Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md and ARCHITECTURE.md changed only where they still listed as open what milestone 0 had settled.
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md and ARCHITECTURE.md changed only where they still listed as open what milestone 0 had settled.
 
 It also settled the smaller points of the reviews of milestones 0 and 1, in code, tests and documents (2.2).
 
@@ -438,7 +433,7 @@ The review of milestone 0 (pull request 1):
 
 ## Milestone 3: runner, planning
 
-Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in one sentence of 6.3, where it contradicted 5.4, now [Commands](architecture/bridge.md#commands), and 6.5 (D65).
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in one sentence of 6.3, where it contradicted 5.4, now [Commands](architecture/bridge.md#commands), and 6.5 (D65).
 
 What the milestone left in the repository:
 
@@ -519,7 +514,7 @@ What the milestone left in the repository:
 
 **D65. Commands are never shown to the agent.**
 *Question:* 6.3 said commands are context that "the agent is shown"; 5.4, now [Commands](architecture/bridge.md#commands), says commands are "never given to the agent", and 6.5's context is the `out` lines and reactions.
-*Choice:* 5.4 and 6.5. The cursor moves past a command, and the prompt never shows one. 6.3 of DESIGN.md now says so.
+*Choice:* [Commands](architecture/bridge.md#commands) and 6.5. The cursor moves past a command, and the prompt never shows one. 6.3 of DESIGN.md now says so.
 
 **D66. What comes first.**
 *Choice:* commands; then nothing while paused; then `once` tasks; then new messages, once the owner is quiet; then a due scheduled task; then a backfill batch. A scheduled task waits for messages that are ready, and doesn't wait for messages still in their quiet period.
@@ -616,7 +611,7 @@ Not verified:
 
 ## Milestone 4: runner, running
 
-Done on 2026-11-17, and after the owner's answer and the fourth review on 2026-11-18, on the Linux machine of section 3 of the plan. One question went to the owner, after the pull request's third review: whether to fix only that review's two points, or the whole kind of problem they belong to. 4.7 has the question, the answer and what was done. Every other open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3, and in 6.2, 6.6 to 6.9, 8.6, section 9 and section 10, for the reviews of this milestone and the owner's answer (4.4).
+Done on 2026-11-17, and after the owner's answer and the fourth review on 2026-11-18, on the Linux machine of section 3 of the plan. One question went to the owner, after the pull request's third review: whether to fix only that review's two points, or the whole kind of problem they belong to. 4.7 has the question, the answer and what was done. Every other open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in three sentences of 6.4 and 6.9, for two points of the review of milestone 3, and in 6.2, 6.6 to 6.9, 8.6, section 9 and section 10, for the reviews of this milestone and the owner's answer (4.4).
 
 The pull request's first review asked for one change: a file or folder pi makes unreadable stopped the runner. Its second asked for two: a file too large for git to add in time stopped the runner, and an empty folder stayed outside git after a successful run. Its third asked for two: enough names in a folder with nothing committed made the clean-up's `git rm` time out, so the runner stopped and couldn't start again; and the modes pi set stayed after a successful run, so later runs couldn't write. Each was a new case of one kind of problem: something pi leaves in `views/`, `memory/` or `run/` stops the runner, or makes it run the same batch again without counting an attempt. Its fourth found two more cases of it, both in the clean-up, which the owner's answer had asked to make unstoppable: a tree nested past the longest path the system takes, which pi makes by moving a folder into another, couldn't be removed, so with one in `run/session/` no run started again; and on a disk pi filled, the clean-up made folders before it freed anything, so the failed run wasn't recorded and the runner couldn't start again. Those, and the smaller points of all four, are in 4.6; what the owner decided about the kind of problem, in 4.7.
 
@@ -746,7 +741,7 @@ In order: the config; the runner's folders, which `setup` makes in an install; o
 *Cost:* changes the owner makes by hand in `views/` or `memory/` and leaves uncommitted are thrown away at the next start. The README (milestone 14) should say to commit them.
 
 **D90. One runner per data folder.**
-*Question:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts (6.4), so a backup could start during a run.
+*Question:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts ([The locks](architecture/exchange.md#the-locks)), so a backup could start during a run.
 *Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket ([One service per data folder](architecture/shared-code.md#one-service-per-data-folder)). `holdInstance` moved to `src/common/instance.mjs`, and names the service in its error.
 
 **D91. `status.json`.**
@@ -1030,7 +1025,7 @@ After the third review, the pull request wasn't approved, and the milestone stop
 
 ## Milestone 5: delivery and commands
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.1, 5.3, 8.6 and section 10, to say what this milestone settled; those sections are now the documents of the bridge's side, in [the map](ARCHITECTURE.md#the-map).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5, 5.1, 5.3, 8.6 and section 10, to say what this milestone settled; those sections are now the documents of the bridge's side, in [the map](ARCHITECTURE.md#the-map).
 
 What the milestone left in the repository:
 
@@ -1087,7 +1082,7 @@ The points the reviews of milestones 0 to 4 left, as each milestone's entry reco
 
 ## Milestone 7: sandbox and VM image
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.6, 6.9, 6.12, 8.6, and sections 9, 10 and 14, to say what this milestone settled (7.4 here). The review of the pull request asked for one change and noted seven smaller points; 7.6 says what became of each (D151, D152).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 6.6, 6.9, 6.12, 8.6, and sections 9, 10 and 14, to say what this milestone settled (7.4 here). The review of the pull request asked for one change and noted seven smaller points; 7.6 says what became of each (D151, D152).
 
 What the milestone left in the repository:
 
@@ -1120,7 +1115,7 @@ What the milestone left in the repository:
 **D141. Until milestone 8, the VMs reach nothing.**
 *Question:* the network policy is milestone 8's, and this milestone builds `scooter runner`.
 *Choice:* the sandbox takes the network as `network(policy)`, which gives the options of Gondolin's `createHttpHooks` apart from the secrets. Its default, `refuseNetwork`, allows no host: every request is refused before it goes out, DNS is answered inside the runner with made-up addresses, and the key, registered as the policy's secret, is swapped in nowhere. The tests give the scripted fake model as the network (`fakeModelNetwork`). Milestone 8 makes the policy the default.
-*Reason:* the simplest option that keeps principles 2 and 4 and the zero data retention of section 2: a runner with no policy sends nothing. *Cost:* until milestone 8, `scooter runner` runs pi, which exits with 1 at once when OpenRouter can't be reached, and with no network log the run is pi's own failure: every message's attempts are used up and it ends in `failed`. So it isn't to be run on real messages before milestone 8. It was run once by hand, on a dummy message (7.5).
+*Reason:* the simplest option that keeps principles 2 and 4 and the zero data retention of [the owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices): a runner with no policy sends nothing. *Cost:* until milestone 8, `scooter runner` runs pi, which exits with 1 at once when OpenRouter can't be reached, and with no network log the run is pi's own failure: every message's attempts are used up and it ends in `failed`. So it isn't to be run on real messages before milestone 8. It was run once by hand, on a dummy message (7.5).
 *Since milestone 8* the policy is the default (D153), and `refuseNetwork` is gone.
 
 **D142. `AGENT_ACCEL`, by opening `/dev/kvm`.**
@@ -1169,7 +1164,7 @@ What the milestone left in the repository:
 `VM_MEMORY_BYTES`, `VM_CPUS` and `VM_START_TIMEOUT` (D149); `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (D148); `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` (D146); and, after the review of this milestone, `APK_INDEX_TIMEOUT` (D147). 8.6 of DESIGN.md lists them. The longest socket path, 107 bytes, isn't one: it is a fact of Linux, as the path lengths of D95 are.
 
 **D151. As root, `build-image` changes the runner's folder only by two renames** (the review of this milestone, must-fix).
-*Question:* `runner/` belongs to `scooter-runner`, which can put a link anywhere in it at any moment. `build-image`, as root, built in `runner/image.new/`, wrote the image's record and `packages.txt` there, gave that folder and every name in it to `scooter-runner`, set its mode, and removed the old image by its path. The review renamed `image.new` aside during a build, as root in a container with the tests' fake builder, and put a link to another folder in its place: root wrote into that folder, gave it to the runner's user with every name in it, a file of root's with mode 0600 among them, and set its mode to 0700. With `/etc/scooter` as the folder, `bridge.env` becomes the runner's user's; with `/etc`, so does the machine. Gondolin's native builder writes into `image.new` as root for the whole build too, by its path. Section 9 says an escape from pi's VM reaches the runner's user and not the bridge's secrets, and [Folders other users control](ARCHITECTURE.md#folders-other-users-control) holds the bridge to that; this broke it on a native install at every rebuild. It takes code running as `scooter-runner` outside the service, which `KillMode=control-group` would end, such as from that user's crontab, while the owner runs `sudo scooter build-image`.
+*Question:* `runner/` belongs to `scooter-runner`, which can put a link anywhere in it at any moment. `build-image`, as root, built in `runner/image.new/`, wrote the image's record and `packages.txt` there, gave that folder and every name in it to `scooter-runner`, set its mode, and removed the old image by its path. The review renamed `image.new` aside during a build, as root in a container with the tests' fake builder, and put a link to another folder in its place: root wrote into that folder, gave it to the runner's user with every name in it, a file of root's with mode 0600 among them, and set its mode to 0700. With `/etc/scooter` as the folder, `bridge.env` becomes the runner's user's; with `/etc`, so does the machine. Gondolin's native builder writes into `image.new` as root for the whole build too, by its path. [Why it is built this way](ARCHITECTURE.md#why-it-is-built-this-way) says an escape from pi's VM reaches the runner's user and not the bridge's secrets, and [Folders other users control](ARCHITECTURE.md#folders-other-users-control) holds the bridge to that; this broke it on a native install at every rebuild. It takes code running as `scooter-runner` outside the service, which `KillMode=control-group` would end, such as from that user's crontab, while the owner runs `sudo scooter build-image`.
 *Choice:*
 - It builds the image, reads it, records it and gives it to `scooter-runner` in `.image-build/` in the data folder (`paths.imageStaging`): beside `runner/`, so on the same file system, and made 0700 by the user who builds. Natively the data folder is root's, so nobody but root reaches it. As root it refuses a data folder that isn't root's or that another user can write, and a `.image-build` that isn't a folder of root's.
 - In `runner/` it then makes two renames and nothing else: whatever is at `runner/image`, a link included, out to `.image-build/old`, and the new image in. A rename follows no link at either end, and puts a folder only where nothing is or an empty folder is; anything else in the way fails the build, with the new image left in `.image-build/` for the next build to remove. It also holds `runner/runner.sock`, as before: binding the socket and removing it reach only that name, in a folder whose user could remove it anyway.
@@ -1268,7 +1263,7 @@ The review of the pull request, at `17d6b7b`, found the milestone's "done when" 
 
 | # | Point | What became of it |
 |---|---|---|
-| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which section 9 says an escape from pi's VM can't reach | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and [Folders other users control](ARCHITECTURE.md#folders-other-users-control), and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
+| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which an escape from pi's VM can't reach ([Why it is built this way](ARCHITECTURE.md#why-it-is-built-this-way)) | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and [Folders other users control](ARCHITECTURE.md#folders-other-users-control), and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
 | 1 | A VM that is lost is logged as one whose program exited, and its error is dropped; one that never started too | Fixed (D139): `sandbox.vm_closed` says `lost` or `not_started` in `ended`, and a lost VM also logs `sandbox.vm_lost`, with the error's name and code, but not its message, which can quote the guest's output (`errorFields`). Gondolin's error then is a plain `Error` (7.2). Sandbox tests: QEMU killed a second into a run, with KVM and under emulation; and the test of a VM that doesn't boot in time looks for `not_started` |
 | 2 | A run ends when the program's output closes, not when it exits | A line in D139, as the review said |
 | 3 | `hide` on a writable mount is accepted and ignored | Fixed (D152), the review's first way: `checkRunSpec` refuses it. Case in `runnerfiles` |
@@ -1293,7 +1288,7 @@ Not verified, besides what 7.5 lists: a native build as root with Gondolin's rea
 
 ## Milestone 8: network policy and log
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.6, 6.9, 6.13, 8.6, and sections 10 and 14, to say what this milestone settled (8.4 here). It also settled the four smaller points of the second review of milestone 7, and the points earlier reviews had left for it (8.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 6.6, 6.9, 6.13, 8.6, and sections 10 and 14, to say what this milestone settled (8.4 here). It also settled the four smaller points of the second review of milestone 7, and the points earlier reviews had left for it (8.3).
 
 What the milestone left in the repository:
 
@@ -1455,7 +1450,7 @@ Not verified:
 
 ## Milestone 9: rebuild and backfill
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 6.10, 6.11, 6.13, 8.4 and section 10, to say what this milestone settled (9.3 here). It also settled the six smaller points of the review of milestone 8, and the point earlier reviews had left for this milestone (9.2).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 6.10, 6.11, 6.13, 8.4 and section 10, to say what this milestone settled (9.3 here). It also settled the six smaller points of the review of milestone 8, and the point earlier reviews had left for this milestone (9.2).
 
 What the milestone left in the repository:
 
@@ -1621,7 +1616,7 @@ Not verified:
 
 ## Milestone 10: backups
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.4, 5.5, 6.10, 8.2, 8.4, 8.6 and section 10, to say what this milestone settled. What it settled of the bridge's side is in [backups](architecture/backups.md), [the WhatsApp channel](architecture/whatsapp.md) and [the exchange](architecture/exchange.md). It also settled the five smaller points of the review of milestone 9, leaving one choice that review offered, and the two points earlier reviews had left for this milestone (10.2).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5, 5.4, 5.5, 6.10, 8.2, 8.4, 8.6 and section 10, to say what this milestone settled. What it settled of the bridge's side is in [backups](architecture/backups.md), [the WhatsApp channel](architecture/whatsapp.md) and [the exchange](architecture/exchange.md). It also settled the five smaller points of the review of milestone 9, leaving one choice that review offered, and the two points earlier reviews had left for this milestone (10.2).
 
 ### 10.1 Decisions
 
@@ -1660,7 +1655,7 @@ The points the reviews of milestones 0 to 8 left, as 9.2 has them:
 
 ## Milestone 11: the agent's instructions
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.5, now [Restore](architecture/backups.md#restore), 6.1, 7.1, 7.2, 7.3 and section 10, to say what this milestone settled (11.3 here). It also settled the three smaller points of the second review of milestone 10, which are in [backups](architecture/backups.md) and [the exchange](architecture/exchange.md), and the point milestone 9 left for this one (11.2).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5.5, now [Restore](architecture/backups.md#restore), 6.1, 7.1, 7.2, 7.3 and section 10, to say what this milestone settled (11.3 here). It also settled the three smaller points of the second review of milestone 10, which are in [backups](architecture/backups.md) and [the exchange](architecture/exchange.md), and the point milestone 9 left for this one (11.2).
 
 What the milestone left in the repository:
 
@@ -1784,7 +1779,7 @@ Not verified:
 
 ## Milestone 12: native install
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, now [delivery](architecture/delivery.md), 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5.3, now [delivery](architecture/delivery.md), 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
 
 What the milestone left in the repository:
 
@@ -1825,8 +1820,8 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 *Choice:* the data in `/var/lib/scooter`, the env files in `/etc/scooter`, the config in `/etc/scooter/config`, the command in `/usr/local/bin`, the units in `/etc/systemd/system` (8.5). Every step is safe to repeat:
 - the checks come first, and make nothing (D210);
 - users and the `kvm` group's membership are added when missing (D212);
-- the folders of 3.2 in the data folder are made when missing, and those directly in it given their owners and modes again; a folder in another user's folder, such as `wacli/store`, is made when missing, through `settleFolder` ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)), and otherwise left alone, as that user's; the data folder itself may be a link the owner made to another disk;
-- the config is copied, through a temporary folder renamed into place, only when `/etc/scooter/config` isn't there, root's with the runner's group, folders 0750 and files 0640: it is the owner's from then on;
+- the folders of [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners) in the data folder are made when missing, and those directly in it given their owners and modes again; a folder in another user's folder, such as `wacli/store`, is made when missing, through `settleFolder` ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)), and otherwise left alone, as that user's; the data folder itself may be a link the owner made to another disk;
+- the config is copied, through a temporary folder renamed into place, only when `/etc/scooter/config` isn't there, with the owner and modes of [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners): it is the owner's from then on;
 - the env files are written only when missing, and otherwise given their owners and modes again, their text left alone (D211);
 - the command and the units are written again each time, so a moved Node or a changed unit is taken up.
 `--no-services` leaves the units out and doesn't need systemd; `setup` prints what to do next, and starts nothing.
@@ -1897,7 +1892,7 @@ The points earlier reviews and milestones left, as 11.2 has them:
 | Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Settled (D207) |
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
 | Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
-| Milestone 10, 10.4 | A native restore | Run at G2 (12.5) |
+| Milestone 10, what wasn't verified | A native restore | Run at G2 (12.5) |
 
 ### 12.4 Changes to DESIGN.md
 
@@ -1907,7 +1902,7 @@ None changes what Scooter does beyond what this milestone settled:
 - 8.4: `setup`'s steps and `--no-services`; what `doctor` checks, and its exit code (D209, D214).
 - 8.5: the first `setup`, the units' restarts, and the command's `exec` (D207, D213).
 - 8.6: `DOCTOR_TIMEOUT` and `DOCTOR_RESPONSE_MAX_BYTES`.
-- Section 10: Least privilege, with `setup`'s root test; Delivery, with the link swapped in once an entry is taken.
+- Section 10: Least privilege, with `setup`'s root test. The required tests of delivery: the link swapped in once an entry is taken.
 
 The plan's milestone 13 has what 12.2 found of Scooter's VMs in the root VM, and its milestone 14 what this milestone leaves for the README.
 
@@ -1963,7 +1958,7 @@ Not verified:
 
 ## Milestone 13: Docker
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 3.2, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), 4.3, now [Writing](architecture/datastore.md#writing), 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 3.2, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), 4.3, now [Writing](architecture/datastore.md#writing), 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
 
 What the milestone left in the repository:
 
@@ -1996,7 +1991,7 @@ What the milestone left in the repository:
 *Cost:* `q35` has firmware and a PCI bus that `microvm` hasn't: QEMU needs SeaBIOS and iPXE's ROMs, which Debian's `qemu-system-x86` brought into the image without its recommendations, and Ubuntu's into the native install.
 
 **D219. In Docker, one volume holds the whole data folder** (the plan's rules for this milestone: `build-image` in Docker, and `restore` in Docker).
-*Question:* DESIGN 3.2 gave each folder a volume of its own, mounted read-only where a service only reads it. `build-image` builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, which must be one file system, and, as root, refuses a `/data` another user can write (D151); with a volume for each folder, `/data` is the container's own file system, read-only in the runner's. And `restore` writes `runner/log/`, which the bridge's container couldn't.
+*Question:* the design's table of folders, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), gave each folder a volume of its own, mounted read-only where a service only reads it. `build-image` builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, which must be one file system, and, as root, refuses a `/data` another user can write (D151); with a volume for each folder, `/data` is the container's own file system, read-only in the runner's. And `restore` writes `runner/log/`, which the bridge's container couldn't.
 *Choice:* one named volume, `data`, at `/data` in the bridge's container, the runner's and `build-image`'s, as the plan's example has it. What it is for, how the owners and modes keep the services apart in it, and what it costs, is in [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners). The image's `/data` holds the folders with the owners and modes `setup` gives a native install (`dataFolders`), and a new named volume starts as a copy of it. A Docker install is then the native install's layout, which `setup`'s and `doctor`'s checks, `setup`'s root test and G2 have checked.
 *Cost:* a bind mount of a host folder in the volume's place starts empty, not as a copy of the image's `/data`, and the runner can't make its folders in a `/data` of root's: the README should say to keep the named volume, or to make the folders with their owners first.
 
@@ -2084,7 +2079,7 @@ The points earlier reviews and milestones left, as 12.3 has them:
 | Milestone 6, second review, point 3 | The outbox's owner in rootless Docker | Settled (D217): the runner runs as `scooter-runner` there too |
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
 | Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
-| Milestone 10, 10.4 | Backups in Docker: the socket across containers, and `restore` | Run (D223; 13.5) |
+| Milestone 10, what wasn't verified | Backups in Docker: the socket across containers, and `restore` | Run (D223; 13.5) |
 
 ### 13.4 Changes to DESIGN.md
 
@@ -2096,7 +2091,7 @@ None changes what Scooter does beyond what 8.3 left open and the review asked:
 - 8.5: `setup` makes the kvm group when it installs the services (D225).
 - 13.4: rootful Docker with `devices` and `group_add` was tried at G3.
 - Section 9: `build-image`'s container under rootful Docker is root on the host, as a native build is; in Docker, the folders are kept apart by their owners and modes (D219, D220).
-- Section 10: Least privilege, Delivery and Config, as this milestone tests them; the Docker files' test.
+- Section 10: Least privilege and Config, as this milestone tests them; the Docker files' test. The required tests of delivery, as this milestone tests them.
 - Section 14: KVM in a container, building the image in Docker and natively, the read-only root file system and `docker compose build` were checked; arm64 wasn't (D228).
 
 ARCHITECTURE.md 6 says the same of Docker. The plan's milestone 14 has what this milestone leaves for the README, and D229 among what isn't done.
@@ -2156,7 +2151,7 @@ Not verified:
 
 ## Milestone 14: docs and final check
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Three choices the plan's rules for this milestone listed as the owner's were put to the owner after milestone 13 was merged, and answered before this milestone started (14.1): two gaps are closed here, catch-up's ([Catch-up](architecture/whatsapp.md#catch-up)) and D229's, and D160 stays as it is. Everything else was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.1, 5.2 and 5.4, now [the WhatsApp channel](architecture/whatsapp.md) and [/status](architecture/bridge.md#status), and in 6.3, 6.9, 8.3, 8.4, 8.5, 8.6 and sections 9, 10 and 14 (14.4). The milestone settled the five smaller points of the review of milestone 13, and the points earlier reviews had left (14.3), and made the final check of the plan (14.5).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Three choices the plan's rules for this milestone listed as the owner's were put to the owner after milestone 13 was merged, and answered before this milestone started (14.1): two gaps are closed here, catch-up's ([Catch-up](architecture/whatsapp.md#catch-up)) and D229's, and D160 stays as it is. Everything else was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5.1, 5.2 and 5.4, now [the WhatsApp channel](architecture/whatsapp.md) and [/status](architecture/bridge.md#status), and in 6.3, 6.9, 8.3, 8.4, 8.5, 8.6 and sections 9, 10 and 14 (14.4). The milestone settled the five smaller points of the review of milestone 13, and the points earlier reviews had left (14.3), and made the final check of the plan (14.5).
 
 What the milestone left in the repository:
 
@@ -2192,7 +2187,7 @@ To running milestone 14 through the loop with the fixes in it: "Yes, both fixes"
 ### 14.2 Decisions
 
 **D230. The README.**
-*Choice:* `README.md` covers what 11.7 lists and the plan's rules for this milestone give it, for Linux, in the order an owner meets them: how the parts fit; what is needed; the native install, from the prerequisites, with restic's and wacli's checksums (0.2; 13.1), to `doctor`; the Docker install; KVM in each case, with the udev rule for rootless Docker and the command that finds the uid; the bot number, the mailbox and its app password, the OpenRouter key and its guardrail, and the bucket; the env files; daily use, the commands, and copying the views out; the agent's instructions, adding a skill, and what an upgrade does to them; backups and restore; rebuilds and backfills; what to do when something goes wrong, `doctor`, its warning about emulation, and the runner's restarts; the security model, with what internet access means; the network log; the known limits; upgrading; development; and "Check on the first real run", gate G4's items as checkboxes.
+*Choice:* `README.md` covers what the design's development plan listed for it and the plan's rules for this milestone give it, for Linux, in the order an owner meets them: how the parts fit; what is needed; the native install, from the prerequisites, with restic's and wacli's checksums (0.2; 13.1), to `doctor`; the Docker install; KVM in each case, with the udev rule for rootless Docker and the command that finds the uid; the bot number, the mailbox and its app password, the OpenRouter key and its guardrail, and the bucket; the env files; daily use, the commands, and copying the views out; the agent's instructions, adding a skill, and what an upgrade does to them; backups and restore; rebuilds and backfills; what to do when something goes wrong, `doctor`, its warning about emulation, and the runner's restarts; the security model, with what internet access means; the network log; the known limits; upgrading; development; and "Check on the first real run", gate G4's items as checkboxes.
 *Reason:* the plan. Each rule of the plan's milestone 14 for the README is in it; 14.5 ticks them off. Where it gives a command no milestone ran, it was run here: `docker compose cp` out of the data volume (with `docker cp`, which it wraps), `git reset` in the runner's container as `scooter-runner`, and `docker compose run -d`, whose container Docker doesn't restart (14.6).
 *Not verified:* the native install's steps as a whole on a fresh machine: G1 and G2 ran them in milestone 12, from the plan rather than from this text.
 
@@ -2238,14 +2233,14 @@ The points earlier reviews and milestones left, as 13.3 has them:
 
 ### 14.4 Changes to DESIGN.md
 
-None changes section 2, or what Scooter does beyond what the owner's answers and the review asked:
+None changes [the owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices), or what Scooter does beyond what the owner's answers and the review asked:
 - `/status`, 6.3, 6.9: the runner's own waits between starts where its service manager doesn't wait, its notice, and `/status` and `status.json` saying so (D229).
 - 8.3: the runner's restarts in Docker; the app's modes in the image (D229, D232).
 - 8.4: `doctor` closes the VM it booted when it is stopped (D231).
 - 8.5: the runner's unit tells the runner that systemd keeps the waits (D229).
 - 8.6: `RUNNER_RESTART_WAITS` and `LOGGED_NAME_MAX_CHARS`, and the eight constants of `limits.mjs` the table didn't list (D234).
 - Section 9: a request the agent sends itself, among the accepted risks (D160).
-- Section 10: Intake's catch-up and the Runner's restart waits, as this milestone tests them.
+- Section 10: the Runner's restart waits, as this milestone tests them. The required tests of intake: catch-up, as this milestone tests it.
 - After the review (14.7): 6.3, a stop during the wait takes `restart` out of `status.json`; 6.9, a start that stops before its wait waits for nothing; and the README's first real run, how wacli stores and lists the owner's chat after downtime.
 
 ARCHITECTURE.md 5.2 and 6 say the same of the runner's restarts.
@@ -2264,7 +2259,7 @@ The plan's final check, step 1: DESIGN.md read again, section by section, each r
 | 6.12 The VM image | Milestone 7; natively at G2, in Docker in milestone 13 (D220) |
 | 6.13 The network policy | Milestone 8 |
 | 7. The agent's instructions | Milestone 11 |
-| 8.2 Environment | Every variable is one `settings.mjs` knows, on its side, and each example explains it (a test); `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` too, which 8.2 names in a row |
+| 8.2 Environment | Every variable is one `settings.mjs` knows, on its side, and each example explains it (a test); `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` too, which [backups' settings](architecture/backups.md#settings) name in a row |
 | 8.3 Docker | Milestone 13; the other architecture not built (below) |
 | 8.4 CLI | Every command, as `scooter help` lists them; `build-image`'s line corrected (D233) |
 | 8.5 Running natively | Milestone 12; the unit's restarts (D207, D229) |
@@ -2275,7 +2270,7 @@ The plan's final check, step 1: DESIGN.md read again, section by section, each r
 
 Not done, or not verified:
 - **Gate G4**, the first real run, with the owner's phone, accounts and keys: every item of section 14 not marked checked, in the README's "Check on the first real run". The install on the machine Scooter will live on stays with the owner too.
-- **arm64**, and building the image for the other architecture with `docker buildx`, which 11.5 asks where Docker can: the plan's machine has no arm64 emulation (D228). macOS, Docker Desktop, OrbStack and Colima are deferred ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)).
+- **arm64**, and building the image for the other architecture with `docker buildx`, which the design's development plan asked for where Docker can: the plan's machine has no arm64 emulation (D228). macOS, Docker Desktop, OrbStack and Colima are deferred ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)).
 - **A request the agent sends itself** can decide the cause of a failure: accepted by the owner (D160).
 - **The moment `uaccess` leaves** on a desktop with rootless Docker's udev rule (D217): unverified, and in the README.
 - **The README's native install as a whole**, as text, on a fresh machine: its steps were run at G1 and G2 in milestone 12.
