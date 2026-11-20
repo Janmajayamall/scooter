@@ -146,7 +146,7 @@ Empty sections are left out:
 ## Memory
 
 The agent's memory is `memory/`, in git, which the system prompt shows on every run ([The prompt](runner.md#the-prompt)):
-- `memory/preferences.md` holds the owner's standing instructions, one per line: `- 2026-11-09 (#1060): Track coffee and tea in meals.csv as "drink".` A newer line overrides older lines, and the prompt's rules for the views and the files, never the protocol before them. Preferences need no approval, as the owner chose ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)): the runner doesn't check them, and git history is the audit trail. Rules the owner sent as messages are learned again at the point they were sent in a rebuild ([Replayed batches](rebuild-and-backfill.md#replayed-batches)).
+- `memory/preferences.md` holds the owner's standing instructions, one per line: `- 2026-11-09 (#1060): Track coffee and tea in meals.csv as "drink".` A newer line overrides older lines, and the prompt's rules for the views and the files, never the protocol before them. Preferences need no approval, as the owner chose ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)): the runner doesn't check them, and git history is the audit trail. How a rebuild learns them again is in [Replayed batches](rebuild-and-backfill.md#replayed-batches).
 - `memory/needs-review.md` holds open questions, and things the owner said are on their way, one per line: `- #1042 (9 Nov) Blue Tokai ₹450: work or personal? (asked in #1043)`, `- #1070 (9 Nov) voice memo coming by email`.
 
 ## Facts about pi 1.5.2

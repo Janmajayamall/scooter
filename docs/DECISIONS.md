@@ -1,6 +1,6 @@
 # Decisions
 
-This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. It also records the changes made to DESIGN.md while building, each with the question put to the owner and the answer. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (6.6), are sections of DESIGN.md. "Row 8" is row 8 of the table in section 8 of ARCHITECTURE.md. "The plan" is `docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md`.
+This file records what was decided while building Scooter v2, where `docs/DESIGN.md` and `docs/ARCHITECTURE.md` left something open, and what each check of the tools found. It also records the changes made to DESIGN.md while building, each with the question put to the owner and the answer. Each entry gives the question, the choice and the reason. Numbers in parentheses, such as (8.4), are sections of DESIGN.md. "Row 16" is row 16 of the table in section 8 of the old ARCHITECTURE.md, now in its old text. "The plan" is `docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md`.
 
 ## Milestone 0: check the tools
 
@@ -129,14 +129,14 @@ So a value can't contain a single quote at all.
 | `RESTIC_KEEP_WEEKLY` | 0 to 520 |
 | `RESTIC_KEEP_MONTHLY` | 0 to 1200 |
 
-*Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, so it stays with the setting's check; the defaults are in the table in 8.2 for the runner's, and in the Settings of [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings) for the bridge's.
+*Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, so it stays with the setting's check; the defaults are in the Settings of [the runner](architecture/runner.md#settings), [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings).
 
 **D19. Other settings rules.**
 - Loading returns an object and never changes the environment. A program the service starts gets only what it is handed ([Secrets](ARCHITECTURE.md#secrets)).
 - Every fault is reported at once, each naming its variable. No message repeats a value, because a value may be a secret.
 - When email and backups are on, and which of their settings each then needs, and how the owner's number and email addresses are read: the Settings of [the WhatsApp channel](architecture/whatsapp.md#settings), [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings).
 - `DATA_DIR` and `CONFIG_DIR` default to `/data` and `/config` and must be absolute paths.
-- `AGENT_ACCEL=hvf` passes the settings. The runner refuses it when it picks the accelerator (6.6), in milestone 7.
+- `AGENT_ACCEL=hvf` passes the settings. The runner refuses it when it picks the accelerator ([Acceleration](architecture/sandbox.md#acceleration)).
 - `SCOOTER_ENV_DIR` is read from the environment alone.
 
 **D20. Constants: units, how tests change them, and two additions.**
@@ -333,7 +333,7 @@ What the milestone left in the repository:
 
 ## Milestone 12: native install
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5.3, now [delivery](architecture/delivery.md), 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 5.3, now [delivery](architecture/delivery.md), 6.1, 7.3, now [Skills](architecture/agent.md#skills), 8.4, 8.5, 8.6, section 9, whose rules are now in the documents of [the map](ARCHITECTURE.md#the-map), and section 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
 
 What the milestone left in the repository:
 
@@ -351,7 +351,7 @@ What the milestone left in the repository:
 
 ### 12.1 Decisions
 
-**D207. The two units, and how they restart** (the first review of milestone 4, point 4; the plan's rule for this milestone).
+**D207. The two units, and how they restart** (the first review of milestone 4; the plan's rule for this milestone).
 *Choice:* `deploy/systemd/scooter-bridge.service` runs `/usr/local/bin/scooter bridge` as root; `scooter-runner.service` runs `/usr/local/bin/scooter runner` as `scooter-runner`, with its group and `SupplementaryGroups=kvm`. Both: `Type=exec`, `Environment=TZ=UTC`, `KillMode=control-group`, `Restart=on-failure`, after `network-online.target`, wanted by `multi-user.target`, and no `EnvironmentFile`: each service reads its own env file (8.2). The restarts:
 - the runner's after 1 minute, then about 5½, then 30 minutes, and every 30 after (`RestartSec=1min`, `RestartSteps=2`, `RestartMaxDelaySec=30min`): the runner's waits ([Restarts](architecture/runner.md#restarts));
 - the bridge's after 5 seconds, doubling to 5 minutes (`RestartSec=5s`, `RestartSteps=6`, `RestartMaxDelaySec=5min`): `RESTART_BACKOFF`, as the bridge restarts wacli and the email reader.
@@ -393,7 +393,7 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 
 **D212. Scooter's users.**
 *Choice:* `useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin`, the shell `/sbin/nologin` or `/bin/false` where that isn't there; `scooter-runner` added to `kvm` with `usermod --append --groups`. A machine with no `kvm` group, such as a container, gets none: `setup` says pi's VMs will run under emulation, that `doctor` says how to enable KVM, and that running `setup` again adds the runner to the group. The names are `USERS`; the root test gives names of its own.
-*Reason:* [Processes and users](ARCHITECTURE.md#processes-and-users). No home: wacli's is given by the bridge, the runner's set by the runner, and the email reader's by the bridge ([Running wacli](architecture/whatsapp.md#running-wacli), [The email reader](architecture/email.md#the-email-reader), 6.6); `/nonexistent` is Debian's way. Creating a `kvm` group where the kernel offers no KVM would change nothing.
+*Reason:* [Processes and users](ARCHITECTURE.md#processes-and-users). No home: wacli's is given by the bridge, the runner's set by the runner, and the email reader's by the bridge ([Running wacli](architecture/whatsapp.md#running-wacli), [The email reader](architecture/email.md#the-email-reader), [The runner's own folders](architecture/sandbox.md#the-runners-own-folders)); `/nonexistent` is Debian's way. Creating a `kvm` group where the kernel offers no KVM would change nothing.
 
 **D213. `/usr/local/bin/scooter`.**
 *Choice:* a shell script, root's, mode 0755, that `exec`s the real path of the Node that ran `setup` with the code's `src/cli.mjs`, both in single quotes, and refuses a path that holds one. The first `setup` is run as `sudo node /opt/scooter/src/cli.mjs setup`, or `sudo /opt/scooter/src/cli.mjs setup`, since it writes the command.
@@ -428,7 +428,7 @@ The points earlier reviews and milestones left:
 
 | From | Point | What became of it |
 |---|---|---|
-| Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Settled (D207) |
+| Milestone 4, first review | `RestartSec` for the runner's unit | Settled (D207) |
 | Milestone 10, what wasn't verified | A native restore | Run at G2 (12.5) |
 
 ### 12.4 Changes to DESIGN.md
@@ -493,7 +493,7 @@ Not verified:
 
 ## Milestone 13: Docker
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 3.2, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), 4.3, now [Writing](architecture/datastore.md#writing), 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. [The owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) are unchanged. DESIGN.md changed in 3.2, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), 4.3, now [Writing](architecture/datastore.md#writing), 6.6, 6.12 and section 9, now [the sandbox](architecture/sandbox.md), 8.3, 8.4, 8.5, 13.4 and sections 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
 
 What the milestone left in the repository:
 
@@ -525,19 +525,19 @@ What the milestone left in the repository:
 **D220. In Docker, `build-image` runs in a container of its own: `docker compose run --rm build-image`, as root and privileged** (the plan's rule for this milestone; 8.3 left the command to when it was first tried).
 *Question:* as root in the runner's container if the builder's chroot works there, otherwise as a one-off with the privileges it needs ([build-image](architecture/sandbox.md#build-image)).
 *Found:* it doesn't work in the runner's container. As `scooter-runner` the build needs root, or a container runtime, which the container doesn't have. As root (`docker compose run --rm --user root runner build-image`), Gondolin's native builder can't make its cache under the read-only root file system, and the mount of `/proc` its chroot needs is refused there without `CAP_SYS_ADMIN` (13.2).
-*Choice:* a service of its own in `compose.yaml`, `build-image`, from the same image, which only `docker compose run` starts (its profile): `user: root`, `privileged: true`, the data volume and `./config` read-only, and no env file: it reads only `DATA_DIR` and `CONFIG_DIR`, which `compose.yaml` sets. It builds natively, as root, as `sudo scooter build-image` does: in `/data/.image-build/`, given to `scooter-runner`, then renamed into `/data/runner/image/`. In the runner's container `build-image` says to use it ([build-image](architecture/sandbox.md#build-image)).
+*Choice:* a service of its own in `compose.yaml`, `build-image`, from the same image, which only `docker compose run` starts (its profile): `user: root`, `privileged: true`, the data volume and `./config` read-only, and no env file: it reads only `DATA_DIR` and `CONFIG_DIR`, which `compose.yaml` sets. It builds natively, as root, as `sudo scooter build-image` does, in the one volume. In the runner's container `build-image` says to use it ([build-image](architecture/sandbox.md#build-image)).
 *Reason:* the privileges Gondolin's own container build takes, `--privileged`, on a container that runs only the build, only when the owner starts it, and is removed afterwards; the runner's service keeps none of them. Fewer, such as `CAP_SYS_ADMIN` with Docker's masks of `/proc` and AppArmor's profile lifted, weren't tried: they differ between rootful and rootless Docker, for a container that runs nothing else.
-*Cost:* under rootful Docker a privileged container is root on the host, with its devices: the build runs Gondolin's builder, then Alpine's shell, npm and git in a chroot, which is what a native build as root runs ([build-image](architecture/sandbox.md#build-image)). Under rootless Docker it is the user that runs Docker, with no root on the host. The build took 14 to 17 seconds, and the image was 527 MB (13.5).
+*Cost:* under rootful Docker a privileged container is root on the host, with its devices: the build runs what a native build as root runs ([build-image](architecture/sandbox.md#build-image)). Under rootless Docker it is the user that runs Docker, with no root on the host. The build took 14 to 17 seconds, and the image was 527 MB (13.5).
 
 **D221. The image.**
 *Choice:* 8.3's two stages. `golang:1.27-trixie` builds wacli 0.26.0 with 13.1's command. `node:24-trixie-slim` installs 8.3's packages without their recommendations, QEMU for `TARGETARCH` (`qemu-system-x86` or `qemu-system-arm`), and `qemu-utils`, for `qemu-img`, which Gondolin runs and `doctor` checks. restic 0.19.1 is checked against the checksums milestone 0 took from the release's `SHA256SUMS` (0.2), written in the Dockerfile for each architecture, rather than against a `SHA256SUMS` fetched beside it, which would only say that the two came from the same place. The users are made as `setup` makes them (D212), at 10001 to 10003; the data folder as D219 says; the app is root's, installed with `npm ci --omit=dev --ignore-scripts`; `TZ=UTC`; and the entry point is `tini -- node /app/src/cli.mjs`, with `help` when no command is given. `.dockerignore` lets only `package.json`, the lock file and `src/` into the build, so no env file or data folder is copied in. A test holds the users, the folders and restic's checksums to `setup.mjs` and this file.
-*Reason:* 8.3. tini passes a signal on to Node, the service's main process, so `docker compose kill -s SIGUSR1 bridge` starts a backup ([When backups run](architecture/backups.md#when-backups-run)); as the container's first process it takes every process of the container with it when it ends, so the runner's QEMU doesn't outlive the runner's container (6.6; 13.5).
+*Reason:* 8.3. tini passes a signal on to Node, the service's main process, so `docker compose kill -s SIGUSR1 bridge` starts a backup ([When backups run](architecture/backups.md#when-backups-run)); as the container's first process it takes every process of the container with it when it ends, so the runner's QEMU doesn't outlive the runner's container ([Supervision](architecture/sandbox.md#supervision); 13.5).
 *Found:* the image is 775 MB, with QEMU 10.0.13 and Node 24.22.3. It built in 28 seconds on the Linux machine, wacli's stage in 12.
 
 **D222. `compose.yaml`, and the KVM cases as files of their own.**
 *Choice:* `compose.yaml` has 8.3's two services, from the image it builds, `scooter:local`, each with `restart: unless-stopped`, `no-new-privileges`, `stop_grace_period: 30s`, log rotation of 10 MB × 3 in Docker's `json-file` driver, `DATA_DIR=/data` and `CONFIG_DIR=/config`, its own env file, and no port. The bridge has `hostname: scooter`; the runner `user: scooter-runner`, `read_only: true` with a `tmpfs` at `/tmp`, and `./config` read-only. Alone, it runs pi's VMs under emulation, the third case. The other two are added by naming them in `COMPOSE_FILE` in a `.env` file beside it, which every `docker compose` command there reads: `compose.kvm.yaml`, for rootful Docker, gives the runner `/dev/kvm` and the host's kvm group by its id, `KVM_GID` in `.env`, and stops with a message saying so when that isn't set; `compose.kvm-rootless.yaml`, for rootless Docker, gives it `/dev/kvm`, and holds D217's udev rule. The project is named `scooter`, so the volume is `scooter_data`.
 *Reason:* the plan asks for the three cases as documented variants. Files of their own let the owner choose one without editing a file git tracks, which an upgrade's `git pull` would otherwise meet as a conflict, and a test reads each. git ignores `.env`, as it does the env files.
-*Not changed:* how Docker restarts the runner (D229).
+*Not changed:* how Docker restarts the runner ([Restarts](architecture/runner.md#restarts)).
 
 **D223. Backups and restore in Docker** (the plan's rule for this milestone).
 *Choice, and what was found:*
@@ -549,10 +549,10 @@ What the milestone left in the repository:
 
 **D224. `doctor` boots a VM, and runs as the runner's user** (the review of milestone 12, smaller points 2 and 7).
 *Choice:*
-- After the image's check, when QEMU and the image are there and the accelerator can be used, `doctor` boots one VM from the image as a run does, with the accelerator the runner would use, runs `true` in it, and reports how long the boot took; or that it didn't boot, with the fix: nested virtualization for a machine that is itself a VM, or `AGENT_ACCEL=emulation`, or building the image again. The runner's own code does it (`bootCheck` in `gondolin.mjs`), which `src/cli.mjs` hands to `doctor`. Gondolin's home and temporary folder, and the network log, are then a folder of its own in the system's temporary folder, removed afterwards: nothing in the data folder changes, and a runner at work keeps its own folders. The VM sees an empty folder, and reaches no host.
+- After the image's check, when QEMU and the image are there and the accelerator can be used, `doctor` boots one VM from the image, and reports how long the boot took; or that it didn't boot, with the fix: nested virtualization for a machine that is itself a VM, or `AGENT_ACCEL=emulation`, or building the image again. The runner's own code does it ([The boot check](architecture/sandbox.md#the-boot-check)), which `src/cli.mjs` hands to `doctor`.
 - Where `scooter-runner` is a user of the machine, `doctor` refuses to run as another, with exit code 2, and says how to run it: `sudo -u scooter-runner scooter doctor`, or in Docker `docker compose run --rm runner doctor`, which runs as that user. Without that user, as in development, it runs as whoever runs it.
 - Its fixes in Docker name the KVM files (D222), `docker compose run --rm build-image` (D220), and the command that sets a folder's owner and mode in a container of the bridge's.
-*Reason:* the review's ways. Opening `/dev/kvm`, which is what 8.4 asks, said "KVM" in the root VM of G2, where no VM booted (D142's "not covered"); and as root, `doctor` reported a fault that wasn't one, and every check saw what root sees.
+*Reason:* the review's ways. Opening `/dev/kvm`, which is what 8.4 asks, said "KVM" in the root VM of G2, where no VM booted, which opening it doesn't cover ([Acceleration](architecture/sandbox.md#acceleration)); and as root, `doctor` reported a fault that wasn't one, and every check saw what root sees.
 *Cost:* `doctor` takes a VM's boot longer: 1 to 2 seconds with KVM, 4 to 5 under emulation (13.5).
 
 **D225. With services, `setup` makes the kvm group when there is none** (the review of milestone 12, smaller point 1).
@@ -560,7 +560,7 @@ What the milestone left in the repository:
 *Reason:* the runner's unit names the group (`SupplementaryGroups=kvm`), and systemd refuses to start a unit whose group isn't there (216/GROUP, the review's probe). With the group and no `/dev/kvm`, the runner starts, and falls back to emulation, which `doctor` explains.
 
 **D228. arm64 isn't verified** (the plan's rule for this milestone).
-*Choice:* the image builds for the machine's architecture by `TARGETARCH`: QEMU's package, restic's file and checksum, and wacli from source; an architecture other than amd64 or arm64 stops the build, saying so. `machineArch`, `qemuProgram` and `machineType` choose by Node's `process.arch`, and the VM image's build file names no architecture (D5).
+*Choice:* the image builds for the machine's architecture by `TARGETARCH`: QEMU's package, restic's file and checksum, and wacli from source; an architecture other than amd64 or arm64 stops the build, saying so. `machineArch`, `qemuProgram` and `machineType` choose by Node's `process.arch`, and the VM image's build file names no architecture ([The VM image](architecture/sandbox.md#the-vm-image)).
 *Not verified:* nothing has built or run the image on arm64. The Linux machine has no arm64 emulation for Docker or for QEMU (section 3 of the plan), nor has the root VM. Whether the arm64 image holds everything Gondolin's `virt` machine needs, without the packages' recommendations, is unknown until then. restic's arm64 checksum is the release's (0.2), and wacli's source builds for both (13.1).
 
 ### 13.2 Facts found
@@ -599,7 +599,7 @@ None changes what Scooter does beyond what 8.3 left open and the review asked:
 - Section 10: Least privilege and Config, as this milestone tests them; the Docker files' test. The required tests of delivery, as this milestone tests them.
 - Section 14: KVM in a container, building the image in Docker and natively, the read-only root file system and `docker compose build` were checked; arm64 wasn't (D228).
 
-ARCHITECTURE.md 6 says the same of Docker. The plan's milestone 14 has what this milestone leaves for the README, and D229 among what isn't done.
+ARCHITECTURE.md 6 says the same of Docker. The plan's milestone 14 has what this milestone leaves for the README, and the runner's restarts in Docker among what isn't done ([Restarts](architecture/runner.md#restarts)).
 
 ### 13.5 What was run to verify the milestone, and what wasn't verified
 
@@ -661,7 +661,7 @@ What the milestone left in the repository:
 | Path | What |
 |---|---|
 | `README.md` | Installing and running Scooter, natively and in Docker, and "Check on the first real run" (D230) |
-| `bridge.env.example`, `runner.env.example` | Final: an example number, the app password, the key's guardrail as 6.13 gives it |
+| `bridge.env.example`, `runner.env.example` | Final: an example number, the app password, the key's guardrail as [Zero data retention](architecture/network-policy.md#zero-data-retention) gives it |
 | `src/runner/restarts.mjs`, `main.mjs`, `status.mjs`; `src/common/runnerstatus.mjs`; `src/bridge/status.mjs`; `src/cli.mjs`; `deploy/systemd/scooter-runner.service` | The runner's own waits between starts, where its service manager doesn't wait, and `/status` saying so ([Restarts](architecture/runner.md#restarts)) |
 | `src/runner/sandbox/gondolin.mjs`, `src/ops/doctor.mjs` | `doctor` closes its VM when it is stopped, and boots in `/tmp` when `TMPDIR` is too long a path (D231) |
 | `Dockerfile` | The app readable by every user, whatever the checkout's modes (D232) |
@@ -677,8 +677,8 @@ What the milestone left in the repository:
 
 **D231. `doctor`'s VM, when `doctor` is stopped, and a long `TMPDIR`** (the review of milestone 13, smaller points 2 and 3).
 *Choice:*
-- `doctor` takes `SIGTERM`, `SIGINT` and `SIGHUP` while it runs, and gives the boot check a signal, which closes the VM it started ([The runner's own folders](architecture/sandbox.md#the-runners-own-folders)); the checks after it are left, and `doctor` says what stopped it and exits with 1. The same signal ends its wait for OpenRouter's answer, up to `DOCTOR_TIMEOUT`, which its handlers had left to run out (the review of milestone 14, smaller point 6).
-- The boot check makes its folder where Gondolin's sockets fit ([The runner's own folders](architecture/sandbox.md#the-runners-own-folders)).
+- `doctor` takes `SIGTERM`, `SIGINT` and `SIGHUP` while it runs, and gives the boot check a signal, which closes the VM it started ([The boot check](architecture/sandbox.md#the-boot-check)); the checks after it are left, and `doctor` says what stopped it and exits with 1. The same signal ends its wait for OpenRouter's answer, up to `DOCTOR_TIMEOUT`, which its handlers had left to run out (the review of milestone 14, smaller point 6).
+- The boot check makes its folder where Gondolin's sockets fit ([The boot check](architecture/sandbox.md#the-boot-check)).
 *Reason:* the review's first way for each. A native `doctor` killed during the boot left a QEMU running; nothing else stops it ([Supervision](architecture/sandbox.md#supervision)). And the misleading fix came from a folder the owner's `TMPDIR` placed, which `/tmp` avoids, rather than a message that names it.
 *Tests:* in `doctor`, the signal given to the boot check, and no check after it, and a stop while OpenRouter hasn't answered; in `sandbox`, with the image, a boot check stopped during the boot leaves no QEMU and no folder, and one with a `TMPDIR` of over 100 characters boots.
 
