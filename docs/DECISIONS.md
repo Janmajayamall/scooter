@@ -265,33 +265,6 @@ The tests are in `test/tools/vm.test.mjs`.
 - With an `onRequest` hook that answers requests itself, requests to hosts outside `allowedHosts` still reach the hook: `curl` in the VM to `https://example.com`, `https://github.com` and `http://example.org` each reached the scripted fake model and got its 404. That is what makes "no request to any other path or host" in pi 6 a checked statement, and milestone 8's hook must refuse other hosts itself. A hook that passes such a request on wasn't tried. This was found by the review of milestone 0's pull request, and recorded in milestone 2 (2.2).
 - In the VM, `/root` and `/tmp` are temporary file systems made at boot, each up to half the VM's memory. The root disk has about 96 MB free.
 
-### 0.6 The checks: wacli
-
-The tests are in `test/tools/wacli.test.mjs`. They run wacli with the environment of 5.1 and nothing else, not even `PATH`.
-
-**wacli 1. Whether `sync` can take the webhook secret from its environment.**
-*Ran:* `wacli sync --help`. A search of the program for the names of environment variables. `sync` with the secret in `WACLI_WEBHOOK_SECRET`, `WACLI_SYNC_WEBHOOK_SECRET` and `WEBHOOK_SECRET`. The source of the flag at the release's tag, `cmd/wacli/sync.go`.
-*Found:* it can't. `--webhook-secret` is a plain flag. The program reads nine variables of its own, among them `WACLI_STORE_DIR` and `WACLI_READONLY`, and none is about webhooks. Its `config.yaml` holds accounts only.
-*So:* the secret stays on wacli's command line, the one exception 3.2 and 5.1 allow, with the risk section 9 already accepts.
-
-**wacli 2. `auth status` when not paired.**
-*Ran:* `wacli --json --read-only auth status` against a store that doesn't exist.
-*Found:* exit code 0, nothing on stderr, and `{"success":true,"data":{"authenticated":false},"error":null}` on stdout. With `--read-only` it doesn't create the store. Commands that need the session, `sync` among them, fail at once with exit code 1 and `{"success":false,"data":null,"error":"not authenticated; run \`wacli auth\`"}` on stderr.
-*So:* the pairing check of 5.1 reads `data.authenticated`. The exit code doesn't tell paired from unpaired.
-
-**wacli 3. The commands and flags of 13.1.**
-*Ran:* `--help` for `sync`, `auth`, `auth status`, `messages list`, `media download`, `send text`, `send file` and `send react`, and `messages list` against an empty store. After the owner's answer (0.8): the two send commands of 5.3 as the bridge will run them, `--no-preview` included, against a store that isn't paired.
-*Found:* every command and flag of 13.1 exists as written, with the defaults it gives. Three more things matter to later milestones:
-- **`send text` fetches the first URL in the text,** to send a link preview with it, unless `--no-preview` is given. wacli's `docs/send.md` says so, its source does it (`fetchLinkPreview` in `cmd/wacli/send.go`), and the flag is in the help. See 0.8, question 1. More from the same documentation and source, at the release's tag:
-  - It takes the first `http://` or `https://` URL, fetches that page, and then the image the page names. It refuses private and local addresses, follows up to 3 redirects, and gives up after 10 seconds. When the fetch fails, the text goes out without a preview, and wacli prints a line on stderr that starts `warning: link preview skipped for`.
-  - While `sync --follow` runs, a send is handed to the sync process, and that process does the fetching. The flag goes with the send: the request has a `no_preview` field (`cmd/wacli/send_ipc.go`), and the installed program holds that field's name.
-  - With the flag, `fetchLinkPreview` returns before it looks for a URL.
-  - None of this was run: sending needs a paired number. Not paired, `send text` with `--no-preview`, with and without `--reply-to`, and `send react` each stop at `not authenticated`, so wacli took every flag of 5.3. A flag it doesn't know stops it before that, with `unknown flag`. A text that begins with `--` is taken as the text.
-- `messages list --json` answers `{"messages": …, "page": {"has_more": …, "next_cursor": …}, …}` inside `data`, and `messages` is `null`, not an empty list, when there are none. With `--read-only` it fails when the store doesn't exist yet.
-- By its source, wacli prints a warning on stderr when two sends are less than 5 seconds apart, and still succeeds. `SEND_INTERVAL` was 1.5 seconds when this was found, so the bridge would have seen that warning often. The owner has since raised it to 5 seconds (see "Between milestones 1 and 2: the send interval"). This wasn't run: sending needs a paired number.
-
-*So:* milestones 2 and 5 can use the commands of 13.1 as they stand, with `--no-preview` on every `send text` (0.8, question 1), and must treat a `null` list as empty.
-
 ### 0.7 What was run to verify the milestone, and what wasn't verified
 
 Run on 2026-11-16, from a clean checkout of the branch after `npm ci`. Run again the same day after the owner's answers (0.8), with `sessions/` hidden in the checks' mounts (D11), and the results were the same:
@@ -306,23 +279,11 @@ Run on 2026-11-16, from a clean checkout of the branch after `npm ci`. Run again
 Not verified:
 - **arm64.** The machine can't run it. The build file names no architecture, and the helpers take the machine's own.
 - **The real OpenRouter.** The tests send it nothing. Two requests were made by hand on 2026-11-16, with a dummy key, to see its 401 answers, and the fake model's 401 answers are copies of those. The fake's answers to other statuses, and the streams it sends, follow the formats pi accepts, not a recording.
-- **wacli when paired.** Sending, receiving, and the shape of a list row need the bot number (gate G4). That goes for `--no-preview` too: that wacli fetches nothing when given the flag is read from its documentation and source, not seen (0.6, 0.8).
 - **A native image build as root** (gate G2). Only the container build was run.
 
 ### 0.8 Questions for the owner, and the answers
 
-Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4. Both went to the owner on 2026-11-16, each with a proposal, through the milestone workflow (`docs/plans/completed/v2-linux-implementation/milestone-loop.workflow.js`). The owner was asked "Accept both proposals for milestone 0's two questions?" and answered "Yes, both", having been told that DESIGN.md would then be changed to match.
-
-**1. wacli's link previews (5.3; before milestone 5).**
-*The question, as asked:*
-> DESIGN.md sends replies with `wacli send text --to <owner chat> --message <chunk>`. By wacli 0.26.0's documentation (`docs/send.md`) and source (`fetchLinkPreview` in `cmd/wacli/send.go`), that command fetches the first URL in the text, from any public host, to build a link preview, unless `--no-preview` is given. The text is the agent's. So a misled agent could make the bridge's side fetch a URL of its choosing, with data in it, while internet access is off, and the request would be in no log. That goes against 3.1 (the bridge's only outbound connections) and principles 2 and 4. Proposed: the bridge always passes `--no-preview`, so links arrive as plain text. Do you agree?
-
-*The answer:* yes. The bridge always passes `--no-preview` to `wacli send text`.
-*What follows:*
-- DESIGN.md gives the command with the flag, and the reason, in 5.3. It says the same in 3.1, the table of section 5, the controls of section 9, the delivery tests of section 10 and wacli's facts in 13.1. ARCHITECTURE.md says it in 2.2, 3.4 and 5.3, and the plan in a rule of milestone 5.
-- Milestone 5 builds it. Its delivery tests check that the flag is on every text's command line (section 10).
-- Not verified: that a paired wacli, given the flag, fetches nothing (0.6). That is now an item of section 14 of DESIGN.md, and gate G4 checks it. A way to tell, there: send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`. Without the flag, wacli should print its `link preview skipped` warning. With the flag it should print none, and the message should arrive without a preview.
-- Nothing else Scooter sends through wacli carries the agent's words. A reaction carries the emoji from the config, and v2 sends no files.
+Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4. The first, about wacli's link previews, is now beside its rule, in [Sending](architecture/whatsapp.md#sending). Both went to the owner on 2026-11-16, each with a proposal, through the milestone workflow (`docs/plans/completed/v2-linux-implementation/milestone-loop.workflow.js`). The owner was asked "Accept both proposals for milestone 0's two questions?" and answered "Yes, both", having been told that DESIGN.md would then be changed to match.
 
 **2. Whether pi may read `sessions/` (6.6; before milestone 7).**
 *The question, as asked:*
@@ -330,7 +291,7 @@ Two outcomes didn't fit DESIGN.md as it stood. Neither stopped milestones 1 to 4
 
 *The answer:* hide it from the VM with Gondolin's `ShadowProvider`, in milestone 7. pi does not see `sessions/`.
 *What follows:*
-- DESIGN.md lists `sessions/` as hidden in the mounts of 6.6. It says the same in 6.2, the controls of section 9, the runner and sandbox tests of section 10 and Gondolin's facts in 13.4. ARCHITECTURE.md says it in 2.7, 2.9, 2.10, 3.3 and decision 30, and the plan in a rule of milestone 7.
+- DESIGN.md lists `sessions/` as hidden in the mounts of 6.6. It says the same in 6.2, the controls of section 9, the runner and sandbox tests of section 10 and Gondolin's facts in 13.4. ARCHITECTURE.md says it in 2.7, 2.9, 2.10, [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners) and decision 30, and the plan in a rule of milestone 7.
 - Milestone 7 builds it, the way VM 1 shows. What is hidden is part of the list of mounts. So the sandbox interface of milestone 4 carries it, a runner test checks that the sandbox is given it (section 10), and the fake sandbox leaves `sessions/` out of its folder, as the VM does.
 - This milestone's checks now run with the folder hidden (D11), and all of them pass (0.7). pi doesn't need the folder.
 - Only `sessions/` is hidden. `state.json` and `.git` stay in the VM, readable and not changeable, as 6.2 and section 9 have them. The protocol tells the agent it can read history with `git log` (7.1).
@@ -396,11 +357,11 @@ So a value can't contain a single quote at all.
 *Reason:* the low ends are what protects: a batch can't start on every poll, the mailbox isn't asked more than every 10 seconds, and at least one daily backup is kept. The high ends only catch slips of the hand. A range is a fixed number that protects behavior, so it is a constant (`SETTING_RANGES`). A default is the setting's own value, from the table in 8.2, so it stays with the setting's check.
 
 **D18. `DEFAULT_CHANNEL` must name a channel. Whether the channel can send is checked later.**
-*Choice:* the settings accept `whatsapp` or `email`, the two sources a line can have. The bridge's startup check, in milestone 5, refuses a channel that can't send, which leaves `whatsapp` (5.3).
+*Choice:* the settings accept `whatsapp` or `email`, the two sources a line can have. The bridge's startup check, in milestone 5, refuses a channel that can't send, which leaves `whatsapp` ([Choosing the channel](architecture/delivery.md#choosing-the-channel)).
 *Reason:* the core is channel-neutral, and "can send" is something a channel module knows. Milestone 5 lists that check and its test.
 
 **D19. Other settings rules.**
-- Loading returns an object and never changes the environment. A program the service starts gets only what it is handed (3.2).
+- Loading returns an object and never changes the environment. A program the service starts gets only what it is handed ([Secrets](ARCHITECTURE.md#secrets)).
 - Every fault is reported at once, each naming its variable. No message repeats a value, because a value may be a secret.
 - Email is on when `EMAIL_IMAP_HOST` is set, and then the user, the password, the owner's addresses and the server name are required. Off, the other mailbox variables aren't looked at. Backups are the same with `RESTIC_REPOSITORY` and `RESTIC_PASSWORD`.
 - `OWNER_NUMBER` may be written with `+`, spaces, hyphens and brackets, and is kept as digits. The owner's email addresses are kept in lower case, since they are compared without regard to case.
@@ -412,85 +373,12 @@ So a value can't contain a single quote at all.
 *Choice:* durations are in milliseconds and sizes in bytes, under the names 8.6 gives. `limits` is one object that code reads at the moment of use, and `overrideLimits` changes values for a test and returns the function that puts them back. Besides `WEBHOOK_PORT`, which the plan adds, there are two more: `SETTING_RANGES` (D17) and `ATTACHMENT_EXT_MAX_CHARS`, 10, the longest extension an attachment's stored name takes from its original name.
 *Reason:* 8.6 wants every tuning number in the module and tests overriding them through it.
 
-**D21. Daylight saving: a local time means the earliest instant at which the zone's clock shows that time or a later one.**
-*Question:* the plan asks for the next instant of a local `HH:MM`, correct across daylight-saving changes. Two local times are awkward: one that comes twice when clocks go back, and one that is skipped when they go forward.
-*Choice:* one rule for both. A time that comes twice means its first occurrence. A skipped time means the instant of the jump: on a day when 02:00 becomes 03:00, 02:30 comes due at 03:00. Each local date gives a schedule one instant, so a daily task runs once on either kind of day. A date that a zone skips altogether has nothing due on it.
-*Reason:* a daily backup or check-in must neither be skipped nor run twice. Running at the jump is what cron does with a skipped time. The code uses Node's own time zone data, through `Intl.DateTimeFormat`, and no library.
-
-**D22. The clock is two functions.**
-*Choice:* `now()`, in milliseconds, and `sleep(ms, { signal })`, which rejects when the signal aborts. Everything that waits or reads the time takes a clock. `test/support/clock.mjs` is the fake: `advance` wakes sleepers in order, `set` moves the time either way, and `whenSleeping` waits for code under test to reach its next sleep.
-*Reason:* polling loops, backoff and timeouts are all "wait, then look again". One function covers them, and a test can then run through hours in milliseconds.
-
-**D23. Logs go to stderr, and three small things keep content out of them.**
-*Choice:* a line is `at`, `level`, `component`, `event` and the caller's fields. Then:
-- a field named `text`, `subject` or `quoted`, the content fields of a datastore line, is written as `[withheld]`;
-- a field's value is a string, a number, a boolean, null, or a list of those. Anything nested is written as `[object]` or `[array]`;
-- `errorFields(error)` gives an error's name, code and system call, without its message.
-
-*Reason:* stderr leaves stdout to the commands that print results. The rule that logs carry no message text (section 9) is the caller's to keep, and these three make the common slips harmless: logging a whole line, and logging the message of a parsing error, which quotes what was being parsed.
-
-**D24. Sortable IDs, and the folder hand-off.**
-*Choice:* an ID is the UTC time to the millisecond and a four-digit counter that starts at 1 with each millisecond, as in 5.3. IDs from one generator always go up, even when the clock goes back. `handOff` makes `.tmp-<id>`, fills it, syncs it and renames it. If the name is taken, at either step, it takes the next ID. `listHandOffs` gives the finished folders in order.
-*Reason:* the outbox and the mail spool share this (ARCHITECTURE.md, decision 9). The rule about a taken name is milestone 5's, and it lives here because two processes write outbox entries with the same code.
-
-**D25. Running programs.**
-- **Found on Scooter's own `PATH`.** A program's environment is exactly what the caller gives, empty by default, and wacli's has no `PATH` (5.1). So a bare name is looked up on the `PATH` of the process that starts it.
-- **Stopped as a process, not a group.** SIGTERM, then SIGKILL after `STOP_GRACE`, go to the program itself. It stays in Scooter's process group, so whatever stops the service's group stops it too (6.6).
-- **The restart wait goes back to 5 seconds after a run of 5 minutes or more.** 5.1 gives the waits and not when they start again. A program that ran as long as the longest wait was working.
-- **A program that can't be started** is tried again with the same waits.
-- **Users by name.** `lookupUser` asks `id -u` and `id -g`, which every Unix has. Node has no call for it.
-- **Not root.** Switching users is skipped, `lookupUser` returns null, and one warning is logged for the life of the process (section 10). Whoever gets null leaves file owners alone.
-- **Logs name the program,** never its arguments or environment: wacli's command line carries the webhook secret (5.1).
-- `proc.mjs` is the only module that imports `node:child_process`, and it never uses a shell. The import test holds everything else to that.
-
-**D26. Lock files.**
-*Choice:* a lock is one line of JSON: `pid`, `at` and `deadline`, the last two as UTC times to the second, and `deadline` null when there is none. It is written under a temporary name and hard-linked into place.
-*Reason:* a link fails if the name exists, which makes taking the lock exclusive, and the name appears with its contents complete, so the bridge never reads half a `run.lock`. A lock that can't be read still counts as held. How the two locks work together is for milestones 4 and 10 (row 7).
-
-**D27. The line format is checked in both directions.**
-*Question:* 4.2 gives the fields and when each is present. It doesn't say what a reader does with a line that breaks the table.
-*Choice:* `checkLine` is the table as code, and both the store and the reader use it. A field the table doesn't have is refused. So is a field on a kind of line the table doesn't give it to: `text` only on messages, edits and commands; `target` only on edits, deletions and reactions; `emoji` only on reactions; `subject` only on emails; `files`, `media`, `replyTo`, `quoted` and `forwarded` only on messages; `trust` only on `in` lines and `by` only on `out` lines. `replyTo` and `target` must be lower than the line's own `seq`. Lines are written with their fields in one order, the order of the examples in 4.2.
-*Reason:* the datastore is the record, and the line is a contract between the bridge, the runner and pi (ARCHITECTURE.md 3.6). A field in the wrong place is a bug in the writer, and it is cheaper to catch it at the one place lines are written. *Cost:* adding a field means changing `line.mjs` first.
-
-**D28. What the index knows a line by.**
-*Question:* 4.3 has the index map `(source, sourceId)` to `seq`, and an edit carries the ID of the message it changes (13.1).
-*Choice:* messages, commands and reactions are known by their own ID, and the first line with an ID keeps it. Edits and deletions are never looked up by ID. A command whose ID is stored is a duplicate, like a message: 4.4 names messages, edits, deletions and reactions, and a command reaches the bridge the same two ways. The index keeps the current text, the latest edit and the deletion for messages and for commands.
-*Reason:* an edit that took over its message's ID would send replies and reactions to the edit. The bridge and the runner each build the same index from the same lines (`src/common/datastore/index.mjs`).
-
-**D29. The store.**
-- **A damaged datastore stops it.** At startup a complete line that isn't a line, a `seq` that isn't one more than the last, or part of a line in a day that isn't the newest, is an error that names the file and the line and quotes nothing. The store changes nothing in that case. Only part of a line at the very end of the newest log is removed (4.3).
-- **A failed write stops it too.** If a line's `write` or `fsync` fails, the log may end in part of a line. Only a start removes that (the plan's rule for milestone 1), so the store refuses every later append until the bridge restarts.
-- **`seq` and `files` are the store's to set.** The caller gives the line without them, and the attachments as files already downloaded: `{ path, mime, name }`. The store copies them and leaves the originals, which belong to whoever staged them (5.2).
-- **An attachment that can't be copied** stores nothing and uses up no `seq`. Intake then stores the message with a `media` object (5.2), in milestone 2.
-- **Attachment names** (4.4): the extension is the original name's, if it is letters and digits and no longer than `ATTACHMENT_EXT_MAX_CHARS`, in lower case. Otherwise it comes from a table of MIME types in `store.mjs`, and otherwise it is `bin`. A file with no MIME type is recorded as `application/octet-stream`.
-- **Unfinished copies** (`.tmp-…`) in the newest day folder are removed at startup.
-- **What the store leaves to intake:** the 100 MB limit, which applies before a download, and the list of what isn't stored (4.4). Both need to know the channel.
-- **Owners and modes** (3.2): folders 0750 and files 0640, set explicitly, so the umask doesn't matter. The owner is given by whoever opens the store, as `{ uid, gid }`, and is left alone without one.
-- **The store is never told the owner's time zone.** Day folders are UTC dates of its clock.
-
 **D30. The CLI.**
 *Choice:* the table has the twelve commands of 8.4, each with a side: `bridge`, `runner`, or `host` for `setup` and `build-image`, which ARCHITECTURE.md 2.13 lists as root's, on the host. A `bridge` or `runner` command gets its side's settings and the other side's env file is never opened. A `host` command gets none here: what `setup` and `build-image` read is for milestones 12 and 7 to settle. A command's code is imported only when the command runs. No command is built yet, and each says so and exits with 1. Exit codes: 0, 1 when a command fails, and 2 when it can't start because of how it was called or configured, which matches the 2 that 5.5 gives the backup commands.
-
-**D31. What the import test checks, and how.**
-*Question:* some rules of section 4.2 of ARCHITECTURE.md are about what code does, not what it imports.
-*Choice:* `test/support/imports.mjs` reads every file under `src/` and checks:
-- which folders import which, as the diagram of 4.2 draws it, `src/ops` included: it imports only `src/common`;
-- that `src/mail` imports only `files`, `limits` and `log` from `src/common`, and doesn't reach `settings.mjs` through another module either;
-- where each of the four libraries may be imported, and that nothing else is imported that isn't a `node:` module;
-- that `src/cli.mjs` imports a command's code only with `import()`;
-- "only the store appends to the datastore", as two things it can see: only `store.mjs` imports `encodeLine`, and nothing in `src/common/datastore/` calls a function that changes a file;
-- "only one module runs each program", as: only `proc.mjs` imports `node:child_process`; in the bridge only the two channel modules and `backup.mjs` import `proc.mjs`; and the strings `'wacli'`, `'restic'` and `…mail/reader.mjs` appear only in the module that runs that program (`paths.mjs` may name wacli's folder).
-
-It doesn't check rule 5, that every tuning number is in `limits.mjs`. No scan can tell a tuning number from any other number.
-*Reason:* the plan asks for a test that enforces the rules. Where a rule can't be seen in the imports, the test holds to the nearest thing that can.
 
 **D32. Two kinds of root test.**
 *Choice:* tests that need root, to give files away or to run a program as another user, run whenever the suite runs as root, with made-up numeric IDs. Tests that create a user run only with `SCOOTER_ROOT_TESTS=1` as well.
 *Reason:* section 10 keeps user creation behind that variable, so running the suite as root on a real machine creates none. A numeric owner needs no user to exist.
-
-**D33. The reader.**
-*Choice:* a reader starts at the first line of the datastore and keeps its own place: the day folder, and how many bytes of that day's log it has taken. A poll gives all of its new lines or none. When it meets a complete line that isn't a line, it throws, names the file and the line, and stays where it was before the poll. The reader and the store take every path from `paths.mjs`.
-*Reason:* the datastore holds no reader's state (ARCHITECTURE.md 2.4), and both readers want every line anyway, to build the index. A reader that gave half a poll's lines and then failed would have moved past lines nobody received.
 
 ### 1.2 Facts found: how systemd and Compose read an env file
 
@@ -514,155 +402,13 @@ Lines outside the format:
 
 *So:* the loader refuses all of these, the last row too (D14).
 
-### 1.3 What was run to verify the milestone, and what wasn't verified
-
-Run on 2026-11-16, on the Linux machine, with Node 22.23.2:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test`, from a clean clone of the branch | 164 tests: 140 pass, none fail. 24 skip themselves: the 18 pi and VM tests of milestone 0, which need the image, and the 6 that need root |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 158 pass, none fail, in about a minute and a half. The 6 root tests skip themselves |
-| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1` | On Node 24.22.3: 141 pass, none fail. The 6 root tests run, the two that create a user among them. 23 skip themselves: the 18 that need the image, the 4 that need wacli, and one that only makes sense when not root |
-| `npm test`, 25 times in a row, then 36 times with 12 running at once | No failure. The tests of `proc.mjs` and `locks.mjs` start real processes, and this was to see that none depends on timing |
-| The env file check of 1.2 | The format reads the same in all three |
-
-The tests section 10 of DESIGN.md asks of this milestone, and where they are:
-
-| Required | Test file |
-|---|---|
-| Datastore: `seq` order across days; day folders by UTC date that never go backwards, even when the clock does; recovery from an incomplete last line; duplicates; attachment names; the index rebuilt on restart | `test/datastore.test.mjs` |
-| Time, for storage and conversion: stored times are UTC; a local time and a schedule across daylight-saving changes; nothing depends on the process's time zone, and a restart in another one doesn't reorder the datastore | `test/time.test.mjs`, and one test in `test/datastore.test.mjs` |
-| Settings; each service reads only its own env file | `test/settings.test.mjs`, `test/cli.test.mjs` |
-| Locks | `test/locks.test.mjs` |
-| Least privilege, for folder modes: the datastore's owner, group and modes | `test/datastore.test.mjs`. The modes are checked on every run, and the owner and group as root |
-| The import rules | `test/imports.test.mjs` |
-
-Not verified:
-- **arm64 and macOS.** The machine runs neither. Nothing in this milestone knows the architecture, and the portability rules of section 10 are kept: no `/proc`, no `fs.watch`, and only `id -u` and `id -g` as outside commands.
-- **The env file format against systemd and Compose, in the test suite.** It was compared by hand, once, with the versions in 1.2. `npm test` checks only Scooter's loader.
-- **Durability.** The store syncs each line and each attachment. That a line survives a power cut can't be tested here. A crash is tested by leaving part of a line on disk and starting again.
-- **The pieces at work in a service.** Supervising wacli, the two locks together, and the store under real intake belong to milestones 2, 4, 5 and 10, which test them.
-- **Rule 5 of the import rules** has no test (D31).
-
-## Between milestones 1 and 2: the send interval
-
-One point from the review of milestone 0's pull request went to the owner on 2026-11-16, after milestone 1 was merged: how often the bridge sends (5.3, 8.6; before milestone 5). No milestone's agent made this change. It was committed straight to `main`.
-
-*The question, as asked:*
-> wacli prints a warning when two sends are less than 5 seconds apart, saying rapid automated sends may trigger WhatsApp rate limits or account restrictions. DESIGN.md sets `SEND_INTERVAL` to 1.5 seconds. […] On the send interval, I would raise it to 5 seconds: a reply in three parts then takes 10 seconds instead of 3, and replies to your own chat aren't urgent. wacli also has its own pacing option (`sync --send-spacing`, with a random gap).
-
-*The answer:* "yes to all", to a message that held this proposal and two changes to the milestone workflow. `SEND_INTERVAL` is 5 seconds.
-
-*What follows:*
-- DESIGN.md has 5 seconds in 5.3 and 8.6, and wacli's check in 13.1. ARCHITECTURE.md has it in 5.3 and in decision 22. `src/common/limits.mjs` and `test/limits.test.mjs` have the value. Nothing reads the constant yet: milestone 5 builds the outbox processor.
-- The interval is between any two sends, reactions included, as 5.3 has it. So in quiet mode the ✅ reactions to a batch of handled messages go out 5 seconds apart: a full batch of 20 takes 95 seconds, where it took about 29. The question put to the owner gave only the three-part reply as an example. This was reported to the owner with the change.
-- How wacli checks, from its source at v0.26.0 (`warnRapidSendIfNeeded` in `cmd/wacli/send_helpers.go`, called from `send.go` and `send_ipc.go`):
-  - Before it sends, it writes the time of the attempt to `.last-send-at` in its store folder. It warns when the next attempt comes less than 5 seconds after that time.
-  - It does this for a text sent directly, and for every kind of send handed to the sync process: text, file, sticker, edit and reaction.
-  - The time is taken when the send reaches the check, after wacli has resolved the recipient, not when the command starts. While `sync --follow` runs, sends are handed to the sync process (0.6), so the check runs there, and the warning is on that process's stderr, not the send command's.
-  - So at exactly 5 seconds a warning can still appear now and then, when a send reaches the check sooner after its start than the one before it did. The send goes out all the same. Milestone 5 must not count the warning as a failure.
-- Not used: `wacli sync --send-spacing`, which makes the sync process wait between the sends handed to it. The bridge paces its own sends (5.3), and one place is enough.
-- Not verified: any of this with a paired number, and whether 5 seconds is slow enough for WhatsApp. WhatsApp doesn't publish its limits. 5 seconds is the threshold that wacli's authors chose for their warning.
-
 ## Milestone 2: bridge intake, WhatsApp
 
-Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md and ARCHITECTURE.md changed only where they still listed as open what milestone 0 had settled (2.3).
-
-What the milestone left in the repository:
-
-| Path | What |
-|---|---|
-| `src/bridge/channels/index.mjs` | What the core asks of a channel, and the record, with its check |
-| `src/bridge/channels/whatsapp.mjs` | The WhatsApp channel: wacli's environment, the pairing check, sync's supervision, the webhook, wacli's two formats, the filters and owner matching, catch-up, downloads |
-| `src/bridge/intake.mjs` | Records to datastore lines, with their attachments |
-| `src/bridge/state.mjs` | `bridge/state.json` |
-| `src/bridge/main.mjs` | `scooter bridge`: one bridge per data folder, the store, the state, the channel and intake |
-| `src/common/files.mjs` | `copyUntrustedFile` |
-| `test/support/` | A fake channel; the wacli stub and its helper, with samples of wacli's two formats |
-| `test/intake.test.mjs`, `test/whatsapp.test.mjs`, `test/bridge.test.mjs` | The tests of this milestone |
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md and ARCHITECTURE.md changed only where they still listed as open what milestone 0 had settled.
 
 It also settled the smaller points of the reviews of milestones 0 and 1, in code, tests and documents (2.2).
 
 ### 2.1 Decisions
-
-**D34. A record has a list of attachments, and an attachment can say why it isn't to be downloaded.**
-*Question:* 5 defines a record as the normalized message without what only WhatsApp needs, and `download(record, n, path)` takes the number of an attachment.
-*Choice:* `src/bridge/channels/index.mjs` gives the fields: `source`, `id`, `at` (a UTC time to the second, or null when the channel doesn't know, and then the time of arrival), `text`, `subject` on email only, `attachments`, `replyToId`, `replyToPreview`, `reactionToId`, `reactionEmoji` ("" for a removed reaction, null when it isn't one), `edited`, `revoked` and `forwarded`. Each attachment is `{ type, mime, name, bytes, error }`; `error` says why the core mustn't try to download it, as for a location (D40). `checkRecord` is the shape in code. Intake refuses, and logs, a record that fails it.
-*Reason:* email (milestone 6) has several attachments and can have an `.eml` that couldn't be parsed. One shape covers both, and the core needs no channel's details.
-
-**D35. A download is copied out of wacli's folder with care, into one of the bridge's own.**
-*Question:* 5.2 step 6 downloads into `wacli/staging/` and copies the file into the day folder. wacli owns that folder and runs third-party code; the bridge is root.
-*Choice:* the core picks the `path` of `download`, in `bridge/incoming/`, which only root can write. The WhatsApp module runs `wacli media download --chat <chat> --id <id> --output <staging>/<a name of its own>`, checks that wacli says it saved the file there, and copies it to `path` with `copyUntrustedFile`, which opens it without following a link, and refuses anything but a regular file with one name, owned by `scooter-wacli`, and no larger than `ATTACHMENT_MAX_BYTES`. The staged file is removed either way. The store copies `path` into the day folder, and intake removes it. `bridge/incoming/` is emptied at startup.
-*Reason:* a link, or a hard link, left in the staging folder in place of the download would make root copy a file wacli can't read, such as a key, into the datastore, where the runner and pi read it. *Cost:* each attachment is copied twice. The mail spool (milestone 6) needs the same copy, so it is in `src/common/files.mjs`.
-*Since milestone 6* (D136): the staged file, and what a stopped bridge left, are removed by unlinking names the bridge gives, and only while staging is wacli's folder and not a link; a folder wacli made there stays.
-*Also:* a record carries no chat (5), and `download` needs one. The module keeps the chat of each record it hands over in a `WeakMap` keyed by the record.
-
-**D36. A failed download is tried again after 10 seconds, twice.**
-*Choice:* a new constant, `MEDIA_DOWNLOAD_RETRY_WAIT`, 10 seconds, before each of the `MEDIA_DOWNLOAD_RETRIES`. A download refused as too large (`EFBIG`) isn't retried. An attachment whose size the channel gives as over `ATTACHMENT_MAX_BYTES` isn't downloaded, and a downloaded file over it is thrown away. Either way the line gets `media` with `too large, not downloaded`; after three failures, `download failed`; and when the store couldn't copy the file, `could not be stored`, with the message stored without its files (D29).
-*Reason:* a download that fails for good leaves the message without its attachment for ever, and an immediate retry would meet the same reconnecting wacli. Records wait in one queue meanwhile, so the wait is short: 20 seconds at most for one failing attachment.
-
-**D37. Every wacli call except sync has a timeout of 6 minutes.**
-*Choice:* a new constant, `WACLI_CALL_TIMEOUT`. wacli stops its own commands after 5 minutes (its `--timeout`), and this bounds a call that doesn't, so one stuck download can't hold up every message after it.
-
-**D38. Intake takes one record at a time, from the webhook and catch-up alike.**
-*Choice:* one queue in `intake.mjs`. A message whose ID is stored is skipped before its attachments are downloaded again: catch-up lists the last two minutes again every time. A reaction, an edit or a deletion whose target isn't a message or a command is skipped as having an unknown target, and the store refuses one that gets there (2.2, the review of milestone 1, point 5). A failed store stops intake and the bridge, which exits with 1 so its service manager starts it again (D29).
-
-**D39. A command is a text alone, trimmed.**
-*Choice:* a record is a command when its channel takes commands, it has no attachments, and its trimmed text is one of the four exactly. The line's text is the trimmed command. A command that quotes a message is still a command, and its line has no `replyTo`, which only messages have (4.2). A forwarded `/new` is a command too: the plan's rule has no exception, and the owner forwarded it. `COMMANDS` is in `line.mjs`, and `checkLine` holds a command line's text to it, so the runner can match it exactly.
-
-**D40. A location is stored as media that isn't a file.**
-*Question:* wacli gives a location, and a live location, a `Media` of its own type, with the place's name as the caption and no file. 4.2 has no field for coordinates.
-*Choice:* the line has the caption as its text, and `media: { type: "location", error: "not a file, so not stored" }`. Any other media type without a file is treated the same. Stickers are dropped (5.2 step 4).
-*Reason:* the line format is a contract (D27), and a list row has no coordinates at all, so writing the webhook's into the text would store the same message two ways depending on which delivered it. *Cost:* the coordinates are lost. If the owner wants them, a field for them is a change to 4.2.
-
-**D41. A media message's text is its caption.**
-*Choice:* `Media.Caption`, or `MediaCaption` in a list row, not `Text`. wacli puts the caption in `Text` too, but also writes `[Audio]` there for audio without one, which the owner never wrote.
-
-**D42. wacli's formats, as its source at v0.26.0 has them.**
-Read on 2026-11-16 from GitHub at the tag, not run: sending and receiving need a paired number (gate G4). Both are in `fromWebhook` and `fromListRow` in `whatsapp.mjs`, and nowhere else (the plan's rule for this milestone).
-- *A webhook payload* (`internal/app/webhook.go`) is wacli's `ParsedMessage` with Go's field names, with `Media` replaced by `{Type, Caption, Filename, MimeType, FileLength}` and `ChatName` added. The signature is `sha256=` and the lowercase hex HMAC-SHA256 of the raw body, as 13.1 says. Messages without an ID aren't posted.
-- *An edit* (`extractProtocolMutation` in `internal/wa/messages.go`) carries the ID of the message it changes, `Edited: true` and the new text; a *deletion* carries the ID and `Revoked: true`, with no text and no media. The time is the edit's or the deletion's. This is what 13.1 guessed from `sync_edits.go`. The same code also sets `Chat` and `FromMe` from the key the sender's phone wrote, from the sender's side, so the owner's own deletion, and an edit that isn't encrypted, probably arrive with `FromMe: true` and the bot's JID as `Chat`, and are dropped as the bot's (added in milestone 3, 3.3, point 1).
-- *A list row* (`internal/store/types.go`) is the stored message, with Go's field names except `quoted_msg_id` and `quoted_sender_jid`. It has no preview of what it quotes and no size for its media. An edit updates the stored message, so an edited row has the current text and `Edited: true`: `fromListRow` returns it as the message and then its edit. Whichever of the two is already stored is skipped. So a message missed while wacli was down and edited since is stored as it is now, and an edit missed is stored as an edit, but only while catch-up reaches the message: wacli keeps a row's time when an edit arrives, and `--after` filters on that time, so a missed edit of a message older than 2 minutes before the newest line isn't listed. A deletion moves the row's time to its own, so it is listed. An edited row listed before a newer edit came by webhook, and handled after it, puts the older text back, within the time one page takes (corrected in milestone 3, 3.3, point 6). A deleted row becomes a deletion, skipped when the message isn't stored.
-- *`messages list --after`* (`ListMessages` in `internal/store/messages.go`) lists rows strictly after the time, compared in whole seconds, oldest first with `--asc`.
-- *`media download --output <file>`* (`cmd/wacli/media_download.go`) saves to the file as given, and answers with its `path`.
-
-**D43. Catch-up.**
-- *Where it starts:* "the newest incoming WhatsApp line" is the one with the highest `seq`, and its `at` is used. Intake knows it: from the datastore at startup, then from each line it stores. A catch-up that stores an older message moves the start back, which only lists more.
-- *A full page* goes on from a second before the last row's time, because `--after` is strict to the second and other rows may share it. If the whole page fell within one second, it goes on from that second, and the rest of it is skipped. 500 messages in one second don't come from one person.
-- *The chat* is the owner's chat at the start of the catch-up, for all its pages.
-- It runs at startup, at once, alongside the pairing check, and then every `CATCHUP_INTERVAL`. While wacli is known to be unpaired it doesn't run: there is nothing to list, and the store wacli would read may not exist. One that fails is logged, and the next comes at the usual time. It stops between rows when the channel stops.
-
-**D44. Owner matching, and the owner's chat.**
-- A JID is compared in lower case, without the `:device` suffix and without the `.agent` part whatsmeow writes before it. User parts are digits, so nothing else is lost.
-- `bridge/state.json` keeps `ownerChat` as `{ jid, at }`: the chat of the owner's newest message, and its time. It moves only to a message at least as new, so catch-up delivering older rows doesn't move it back. If it can't be written, that is logged and the message goes on.
-- `firstStart` is written on the very first start and never changed. A state file that isn't one stops the bridge, naming the file: it is written atomically, so a crash doesn't leave one.
-
-**D45. The pairing check runs before every start of sync.**
-*Choice:* `proc.supervise` takes a `before` hook, awaited before each start, restarts included. The WhatsApp module's hook asks `auth status` and, until wacli is paired, asks again every `AUTH_CHECK_INTERVAL`. "Not paired, run `scooter pair`" is logged when that becomes so, not every minute. The webhook secret is new each time the channel starts, at the bridge's start and, from milestone 10, after each backup. A restart of sync keeps it: the webhook server, which checks it, keeps running.
-*Reason:* a session logged out from the phone makes sync fail at once on every restart. Checking first turns that into one log line and a check a minute.
-*Also:* `status()` says `linked`, `not linked; run scooter pair`, `starting`, `stopped`, or that wacli stopped and starts again shortly.
-
-**D46. The webhook server's answers.**
-404 for any path but `/wacli`, query strings included; 405 for any method but POST; 413 when the body is over `WEBHOOK_MAX_BYTES`, by its `content-length` or by what arrives, and the connection is then closed; 401 for a missing or wrong signature; 200 for a signed body, before it is handled. A signed body that isn't JSON, or is a message without an ID, is logged by its size only. One with an `EventType` is ignored (5.2 step 2). It listens on `127.0.0.1` only. Tests set `WEBHOOK_PORT` to 0, and the URL given to sync names the port the server got.
-
-**D47. What the WhatsApp module logs.**
-Drops are logged from webhooks only, by message ID and reason: catch-up lists the bot's own replies again every ten minutes. A sender who isn't the owner is logged by JID, with the hint of 5.2 step 4. Nothing wacli writes is logged: its errors can name chats and files. Each catch-up logs how many rows it read, delivered and dropped.
-
-**D48. One bridge per data folder.**
-*Question:* two bridges on one datastore would give out the same `seq`, and then neither starts until the log is repaired by hand (the review of milestone 1, point 8).
-*Choice:* the bridge listens on a Unix socket, `bridge/bridge.sock`, before it opens the store. A second bridge finds it answering and refuses to start. One left by a bridge that was killed doesn't answer, and is replaced.
-*Reason:* a lock file holding a pid can mistake an unrelated process that got the same pid for a bridge, as happens in a container started afresh, and then the bridge never starts. A socket answers only while its bridge runs, and works across containers that share the folder. *Cost:* two bridges starting at the same instant over a dead socket could both replace it. Starting the bridge is the service manager's job, so that is accepted.
-
-**D49. The bridge's startup.**
-In order: it looks up `scooter-wacli` and `scooter-runner`; makes the data folder 0755 if it is missing, since every service user passes through it to reach its own, and its own folder 0700; takes the socket; empties `bridge/incoming/`; opens the store, owned by root with the runner's group (`{ uid: 0, gid: <scooter-runner's gid> }`, 3.2); opens the state; starts the channel. wacli's folders are made 0700 for `scooter-wacli` if they are missing, which in production `setup` does (milestone 12). A startup error is printed and the command exits with 1. On SIGTERM or SIGINT the channel stops, intake finishes what it was handed, and the command exits with 0. Milestones 5, 6 and 10 add the outbox, email and the leftover `backup.lock`.
-
-**D50. `src/bridge/main.mjs` may import `proc.mjs`.**
-*Question:* D31 holds that in the bridge only the two channels and `backup.mjs` import `proc.mjs`. The bridge looks up its users by name, which runs `id`.
-*Choice:* `main.mjs` is allowed too: it makes the one `proc` the bridge shares, hands it to the channels, and uses its `lookupUser`. The test that names programs still holds `wacli`, `restic` and the email reader to their modules.
-
-**D51. A stopped program is waited for until it exits.**
-*Question:* the review of milestone 1 (point 1) found that a timeout didn't bound `run` when what the program started kept its output open.
-*Choice:* once a program that was stopped has exited, `run` closes its pipes from its own side and returns. A program that ends by itself is still waited for until its output closes, so all of it is collected. This adds to D25: a stop takes at most `STOP_GRACE`, whatever the program left behind.
 
 **D52. The wacli stub.**
 *Choice:* the wrapper first on `PATH` is a Node file whose `#!` line names this Node's own path, and it imports `test/support/wacli-stub.mjs`. Its control folder is beside it. The stub records every call (arguments, environment, user, group, pid), answers from fixtures read afresh at each call, and, running as `sync --follow`, posts the files the test puts in its `webhooks/` folder, signed with the secret on its command line.
@@ -676,13 +422,13 @@ In order: it looks up `scooter-wacli` and `scooter-runner`; makes the data folde
 
 ### 2.2 The reviews of milestones 0 and 1
 
-Both pull requests were approved with smaller points listed. Each is below, with what became of it.
+Both pull requests were approved with smaller points listed. Those of milestone 0 are below, with what became of each; those of milestone 1 were settled in the code of the bridge's side and the datastore, whose documents hold the rules.
 
 The review of milestone 0 (pull request 1):
 
 | # | Point | What became of it |
 |---|---|---|
-| 1 | DESIGN.md still lists as open what milestone 0 settled, and says `anthropic/*` models go to the messages route | Settled. 5.1, 6.6, 6.12, 6.13, 13.2 and 14 of DESIGN.md, and 3.5 of ARCHITECTURE.md, now say what milestone 0 found (2.3) |
+| 1 | DESIGN.md still lists as open what milestone 0 settled, and says `anthropic/*` models go to the messages route | Settled. 5.1, 6.6, 6.12, 6.13, 13.2 and 14 of DESIGN.md, and [Secrets](ARCHITECTURE.md#secrets), now say what milestone 0 found |
 | 2 | The image's contents leave out `tzdata` and `curl` | Settled. Both documents list them, with the reason (D7) |
 | 3 | wacli warns about sends closer than 5 seconds | Settled by the owner before this milestone ("Between milestones 1 and 2"). The related fact: `send text` and `send react` have `--post-send-wait`, default 2 seconds, which keeps wacli's connection open after a send, seen in the installed binary's help on 2026-11-16. Milestone 5's pacing will meet it; not run, since sending needs a paired number |
 | 4 | A fact about Gondolin that pi 6 rests on isn't written down | Settled. In 0.5, "Also found about Gondolin 0.14.0", as the review found it. Not run again |
@@ -690,67 +436,9 @@ The review of milestone 0 (pull request 1):
 | 6 | Three findings seen by hand and held by no test | Two settled: pi 5 asserts a 429, and VM 4 that a killed VM's entry in Gondolin's list stays behind. Both pass with KVM. Left: the 2-minute default start limit, which would add 2 minutes to every run of the VM tests |
 | 7 | Milestone 4 doesn't say the sandbox's mounts carry what is hidden | Settled. A rule under milestone 4 in the plan |
 
-The review of milestone 1 (pull request 2):
-
-| # | Point | What became of it |
-|---|---|---|
-| 1 | A timeout doesn't bound `run` when a descendant keeps the output open | Settled (D51), with a test |
-| 2 | The advice on the store's owner is easy to follow wrongly | Settled. `main.mjs` gives the store `{ uid: 0, gid: <scooter-runner's gid> }` (D49), and this milestone's pull request says so |
-| 3 | `SCOOTER_TZ` accepts names pi's VM may not resolve | Settled another way. The review's suggestion, `resolvedOptions().timeZone`, turns `Asia/Kolkata` into `Asia/Calcutta` in Node 22: ICU's own name, which Ubuntu's zone files lack without `tzdata-legacy`, and which the owner would then see in prompts. Instead a zone must be written as the tz database writes it, each part beginning with a capital letter: every zone Node lists, and every zone file on the Linux machine, passes, and lowercase slips and offsets such as `+05:30` don't. Left: a name wrong in its later letters, such as `Asia/KOLKATA`, still passes; milestone 7 can look the zone up in the VM's image |
-| 4 | D29 says a `seq` out of order names the file and the line, and it didn't | Settled. The reader gives each line's number, and the store's error names the file and the line |
-| 5 | An edit or deletion can point at a line that isn't a message | Settled in both places: the store refuses it, and intake skips it first (D38) |
-| 6 | `subject` is optional on an email's line | Settled. `checkLine` requires it on an email's message |
-| 7 | An attachment left by a crash can stay beside a line it doesn't belong to | Settled. At startup the store removes, from the newest day folder, attachments whose `seq` is past the last line's |
-| 8 | Nothing stops a second writer | Settled (D48) |
-| — | An empty, untracked folder named `2026-11-09T20:30:00Z` in the working copy on the Linux machine | Removed. No test makes it: fresh clones stayed clean after every run. It was made during milestone 1's work, before its commits; the name is a time from the test of the process's time zone in `datastore.test.mjs` |
-
-### 2.3 Changes to DESIGN.md
-
-None changes what Scooter does. Each brings a statement up to date with what milestone 0 found:
-- 5.1: wacli 0.26.0 takes the webhook secret only on its command line (0.6, wacli 1).
-- 6.6: the list of "things to check in the pinned pi version" is now what was found, each with its check.
-- 6.12: the image's contents include `tzdata` and `curl` (D7), and pi works without its install scripts (pi 8).
-- 6.13 and 13.2: pi sends Anthropic's models to the messages route, except their `:batch` variants, and the exact fields are in `test/fixtures/pi-requests/` (pi 6).
-- 14: a line names the five items milestone 0 settled, and each is marked "Checked".
-
-ARCHITECTURE.md has the same in 2.7 and 3.5, and the plan has a new rule under milestone 4.
-
-### 2.4 What was run to verify the milestone, and what wasn't verified
-
-Run on 2026-11-16, on the Linux machine, from a clean clone of the branch:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test`, Node 22.23.2 | 219 tests: 194 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 212 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second fresh clone | Node 24.22.3: 195 pass, none fail. All 7 root tests run, among them the one where wacli runs as another user. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
-| `intake`, `whatsapp`, `bridge` and `proc` tests, 16 times, 8 at once | No failure. The test of `scooter bridge` as a process skipped itself when another copy held the port |
-
-The tests section 10 of DESIGN.md asks of this milestone, and where they are:
-
-| Required | Where |
-|---|---|
-| Signatures accepted and rejected | `whatsapp.test.mjs`: the function, and the webhook through the stub; `bridge.test.mjs` end to end |
-| Filtering of non-owners, `@lid` owners, groups, `FromMe` messages, stickers and empty messages | `whatsapp.test.mjs`: the function, and through the webhook |
-| Media downloads, including failures | `intake.test.mjs` with the fake channel: retries, the size limit, media without a file, a copy that fails; `whatsapp.test.mjs` with the stub: the command, failures, a link, a file saved elsewhere, a call that hangs |
-| Replies, reactions, edits and deletions mapped to `seq` numbers | `intake.test.mjs`; `bridge.test.mjs` end to end |
-| The same edit, deletion or reaction delivered twice is stored once | `intake.test.mjs`; `bridge.test.mjs`; catch-up in `whatsapp.test.mjs` |
-| Commands logged | `intake.test.mjs`; `bridge.test.mjs` |
-| Catch-up after a gap, without duplicates, from the newest incoming WhatsApp line even when emails arrived; no history on the first start | `whatsapp.test.mjs` |
-| Least privilege, for wacli's environment and command line | `whatsapp.test.mjs`: exactly six variables on every call, no setting's secret anywhere, the webhook's secret on sync's command line alone; as root, every call as wacli's user, and its folders its own |
-
-The milestone's "done when", signed webhook posts ending up as the right lines and attachments and unsigned ones not, is the first test in `bridge.test.mjs`. It posts through the stub's running sync, and reads `log.jsonl` and the day folder.
-
-Not verified:
-- **wacli when paired** (gate G4). The tests run a stub. How a real edit, deletion, `@lid` sender and list row look is read from wacli's source (D42), and so is the likelihood, added in milestone 3, that the owner's own deletion arrives with `FromMe: true` and the bot's JID as `Chat`. So is how `media download` behaves while sync runs, and `messages list --read-only` alongside it. A correction belongs in `fromWebhook` or `fromListRow`.
-- **The real wacli in this milestone's tests.** Milestone 0's checks run the installed wacli, unpaired. Nothing here does.
-- **The webhook against the real wacli's HTTP client.** The stub posts with Node's.
-- **arm64 and macOS.** Nothing here knows the architecture. Unix sockets, `O_NOFOLLOW` and `mkfifo` exist on macOS.
-- **The bridge under systemd or Compose.** Milestones 12 and 13.
-
 ## Milestone 3: runner, planning
 
-Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in one sentence of 6.3, where it contradicted 5.4 and 6.5 (D65).
+Done on 2026-11-16, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in one sentence of 6.3, where it contradicted 5.4, now [Commands](architecture/bridge.md#commands), and 6.5 (D65).
 
 What the milestone left in the repository:
 
@@ -770,7 +458,6 @@ What the milestone left in the repository:
 | `test/support/runner.mjs` | Fixtures: a datastore written from lines, a config folder, and the example of 6.5 as data |
 | `test/config.test.mjs`, `agentstate`, `triggers`, `batch`, `agentdir`, `outbox`, `planning` | The tests of this milestone |
 
-It also settled the smaller points of the review of milestone 2 (3.3).
 
 ### 3.1 Decisions
 
@@ -794,7 +481,7 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 
 **D58. `timeout_minutes` from 1 to 120.**
 *Choice:* a new constant, `CONFIG_RANGES`, as `SETTING_RANGES` is for the env files (D17).
-*Reason:* 8.6 wants a range for a number the owner sets. The low end keeps a run from being cut off before pi starts; the high end is a slip of the hand, and also how long a backup can wait (5.5).
+*Reason:* 8.6 wants a range for a number the owner sets. The low end keeps a run from being cut off before pi starts; the high end is a slip of the hand, and also how long a backup can wait ([The locks](architecture/exchange.md#the-locks)).
 
 **D59. The entries of `run`.**
 - Each entry has exactly one of `on`, `at`, `once` and `backfill`, and only the keys that go with it.
@@ -843,7 +530,7 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 - **At startup**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, worked out in the zone the runner starts with. So a runner that starts after the time waits until the next day (6.4), and a changed `SCOOTER_TZ` takes effect at once. Entries for `at` values no longer in the config are dropped.
 - **While running**, a task is due when its last occurrence has a later date than `scheduled[at]`. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once.
 - The runner records the date once the task has run (milestone 4). A task that fails on a setup error or an outage keeps its old date, so it stays due (the plan's rule for milestone 4). A start during a pause keeps every date as it is, so that task stays due across the start too (D83).
-- `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` (D21): a time skipped by the clocks comes due at the jump, and a time that comes twice at its first.
+- `previousLocalTime` in `time.mjs` finds the last occurrence, by the same rule as `nextLocalTime` ([Time](architecture/shared-code.md#time)): a time skipped by the clocks comes due at the jump, and a time that comes twice at its first.
 *Reason:* a date per task is what 6.3 stores, and comparing dates of the owner's day keeps one run a day across clock changes. Overwriting at startup instead of keeping the larger date lets a changed zone start from where it is: a date from a zone far ahead would otherwise hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all.
 
 **D68. `once` tasks.**
@@ -887,10 +574,6 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 - Each step is safe to repeat, and a start finishes what a crash left: the folders, `git init`, the `.gitignore`, and the first commit, `lifelog: initial commit`, holding the `.gitignore` alone, on the branch `main`.
 - Git runs from an argument list with an environment of its own: no system or user config, no hooks, no signing, `Scooter <scooter@localhost>` as author and committer, and the time from the runner's clock. A new constant, `GIT_CALL_TIMEOUT`, one minute, bounds each command.
 
-**D76. The outbox entry's format, and its writer, are in `src/common/outbox.mjs` now.**
-*Question:* the plan builds the writer in milestone 4, and this milestone's rule writes the reply to `/new` to the outbox.
-*Choice:* `checkOutboxEntry` is 5.3's format as code, as `checkLine` is for lines (D27), and `writeOutboxEntry` writes one through `handOff`. The outbox folder is made 0700 when missing, as in development; `setup` makes it in an install (milestone 12).
-
 **D77. The protocol says a little more than 7.1.**
 *Choice:* besides each point of 7.1, `protocol.md` says how the prompt shows things (the three sections, `(edited in …)`, `(deleted in …)`, JSON strings, cut texts, who `Scooter` is), that a scheduled task has no items to report on, and that the agent writes no links and no dotfiles. Milestone 11 checks it against the parser.
 
@@ -898,20 +581,6 @@ It also settled the smaller points of the review of milestone 2 (3.3).
 
 - **YAML.** `yaml` 2.9.1 with `version: '1.2'` and `schema: 'core'` reads `09:05` as a string, `on` as a key, and `010` as 10. A duplicate key is an error, and an unknown tag a warning that the config turns into a fault.
 - **A schedule's last occurrence** agrees with the next: for six zones (Kolkata, New York, London, Lord Howe, Apia and St John's), six schedules and 20 days around each of three dates with clock changes, nothing comes due between `previousLocalTime(now)` and `now`. A test holds it.
-
-### 3.3 The review of milestone 2
-
-The pull request was approved with seven smaller points. Each is below, with what became of it. The points of the reviews of milestones 0 and 1 that milestone 2 left (2.2) stay as they were: the 2-minute start limit of the VM tests, and zone names wrong in their later letters, for milestone 7.
-
-| # | Point | What became of it |
-|---|---|---|
-| 1 | By wacli's source, the owner's own deletion arrives with `FromMe: true` and the bot's JID as `Chat`, and is dropped | Settled by recording it, as the review proposed. D42 and the list of what wasn't verified (2.4) say it, gate G4 in the plan now checks `FromMe` and `Chat` on a real edit and deletion, and a comment at `fromWebhook` says where the correction goes. The code is unchanged: the behavior is read from source, and the plan leaves wacli's formats to G4 |
-| 2 | The stub's helper reads a status file the stub writes in place | Settled. The stub writes it under another name and renames it |
-| 3 | Stopping the bridge waits for the wacli calls in progress, up to `WACLI_CALL_TIMEOUT` for each of three tries | Left for milestone 10, recorded here. A stop waits for every wacli call in progress, and the channel's `stop()` returns while intake may still hold records. Milestone 10, which stops the channels before each backup, must await `intake.idle()` after stopping them, and should pass a stop signal to wacli's calls (`proc.run` takes one), dropping a record whose download a stop cut short so that catch-up brings it back, instead of storing it as `download failed`. It is left because it changes what a stop does to a record, which is the backup's question, and nothing stops the channels before milestone 10 but a shutdown, which systemd ends after 90 seconds and the store survives |
-| 4 | Catch-up doesn't end if wacli answers a full page that isn't after `--after` | Settled. A full page whose last row isn't after the time asked for ends the catch-up, with a warning. A test has the stub answer the same page whatever it is asked |
-| 5 | wacli's staging folder is never emptied, and a folder in a download's place isn't removed | Settled. The channel empties `wacli/staging/` when it starts, folders included, and removes whatever is at a download's path. A test leaves a file, a folder and a link there |
-| 6 | D42 says more than catch-up can do for a missed edit | Settled. D42 now says that a missed edit is listed only while catch-up reaches its message, and that an older row handled after a newer edit puts the older text back |
-| 7 | Smaller still: a test counts any connection error as a 413; a test compares the port with itself; failed wacli calls log no reason; `bridge.first_start` logs `at`, a reserved name | All settled. The test accepts a 413 or a reset connection, and checks the log's two refusals. `whatsapp.started` logs the address the server listens on, and the test checks it is `127.0.0.1`. `errorFields` adds a program's exit code and whether it timed out, so `whatsapp.catchup_failed` and `intake.download_failed` say why; a test checks one. `bridge.first_start` logs `firstStart` |
 
 ### 3.4 What was run to verify the milestone, and what wasn't verified
 
@@ -922,7 +591,6 @@ Run on 2026-11-16, on the Linux machine, from clean clones of the branch:
 | `npm ci && npm test`, Node 22.23.2 | 277 tests: 252 pass, none fail. 25 skip themselves: the 18 that need the image and the 7 that need root |
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 270 pass, none fail, in 111 seconds. The 7 root tests skip themselves. No QEMU left |
 | The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 253 pass, none fail. All 7 root tests run. 24 skip themselves: 18 need the image, 4 need wacli, 1 is about a file root can read anyway, and `scooter bridge` as a process, which as root needs the users `setup` makes |
-| The `intake`, `whatsapp`, `bridge` and `proc` tests, 64 times, 8 at once | No failure. The review of milestone 2 saw one in 64 before the stub's fix (3.3, point 2) |
 | This milestone's tests, with `time` and `datastore`, 32 times, 8 at once | No failure |
 
 The tests section 10 of DESIGN.md asks of this milestone, and where they are:
@@ -944,8 +612,6 @@ The tests section 10 of DESIGN.md asks of this milestone, and where they are:
 Not verified:
 - **pi reading these prompts.** Nothing runs pi in this milestone. The prompt and the protocol are text the model hasn't seen yet: milestone 4 runs a stub of pi, and milestones 7 and 11 the real one.
 - **The runner as a service.** There is no `scooter runner` yet; milestone 4 builds its loop. This milestone's parts are tested as functions, and end to end from files.
-- **The stop of point 3 above.** Left for milestone 10.
-- **wacli when paired**, for the points of 3.3: gate G4.
 - **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `mkfifo` and git's `-c` options exist on macOS.
 
 ## Milestone 4: runner, running
@@ -1034,7 +700,7 @@ A start during a pause keeps the scheduled tasks' dates as they are, instead of 
 - `NO_REPLY` anywhere means no text is sent, `REPLY_TO` texts included: 6.7 has it "send no text". Reactions still go.
 - `REPLY_TO` quotes a message. One that names an edit or a deletion quotes the message it changes. One that names a reaction, a command, or a number that doesn't exist sends its text without a quote, `about` the batch's newest item, like plain text.
 - The texts go to the outbox first, in order, then the reactions, by `seq`. A reaction goes to an item reported `DONE` that is a message, still there, and not answered by a `REPLY_TO`. Reacting to a message the owner has deleted would say nothing.
-- In a scheduled or `once` task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` (5.3).
+- In a scheduled or `once` task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` ([Choosing the channel](architecture/delivery.md#choosing-the-channel)).
 - One answer sends at most `ANSWER_MAX_TEXTS` texts, 25: the first ones, which is more than a full batch needs, a question about each of its 20 items and a few lines besides. The rest are dropped, and their number logged as `runner.answer_texts_dropped`. A message whose `REPLY_TO` was dropped gets its reaction instead. An answer of 2,000 `REPLY_TO` lines became 2,000 outbox entries, nearly 3 hours of sending at one every 5 seconds (the third review, 4.6). How long one text may be is milestone 5's, which chunks it.
 
 **D86. Notices.**
@@ -1081,7 +747,7 @@ In order: the config; the runner's folders, which `setup` makes in an install; o
 
 **D90. One runner per data folder.**
 *Question:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts (6.4), so a backup could start during a run.
-*Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket (D48). `holdInstance` moved to `src/common/instance.mjs`, and names the service in its error.
+*Choice:* the runner holds `runner/runner.sock`, as the bridge holds its socket ([One service per data folder](architecture/shared-code.md#one-service-per-data-folder)). `holdInstance` moved to `src/common/instance.mjs`, and names the service in its error.
 
 **D91. `status.json`.**
 `{ startedAt, accel, zdr, internet, imageBuiltAt, agents: { <name>: { model, timeoutMinutes, reads } } }`, written atomically, mode 0600, at every start. `accel` is `kvm` or `emulation`. `imageBuiltAt` is null when the sandbox doesn't know it. The model is each agent's, as `agents.yaml` has it. A `status.json` that can't be read is logged and counts as none.
@@ -1107,7 +773,7 @@ It goes out at startup when `AGENT_ACCEL=auto`, the sandbox runs under emulation
 **D96. Packing the agent's repository.**
 *Question:* `git commit` starts `git gc --auto` once the repository has enough loose objects, about 6,700, which some hundreds of commits make, and by default that goes on in the background after the commit has returned. It then works outside `run.lock`: a backup can read `.git` while packs are written and loose objects removed, and D89's ground for removing git's lock files at a start, that no git of the runner's is running, no longer holds (the third review, 4.6).
 *Choice:* no git command of the runner's starts maintenance on its own (`maintenance.auto=false`). After a run that committed, once the state is saved, the runner runs `git gc --auto` itself, in the foreground (`gc.autoDetach=false`, and `maintenance.autoDetach=false` for a later git), while it still holds `run.lock`, and with no time limit. A failure is logged as `agent.pack_failed`, and changes nothing else.
-*Reason:* turning it off alone (`gc.auto=0`) would leave every object loose for good, each version of a view a whole compressed file of its own, where a pack keeps the differences. Packing inside the commit would let a slow pack fail a run that had committed (D88). It has no time limit because git stopped part-way would leave the programs it started, `repack` and `pack-objects`, writing on their own outside `run.lock`: `proc.mjs` signals the program alone (D25). It packs only what is loose, a few thousand objects, and, once there are 50 packs, all of them again. *Cost:* the next round of the loop waits for it, as for a run. And `run.lock` holds a time, the run's start and its timeout, past which a backup goes ahead anyway, `BACKUP_LOCK_EXTRA` later (5.5), so that a lock a crashed runner left can't hold backups up for good. Packing has no time limit, nor has the clean-up's removal (D88), so after a run that used most of its time a backup could read `.git` during a repack (the fourth review, 4.6). How a backup tells a runner still at work from one that is gone is milestone 10's, and the plan's milestone 10 now says so.
+*Reason:* turning it off alone (`gc.auto=0`) would leave every object loose for good, each version of a view a whole compressed file of its own, where a pack keeps the differences. Packing inside the commit would let a slow pack fail a run that had committed (D88). It has no time limit because git stopped part-way would leave the programs it started, `repack` and `pack-objects`, writing on their own outside `run.lock`: `proc.mjs` signals the program alone ([Running programs](architecture/shared-code.md#running-programs)). It packs only what is loose, a few thousand objects, and, once there are 50 packs, all of them again. *Cost:* the next round of the loop waits for it, as for a run. And `run.lock` holds a time, the run's start and its timeout, past which a backup goes ahead anyway, `BACKUP_LOCK_EXTRA` later ([The locks](architecture/exchange.md#the-locks)), so that a lock a crashed runner left can't hold backups up for good. Packing has no time limit, nor has the clean-up's removal (D88), so after a run that used most of its time a backup could read `.git` during a repack (the fourth review, 4.6). How a backup tells a runner still at work from one that is gone is milestone 10's, and the plan's milestone 10 now says so.
 
 ### 4.2 Facts found
 
@@ -1364,7 +1030,7 @@ After the third review, the pull request wasn't approved, and the milestone stop
 
 ## Milestone 5: delivery and commands
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.1, 5.3, 8.6 and section 10, to say what this milestone settled (5.3 here).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.1, 5.3, 8.6 and section 10, to say what this milestone settled; those sections are now the documents of the bridge's side, in [the map](ARCHITECTURE.md#the-map).
 
 What the milestone left in the repository:
 
@@ -1382,80 +1048,6 @@ What the milestone left in the repository:
 | `test/support/fake-channel.mjs`, `wacli-stub.mjs` | Sends: the fake channel records them and fails as told; the stub answers `send text` and `send react` |
 
 ### 5.1 Decisions
-
-**D97. Routing.**
-*Question:* 5.3 gives the rules by the kind of line an entry points at, and leaves some lines out.
-*Choice:* `routeEntry` in `src/bridge/outbox.mjs`.
-- A `text` goes to the channel of the line `replyTo` or `about` names when that channel is running and can send; otherwise to `DEFAULT_CHANNEL`, unquoted. With `replyTo` it quotes: an edit or a deletion as the message it changes, a command as the message it was, and a line Scooter sent by the ID the channel gave it. A line with no channel ID, or one that isn't a message, isn't quoted, and the text still goes to its channel.
-- A `react` goes to the channel of the message its target is or changes, by that message's channel ID. A reaction to an email is the text `✅ Email: <subject>`, or `(no subject)`, on `DEFAULT_CHANNEL`. One to a line that doesn't exist, to a line Scooter sent, or to a reaction is dropped and logged, and so is one whose channel can't react: WhatsApp's `send react` names the owner as `--sender`, and the runner reacts only to items, which are the owner's.
-- An `out` line has `replyTo` only when its chunk quoted that line, which is what 4.2 says `replyTo` is: the quoted message. A reply about an email isn't quoted, so its line has none, and the agent's prompt shows it as "you sent". The protocol already tells the agent to say which email it means.
-*Reason:* 5.3, with the cases it doesn't name settled by what a channel can do.
-
-**D98. Chunks.**
-*Choice:* a text is split into pieces of at most `CHUNK_CHARS` characters, a character being a Unicode code point, so an emoji is never split. A piece that would be too long is cut at the last paragraph break in its second half, or else the last line break there, or else the last space, or else at the limit; looking only in the second half keeps every piece but the last at least half full. The breaks where it is cut, and blank lines at the start of a piece, are left out, and so is a piece of nothing but spaces.
-*Reason:* 5.3 says "at paragraph or line breaks". Without the second-half rule, a break near the start of a long piece would make a piece of a few characters.
-
-**D99. A text is at most `TEXT_MAX_CHARS`, 14,000 characters, and a longer one is cut when it is written.**
-*Question:* D85 left how long one text may be to this milestone. The agent's answer is pi's to make: a text of a megabyte is 300 chunks, 25 minutes of the bot number sending, one every `SEND_INTERVAL`, and 25 such texts (`ANSWER_MAX_TEXTS`) ten hours.
-*Choice:* four chunks. `writeOutboxEntry` cuts a longer text and ends it with `[The rest of this message was too long to send.]`, for the runner's entries and the bridge's alike, and `checkOutboxEntry` refuses a longer one, so the bridge refuses an entry not written that way. The bridge reads an entry file of at most `OUTBOX_ENTRY_MAX_BYTES`, 1 MB, which a text at its longest stays far under.
-*Reason:* the text is cut, not refused, where it is written: a refusal would throw in the runner after a run that went well, and stop it (D93), which is the kind of problem 4.7 closed. A reply to the owner of 14,000 characters is already long; a `/status` is about 700. *Cost:* an answer can still send 25 texts of four chunks each, about eight minutes of sending.
-
-**D100. Pacing.**
-*Choice:* one interval for every message the bridge sends, texts, chunks and reactions alike, on every channel, measured from the start of the last try, failed ones included. A bridge that starts afresh sends its first message at once.
-*Reason:* 5.3, and wacli's own check notes the time of each attempt (between milestones 1 and 2). One channel sends in v2.
-
-**D101. `sending.json`, and when it is written.**
-*Choice:* `{"entry": {…}, "sent": n}`, written atomically, 0600. An `entry.json` becomes a `sending.json` with `sent: 0`, written before `entry.json` is removed, so a crash between them leaves both and `sending.json` wins. Then, for each message:
-1. `sending.json` is written again, with the count it has. If that fails, as on a full disk, the message isn't sent.
-2. The message is sent.
-3. Its `out` line is appended.
-4. `sending.json` is written with one more, or the folder is removed after the last.
-
-A crash between 2 and 4 sends that message again: at worst one repeated message, which row 3 accepts. If the store refuses the `out` line (D29), the message is still counted as sent, the entry's folder updated, and the bridge stops; its `out` line is missing.
-*Reason:* row 3 is about crashes. Without step 1, and without counting a message whose line the store refused, a disk that can't be written would make a bridge that restarts for it send the same message at every start, as fast as its service manager restarts it.
-
-**D102. When a send can't go out.**
-*Question:* 5.3 has entries handled in order, and says nothing of a send that fails. ARCHITECTURE.md 4.1 says outbox entries wait while wacli isn't paired.
-*Choice:*
-- A channel says whether it can send now (`ready()`). WhatsApp can't while wacli isn't paired or sync is starting again. While the first entry's channel can't, it waits, the entries after it with it, and that is logged once.
-- A send that fails is logged, without its text, and tried again after a wait that starts at 5 seconds and doubles up to 5 minutes (`SEND_RETRY_BACKOFF`). From the middle try on, a text goes without its quote: wacli needs the quoted message in its store (13.1), and a store made afresh, after pairing again, wouldn't have it.
-- After `SEND_ATTEMPTS`, 8, failed tries of the same message made while its channel could send, about 10 minutes, the entry is given up on: logged as `outbox.given_up`, with its ID, type, author and how far it got, and removed. A failure after which the channel can't send, such as sync stopping, isn't counted.
-- A look at the outbox that fails for another reason, such as a disk that can't be written, is tried again after the same waits, and logged each time.
-*Reason:* entries go out in order, so one that can never go out would hold back every reply after it, the answer to `/status` among them, for good. *Cost:* a message given up on reaches neither the owner nor the datastore; the log says so. Telling the owner would go through the same channel. How wacli fails when paired is unknown until gate G4, which can tell whether 8 tries is right.
-
-**D103. The bridge reads the outbox as someone else's folder.**
-*Choice:* the runner's user owns the outbox and writes the entries; the bridge, as root, reads `entry.json` and `sending.json` with `readUntrustedFile` (`src/common/files.mjs`): without following a link, only a regular file with one name, at most `OUTBOX_ENTRY_MAX_BYTES`. An entry that isn't a folder, has neither file, isn't JSON, or fails the check is logged with the reason, which names fields and never repeats values, and removed. Removal doesn't follow links.
-*Reason:* as D35 for wacli's staging folder: a link left in place of an entry would have root read a file the runner's user can't. An escape from pi's VM reaches the runner's user (section 9).
-*Since milestone 6* (D136): entries are taken only while the outbox is the runner's folder and not a link, an entry is removed by the names one holds, and what isn't a folder is left, logged once.
-
-**D104. The channel's sending functions.**
-*Choice:* `canSend` and `canReact`, as `takesCommands` is; `ready()`; `sendText(text, quoteId, { signal })` and `react(id, emoji, { signal })`, which resolve with the channel's ID of what was sent, or null when it gave none. A message with no ID is logged without `sourceId` (4.2 makes it optional) and not sent again. WhatsApp sends to the owner's chat (5.2 step 5), as `--to`, and names it as `--sender` of a reaction: in a one-to-one chat the owner's JID is the chat's. Its ID is `data.id` (13.1). `signal` stops wacli, for a bridge that is stopping; that send goes out again at the next start.
-
-**D105. `DEFAULT_CHANNEL` is checked once the channels exist, and a bad one exits with 2.**
-*Choice:* the bridge makes its channels, then refuses to start if `DEFAULT_CHANNEL` names one that isn't running or can't send (`defaultChannelProblem`), before it starts any; `scooter bridge` then prints why and exits with 2, which D30 gives to a command that can't start because of how it is configured. The settings still accept `email` (D18).
-*Reason:* "can send" is the channel module's to say. *Cost:* the store has been opened by then, and nothing else.
-
-**D106. The bridge answers commands from the datastore, keeping `commandSeq`.**
-*Question:* 5.4 has the bridge answer `/status`, `/help` and `/backup`, and says nothing of a crash between storing a command and answering it.
-*Choice:* as the runner does (6.4, row 11). `bridge/state.json` keeps `commandSeq`, the newest command line the bridge has handled. Intake tells the bridge when it has stored a command, and the bridge handles every command line after `commandSeq`, one at a time: it writes the reply (`by: "bridge"`, `about` the command), then saves the state. `/new` is the runner's and only moves `commandSeq`. At startup it handles any it didn't get to. A state from before has no `commandSeq` and gets the newest line's `seq`, as does a state made at the first start, so commands sent before are never answered late.
-*Reason:* the datastore is the record, and the same rule as the runner's answers each command once, also across a crash, at worst twice.
-
-**D107. What `/status` says.**
-*Choice:* `src/bridge/status.mjs`, one line or a few for each thing 5.4 lists, with times as the prompt shows them (`shortLocalTime`, moved to `src/common/time.mjs`):
-- each channel's `status()`; the newest message the owner sent, by `seq`, time and channel;
-- from `status.json`: when the runner started, KVM or emulation, when the image was built, ZDR and the agent's internet access;
-- from the network log, over `STATUS_WINDOW`: the requests, the hosts they went to, and the refusals;
-- for each agent `status.json` names: its last run, with its result, what it held and how long it took; whether runs are paused, since when, why and the next try; pending, retrying and failed; a backfill and how far it has got. Pending is the work items after the cursor from the sources the agent reads (`reads` in `status.json`);
-- backups: a line saying there are none in this version, until milestone 10.
-
-Before the runner has ever started there is no `status.json`, and `/status` says so and has no agent to report on. A file that can't be read is said to be so, with the reason's code, and the rest is reported. `checkRunnerStatus` now refuses an agent's name that `agents.yaml` wouldn't allow, since the bridge makes a path of it.
-
-**D108. The bridge makes the exchange's folders with the runner's owner when they are missing.**
-*Choice:* at startup, `exchange/` and `exchange/outbox/` are made, if missing, 0700 and owned by `scooter-runner` (3.2).
-*Reason:* the bridge writes its own replies into the outbox. Had it made the folder first, as root, the runner couldn't write its entries there, and would stop on every run. `setup` makes them in an install (milestone 12).
-
-**D109. Stopping the bridge stops delivery first.**
-*Choice:* delivery, then the channels, then what intake and the commands were doing. A send in progress is stopped and goes out again at the next start.
 
 **D110. The network log is read as a stream, and a log that can't be read doesn't keep a failed run from being recorded** (the fifth review of milestone 4, point 1).
 *Choice:* `scanNetworkLog` reads each day's file 64 KB at a time and calls back for each line in the window, taking a line only up to `NETLOG_LINE_MAX_BYTES`, 16 KB; a longer one is skipped and counted, as a line that isn't one is. The runner's failure handling keeps only the last request to OpenRouter and what came of it. An error in reading the log counts as no answer from OpenRouter, so the run is pi's own failure: recorded, its attempt counted, and logged as `runner.netlog_unreadable`. `/status` uses the same reader. The plan's milestone 8 now says to bound what one request, and one run, add to the log, since a `request` line a reader skips is one the failure handling doesn't see.
@@ -1490,324 +1082,8 @@ The points the reviews of milestones 0 to 4 left, as each milestone's entry reco
 | Milestone 3, point 7 | The search for the largest cut in D72 can cut a text a little more than it needs to | Settled (D113), with a test that fails on the search before |
 | Milestone 0, point 6 | The VM tests' 2-minute start limit | Left, for milestone 7, whose sandbox sets how long a VM may take to start |
 | Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Left, for milestone 7, which can look the zone up in the VM's image |
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, which stops the channels before each backup. This milestone's sends take a stop signal (D104, D109) |
 | Milestone 4, first review, points 4, 5 and 6 | `RestartSec` for the runner's unit; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8, as the plan says |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time, packing and the clean-up's removal | Left, for milestone 10, as the plan says. D112 adds `git prune` to the clean-up, under `run.lock`, which takes milliseconds |
-
-### 5.3 Changes to DESIGN.md
-
-None changes what Scooter does beyond what 5.3 left open:
-- 5: the channel functions include `ready()`, and each channel says whether it can send and react (D104).
-- 5.1: the bridge's state keeps the newest command it answered (D106).
-- 5.3: a text is at most 14,000 characters, cut when written (D99); a reaction to a line Scooter sent is dropped, and an `out` line has `replyTo` when its chunk quoted (D97); entries wait while their channel can't send, and a failed send is tried again and given up on after 8 tries (D102); `sending.json` is written once the `out` line is logged, and nothing is sent that it couldn't record (D101).
-- 8.6: the five constants of this milestone.
-- Section 10, Delivery: waiting, failed sends and the cut.
-
-ARCHITECTURE.md 2.1 and 5.3 have the same. The plan's milestones 6, 7, 8 and 10 say what this milestone did for them, or left for them. `bridge.env.example` says the bridge refuses a `DEFAULT_CHANNEL` that can't send.
-
-### 5.4 What was run to verify the milestone, and what wasn't verified
-
-Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `79d408b`:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test`, Node 22.23.2 | 428 tests: 403 pass, none fail. 25 skip themselves: 18 need the image and 7 need root |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 421 pass, none fail, in 109 seconds. The 7 root tests skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 397 pass, none fail. 31 skip themselves: 18 need the image, 4 need wacli, 2 run `scooter bridge` as a process, which as root needs the users `setup` makes, and 7 are about a file or folder root can read or write anyway. The WhatsApp root test runs, with the exchange made for the runner's user |
-| The `delivery`, `routing`, `status`, `bridge`, `whatsapp`, `outbox`, `failures`, `answer` and `batch` tests, 32 times, 8 at once | No failure, and no test folder left behind |
-| The `run`, `runner`, `agentdir` and `files` tests, 16 times, 8 at once | No failure |
-| The fifth review's first case: a day of the network log of 575 MB, 69,760 `refused` lines with paths of 8,000 bytes, and the cause of a run that exited with 1, by a script against `main` and this branch | `main`: `ERR_STRING_TOO_LONG`, with 1.1 GB of memory. This branch: `other`, "pi exited with code 1", in 750 ms with 57 MB |
-| Its second: `FAILED: 1`, 80,000 spaces, `a\rb`; and `DONE:` with 160,000 numbers | `main`: 6.4 s and 8.7 s. This branch: under 1 ms and 45 ms |
-| Its third: 90 MB of random bytes staged beside `views/git~1`, then the clean-up, four times | `main`: `.git/objects` grows by 90, 180, 270 and 360 MB. This branch: by nothing |
-
-The tests section 10 of DESIGN.md asks of this milestone, and where they are:
-
-| Required | Where |
-|---|---|
-| Delivery: order, pacing, chunking | `delivery.test.mjs`: four entries in order, a second apart then `SEND_INTERVAL`; a long text cut at paragraph breaks; `splitText` on 200 random texts |
-| Delivery: `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions | `whatsapp.test.mjs`, through the wacli stub: the command lines of a quoted text, a reaction with `--sender`, and a text in two chunks, each with `--no-preview`; sends to the chat the owner last wrote from |
-| Delivery: `out` lines logged with wacli's IDs | `delivery.test.mjs`, the lines whole; `whatsapp.test.mjs`, `SENT1`… from the stub; `bridge.test.mjs` end to end |
-| Delivery: recovery from `sending.json`, only the chunks not recorded going out again | `delivery.test.mjs`: a send that fails at the second chunk and a bridge started afresh; `sending.json` files left as a crash leaves them, a reaction among them |
-| Routing: `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` unquoted; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL` | `routing.test.mjs` |
-| Routing: a `DEFAULT_CHANNEL` that can't send stops the bridge at startup | `routing.test.mjs`: `startBridge` refuses before wacli is started, and `scooter bridge` exits with 2 |
-| Time: `/status` shows `SCOOTER_TZ` | `status.test.mjs`, the same files in Kolkata and New York |
-| `/status` reports the runner's state, and says when the runner hasn't started | `status.test.mjs`; `bridge.test.mjs`, through the runner and the bridge |
-
-Beyond section 10: waiting for a channel, failed sends and giving up, entries that aren't entries, pausing, the cut, a store that stops, and a `sending.json` that can't be written, in `delivery.test.mjs`; commands answered once across a restart, in `bridge.test.mjs`.
-
-The milestone's "done when": the first test in `bridge.test.mjs` under "From a webhook to a reply" posts a signed webhook through the wacli stub's sync, runs the runner with the fake sandbox and the pi stub, which asks a question, and checks that the bridge sends the reply with `--reply-to` the message's WhatsApp ID and `--no-preview`, and logs it as an `out` line with wacli's ID and `replyTo`. The second has `/status` report the runner's state, through both services.
-
-Not verified:
-- **wacli when paired** (gate G4): sending, its answers, and how it fails. The stub answers `send text` and `send react` as wacli's source and help say (13.1). That `--no-preview` keeps wacli from fetching a link (0.8), that `--sender` with the owner's chat is right for a reaction in a one-to-one chat, and whether `SEND_ATTEMPTS` and the dropped quote fit wacli's real failures, wait for the bot number.
-- **The end-to-end case from an email:** milestone 6, which builds the email channel. Routing for emails is tested here with a fake email channel.
-- **`/backup`:** a placeholder until milestone 10, which also uses delivery's `pause()`.
-- **The bridge under systemd or Compose:** milestones 12 and 13. `scooter bridge` runs as a process in one test, without an outbox entry.
-- **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW`, `O_NONBLOCK` and `git prune` exist on macOS.
-
-## Milestone 6: email
-
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, 5.4, 5.6, 8.2, 8.4, 8.6, and sections 9, 10 and 14, to say what this milestone settled (6.3 here). Its review asked for three changes and noted eight smaller points; 6.5 says what became of each.
-
-What the milestone left in the repository:
-
-| Path | What |
-|---|---|
-| `src/mail/reader.mjs` | The email reader, `node src/mail/reader.mjs run`: the position, headers first, the whole message only from an owner's address, the `n:*` quirk, IDLE and the periodic look, a `UIDVALIDITY` change, and `newest` for `email-check` |
-| `src/mail/imap.mjs` | The mailbox adapter over `imapflow`: seven functions, and nothing that changes the mailbox |
-| `src/mail/parse.mjs` | Parsing with `postal-mime`, HTML to text, and the reader's loose check of `From` |
-| `src/mail/spool.mjs` | The spool writer and the position file |
-| `src/bridge/channels/email.mjs` | The email channel: the reader's environment and supervision, the spool consumer and its checks, the sender check, the record, the skip log and its counts, `status()`, and `email-check` |
-| `src/bridge/main.mjs`, `intake.mjs`, `src/common/settings.mjs`, `src/cli.mjs` | The channel started with email on; an email's files only with its whole message first; `EMAIL_AUTHSERV_ID` checked by the bridge, not the settings; `email-check` built |
-| `src/common/files.mjs`, `limits.mjs` | `readUntrustedFile` with an owner, and `readUntrustedStart`; `checkOwnFolder` and `removeHandOff` (D136); eight constants |
-| `src/bridge/outbox.mjs`, `commands.mjs`, `status.mjs`, `src/common/outbox.mjs`, `agentstate.mjs`, `runnerstatus.mjs`, `netlog.mjs` | The smaller points of the review of milestone 5 (6.2) |
-| `test/support/` | The fake mailbox, a small IMAP server, the reader's stub, and sample emails as Gmail, Apple Mail and Outlook send them |
-| `test/mail-reader`, `mail-imap`, `mail-parse`, `email` | This milestone's tests, with additions to `bridge` (end to end), `delivery`, `routing`, `outbox`, `status`, `settings`, `limits`, `failures` and `whatsapp` |
-
-It also settled the smaller points of the review of milestone 5 (6.2).
-
-### 6.1 Decisions
-
-**D114. The mailbox is an adapter of seven functions, tested two ways.**
-*Question:* section 10 has the reader reach the mailbox through a small adapter, so its tests use a fake mailbox; nothing then tests the adapter itself before gate G4.
-*Choice:* `src/mail/imap.mjs` gives `open`, `list(from)`, `header(uid)`, `source(uid)`, `search({ since })`, `newest(count)`, `news({ signal })` and `close`, each one IMAP command or two through imapflow, and holds no logic of the reader's. The reader's tests use `test/support/fake-mailbox.mjs`, with the same functions and a fake clock. The adapter's own test runs it, imapflow for real, against `test/support/imap-server.mjs`, a small IMAP server on a Unix socket in the test's folder, which imapflow reaches through its `transport` option: the commands it sends (EXAMINE, `UID FETCH … BODY.PEEK[…]`, `UID SEARCH SINCE`), `n:*`, IDLE and `EXISTS`, a lost connection, a wrong password; and the reader on top of it. TLS and a real provider are G4's.
-*Reason:* the adapter is the part G4 would otherwise be the first to run. *Cost:* the test server is only as faithful as its author; imapflow's commands are what it answers.
-
-**D115. Any error with the mailbox ends the reader, and the bridge's restart is the backoff.**
-*Choice:* the reader connects, opens `INBOX` and keeps looking; a failed connection, login or command, or a lost connection, rejects, and the reader exits with code 1. The bridge's supervisor starts it again after `RESTART_BACKOFF` (5.6), which is how it reconnects with backoff. SIGTERM ends it with 0, after it has saved `connected: false` and logged out. The position moves only after a folder is renamed, so a reader that ends in the middle of an email hands it over again.
-*Reason:* one place for backoff, and one way to start: every connection is a fresh process.
-
-**D116. The reader fetches the whole message when any `From` header names an owner's address; the bridge decides.**
-*Question:* 5.6 has the reader fetch the whole message "only if `From` is one of `EMAIL_OWNER_ADDRESSES`", and the bridge's sender check decides. If the two read `From` differently, an email the check would keep could arrive with its headers only.
-*Choice:* the reader's test is looser than the check by construction: a `From` header, unfolded the same way, that contains an owner's address, in any case. Everything the check keeps passes it. A message over `ATTACHMENT_MAX_BYTES` isn't fetched (5.6); its headers go over, and one that passes the check is stored without its body, with `media` `too large, not downloaded`, so the agent can tell the owner. Mail that isn't the owner's is never fetched whole. A message whose size the server doesn't give is treated as too large too; IMAP requires `RFC822.SIZE` in a `FETCH` that asks for it, so only a server that doesn't follow it would make one (the review of this milestone, smaller point 7).
-*Reason:* the check is Scooter's own code in the bridge (5.6); the reader's test only saves fetching strangers' mail.
-
-**D117. The spool folder's format.**
-*Choice:* `src/mail/spool.mjs` writes it, and `email.mjs` checks it, field by field, refusing any other: `parsed.json` is `{ uid, uidValidity, arrivedAt, size, fetched, parsed, subject, text, attachments }`, each attachment `{ name, mime, bytes }` in the order of `part-1`, `part-2`…. `fetched` is `whole` or `headers`; `parsed` is false for an email postal-mime couldn't parse, which then has no subject, text or attachments. The reader keeps the subject and the text to one character past where the bridge cuts them, so the bridge can tell that a cut is due, and an attachment's name to `ATTACHMENT_NAME_MAX_CHARS`, 255 characters, which both sides read from `limits.mjs` (the review of this milestone, smaller point 5); a MIME type that isn't `type/subtype` is `application/octet-stream`. An email whose description would pass `EMAIL_PARSED_MAX_BYTES`, as with thousands of attachments, is handed over unparsed. The bridge never takes a file name from `parsed.json`: it reads `part-<n>` by position, and the store names the stored file (4.1).
-*Reason:* 5.6, with sizes bounded on both sides, so a well-behaved reader never writes what the bridge refuses.
-
-**D118. The position.**
-*Choice:* `state.json` is `{ uidValidity, next, newest, parsing, connected, checkedAt }`, written atomically, mode 0600. `newest` is when the newest message handed over arrived, which a `UIDVALIDITY` change needs (5.6). There, `next` becomes the lowest UID the server gives for `SINCE` the day before `newest`, a date in UTC a day early, since `SINCE` takes a date in the server's own zone, and everything from it on is handed over again; the bridge skips what it holds by `Message-ID`. Before anything was handed over, `next` is the new `UIDNEXT`. A position that can't be read, which only something other than the reader makes, is logged as `mail.position_unreadable`, and the reader starts from `UIDNEXT`, as the first time. `connected` and `checkedAt` are for `/status`; `checkedAt` is written after every look.
-*Cost:* an email without a `Message-ID` is stored again after a renumbering, as `imap-<the new UIDVALIDITY>-<UID>`.
-
-**D119. A message the reader was parsing when it ended is handed over unparsed.**
-*Question:* 5.6 hands over raw a message that postal-mime fails on, so it can't hold up the ones after it. A message that ends the reader instead, killed at `STOP_GRACE` or out of memory, would end it at every start.
-*Choice:* the reader records `parsing: <uid>` before it parses a whole message, and clears it as soon as postal-mime has returned or thrown, before the folder is written. A start that finds it set for the next message hands that message over unparsed, with `mail.parse_failed`. A `UIDVALIDITY` change clears it too, since the UID then names another message. Clearing it only once the folder was renamed, as at first, made a spool the reader couldn't write, as on a full disk in `mail/`, look like a parse that ended the reader: the email, parsed already, was handed over unparsed at the next start, and stored for good as `could not be parsed` (the review of this milestone, smaller point 2).
-*Cost:* a reader stopped while parsing, which a backup's stop could do to a large email, hands that one over unparsed: its `.eml` is kept, and the agent is told it couldn't be read.
-
-**D120. HTML to text is Scooter's own, and takes time in step with its length.**
-*Question:* postal-mime gives an HTML-only email no text: it fills `text` only from a plain part, and its HTML converter isn't exported.
-*Choice:* `htmlToText` in `parse.mjs`: one pass that finds each `<` and `>` once; comments, `head`, `script`, `style`, `template` and `title` dropped with what they hold; a line break at `br` and at block elements, a blank line around paragraphs, headings and rules; "- " before a list item; a space between table cells; spaces run together; character references decoded: numeric ones, the XML five, all of Latin-1's names and HTML 4's punctuation and symbols. A tag, a comment or a script that never ends drops the rest. A test holds inputs that would take a careless parser time in the square of their length. Where a hidden element ends is looked for in a copy of the HTML with only A to Z lowered: `toLowerCase` makes some letters two characters, such as `İ`, which moved every position after it, and the text after a `style` element was dropped (the review of this milestone, smaller point 3).
-*Reason:* the HTML is a stranger's at worst, and the reader runs every email through it, so one email mustn't hold up the rest.
-
-**D121. Every attachment postal-mime finds is a part, an image shown in the body included.**
-*Choice:* the reader hands over every attachment, `related` inline images among them.
-*Reason:* Apple Mail sends a photo as an image the HTML body shows inline; leaving inline images out would lose it. *Cost:* a forwarded newsletter's logos are attachments too.
-
-**D122. The sender check's reading of the headers.**
-*Choice:* `email.mjs` reads the header block from the first `EMAIL_HEADER_MAX_BYTES` of `message.eml`, as UTF-8, up to the first empty line, unfolding continuation lines. A block that doesn't end there, a line that is neither a header (printable ASCII without a colon, then a colon) nor a continuation, makes the email unreadable, and it is skipped. Then:
-- `From`: exactly one header. Its value is walked as RFC 5322 has it, quoted strings and nested comments passed over: an address in `<…>` with nothing after it but spaces and comments, or else a bare address. A `,` outside them is several addresses, a `:` or `;` a group, either is skipped. The address is compared, in lower case, with `EMAIL_OWNER_ADDRESSES`, exactly.
-- `Authentication-Results`: the first, after unfolding (the plan's rule). Comments are dropped, then it is split at `;` outside quoted strings. Its first token is the server, compared with `EMAIL_AUTHSERV_ID` without regard to case. It must hold exactly one `dmarc=` result, and that `pass`.
-- The log line is `email.skipped` with `uid`, `sender` (the address, when there is one, at most 254 characters) and `reason`, which names the rule; never the subject or the body.
-*Reason:* 5.6 and the plan's rule, with what is ambiguous made precise.
-
-**D123. `Message-ID` and `Date` are read by the bridge, from the raw headers.**
-*Choice:* the `sourceId` is the one `Message-ID` that reads as `<…>` of printable ASCII, without the brackets, else `imap-<UIDVALIDITY>-<UID>`. `at` is the one `Date` of RFC 5322's form, `[Mon, ]9 Nov 2026 21:12[:28] +0530`, comments dropped, with its zone: `+hhmm`, `-hhmm` or one of the names RFC 5322 gives. Anything else, a date without a zone among them, is the arrival time.
-*Reason:* the bridge needs both even for an email postal-mime couldn't parse, and a date without a zone would be read in the bridge's own, which code never depends on (8.2).
-
-**D124. The record of an email.**
-*Choice:* its attachments are the whole message, `{ type: 'email', mime: 'message/rfc822' }`, then the parts, each typed `image`, `audio`, `video` or `document` by its MIME type, for a `media` object should it fail. An email that couldn't be parsed adds `{ type: 'email', error: 'could not be parsed' }`, which intake turns into its `media`, as a location's is (D40). One fetched without its body has the whole message as too large. The text is cut at `EMAIL_TEXT_MAX_CHARS` characters, then `[The rest of this email was too long to keep here. The whole email is in its .eml file.]`; the subject at `EMAIL_SUBJECT_MAX_CHARS`, then ` […]`. Intake keeps an email's files only if the first, the whole message, was stored: the agent's prompt names an email's first file as the whole email (D71), and without it the store would give the first part that name.
-*Reason:* 5.6, in the record's own shape (D34), so intake stays the same for both channels.
-
-**D125. The spool consumer.**
-*Choice:* every `POLL_INTERVAL`, the folders in order, while the spool is the reader's folder and not a link (D136). A folder is taken only if it is a folder, and the reader's when the bridge knows its user; `parsed.json` and `message.eml` are read with `readUntrustedFile` and `readUntrustedStart`, which now take an owner, and the parts are copied with `copyUntrustedFile`, all without following a link, as regular files with one name, belonging to `scooter-mail`. A folder whose files aren't so is logged as `email.refused`, with the reason, and deleted. A skipped email is counted and deleted; a stored or duplicate one is deleted. Deleting goes by the names the reader writes in a folder, and leaves what isn't the reader's or isn't a folder, logged once (D136). When intake stores nothing of an email for a reason of the bridge's own, the folder stays and the spool is looked at again after `SPOOL_RETRY_BACKOFF` (D137); when the store has stopped, the consumer stops with the bridge.
-*Reason:* 5.6, with D35's care for a folder another user controls: the reader could leave a link to a file it can't read.
-
-**D126. The reader's environment and process.**
-*Choice:* `HOME` is `mail/`, `TZ=UTC`, `PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C.UTF-8`, and the six mailbox settings; not `EMAIL_AUTHSERV_ID`, which only the bridge reads. It runs as `node src/mail/reader.mjs run`, Node being the bridge's own, in `mail/` as its working folder. Its stderr joins the bridge's: its log lines are Scooter's own, through `log.mjs`, and imapflow logs nothing (`logger: false`).
-*Reason:* 5.6 lists the variables; a fixed `PATH` and `LANG` give the reader nothing of the bridge's own environment.
-
-**D127. What `/status` says of email.**
-*Choice:* `Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory; within 24 hours of the bridge's start the line says `since the bridge started, 21:20` instead. Times past the window are dropped when one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps a day of times at most (the review of this milestone, smaller point 6).
-*Reason:* counting skips that aren't stored anywhere else needs a record of them; one in memory is the simplest, and the line says what it covers.
-
-**D128. `email-check` runs before `EMAIL_AUTHSERV_ID` is set.**
-*Question:* 8.2 makes `EMAIL_AUTHSERV_ID` required for email, and gate G4 runs `email-check` to find it; with the settings as D19 had them, `email-check` couldn't start without it.
-*Choice:* the settings no longer require it; the bridge refuses to start with email on and without it, saying to run `email-check`, and exits with 2 (D30). `email-check` runs the reader's `newest` mode as `scooter-mail`, with the reader's environment, at most `EMAIL_CHECK_TIMEOUT`, and prints each of the newest `EMAIL_CHECK_COUNT` messages with its UID, when it arrived, its `From` address, the server of its topmost `Authentication-Results`, and whether it would be kept, or why not. Without `EMAIL_AUTHSERV_ID` it says how to choose it. It exits with 2 when email is off, and 1 when the reader couldn't read the mailbox, after the reader's log lines.
-*Reason:* that is what the command is for (8.4), and the bridge still never runs the check without the setting.
-
-**D129. Eight constants.**
-`EMAIL_SUBJECT_MAX_CHARS`, 1,000 (D124; the review of milestone 5, point 6); `EMAIL_HEADER_MAX_BYTES`, 256 KB (D122); `EMAIL_PARSED_MAX_BYTES`, 1 MB (D117); `ATTACHMENT_NAME_MAX_CHARS`, 255 (D117; the review of this milestone, smaller point 5); `SPOOL_RETRY_BACKOFF`, 5 seconds doubling up to 5 minutes (D125); `EMAIL_CHECK_COUNT`, 5, and `EMAIL_CHECK_TIMEOUT`, 2 minutes (D128); and `STATUS_FILE_MAX_BYTES`, 4 MB (D127, D132). 8.6 of DESIGN.md lists them. The longest address and message ID the check reads, 254 and 995 characters, aren't constants: they are facts of RFC 5321 and 5322, as D95 has the path lengths.
-
-**D130. An entry that has failed `SEND_ATTEMPTS` times no longer holds back the others; it is given up on only once another's message has gone out** (the review of milestone 5, point 1).
-*Question:* D102 gave an entry up after 8 failed tries made while its channel was ready. But WhatsApp's `ready()` is true while sync runs, connected or not, so in an outage every send fails while ready, and each entry was deleted after about 10 minutes. The runner has the rule this lacked: an outage never uses up a message's attempts (6.9).
-*Choice:* each entry keeps its own failed tries and its own next try. After `SEND_ATTEMPTS`, it is logged as `outbox.passed_over`: it is still tried first, after its own wait, which by then is the longest, but when it fails the look goes on to the next entry. When a message of a later entry goes out, the channel works: each entry passed over gets one last try, and the look starts over so that it comes next. If that try fails, the entry is given up on, logged as `outbox.given_up` with all its failures, and removed. So an outage, during which nothing goes out, gives up on nothing, and once it ends the entries go in order. An entry with nothing behind it holds nothing back, and is tried every 5 minutes. The review's way, trying the next entry before giving one up, is this rule; the last try is added so that an entry that failed only because of an outage the next one outlasted isn't given up.
-Before an entry behind ones passed over is tried, those are tried again, in order, whatever their own waits (the review of this milestone, smaller point 1). Each passed-over entry kept its own wait, so one behind it could come due first and, once sends worked again, go first: with four entries, 7 of 30 outages from 5 to 92 minutes sent them out of order, and now none does. What remains is an entry tried in the look during which sends began to work again, after the ones passed over ahead of it failed in that same look, seconds before: it goes first, and they follow, in order. No rule can undo a message once it has gone; a test shows the case.
-*Cost:* during an outage each entry is tried at its own pace, at most once every 5 minutes once its waits have grown, and each failure is logged; while an entry behind ones passed over ramps up, each of its tries brings a try of each of them. Six entries make about 140 tries in an hour of outage, where they made about 60. Outages are when wacli is linked and can't reach WhatsApp, so none of these tries reaches it.
-
-**D131. U+0000 in a text is written as U+FFFD, and an entry that holds one is refused** (the review of milestone 5, point 2).
-*Choice:* `cutText`, which `writeOutboxEntry` applies to every text, replaces U+0000 with U+FFFD, which keeps a text of nothing else from being empty; `checkOutboxEntry` refuses a text or an emoji with U+0000, so the bridge drops an entry not written that way at once. The `✅ Email:` text goes through `cutText` too.
-*Reason:* no program takes a command-line argument with U+0000 in it, so `wacli send text` never started; the entry held the outbox for its 8 tries, and an answer's 25 texts could hold it for hours.
-
-**D132. `/status` reads the runner's files as files another user controls** (the review of milestone 5, point 3).
-*Choice:* `readAgentState` and `readRunnerStatus` take `maxBytes`, and with it read with `readUntrustedFile`; the bridge passes `STATUS_FILE_MAX_BYTES`, and the runner reads its own files as before. `scanNetworkLog` opens each day's file without following a link and without waiting on a FIFO, and reads it only if it is a regular file; the runner's failure handling reads it the same way, and counts one that isn't as no answer (D110). What can't be read is said to be so, with the code, `EUNTRUSTED` for these.
-*Reason:* the bridge reads them as root, and the runner's user writes them: a FIFO in place of `status.json` kept `/status`, and the bridge's one thread, waiting.
-
-**D133. An `out` line whose ID the datastore already holds is logged without it** (the review of milestone 5, point 4).
-*Choice:* when the store says an `out` line is a duplicate, the bridge logs `outbox.id_taken` and appends the line without its `sourceId`, which 4.2 makes optional. What `send text` and `send react` return as `id` is now an item of gate G4 and of section 14 of DESIGN.md.
-*Reason:* if wacli answered a reaction with the ID of the message reacted to, every ✅ would go out and none would be recorded.
-
-**D134. A text is at most four chunks, four to eight messages** (the review of milestone 5, point 5).
-*Choice:* the documents say so: DESIGN.md 5.3 and 8.6, ARCHITECTURE.md 5.3, and `limits.mjs`. D98 keeps each piece at least half full, so a text of `TEXT_MAX_CHARS` can take eight. D99's cost becomes: an answer can send 25 texts of up to eight messages each, about seventeen minutes of sending.
-*Reason:* the cheaper fix; filling pieces further would cut texts in the middle of a paragraph more often.
-
-**D135. A reply to a command that couldn't be written is tried again after a wait** (the review of milestone 5, point 7).
-*Choice:* `createCommands` takes the clock. After a failure, such as a full disk, it tries the same commands again after a wait that doubles from 5 seconds to 5 minutes (`SEND_RETRY_BACKOFF`, as a failed look at the outbox has it), without waiting for another command. `stop()` ends the wait; the bridge calls it when it stops.
-
-**D136. The bridge removes nothing in a folder another user controls but the names it knows** (the review of this milestone, must-fix 1 and smaller point 4).
-*Question:* `mail/` belongs to `scooter-mail`, `wacli/` to `scooter-wacli` and `exchange/` to `scooter-runner` (3.2), so each can put a link where `mail/spool`, `wacli/staging` or `exchange/outbox` was. The bridge listed what the link led to, and removed as root, with `fs.rmSync(…, { recursive: true })`, whatever it found wrong there. The review made `mail/spool` a link to the data folder, as root in a container, and within three looks `agents`, `bridge` and `datastore` were gone. Section 9 lists what a malicious reader can do, and deleting the record isn't on it. wacli's staging folder and the outbox had the same removal.
-*Choice:*
-- At every look at the spool or the outbox, and before wacli's staging folder is cleared at a start, the folder must be a folder, not a link, and that user's when the bridge knows its user (`checkOwnFolder` in `src/common/files.mjs`). Otherwise nothing is taken or removed: the look fails with `EUNTRUSTED`, is logged, and is tried again after the waits that grow (`SPOOL_RETRY_BACKOFF`, `SEND_RETRY_BACKOFF`), and staging isn't cleared, which is logged.
-- What isn't the reader's in the spool, and what isn't a folder in the spool or the outbox, is left where it is, and logged once while it stays: the bridge never removes what that user couldn't remove itself. An outbox entry is taken whoever owns it, as before, since the bridge's own entries are root's.
-- A folder the bridge is done with is removed by the names its writer gives the files in one (`removeHandOff`): `message.eml`, `parsed.json` and `part-<n>` in the spool; `entry.json`, `sending.json`, and what a write of `sending.json` cut short leaves, in the outbox. Each is unlinked, which neither follows a link nor removes a folder, and then the folder is removed, which happens only once it is empty. One that holds anything else is left, and logged once (`email.not_removed`, `outbox.not_removed`).
-- In wacli's staging folder the bridge unlinks only names that start with an ID, as it names its downloads (`startsWithId`), at a start and after each download. Anything else there, a folder wacli left in a download's place among it, is wacli's, and stays, counted in `whatsapp.staging_kept`. This changes D35, and milestone 2's test, which removed every name there, folders and all.
-*Reason:* the review's way, for all three folders. Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a gap between the check and the removal stays, and a link swapped in there is followed. Removing by known names limits what it can reach to files of those names, which nothing else of Scooter's or the system's has, and to empty folders, which are all `rmdir` removes. A name starting with an ID is also an outbox entry's, which is a folder, and `unlink` refuses a folder; and a download waiting in `bridge/incoming/`, named `<id>-<n>`, which is in the bridge's own folder, emptied at every start, and empty whenever staging is cleared, so a link in staging's place leads to none of them (added in milestone 7, for the second review of milestone 6, smaller point 7).
-*Cost:* the same gap remains for what the bridge writes into the outbox. It writes `sending.json` into an entry's folder before each message (D101), and hands its own entries off there; a link swapped in between its read and its write would steer that write, as root, into the folder the link leads to, under that name. Only the runner's user can make the swap, and an escape from pi's VM is needed to reach it (section 9). The plan's milestone 12, which checks what each user can reach, now says to settle it, for example by keeping `sending.json` in `bridge/`. What is left in place stays until its owner removes it; a well-behaved reader, wacli or runner leaves nothing of the kind.
-
-**D137. An email whose files the bridge can't copy, for a reason of its own, stays in the spool** (the review of this milestone, must-fix 2).
-*Question:* D125 kept a folder only when intake answered `failed`. But intake caught a failed copy itself, as D29 and D36 have it for WhatsApp: a copy into `bridge/incoming/` that failed became `download failed` after three tries, and a copy into the day folder that failed became `could not be stored`; the line was stored without its files, and the channel deleted the folder. So on a full disk, the case 5.6 names, the `.eml` and the attachments, whole in the spool, were lost for good.
-*Choice:* a channel says whether it keeps a message until intake has stored it (`keepsUntilStored`): email does, WhatsApp doesn't. The email channel's `download` marks a failure on the bridge's side (`bridgeSide`): anything but an error about the spool's file (whose `path` is that file, such as `ENOENT`), a file that isn't the reader's or isn't a regular file with one name (`EUNTRUSTED`), or one too large (`EFBIG`). From a channel that keeps its messages, such a failure, and any failure to copy a file into the day folder, stores nothing: intake answers `failed`, and the folder stays, whole, and is tried again after `SPOOL_RETRY_BACKOFF`. WhatsApp's messages are still stored without the files, as D29 and D36 have it.
-*Reason:* 5.6. The spool holds the email whole, so waiting loses nothing, and the folders after it wait, in order.
-*Cost:* a fault of the bridge's that lasts, such as a `bridge/incoming/` it can't write, holds back every email behind the first, tried every 5 minutes and logged, until it is mended. That is what 5.6 asks for a full disk.
-
-**D138. A file replaced by a rename as it was opened is opened again, once** (the review of this milestone, must-fix 3).
-*Question:* `readUntrustedFile` refuses a file with more than one name, so that a hard link can't make root read someone else's file. A file its writer replaced by a rename just after the bridge opened it has no name left, and was refused the same way. The reader writes its `state.json` so, and the runner its `status.json` and `state.json`, which `/status` reads since D132. So `/status` would now and then say one couldn't be read, and a test failed on it, once in about 30 runs.
-*Choice:* a file found with no name when it is looked at is opened again, once. Found so again, it is refused, as `a file replaced as it was opened, twice`.
-*Reason:* the review's way. A file with no name isn't a hard link to anything; the check is for a second name. By a script reading a file a million times while another thread replaced it: as fast as the thread could, 101,759 reads were refused before and 293 now; with a replacement every millisecond, 1 now. The reader replaces its file about once a minute.
-*Corrected in milestone 7* (the second review of milestone 6, smaller point 5): the second open mostly doesn't find the new file on ext4. The review's runs of the same kind of script gave 270 refused of a million as fast as the thread could, and 19, not 1, with a replacement every millisecond; with a writer that sleeps between writes, as the reader and the runner do, 60 of 61 replacements were seen without a name at the first open, and 56 again at the second, 2 microseconds later. On ext4 a name can still lead to the old file, with no name left, for the moment the rename takes; on tmpfs the second open nearly always finds the new one. It costs little: the window is microseconds a minute, only `/status` reads then, a refusal is the safe side, and no test leans on it. The comment in `files.mjs` says so.
-
-### 6.2 The reviews of the pull requests merged before this one
-
-Pull request 6, milestone 5, was approved by its review with seven smaller points. All seven are settled:
-
-| # | Point | What became of it |
-|---|---|---|
-| 1 | A send that fails while wacli is up uses up the entry's tries, whatever the cause | Settled (D130), the review's way with a last try. G4 in the plan and section 14 of DESIGN.md now list how sends fail when wacli can't reach WhatsApp, and whether `SEND_ATTEMPTS` and the dropped quote fit. Tests in `delivery`: an hour of failures with six entries gives up on none and sends them in order; one alone is tried every 5 minutes; one that fails after another went is given up on |
-| 2 | A text with U+0000 can never be sent, and holds back the outbox | Settled (D131). Tests in `outbox` and `delivery` |
-| 3 | `/status` reads three of the runner's files as root without care | Settled (D132). Test in `status`: a FIFO for `status.json` and for the day's log, a link for `state.json`, and one too large, each said to be unreadable, at once |
-| 4 | The outbox doesn't notice when the store skips an `out` line as a duplicate | Settled (D133), storing the line without its ID, and G4 now asks what the IDs are. Test in `delivery` |
-| 5 | "Four chunks" isn't the most a text takes | Settled (D134), in the documents |
-| 6 | The `✅ Email:` text isn't cut | Settled both ways the review gave: intake cuts an email's subject at `EMAIL_SUBJECT_MAX_CHARS` (D124), and routing cuts the text (D131). Tests in `email` and `routing` |
-| 7 | A command whose reply couldn't be written waits for the next command | Settled (D135). Test in `bridge` |
-
-The points the reviews of milestones 0 to 4 left stay with the milestones that own them, as 5.2 has them:
-
-| From | Point | For |
-|---|---|---|
-| Milestone 0, point 6 | The VM tests' 2-minute start limit | Milestone 7 |
-| Milestone 1, point 3 | A zone name wrong in its later letters passes | Milestone 7 |
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Milestone 10. The email channel's `stop()` waits for the spool folder it is taking, which is quick; the plan's milestone 10 now says so |
-| Milestone 4, first review, points 4, 5 and 6 | `RestartSec`; a runner started during `rebuild`; a refused request that reads as pi's own failure | Milestones 12, 9 and 8 |
-| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Milestone 10 |
-
-### 6.3 Changes to DESIGN.md
-
-None changes what Scooter does beyond what 5.6 left open and what the review of milestone 5 asked:
-- 5.3: a passed-over entry, given up on only after another's message goes (D130); U+0000 (D131); an `out` line without a taken ID (D133); four to eight messages (D134); the `✅ Email:` text cut.
-- 5.4: how `/status` reads the runner's files (D132), and a command's reply tried again (D135).
-- 5.6: the reader's loose check of `From`, and an email too large to fetch stored without its body (D116); its errors end it (D115); `newest` in the position, and where a renumbering starts (D118); the parse a reader ended in (D119); inline images (D121); the spool's description (D117); the consumer's checks and retries (D125); the sender check's rules (D122); a `Date` without a zone (D123); the subject cut (D124).
-- 8.2 and 8.4: `email-check` runs without `EMAIL_AUTHSERV_ID`, and the bridge doesn't (D128).
-- 8.6: the seven constants of D129, and `TEXT_MAX_CHARS` and `SEND_RETRY_BACKOFF` as D130, D134 and D135 have them.
-- Section 10, Delivery: passing over and giving up, an outage, U+0000.
-- Section 14: how wacli's sends fail, and the IDs they return; imapflow over TLS.
-
-ARCHITECTURE.md 2.3 and 5.3 say the same. The plan's G4 and section 7 have the new items, and its milestone 10 what this milestone left for it. `bridge.env.example` says how to find `EMAIL_AUTHSERV_ID`.
-
-After the review of this milestone (6.5), none of them beyond what the review asked:
-- 5.3: entries passed over are tried before one behind them, and the one case left out of order (D130); an entry removed by the names it holds, and the outbox used only while it is the runner's folder (D136).
-- 5.6: the spool used only while it is the reader's folder, folders removed by the names the reader writes, and what isn't the reader's left (D136); an email whose files the bridge can't copy for a reason of its own stays whole (D137).
-- 8.6: `ATTACHMENT_NAME_MAX_CHARS`.
-- Section 9: a control for the folders other users control, and the gap Node leaves as an accepted risk (D136).
-- Section 10: under Email, the full disk and a spool that is a link; under Delivery, order after an outage of any length, and an outbox that is a link.
-
-ARCHITECTURE.md 2.3, 3.3 and 5.3 say the same. The plan's milestone 12 has what D136 leaves.
-
-### 6.4 What was run to verify the milestone, and what wasn't verified
-
-Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `f813cf1`, the last commit that changes code:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test`, Node 22.23.2 | 498 tests: 472 pass, none fail. 26 skip themselves: 18 need the image and 8 need root |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 490 pass, none fail, in 110 seconds. The 8 root tests skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 466 pass, none fail. 32 skip themselves: 18 need the image, 4 need wacli, 2 run `scooter bridge` as a process, which as root needs the users `setup` makes, and 8 are about a file or folder root can read or write anyway, the email one among them. The email root test runs: the reader as its own user, its folders its own, and the bridge refusing a spool folder and a `parsed.json` that aren't the reader's |
-| The `email`, `mail-reader`, `mail-imap`, `mail-parse`, `delivery`, `bridge`, `routing`, `status` and `outbox` tests, 32 times, 8 at once | No failure here; the review's runs found two tests of `email` that failed now and then (6.5, must-fix 3) |
-| The `whatsapp`, `failures`, `settings`, `limits`, `files` and `intake` tests, 16 times, 8 at once | No failure, and no test folder left behind |
-| The new tests for the review of milestone 5, against the code of `e81edec`, before the fixes | Each fails: the command's reply isn't tried again; the entry is given up on after 8 tries, and in the outage entries are given up on; the out line with a taken ID is missing; the U+0000 entry is tried 8 times; the `✅ Email:` text isn't cut; the network log that is a folder is read; and `/status` with a FIFO for `status.json` never returns, as the review found, until the run was stopped |
-
-The tests section 10 of DESIGN.md asks of this milestone, and where they are:
-
-| Required | Where |
-|---|---|
-| The reader against a fake mailbox: headers first, whole messages only from the owner's addresses | `mail-reader.test.mjs`, the calls the fake records; `mail-imap.test.mjs`, the commands imapflow sends to a server of the tests' own |
-| The `n:*` quirk | `mail-reader.test.mjs`; `mail-imap.test.mjs`, where the server answers `50:*` with the newest |
-| IDLE with the periodic check | `mail-reader.test.mjs`, a message announced and one IDLE missed, found at the next look; `mail-imap.test.mjs`, `EXISTS` during IDLE |
-| Errors and backoff | `mail-reader.test.mjs`: a refused connection, a lost one, a fetch that fails part-way, each ending the reader with the position as it was; `email.test.mjs`: the reader started again after 5 seconds, with `/status` saying so; `mail-imap.test.mjs`: a wrong password |
-| The position: kept across restarts, nothing imported the first time, a `UIDVALIDITY` change without duplicates | `mail-reader.test.mjs`, the change from the day before the newest; `email.test.mjs`, the duplicate `Message-ID` skipped |
-| The spool: a folder counts only once renamed; a bad `parsed.json` refused; file names the bridge's own; a duplicate `Message-ID` skipped; an email that couldn't be parsed stored with its `.eml` and an error, and the ones after it still arrive | `email.test.mjs`; `mail-reader.test.mjs` for the reader's side, and a message the reader ended while parsing |
-| The sender check: another `From`, several `From` headers or addresses, no `Authentication-Results`, another server's on top, `dmarc=fail`, a forged header below the provider's | `email.test.mjs`, as functions on the samples and through the spool |
-| Parsing samples as Gmail, Apple Mail and Outlook send them, HTML-only mail included | `mail-parse.test.mjs`: Gmail's plain mail and forwarded booking with its e-ticket, Apple Mail's voice memo, Outlook's HTML-only receipt in Latin-1 |
-| The datastore line: `subject`, the 20,000-character cut, `<seq>.eml` first, attachment names | `email.test.mjs` |
-| An email is never a command | `email.test.mjs`, through the spool; `intake.test.mjs` |
-| Least privilege, for the reader's environment | `email.test.mjs`: exactly its ten variables, no password on its command line, nothing else of the bridge's; wacli's calls without the mailbox's settings; as root, the reader as its own user |
-| Delivery and Routing, the email end-to-end case | `bridge.test.mjs`, below |
-
-Beyond section 10: the reader's settings, `newest`, a description too large, its logs; HTML to text and its time; `email-check`; `/status`'s email line; a folder the store can't take tried again; the bridge refusing to start without `EMAIL_AUTHSERV_ID`.
-
-The milestone's "done when":
-- *Sample emails from the fake mailbox end up as the right lines and attachments, and mail that fails the sender check isn't stored*: in `email.test.mjs`, the samples become the lines and files they should, and spoofed, strangers' and unreadable mail is logged and not stored; and in `bridge.test.mjs`, from the stub's fake mailbox through the real reader to the datastore.
-- *An end-to-end test goes from an email to an unquoted reply on WhatsApp*: the test "emails go through the reader, the bridge and the runner…" in `bridge.test.mjs`. The reader's stub runs the real reader, as a process the bridge starts, against a fake mailbox; two emails become lines with their `.eml` and attachment; the runner, with the fake sandbox and the pi stub, asks about one and files the other; and the bridge sends the question to WhatsApp without `--reply-to`, and the ✅ as `✅ Email: Call with Sam`, each logged as an `out` line.
-
-Not verified:
-- **A real mailbox** (gate G4): imapflow over TLS with an app password, the provider's IDLE, the `Authentication-Results` header it writes and its `dmarc=` result on the owner's mail, and `email-check`'s report on them. The tests run imapflow against a server of their own, without TLS.
-- **postal-mime on mail the owner's apps sent** (gate G4). The samples are written by hand, in the shape each app writes mail, not captured from the apps.
-- **The reader as `scooter-mail` under systemd or Compose:** milestones 12 and 13. As root in a container, it ran as made-up IDs.
-- **Delivery's new rule against a paired wacli** (gate G4): how sends fail when wacli can't reach WhatsApp, and the IDs they return.
-- **arm64 and macOS.** Nothing here knows the architecture. `O_NOFOLLOW` and `O_NONBLOCK` exist on macOS.
-
-### 6.5 The review of this milestone
-
-The review of the pull request, at `c941a93`, found the milestone's "done when" met when the suite passes, asked for three changes, and noted eight smaller points. Each is below, with what became of it.
-
-| # | Point | What became of it |
-|---|---|---|
-| Must 1 | A link in the spool's place makes the bridge, as root, delete folders that aren't the reader's: with `mail/spool` a link to the data folder, `agents`, `bridge` and `datastore` were gone within three looks | Fixed (D136), the review's way. The spool is used only while it is the reader's folder and not a link. What isn't the reader's, or isn't a folder, is left and logged once. A folder is removed by the names the reader writes in one, and only once that empties it. The gap Node leaves between the check and the removal is recorded (D136; DESIGN.md section 9). Tests in `email`: a spool made a link to folders as the data folder holds them, which stay; a folder holding another file, left; and, as root, the review's case, a link to the data folder, after which the data folder holds what it did, and a folder of root's in the spool, left. Tests in `files`: `checkOwnFolder` and `removeHandOff`, a link in a folder's place among them |
-| Must 2 | On a full disk an email loses its files and its spool folder is deleted, where 5.6 says the folder stays | Fixed (D137), the review's first way: 5.6's "stays" holds. Tests in `email`, on a day folder that already holds the day's log: a copy into `bridge/incoming/` that fails as on a full disk, and a day folder that can't be written. Each email stays whole, and is stored with its files once the bridge can |
-| Must 3 | Two tests of `email` fail now and then: a `.tmp-` folder that the starting reader removes, and `/status` reading a `state.json` replaced as it was opened, which the product does too | Fixed. The first test waits until the reader has connected, which it does after it has emptied what it left; the second checks the line it waited for. `readUntrustedFile` opens a file with no name left again, once (D138), which `/status` gains for the runner's files too. Test in `files`, with the file replaced between the open and the look |
-| 1 | After an outage, replies can go out of order | Fixed (D130), the review's first way: entries passed over are tried before an entry behind them. Of 30 outages of 5 to 92 minutes, with four entries, 7 went out of order before and none now. The case no rule can undo, sends working again in the middle of a look, is in 5.3 and D130, with its own test. The outage test's count of tries in an hour is now about 140 |
-| 2 | A spool write that fails leaves `parsing` set, and the email is handed over unparsed | Fixed (D119): cleared once postal-mime returns or throws, and on a `UIDVALIDITY` change. Tests in `mail-reader` for both |
-| 3 | HTML to text drops text after `İ` | Fixed (D120): only A to Z are lowered. The review's input is a test in `mail-parse` |
-| 4 | The same removal through a link for wacli's staging folder and the outbox, on `main` | Fixed here (D136), by the same means. In staging only the names the bridge gives its downloads are unlinked, and wacli's own folders stay, which changes milestone 2's test. Tests in `delivery` (an outbox made a link; an entry holding another file) and `whatsapp` (staging made a link; what a start removes). What D136 leaves, the bridge's write of `sending.json` into the outbox, is in the plan's milestone 12 |
-| 5 | 255, the longest file name, in two modules and not in `limits.mjs` | Fixed: `ATTACHMENT_NAME_MAX_CHARS` (D117, D129), in 8.6 |
-| 6 | The counts for `/status` are pruned only when `/status` is asked | Fixed (D127): also when a time is added. No test: the lists are inside the channel, and only `/status` reads them |
-| 7 | A message whose size the server doesn't give is stored as "too large" | A line in D116, as the review said |
-| 8 | The description: "no failure" for the repeated runs, and "the entries then go in order" | Corrected in the pull request. The order holds now, but for the case D130 names |
-
-Each new test was run against the code of `c941a93`, and fails there, but for those of must-fix 3, which failed there only now and then, and those of `files`, whose functions are new.
-
-Run on 2026-11-18, on the Linux machine, from clean clones of the branch at `353fae4`, the last commit that changes code (the one after it changes the documents and one comment):
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test`, Node 22.23.2 | 545 tests, the outage test's 30 lengths each counted: 518 pass, none fail. 27 skip themselves: 18 need the image and 9 need root |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 536 pass, none fail, in 115 seconds. The 9 root tests skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan, on a second clone | Node 24.22.3: 512 pass, none fail. 33 skip themselves: 18 need the image, 4 need wacli, 2 run `scooter bridge` as a process, and 9 are about a file or folder root can read or write anyway. Both email root tests run, the review's link to the data folder among them |
-| `npm test`, 33 times one after another | No failure. The review had 3 |
-| `test/email.test.mjs` alone, 30 times | No failure. The review had 1 |
-| The `email`, `mail-reader`, `mail-imap`, `mail-parse`, `bridge`, `delivery`, `routing`, `status`, `outbox`, `files` and `whatsapp` tests, 16 times, 8 at once | No failure, and no test folder left behind |
-| A script reading a file a million times while a thread replaces it by renames | `c941a93`: 101,759 refused, replaced as fast as the thread can. `353fae4`: 293 so, and 1 with a replacement every millisecond |
-| The new tests against `c941a93`, the root tests in `node:24-trixie` | Each fails, but for those named above. The outage test: 7 of its 30 lengths out of order. The root test with the link: the bridge removed `mail/` itself, the link with it |
-
-Not verified, besides what 6.4 lists: a swap timed into the gap between a check and a removal (D136), which no hermetic test can time. The tests show what a link in place does, and what `removeHandOff` reaches through one.
 
 ## Milestone 7: sandbox and VM image
 
@@ -1824,7 +1100,6 @@ What the milestone left in the repository:
 | `src/cli.mjs`, `src/runner/main.mjs` | `scooter runner` with the Gondolin sandbox, and `scooter build-image`; a sandbox that can't run as it is set up exits with 2 |
 | `src/runner/run.mjs`, `src/runner/failures.mjs` | A cut answer, or a run that wrote too much, fails as pi's own failure |
 | `src/common/settings.mjs`, `limits.mjs`, `paths.mjs` | `loadFolders`, for `build-image`; eight constants; `imageStaging` |
-| `src/bridge/channels/email.mjs`, `src/bridge/intake.mjs`, `src/common/files.mjs` | The smaller points of the second review of milestone 6 (7.3) |
 | `test/support/` | The sandbox with the test image and the fake model's network, a process that holds a VM for the test of a killed runner, and a small image as Gondolin writes one, for `build-image`'s tests, with a stand-in for its file system for those that need no e2fsprogs |
 | `test/sandbox`, `image`, `accel` | This milestone's tests, with additions to `run`, `failures`, `limits`, `email` and `whatsapp` |
 
@@ -1840,7 +1115,7 @@ What the milestone left in the repository:
 **D140. The runner sets its own home and temporary folder, and Gondolin's list of VMs goes in the temporary folder.**
 *Question:* row 16 puts the runner's home and temporary folder under `runner/`; who sets them, and where Gondolin's files go.
 *Choice:* the sandbox, when it opens, sets `HOME` to `runner/home`, `TMPDIR` to `runner/tmp` and `XDG_CACHE_HOME` to `runner/home/.cache` in the runner's own environment, and `GONDOLIN_SESSIONS_DIR` to `runner/tmp/sessions`, then loads Gondolin. The certificate authority stays in the home folder, given to each VM as `mitmCertDir`, so it lasts from one start to the next. The temporary folder is emptied at every open, before any VM. The sandbox refuses to open when a socket's path there would pass 107 bytes, and says the data folder needs a shorter path.
-*Reason:* the runner then works the same however it was started, as a service, by hand, or in a container, and the folder it empties is the one Gondolin uses. Gondolin reads the temporary folder at each VM, and fixes its list of running VMs when it loads, so the module loads only after. The list holds a socket for each VM, named by a UUID: under `home/.cache/gondolin/sessions` its path passed 107 bytes with a data folder of 33 bytes, such as one under a home folder on the Linux machine, which `scooter runner` met at its first start; under `tmp/` it has 51 bytes more room than that and is emptied with the rest. The runner's programs get environments of their own (D25), so they see none of these.
+*Reason:* the runner then works the same however it was started, as a service, by hand, or in a container, and the folder it empties is the one Gondolin uses. Gondolin reads the temporary folder at each VM, and fixes its list of running VMs when it loads, so the module loads only after. The list holds a socket for each VM, named by a UUID: under `home/.cache/gondolin/sessions` its path passed 107 bytes with a data folder of 33 bytes, such as one under a home folder on the Linux machine, which `scooter runner` met at its first start; under `tmp/` it has 51 bytes more room than that and is emptied with the rest. The runner's programs get environments of their own ([Running programs](architecture/shared-code.md#running-programs)), so they see none of these.
 
 **D141. Until milestone 8, the VMs reach nothing.**
 *Question:* the network policy is milestone 8's, and this milestone builds `scooter runner`.
@@ -1884,7 +1159,7 @@ What the milestone left in the repository:
 
 **D148. What the sandboxes keep of pi's output.**
 *Choice:* `createOutput` keeps the first `SANDBOX_STDOUT_MAX_BYTES`, 1 MB, of stdout and the last `SANDBOX_STDERR_MAX_BYTES`, 64 KB, of stderr, as they arrive, and says `stdoutCut`. Both sandboxes use it; the fake one on what its process printed. A run whose answer was cut fails as pi's own failure, "pi's answer was too long", when pi exited with 0; a run that failed otherwise keeps its own cause.
-*Reason:* the plan's rule for this milestone. With `-p` pi prints its answer alone, a few kilobytes; 25 texts of 14,000 characters (D85, D99) are under 1.4 MB at the very most, and an answer near the limit is already one the runner wouldn't send whole. stderr's end holds OpenRouter's error, which the notice quotes (D82).
+*Reason:* the plan's rule for this milestone. With `-p` pi prints its answer alone, a few kilobytes; 25 texts of 14,000 characters (D85; [Outbox entries](architecture/exchange.md#outbox-entries)) are under 1.4 MB at the very most, and an answer near the limit is already one the runner wouldn't send whole. stderr's end holds OpenRouter's error, which the notice quotes (D82).
 
 **D149. The VMs' size, and how long one may take to boot.**
 *Choice:* `VM_MEMORY_BYTES`, 2 GB, and `VM_CPUS`, 2, which milestone 0's checks used, pi 8 with images included; `VM_START_TIMEOUT`, 1 minute, or the run's own timeout when that is shorter. A run whose own time ends before its VM has booted is one whose VM couldn't start too, since milestone 8 (the second review of this milestone, smaller point 2): with `timeout_minutes: 1`, the lowest `agents.yaml` takes, the two limits are equal, the run's timer is set first, and such a run was recorded as timed out, pi's own failure with an attempt counted, where 6.9 makes it a setup error.
@@ -1894,13 +1169,13 @@ What the milestone left in the repository:
 `VM_MEMORY_BYTES`, `VM_CPUS` and `VM_START_TIMEOUT` (D149); `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (D148); `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` (D146); and, after the review of this milestone, `APK_INDEX_TIMEOUT` (D147). 8.6 of DESIGN.md lists them. The longest socket path, 107 bytes, isn't one: it is a fact of Linux, as the path lengths of D95 are.
 
 **D151. As root, `build-image` changes the runner's folder only by two renames** (the review of this milestone, must-fix).
-*Question:* `runner/` belongs to `scooter-runner`, which can put a link anywhere in it at any moment. `build-image`, as root, built in `runner/image.new/`, wrote the image's record and `packages.txt` there, gave that folder and every name in it to `scooter-runner`, set its mode, and removed the old image by its path. The review renamed `image.new` aside during a build, as root in a container with the tests' fake builder, and put a link to another folder in its place: root wrote into that folder, gave it to the runner's user with every name in it, a file of root's with mode 0600 among them, and set its mode to 0700. With `/etc/scooter` as the folder, `bridge.env` becomes the runner's user's; with `/etc`, so does the machine. Gondolin's native builder writes into `image.new` as root for the whole build too, by its path. Section 9 says an escape from pi's VM reaches the runner's user and not the bridge's secrets, and D136 holds the bridge to that; this broke it on a native install at every rebuild. It takes code running as `scooter-runner` outside the service, which `KillMode=control-group` would end, such as from that user's crontab, while the owner runs `sudo scooter build-image`.
+*Question:* `runner/` belongs to `scooter-runner`, which can put a link anywhere in it at any moment. `build-image`, as root, built in `runner/image.new/`, wrote the image's record and `packages.txt` there, gave that folder and every name in it to `scooter-runner`, set its mode, and removed the old image by its path. The review renamed `image.new` aside during a build, as root in a container with the tests' fake builder, and put a link to another folder in its place: root wrote into that folder, gave it to the runner's user with every name in it, a file of root's with mode 0600 among them, and set its mode to 0700. With `/etc/scooter` as the folder, `bridge.env` becomes the runner's user's; with `/etc`, so does the machine. Gondolin's native builder writes into `image.new` as root for the whole build too, by its path. Section 9 says an escape from pi's VM reaches the runner's user and not the bridge's secrets, and [Folders other users control](ARCHITECTURE.md#folders-other-users-control) holds the bridge to that; this broke it on a native install at every rebuild. It takes code running as `scooter-runner` outside the service, which `KillMode=control-group` would end, such as from that user's crontab, while the owner runs `sudo scooter build-image`.
 *Choice:*
 - It builds the image, reads it, records it and gives it to `scooter-runner` in `.image-build/` in the data folder (`paths.imageStaging`): beside `runner/`, so on the same file system, and made 0700 by the user who builds. Natively the data folder is root's, so nobody but root reaches it. As root it refuses a data folder that isn't root's or that another user can write, and a `.image-build` that isn't a folder of root's.
 - In `runner/` it then makes two renames and nothing else: whatever is at `runner/image`, a link included, out to `.image-build/old`, and the new image in. A rename follows no link at either end, and puts a folder only where nothing is or an empty folder is; anything else in the way fails the build, with the new image left in `.image-build/` for the next build to remove. It also holds `runner/runner.sock`, as before: binding the socket and removing it reach only that name, in a folder whose user could remove it anyway.
-- The old image is removed in `.image-build/` as a handed-over folder is (D136): a link or a file in the image's place is unlinked; a folder has each of its names unlinked, which follows no link and removes no folder, and is then removed, which happens only once that empties it. A process of the runner's user that was inside the old image, as its working folder, can still change what it holds after the rename, though no path leads it there any more, and nobody but root can rename it. Gondolin's image is a flat folder. What can't be removed is logged (`image.old_left`) and stays where only root reaches it, and the next build refuses, saying to look at it and remove it.
+- The old image is removed in `.image-build/` as a handed-over folder is ([Folders other users control](ARCHITECTURE.md#folders-other-users-control)): a link or a file in the image's place is unlinked; a folder has each of its names unlinked, which follows no link and removes no folder, and is then removed, which happens only once that empties it. A process of the runner's user that was inside the old image, as its working folder, can still change what it holds after the rename, though no path leads it there any more, and nobody but root can rename it. Gondolin's image is a flat folder. What can't be removed is logged (`image.old_left`) and stays where only root reaches it, and the next build refuses, saying to look at it and remove it.
 - Without root, in development and for the container build, it builds the same way, with no other user to guard against.
-*Reason:* the review's way. Node has no calls relative to a folder it has open, so a check before each step would leave the gap D136 records; building where the runner's user can't reach leaves it no step to turn. A root test with the fake builder is the review's case: during the build, the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, the image is in place, the runner's user's and 0700, and what that user left is as it left it. On the code before, the image's files were written into that folder.
+*Reason:* the review's way. Node has no calls relative to a folder it has open, so a check before each step would leave the gap [Folders other users control](ARCHITECTURE.md#folders-other-users-control) records; building where the runner's user can't reach leaves it no step to turn. A root test with the fake builder is the review's case: during the build, the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, the image is in place, the runner's user's and 0700, and what that user left is as it left it. On the code before, the image's files were written into that folder.
 *Cost:* in Docker, the data folder may not be one file system with `runner/`, and is read-only in the runner's service; the plan's milestone 13 now says to settle it. The tests that build without e2fsprogs read the image through a stand-in (`readFakeImage`), so the root test, which the plan's root container can run, doesn't read the image with `debugfs`; the tests that do still need e2fsprogs.
 
 **D152. A writable mount hides nothing** (the review of this milestone, smaller point 3).
@@ -1920,26 +1195,12 @@ On the Linux machine, with Gondolin 0.14.0, QEMU 8.2.2 and the test image of 0.2
 
 ### 7.3 The reviews of the pull requests merged before this one
 
-Pull request 7, milestone 6, was approved by its second review with eight smaller points:
-
-| # | Point | What became of it |
-|---|---|---|
-| 1 | A failure to open the spool's file is always taken as the email's own, the bridge's too: `EMFILE` stored the email without its files | Settled, the review's way: `ENOENT` on the spool's file, `EUNTRUSTED` and `EFBIG` are the email's own, anything else the bridge's, and the email stays whole in the spool (D137). Test in `email`, with `open` failing with `EMFILE`; it fails on the code before |
-| 2 | A file missing from the spool is tried three times, 10 seconds apart, while intake waits | Settled, the review's way: from a channel that keeps its messages, a failure that isn't the bridge's isn't tried again. Test in `email`: three parts listed and none there, each tried once, and the email stored at once; on the code before, the test waits on the retries for good |
-| 3 | The outbox must belong to `scooter-runner`, and in rootless Docker the runner is the container's root | Settled as the review proposed: a rule under the plan's milestone 13, which builds that variant |
-| 4 | A test of milestone 5 fails under load: `clock.whenSleeping()` could find the outbox's sleep, not the pairing check's | Settled, the review's way: the test waits for `whatsapp.not_paired`, which is logged just before the check sleeps |
-| 5 | D138's figures don't hold for a writer like the reader, on ext4 | Settled: D138 and the comment in `files.mjs` say so, with the review's figures |
-| 6 | Section 10's "a folder in it that is a link" has no test at the channel's level | Settled: the test of bad spool folders in `email` has a link to a folder laid out as a spool folder, which is left, with nothing in it read or removed |
-| 7 | D136 says nothing else of Scooter's is named with an ID but outbox entries | Settled: D136 names the downloads in `bridge/incoming/`, and why nothing follows |
-| 8 | The description says "Seven constants" where D129 has eight | Left: D129, the record, has it right, and the merged pull request's description is kept as it was reviewed |
-
-The points the reviews of milestones 0 to 5 left, as 6.2 has them:
+The points the reviews of milestones 0 to 5 left:
 
 | From | Point | What became of it |
 |---|---|---|
 | Milestone 0, point 6 | The VM tests' 2-minute start limit, Gondolin's default, held by no test | Settled (D149): the sandbox sets its own limit, `VM_START_TIMEOUT`, and a sandbox test shows a VM that doesn't boot within it failing the run, and leaving nothing |
 | Milestone 1, point 3 | A zone name wrong in its later letters, such as `Asia/KOLKATA`, passes | Settled (D143): the runner refuses a `SCOOTER_TZ` that isn't one of the image's zone files. Test in `image` |
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
 | Milestone 4, first review, points 4, 5 and 6 | `RestartSec`; a runner started during `rebuild`; a refused request that reads as pi's own failure | Left, for milestones 12, 9 and 8 |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
 
@@ -1960,7 +1221,7 @@ After the review of this milestone (7.6):
 - Section 9: the accepted risk of a native build says it builds where only root can write, so a link the runner's user puts in its folder leads it nowhere (D151).
 - Section 10, Sandbox: the root test of D151.
 
-ARCHITECTURE.md 2.7 says the same, and 3.3 has D151 beside D136. The plan's milestones 8, 12 and 13 have what this milestone leaves for them, and milestone 13 the second review of milestone 6's point 3. `runner.env.example` says how `SCOOTER_TZ` is checked and what `build-image` reads.
+ARCHITECTURE.md 2.7 says the same. The plan's milestones 8, 12 and 13 have what this milestone leaves for them, and milestone 13 the second review of milestone 6's point 3, the outbox's owner under rootless Docker. `runner.env.example` says how `SCOOTER_TZ` is checked and what `build-image` reads.
 
 ### 7.5 What was run to verify the milestone, and what wasn't verified
 
@@ -1974,7 +1235,6 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, from clean cl
 | `test/sandbox.test.mjs` without the `kvm` group, so under emulation, at `3790c3e` | 13 of 14 pass, in 3 minutes 24 seconds; boots of 5.7 to 6.6 seconds. The end-to-end test expected only the ✅ in the outbox, where under emulation the runner's first start also sends the emulation notice (D92). `63c93b7` expects it there, and the test then passes under emulation |
 | The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone at `3790c3e` | Node 24.22.3: 523 pass, none fail. 50 skip themselves: 30 need the image, 4 wacli, 4 `mke2fs`, which that image lacks, 2 run `scooter bridge` as a process, and 10 are about a file root can read anyway. `63c93b7` changes one assertion of a test that skips there |
 | The `email`, `whatsapp`, `intake`, `run`, `failures`, `image`, `accel`, `limits`, `cli` and `imports` tests, 16 times, 8 at once | No failure, and no test folder left behind |
-| The new tests for the second review of milestone 6, against the code of `3b305b3` | The `EMFILE` case stores the email without its files; the missing parts wait on their retries for good |
 | `scooter build-image`, as `agentw`, with `DATA_DIR` in a scratch folder | Gondolin's container build under rootless Docker: 18 seconds, 527 MB, `scooter-image.json` with pi 1.5.2 and 603 zones, and `packages.txt` with 100 packages at the versions of 0.1. `runner/runner.sock` gone afterwards. The sandbox tests' `pi --version` and end to end pass on that image |
 | `scooter runner`, with that image and the `kvm` group, started and stopped with SIGTERM | `sandbox.opened` with KVM, `status.json` written, and a clean stop. With a message in the datastore it ran two batches a minute apart, each VM up in 1.8 to 2.1 seconds and closed a second later: pi exited with 1, every request refused (D141). No QEMU left |
 
@@ -2008,7 +1268,7 @@ The review of the pull request, at `17d6b7b`, found the milestone's "done when" 
 
 | # | Point | What became of it |
 |---|---|---|
-| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which section 9 says an escape from pi's VM can't reach | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and 3.3, and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
+| Must 1 | As root, `build-image` worked inside `runner/`, which `scooter-runner` owns: a link put in `image.new`'s place during the build made root write into the folder it led to, give it and every name in it to the runner's user, and set its mode. With `/etc/scooter`, `bridge.env` becomes that user's, which section 9 says an escape from pi's VM can't reach | Fixed (D151), the review's way. The image is built, read, recorded and given to `scooter-runner` in `.image-build/`, beside `runner/` in the data folder, and in `runner/` root only holds its socket and renames the old image out and the new one in. The old image is removed in `.image-build/` by its names, a link in its place as a link. As root, a data folder another user can write is refused. DESIGN.md 6.12, sections 9 and 10, ARCHITECTURE.md 2.7 and [Folders other users control](ARCHITECTURE.md#folders-other-users-control), and the plan's milestones 12 and 13 say so. Root test in `image`, with the fake builder and a stand-in for the image's file system, so it runs in the plan's root container, which has no e2fsprogs: during the build the runner's user renames the old image aside and puts links to a folder of root's at `runner/image`, `image.new` and `image.old`. The folder is left as it was, and the image is in place, the runner's user's, 0700. Against the build code of `17d6b7b`, with only the stand-in's reading put in, the test fails: the image's files were written into that folder |
 | 1 | A VM that is lost is logged as one whose program exited, and its error is dropped; one that never started too | Fixed (D139): `sandbox.vm_closed` says `lost` or `not_started` in `ended`, and a lost VM also logs `sandbox.vm_lost`, with the error's name and code, but not its message, which can quote the guest's output (`errorFields`). Gondolin's error then is a plain `Error` (7.2). Sandbox tests: QEMU killed a second into a run, with KVM and under emulation; and the test of a VM that doesn't boot in time looks for `not_started` |
 | 2 | A run ends when the program's output closes, not when it exits | A line in D139, as the review said |
 | 3 | `hide` on a writable mount is accepted and ignored | Fixed (D152), the review's first way: `checkRunSpec` refuses it. Case in `runnerfiles` |
@@ -2102,7 +1362,7 @@ What the milestone left in the repository:
 *The owner's answer* (2026-11-18, before milestone 14; 14.1): accepted as it is, "this is ok". Nothing changes. The README lists it among the known limits, with what takes a WhatsApp message's text out of what the agent is shown, its deletion (6.5); DESIGN.md section 9 has it among the accepted risks.
 
 **D161. What one request, and one run, add to the log.**
-*Choice:* a path is cut at `NETLOG_PATH_MAX_CHARS`, 1,000 characters, a host at 253, a reason at `REASON_MAX_CHARS`, with what the VM chose, such as a field's name, at its end; a line the writer would make longer than `NETLOG_LINE_MAX_BYTES` is an error, and no request goes out without its line. One run may make `RUN_REQUESTS_MAX`, 1,000, requests that go out; past them the policy refuses. It writes its first `RUN_REFUSALS_LOGGED_MAX`, 100, refusals one by one, and counts the rest in one `unlogged` line when the run's network closes. `/status` counts those with the others.
+*Choice:* a path is cut at `NETLOG_PATH_MAX_CHARS`, 1,000 characters, a host at 253, a reason at `REASON_MAX_CHARS`, with what the VM chose, such as a field's name, at its end; a line the writer would make longer than `NETLOG_LINE_MAX_BYTES` is an error, and no request goes out without its line. One run may make `RUN_REQUESTS_MAX`, 1,000, requests that go out; past them the policy refuses. It writes its first `RUN_REFUSALS_LOGGED_MAX`, 100, refusals one by one, and counts the rest in one `unlogged` line when the run's network closes.
 *Reason:* the plan's rule, from the fifth review of milestone 4: a line a reader skips is a request the failure handling doesn't see. A request that goes out has a line before it goes, so requests can't be counted instead of written; they are bounded instead. A run makes a request a turn: a few hundred in the longest run `agents.yaml` allows. So a run adds at most about a megabyte, where a misled one could have added hundreds. *Cost:* a run past 1,000 requests fails as pi's own failure.
 *Since milestone 9* (the review of milestone 8, smaller point 2): a request is counted when it passes the check, before its body is read, and given back if it is then refused. Counted once it went out, requests whose bodies were read at the same time each passed the check: with the limit at 2, eight sent at once all went out, and Gondolin handles up to 128 at once. Now the limit is exact.
 
@@ -2142,7 +1402,6 @@ The points the reviews of milestones 0 to 6 left, as 7.3 has them:
 | Milestone 4, third review, point 3 | A request to `openrouter.ai` with a key of pi's own would read as a setup error | Settled (D156): refused, with every other place the key or its placeholder could go. Tests in `policy` |
 | Milestone 4, fifth review, point 1, as the plan carried it | Bound what one request, and one run, add to the log | Settled (D161). Tests in `policy` and `limits` |
 | D82's cost, as the plan carried it | A run that times out while the model streams would be an outage | Settled (D158): the `response` line is written at the status. Tests in `policy` and `failures` |
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
 | Milestone 4, first review, points 4 and 5 | `RestartSec`; a runner started during `rebuild` | Left, for milestones 12 and 9 |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
 
@@ -2230,7 +1489,7 @@ What the milestone left in the repository:
 
 **D166. A replay's sessions.**
 *Choice:* each of the owner's days gets `<agent>-rebuild-<day>`, or `<agent>-backfill-<id>-<day>`, the day as D164 has it. With `session: none`, a replay runs without a session, as live runs do. A replay's sessions are removed when it is over: a rebuild's when it has finished, a backfill's when it finishes or a start drops it. Only names of the form `<prefix><date>.jsonl` go, so the backfill `people-1-2` keeps its own when `people-1`'s go.
-*Reason:* they serve the replay alone: no live run uses them. A rebuild of a year makes about 365, up to `SESSION_MAX_BYTES` each, and `agents/` is backed up (5.5).
+*Reason:* they serve the replay alone: no live run uses them. A rebuild of a year makes about 365, up to `SESSION_MAX_BYTES` each, and `agents/` is backed up ([What a backup holds](architecture/backups.md#what-a-backup-holds)).
 
 **D167. A rebuild holds `runner/runner.sock`, and refuses while `run.lock` is there.**
 *Question:* the plan's rules: `rebuild` refuses to start while `run.lock` exists, and can't tell whether an idle runner is up; a runner started during a rebuild removes the rebuild's `run.lock` and git's lock files, and throws away its uncommitted changes (D89); if `rebuild` holds `runner.sock` (D90), a runner can't start during it, and `rebuild` can tell whether a runner is up (the first review of milestone 4, point 5).
@@ -2311,7 +1570,6 @@ The points the reviews of milestones 0 to 7 left, as 8.3 has them:
 | From | Point | What became of it |
 |---|---|---|
 | Milestone 4, first review, point 5 | A runner started during `rebuild` | Settled (D167): the rebuild holds `runner.sock`. Test in `rebuild`: a runner can't start during a rebuild's batch, and the rebuild's lock and commits are as they were |
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Left, for milestone 10, as before |
 | Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Left, for milestone 12 |
 | Milestone 4, fourth review, point 2 | Work past `run.lock`'s time | Left, for milestone 10 |
 
@@ -2363,65 +1621,9 @@ Not verified:
 
 ## Milestone 10: backups
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.4, 5.5, 6.10, 8.2, 8.4, 8.6 and section 10, to say what this milestone settled (10.3 here). It also settled the five smaller points of the review of milestone 9, leaving one choice that review offered, and the two points earlier reviews had left for this milestone (10.2).
-
-What the milestone left in the repository:
-
-| Path | What |
-|---|---|
-| `src/bridge/backup.mjs` | The backup module, the only code that runs restic: `init`, `run`, `snapshots`, `check` and `restore`; the bridge's backups, with their schedule, locks, results, replies and notices; and the commands `backup-init`, `snapshots`, `check` and `restore` |
-| `src/bridge/main.mjs`, `commands.mjs`, `state.mjs`, `status.mjs` | The backups started and stopped with the bridge, `SIGUSR1`, a leftover `backup.lock` removed at startup; `/backup`; `lastBackup`; the line of `/status` |
-| `src/bridge/channels/whatsapp.mjs`, `intake.mjs` | A stop that stops wacli's calls in progress, and a download it cuts short leaving its message for catch-up (D179) |
-| `src/common/instance.mjs` | `instanceAnswers`: whether a service holds a socket, without taking it |
-| `src/common/settings.mjs`, `limits.mjs`, `paths.mjs` | `FORCE_CHECK` and `RESTORE_TARGET`; `RESTIC_TIMEOUT`; `backupCache` and `agentsDiscarded` |
-| `src/cli.mjs` | The four commands built |
-| `src/runner/rebuild.mjs`, `protocol.md` | The review of milestone 9 (10.2) |
-| `test/support/restic.mjs`, `restic-stub.mjs` | The restic stub, for the coordination tests |
-| `test/backup.test.mjs` | This milestone's tests, the real round trip among them, with additions to `bridge`, `whatsapp`, `intake`, `rebuild`, `backfill`, `settings`, `paths`, `limits` and `status` |
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5, 5.4, 5.5, 6.10, 8.2, 8.4, 8.6 and section 10, to say what this milestone settled. What it settled of the bridge's side is in [backups](architecture/backups.md), [the WhatsApp channel](architecture/whatsapp.md) and [the exchange](architecture/exchange.md). It also settled the five smaller points of the review of milestone 9, leaving one choice that review offered, and the two points earlier reviews had left for this milestone (10.2).
 
 ### 10.1 Decisions
-
-**D179. Stopping a channel stops wacli's calls in progress, and a download it cuts short leaves its message, and the ones after it, for catch-up** (the review of milestone 2, point 3; the review of this milestone, must-fix 1, 10.5).
-*Question:* the channel's `stop()` waited for every wacli call in progress, a download among them, up to `WACLI_CALL_TIMEOUT` for each of its three tries, and returned while intake could still hold records. A backup stops the channels every night, and then waits for that.
-*Choice:* `stop()` aborts a signal that wacli's calls of the channel take: the catch-up's `messages list`, the pairing check's `auth status`, and `media download`, which also fails at once, with the code `ESTOPPED`, when the channel is stopped. Intake doesn't try such a download again, and doesn't store its message as `download failed`: it leaves the message unstored, logged as skipped, for the channel to hand over again. From then on it stores nothing of that channel, and leaves every record it takes from it, until the bridge says the channel starts again (`intake.started`), which it does before it starts a channel it stopped; that takes its turn after the records taken before it. The backup waits for `intake.idle()` after stopping the channels. Sends already took a signal (D104). A call that ended well as the signal came is a success, as before: a send that went out isn't sent again.
-*Reason:* the review's way. WhatsApp's catch-up runs as soon as the channel starts, from two minutes before the newest incoming line, and lists what came after it again, in order. A message stored after the one left would move that start past it, and it would never be stored: records queued behind a download needn't be close to it in time, since a download may take three tries of `WACLI_CALL_TIMEOUT` with what is sent meanwhile waiting, and after downtime wacli hands over within seconds a backlog that spans hours. With nothing of the channel stored after it, catch-up starts before the message left, and brings it and those after it. Catch-up itself hands its rows over one at a time, and stops between them on a stop. Email's download is a copy out of the spool, which is quick, and the spool keeps the email until it is stored (D137). *Not:* what pull request 11 had at first, the message left and the ones queued behind it stored, which lost the message for good when one of those was more than `CATCHUP_OVERLAP` newer (10.5).
-*Cost:* a message whose download a stop cut short, and those after it, are stored only when catch-up lists them, a few seconds after the channel starts again; a command among them is answered then.
-*Not changed:* catch-up and the webhook both hand records to intake while the channel runs, so a catch-up cut short between rows, by a stop or a crash, after the webhook stored a message more than `CATCHUP_OVERLAP` newer than the rows it hadn't listed yet, doesn't list them again. Only a row the webhook didn't hand over is lost so. It is so on `main`, and follows from where 5.2 step 7 starts catch-up; this milestone doesn't change it.
-*Closed in milestone 14* (the second review of milestone 10, smaller point 3; the owner's answer, "yes", 14.1).
-*Choice:* catch-up's start comes from what catch-up itself has finished listing, kept in the bridge's state, never from what the webhook stored (`catchUp` in `bridge/state.json`, `whatsapp.mjs`):
-- For each of the owner's chats, the state keeps the time of the newest of the owner's rows catch-up has listed there with every row before it handled: stored, skipped as a duplicate or for an unknown target, or dropped as 5.2 drops it. The next catch-up of that chat starts `CATCHUP_OVERLAP` before it, and never before the bridge's first start.
-- It is saved after each page and when the catch-up ends, done, failed or stopped. A crash keeps nothing in memory: the next start lists again from the last save, and stores nothing twice.
-- A row intake must be handed again holds it where it is: intake now says so of a record, `again: true`, for one a stop left (the first part of this decision), one that failed for a reason of the bridge's, such as a bug (`intake.failed`), and one the store stopped for. The rows after it are still handed over, and stored, and the next catch-up lists from before it again; `whatsapp.catchup_held` says so once a catch-up.
-- The bot's own rows don't move it: wacli stores a reply with the time it was sent, and after downtime a reply waiting in the outbox can go out before wacli has received the owner's messages from while it was down, whose times are older.
-- Every chat the owner has written from is listed, each from its own place: the chat replies go to, and any other an owner's message came from, such as an `@lid` one, which is listed from the first start the first time.
-- A state an older bridge wrote has no `catchUp`: it starts, as that bridge did, from the newest incoming WhatsApp line, in the chat it listed, and saves that at once.
-- As before, nothing from before the bridge's first start is imported, and what 5.2 drops on purpose stays dropped. The `left` of the first part stays, so that what came after a message a stop left is stored after it, in its order.
-
-*The kind of problem.* Every way something stored out of turn, or not stored, could move the start past a row that was never stored, and what became of it:
-
-| Way | On `main` | Now | Test |
-|---|---|---|---|
-| A stop between catch-up's rows, after the webhook stored a message more than `CATCHUP_OVERLAP` newer than the rows not listed yet (the review's case) | the rest passed for good | listed again when the channel starts | `whatsapp`, by a stop; fails on `main` |
-| The same, by a crash | the same | listed again from the last save | `whatsapp`, the state as it was on disk at the crash given to a new bridge; fails on `main` |
-| A message whose webhook never came, wacli waiting 5 seconds and never trying again, and a newer one stored before the next catch-up (found by reading the code, for the plan) | passed for good | listed by the next catch-up | `whatsapp`; fails on `main` |
-| A record intake failed on, for a bug or the disk | passed for good once a newer one was stored | catch-up holds before it, and lists it again | `intake` and `whatsapp` |
-| A download a stop cut short (the first part of this decision) | left, and nothing more of the channel stored | the same, and catch-up holds before it too | `whatsapp`, `backup`, as before |
-| The bot's own reply, stored by wacli before the owner's messages from downtime reach it | not a way on `main`, which counted incoming lines only; it would have been one had every listed row moved the start | doesn't move it | `whatsapp` |
-| The owner's newest message from another chat, such as an `@lid` one, making catch-up list that chat alone | a message the webhook missed in the other chat passed for good | every chat listed, each from its own place | `whatsapp`; fails on `main` |
-| An email, which says nothing of WhatsApp (row 10) | already left out | left out | as before |
-
-*Left, and why* (the plan's rule: what can't be closed with wacli as it is):
-- **A message that reaches wacli late.** `messages list` lists by the messages' own times, so a message that reaches wacli's store more than `CATCHUP_OVERLAP` after the owner's message with a later time was listed, and whose webhook was also lost, is never listed. The owner's messages reach wacli in their order, from one sender, so this needs a delay across the owner's own devices, or their clocks, of more than 2 minutes, and a lost webhook. wacli 0.26.0 keeps a journal of its store's changes in the order it records them, `messages changes`, which would close it (its source and its `docs/messages.md`, read on 2026-11-18): it holds no content, so each change needs a `messages show`, and it keeps 30 days. It isn't used: nothing here can run it against a paired store, and it would replace a catch-up the tests and gate G4 check with one nothing has seen. The README lists it among the known limits.
-- **A page of 500 rows in one second.** `--after` is strict, to the second, so a full page whose rows all share a second moves past that second. The owner's one chat can't make 500 messages in a second.
-
-*Reason:* the plan's way, which the owner's answer chose: "a catch-up that was cut short runs again from where it started". Only catch-up lists everything wacli holds; the webhook is best-effort. So what catch-up has handed over, in order, is the only thing that says nothing before it is missing.
-*Cost:* each catch-up lists the bot's rows since the owner's newest message again, and a chat seen for the first time from the first start, once; the state is written after a page that moved catch-up on. A row intake fails on every time, as a bug could make, holds catch-up there: each catch-up then lists from it, and says so, until the bug is mended.
-*Not verified:* how the real wacli stores and lists the owner's chat after downtime, with real sends and `@lid` IDs (gate G4).
-
-**D180. restic's environment, and its cache.**
-*Question:* 5.5 runs restic with its settings in its environment, and says nothing of what else restic needs.
-*Choice:* restic's environment is `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, the bucket's credentials (`AWS_*` or `B2_*`), `TMPDIR`, the bridge's own temporary folder, and `TZ`, nothing else; it runs as the bridge's user, root in an install, from Scooter's own `PATH` (D25). The nightly backup keeps restic's cache in `bridge/backup-cache/`, which restic marks with a `CACHEDIR.TAG`, so `--exclude-caches` in 5.5's command leaves it out. The commands run at a terminal use `--no-cache`. `TZ` is UTC, so restic writes a snapshot's time in UTC (section 2), except for `snapshots`, whose list the owner reads, which gets `SCOOTER_TZ`.
-*Reason:* without a home or a cache folder restic stops before it does anything (10.2, facts), and a cache saves the nightly backup reading the repository's index from the bucket. The commands needn't keep one, and `restore` mustn't: it can delete inside `bridge/`, where the cache is (D190). restic otherwise takes the machine's zone for a snapshot's time.
 
 **D181. A rebuild's own steps take `run.lock`** (the review of milestone 9, point 1).
 *Question:* only a rebuild's batches took `run.lock`. Its tag, the emptying of `views/`, `memory/` and `sessions/`, the first commit and the reset state, and at the end `git reset --soft`, the commit `lifelog: rebuild`, `git gc --auto` and the removal of its sessions, changed the agent's folder outside it, also while a backup held `backup.lock`. A backup could then read a branch naming a commit it hadn't read.
@@ -2433,82 +1635,11 @@ What the milestone left in the repository:
 *Choice:* while the rebuild's lane has an item waiting to be tried again, it waits until the first is due, as it waits for a pause, and takes nothing after it meanwhile. The batches are then `[1] [1] [1] [1] [3] [5]`, and the lane's cursor never passes the day of an item waiting: a retry's context is its own day's, as is every batch's, but for a message an edit brings in from another day (6.5).
 *Reason:* the review's first way; nobody waits on a rebuild. *Cost:* at most three minutes for each item not reported, and four attempts each. A backfill isn't changed: it files one view, its rules are the config's, and it runs inside the live runner, where it waits for nothing.
 
-**D183. A backup tells a runner still at work from one that is gone by `runner/runner.sock`** (the plan's rule for this milestone; the fourth review of milestone 4, point 2).
-*Question:* the time in `run.lock` is the run's start plus its timeout, and a backup goes ahead `BACKUP_LOCK_EXTRA` past it, so that a lock a dead runner left can't hold backups for good. But the runner holds the lock while it packs its repository and while its clean-up removes what pi left, and neither has a time limit (D96, D88).
-*Choice:* past that time, the backup goes ahead only when no runner holds `runner/runner.sock`; while one does, it is at work, and the backup waits on, logging `backup.run_overdue` once. Only a socket counts, not a link to one. Before that time nothing changes: the lock is its run's. A `run.lock` whose time can't be read is past it.
-*Reason:* every holder of `run.lock` holds the socket for as long as it lives: the runner and a rebuild (D90, D167). The socket answers only while its holder runs, in another container too, and it can't be mistaken for a process that got the same pid, which is why the services hold one (D48); the pid in `run.lock` would mean nothing in the bridge's container. A connection is queued by the system, so a runner whose own work keeps it from taking one, a long removal for one, still answers.
-*Cost:* a runner that hangs while it holds `run.lock` holds backups back for as long. Nothing of the runner's after a run is unbounded but by what pi could write, which `RUN_WRITE_MAX_BYTES` and `RUN_NAMES_MAX_COUNT` bound. The runner's user can hold backups back anyway, with a `run.lock` whose time is far ahead.
-*A bound* (added in milestone 11, for the second review of milestone 10, smaller point 2): the socket answers while its queue has room. Each check leaves a connection in the queue until the holder takes it, and Node makes the queue 511 long, so a holder whose thread takes no connection for 512 checks, about 8.5 minutes of the bridge's checks once a second past the run's time, answers no more, and the backup goes ahead. The review's probe showed it: yes 512 times, then no, with `EAGAIN`. So a runner that hangs holds backups back for about 8.5 minutes past `run.lock`'s time and its 2 minutes, not "for as long". Nothing the runner does after a run blocks its thread that long: packing is a child process, and what the clean-up removes is bounded by `RUN_NAMES_MAX_COUNT`, and out of the backup (D185). `instance.mjs` says so where the check is.
-
-**D184. `exchange/locks/` as the bridge uses it.**
-*Choice:* the bridge makes `exchange/locks/` at startup, if it is missing, as the runner's, 0700, as it makes the outbox (D108). It takes and removes `backup.lock` there only while the folder is the runner's and not a link (`checkOwnFolder`, D136), and reads `run.lock` as it reads the runner's other files: without following a link, without waiting on a FIFO, a regular file of at most `STATUS_FILE_MAX_BYTES` (D132). At startup it removes a leftover `backup.lock` (5.5), logged as `bridge.lock_removed`; it is the only one that takes it, and holds the bridge's socket.
-*Reason:* had the bridge made the folder first, as root, the runner couldn't take `run.lock` there, and every run would fail. The bridge writes there as root, in a folder the runner's user controls. A FIFO in place of `run.lock` would have the bridge's one thread wait with it.
-
-**D185. What a backup holds, and leaves out.**
-*Choice:* 5.5's folders and excludes, and also `agents/.discarded/` (the plan's rule), which holds what a clean-up is removing. A folder that isn't there, such as `mail/` with email off or `runner/log/` before the first run, is left out of restic's command line. `exchange/locks/` isn't held: a lock restored would hold runs or backups back.
-*Reason:* restic exits with 3 for a folder that isn't there, as for a file it couldn't read (10.2, facts), and every night would be a failure.
-
-**D186. A backup's steps, and its results.**
-*Choice:* the steps run in order, and the first that fails ends the backup: a forget or a check after a backup that failed would prune or check without a new snapshot. restic's exit code 3 saves a snapshot without the files it couldn't read: the backup fails, with that snapshot. A backup that exits 0 without the line `snapshot <id> saved` fails too. A step that takes longer than `RESTIC_TIMEOUT`, 6 hours, is stopped, and the backup fails. The reason is said in words for restic's exit codes 10, 11 and 12; otherwise it is restic's last line on stderr, `Fatal: …`, cut to `REASON_MAX_CHARS`. It goes into the reply or the notice and the bridge's state, never into the log, which has the step, the exit code and the snapshot's ID, as D82 does with OpenRouter's words. A notice or a reply that can't be written is tried again after the waits of a command's reply (5.4).
-*Reason:* while a backup lasts the channels are stopped and the runner waits, so a restic that hung would stop Scooter for good; 6 hours is room for a first backup of years of photos over a slow uplink, and what it uploaded is used again by the next. *Cost:* a restic that fails before the time limit at every try, as a bucket that refuses it would make, is a notice a night.
-
-**D187. `/backup` doesn't hold back the commands after it.**
-*Question:* the bridge answers commands one at a time (D106), and a `/backup` that waited for its backup, which waits for a run of up to two hours, would hold back a `/status` sent after it (the plan's rule for this milestone).
-*Choice:* `/backup` starts a backup, or joins the one in progress, and counts as handled at once; its reply, `about` the command, is written when the backup is over. A request during a backup joins it, whatever started it: a scheduled one, `SIGUSR1` or `/backup`. A backup the owner didn't ask for by message, scheduled or by `SIGUSR1`, says nothing when it works, and tells the owner when it fails, unless a `/backup` that joined it got the reply. A bridge that stops during a backup stops restic, starts nothing again, lets go of `backup.lock`, and tells each `/backup` that it was stopped; such a backup isn't recorded as one that failed. The backups' stop is over only once every backup asked for is told: one that ended as the stop came keeps its result and writes its replies first, though a new request no longer joins it (the review of this milestone, point 6).
-*Reason:* the `/status` the owner sends while waiting is the one that says a backup is in progress, waiting for a run. *Cost:* a bridge that crashes during a backup doesn't answer the `/backup` that started it. Keeping the request in the bridge's state, to answer it after a crash, would have a crash that a backup causes start one at every start.
-
-**D188. The schedule.**
-*Choice:* the next backup is `nextLocalTime` of `BACKUP_TIME` in `SCOOTER_TZ` (D21), worked out at the start and after each backup: so a bridge started after the day's time backs up the next day, a time that comes twice when the clocks go back comes due once, and a skipped one at the jump. The bridge sleeps until that instant, and sleeps again if the clock was set back meanwhile. Without `RESTIC_REPOSITORY`, `backup.off` is logged at startup, `/backup` says backups are off, and `SIGUSR1` is logged and does nothing. `BACKUP_TIME=off` leaves `/backup` and `SIGUSR1`.
-*Cost:* a machine that sleeps through the time backs up when it wakes, late. Scooter runs on a server.
-
-**D189. `FORCE_CHECK` and `RESTORE_TARGET` are settings of the bridge; Sunday is the owner's.**
-*Question:* 5.5 names both, as `FORCE_CHECK=1` and `RESTORE_TARGET` (default `/`); 8.2 lists neither, and a variable in `bridge.env` that isn't the bridge's stops it (D15).
-*Choice:* both are in the bridge's list, read from `bridge.env` or the environment, as every setting is: `FORCE_CHECK` is `0` or `1`, default `0`; `RESTORE_TARGET` an absolute path, default `/`. They are read only with backups on. 8.2 and `bridge.env.example` list them. The weekly check runs when the backup starts on a Sunday (`RESTIC_CHECK_WEEKDAY`) in `SCOOTER_TZ`, as `BACKUP_TIME` is.
-*Reason:* one way to set anything; the environment still wins, so `RESTORE_TARGET=/tmp/look scooter restore` works for one restore. `FORCE_CHECK` is written `=1` in 5.5. `BACKUP_TIME` is the owner's time, so "Sunday" is the owner's day.
-
-**D190. Restore.**
-*Question:* 5.5 restores into `RESTORE_TARGET` and refuses a non-empty destination without `--force`, and says nothing of what `--force` does with what is there, or of a destination of `/`, which is never empty.
-*Choice:*
-- The destination is each folder the snapshot holds, at `RESTORE_TARGET` joined with the path it was backed up from; one that isn't there, or is an empty folder, is empty.
-- Only a snapshot whose paths are the folders a backup holds, under one folder, is restored, whatever its tags say; `latest` is the newest with the host and the tag `scooter`.
-- It is one `restic restore <id>:<that folder> --target <RESTORE_TARGET>/<that folder>`, limited to the snapshot's folders by `--include`, with `--delete` and `--ownership-by-name`, and without a cache. So each folder becomes the snapshot's: restic deletes what the snapshot doesn't hold inside the folders it includes, and nothing else, such as `runner/image/`; the folders between, `runner/` and `exchange/`, get the owners and modes they had; and every file its owner by name, so a machine whose users `setup` made with other numbers gets them right. The data folder, if it makes it, is 0755 (D49).
-- Writing into the data folder of `DATA_DIR`, it refuses while the bridge or a runner holds its socket.
-- As root, it refuses while any of Scooter's three users isn't there, whatever the target, and says to run `setup` first (the review of this milestone, point 3). restic gives a file whose owner's name isn't a user there to root, and says nothing (10.5, facts): a restore before `setup` on a new machine, the case a restore is for, would leave the runner unable to enter the agent's folder, and wacli its own. Not root, no file gets another owner, and it goes on.
-- It exits with 0 once restored, 2 when it refuses, as for a call or a configuration it can't start with (D30), and 1 when restic fails.
-*Reason:* with `--force`, a datastore restored over a later one would keep the later days' logs after a shortened one, a gap in `seq` that stops the bridge (D29): what is there is replaced, as the owner asked. restic's `--delete` with a target of `/` would delete everything in `/` the snapshot doesn't hold (10.2, facts); limited to the folders included, it deletes nothing else. Restoring each folder on its own, `<id>:<folder>`, makes a new one root's, 0700, which the runner couldn't enter.
-*Cost:* a snapshot made with another `DATA_DIR` is restored at that one, under `RESTORE_TARGET`; moving it is the owner's. Nothing keeps a service from starting during a restore: the README says to stop both. A restore as root only to look at a backup elsewhere needs the users too, so on a machine without Scooter it also comes after `setup`.
-
-**D191. The commands.**
-*Choice:* `backup-init`, `snapshots` and `check` take no arguments; `restore` at most a snapshot's ID, eight to 64 hexadecimal digits, or `latest`, and `--force`, once each. Each exits with 2 and says so without `RESTIC_REPOSITORY` (5.5); without `RESTIC_PASSWORD` the settings already stop it with 2. They pass restic's own output on, and end a failure with a line that says why, in words for restic's exit codes 10 to 12. `backup-init` prints what `restic init` says, and that nothing was changed when the repository is there.
-
-**D192. What the bridge keeps of a backup, and what `/status` says.**
-*Choice:* `lastBackup` in the bridge's state is `{ at, ok, snapshot, reason }`: the backup's start, whether it worked, the snapshot, and why it failed, and the state's check holds it to that. `/status` says `Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.`, `the last, 03:30, failed (<reason>)`, `none yet`, `one in progress since 21:20, waiting for the agent's run to end`, `None is scheduled: BACKUP_TIME is off`, or that backups are off, and why.
-
 **D193. A rebuild stops on `SIGHUP`** (the review of milestone 9, point 3).
 *Choice:* `scooter rebuild` stops on `SIGHUP`, which a closed terminal sends, as on `SIGTERM` and `SIGINT`: the batch in progress is thrown away and `run.lock` let go of. Writing to a terminal that is gone fails, and the rebuild ignores that. A leftover `run.lock` is now said to be "left by a runner or a rebuild stopped by force".
 *Reason:* the review's way. A closed terminal is the likeliest way a rebuild is cut short, and killed by the signal it left `run.lock`, which the next rebuild refused.
 
-**D194. One constant, and one more use of another.**
-`RESTIC_TIMEOUT`, 6 hours (D186). `STATUS_FILE_MAX_BYTES` also bounds the `run.lock` the bridge reads (D184). 8.6 of DESIGN.md lists both.
-
-**D195. Scooter's snapshots are one group, whatever folders each holds** (the review of this milestone, point 2).
-*Question:* restic groups snapshots by host and paths unless told, and `forget` applies the retention to each group. D185 leaves out a folder that isn't there, so the paths change when `runner/log/` first appears, or email is turned on or off, and the last snapshot of the old paths stays for good, the newest of its group. `backup` picks its parent snapshot the same way, and without one reads every file again.
-*Choice:* `backup` and `forget` take `--group-by host,tags`. Scooter's snapshots all have the host and the tag `scooter`, so they are one group.
-*Reason:* the review's first way. The retention is about time, not about which folders a night held, and `restore` takes a snapshot whatever folders it holds (D190). With the latest snapshot as its parent, `backup` reads in full only a folder the parent doesn't hold.
-
-**D196. `SIGUSR1` is for the bridge alone, and the email reader ignores it** (the review of this milestone, point 1).
-*Question:* the plan's command for the README, `systemctl kill -s USR1 scooter-bridge`, signals every process of the unit: systemd's `--kill-whom` is `all` unless given. The email reader is Node, and Node answers a `SIGUSR1` it has no listener for by opening its debugger on `127.0.0.1:9229`, where any local user, `scooter-wacli` among them, could run code as `scooter-mail`, which holds the mailbox's password.
-*Choice:* the bridge starts the reader as `node --disable-sigusr1 <reader>`, which Node has had since 22.14: it then ignores the signal from its start, debugger and exit alike. The plan's command is `systemctl kill --kill-whom=main -s USR1 scooter-bridge`, and its milestone 12 says the bridge's unit has Node as its main process, which the wrapper `exec`s. In Docker, `docker compose kill` signals the container's first process, `tini`, which passes it to the bridge.
-*Reason:* the review's two ways. A listener in the reader, as the bridge has, would leave the moments before it is added; the flag leaves none. The bridge itself can't take the flag: with it, its own listener isn't called (10.5, facts).
-
 ### 10.2 Facts found, and the reviews of the pull requests merged before this one
-
-**restic 0.19.1** on the Linux machine, by hand and in the round trip:
-- Exit codes: 0; 1 for an error; 3 for a backup that saved a snapshot without some files, a source folder that isn't there among them; 10 for a repository that isn't there (`cat config` too); 11 for one locked; 12 for a wrong password. `check` takes an exclusive lock, and a temporary cache.
-- Without `HOME`, `XDG_CACHE_HOME` or a cache option, every command stops with 1, "unable to locate cache directory". The cache folder holds a `CACHEDIR.TAG`, and `--exclude-caches` leaves it out of the backup.
-- Without `TZ` it writes a snapshot's time in the machine's zone, `+05:30` here.
-- `snapshots --json` answers `[]` and 0 for an ID it doesn't find, and for `latest` with no snapshot.
-- `restore <id>:<folder>` makes its target 0700, whatever the folder was. Restoring a folder above, with `--include` for each folder wanted and `--delete`, restores those with their own modes, gives the folders between the snapshot's modes, and deletes inside the included folders only: what else is in the target stays. `--ownership-by-name` as an ordinary user gives no error; as root it gives a file its owner by name, also when the user's number has changed since the backup.
 
 Pull request 10, milestone 9, was approved by its review with five smaller points. All five are settled, the fourth by recording its two costs; the warning it offered as a choice is left:
 
@@ -2524,97 +1655,12 @@ The points the reviews of milestones 0 to 8 left, as 9.2 has them:
 
 | From | Point | What became of it |
 |---|---|---|
-| Milestone 2, point 3 | Stopping the channels waits for wacli's calls in progress | Settled (D179). Tests in `whatsapp`, a download that hangs, stopped, and its message brought back by catch-up, which hangs on the code before, and in `intake` |
-| Milestone 4, fourth review, point 2 | Work past `run.lock`'s time, packing and the clean-up's removal | Settled (D183), the plan's way. Tests in `backup` |
 | Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Left, for milestone 12 |
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
 
-### 10.3 Changes to DESIGN.md
-
-None changes what Scooter does beyond what 5.5 and the reviews left open:
-- 5: a channel's `stop()` stops wacli's calls in progress (D179).
-- 5.4: `/backup` replies once the backup is over, and the commands after it are answered meanwhile (D187).
-- 5.5: restic's environment and its cache (D180); `agents/.discarded/` left out, and a folder that isn't there (D185); the check on Sundays in `SCOOTER_TZ`, and `FORCE_CHECK` (D189); a step that fails ends the backup, and `RESTIC_TIMEOUT` (D186); what `restore` does, `--force` and owners by name (D190); `/backup` and `SIGUSR1` at any time, joining a backup in progress; a runner still at work past its time (D183); a rebuild's own steps under `run.lock` (D181); `exchange/locks/` as the bridge uses it (D184); the notice for a backup `SIGUSR1` started, and the state's result (D187, D192).
-- 6.10: an item tried again is waited for; the rebuild's own steps take `run.lock`; a closed terminal (D181, D182, D193).
-- 8.2: `FORCE_CHECK` and `RESTORE_TARGET` (D189).
-- 8.4: `restore` takes the latest unless a snapshot is named, and needs both services stopped to write into the data folder.
-- 8.6: `RESTIC_TIMEOUT`; `BACKUP_LOCK_EXTRA` and `STATUS_FILE_MAX_BYTES` as D183 and D184 have them.
-- Section 10: Backups, as this milestone tests them; Rebuilds, the retry's order and the backup's lock.
-
-ARCHITECTURE.md 2.11, decision 10, 5.4 and 5.5 say the same. The plan's milestones 12, 13 and 14 have what this milestone leaves for them. `bridge.env.example` has the two settings, and says what a backup stops.
-
-### 10.4 What was run to verify the milestone, and what wasn't verified
-
-Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `ec4bf4f`, which holds all the code. `5b39b34` changes only the restic stub, for a race the repeated runs found in it, and the commit after it only this file. The first five rows were run at `ec4bf4f`, and `npm test` again at `5b39b34`, with the same counts:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test` | 701 tests: 656 pass, none fail. 45 skip themselves: 34 need the image (18 of milestone 0, 16 of the sandbox), 10 need root, and the restore by name needs root and `SCOOTER_ROOT_TESTS=1`. The real round trip runs, with the restic of `~/.local/bin` |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 703 tests: 692 pass, none fail, in 115 seconds. The 11 that need root skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan: as root, in `node:24-trixie`, with `SCOOTER_ROOT_TESTS=1`, on a second clone | Node 24.22.3: 644 pass, none fail. 57 skip themselves: 34 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, 2 run `scooter bridge` as a process, and 2 need restic, which that image lacks |
-| The same container, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic`, `test/backup.test.mjs` | All 26 pass as root, the round trip and the restore by name among them: a user's number changed between the backup and the restore, and the restored files are the user's by name |
-| The `backup`, `rebuild`, `whatsapp`, `intake`, `bridge`, `delivery`, `backfill` and `status` tests, 16 times, 8 at once, at `ec4bf4f` | One failure in 16: the test of a stop during a backup found no mark of restic's stop. The stub wrote that it held the command before it was ready for SIGTERM, and a stop that came at once killed it before it could write the mark. `5b39b34` readies it first |
-| The same, 32 times, 8 at once, at `5b39b34`; and `test/backup.test.mjs` alone 20 times | No failure. The test of `scooter bridge` as a process skips itself when another copy holds the port |
-| The new tests of the rebuild, against `rebuild.mjs` of `main`, at `4ffb862` | Five fail: the message about a leftover `run.lock`, the order of the outage test, the lock around its own steps, the retry's order, and `SIGHUP`. The tests of `session: none` and of the stop pass, as the review found |
-| The new tests of the stop, against `intake.mjs` and `whatsapp.mjs` of `main`, at `4ffb862` | The intake test fails; the WhatsApp test hangs on the download, as the review found, until it was stopped |
-| By hand, at `4ffb862`: `scooter backup-init` twice, `scooter bridge` as a process with the real, unpaired wacli and restic, `SIGUSR1`, then `snapshots`, `check`, `restore`, with a scratch data folder | `backup-init` made the repository, then said it was there. On `SIGUSR1` the bridge stopped WhatsApp, backed up (`backup.step` for backup and forget, exit codes 0), started it again, and stopped cleanly on SIGTERM with no wacli left and `exchange/locks/` empty. `snapshots` listed the snapshot in Asia/Kolkata time; `check` found no errors; `restore` refused the live data folder as not empty (2), restored into `RESTORE_TARGET`, where the datastore matched and `bridge/backup-cache` wasn't, and with `--force` into the live folder (0); the repository held no plaintext; the wrong password exited with 1, saying so; a snapshot that isn't there with 2 |
-
-The tests section 10 of DESIGN.md asks of this milestone, and where they are:
-
-| Required | Where |
-|---|---|
-| A backup waits for a run to finish | `backup.test.mjs`, the first test: `backup.lock` taken first, nothing of restic while `run.lock` is there, and the writers stopped only while restic runs |
-| It goes ahead once `run.lock` is 2 minutes past its time | `backup.test.mjs`: not a second before; and, past its time, it waits on while a runner holds `runner.sock`, and goes ahead once none does (D183); a lock that is a FIFO, a link or not a lock |
-| A leftover `backup.lock` is removed at startup | `backup.test.mjs`, through `startBridge` |
-| Real round trip: init, back up, no plaintext, the wrong password fails, the restore matches, `--force` needed for a non-empty target | `backup.test.mjs`, with restic installed; and, as root, owners by name |
-| Runner: no run while a backup holds its lock; the runner gives way when both appear | `runner.test.mjs` (milestone 4), and `backup.test.mjs` with a backup in progress |
-| Rebuilds: the retry's order, and the backup's lock | `rebuild.test.mjs` |
-
-Beyond section 10: restic's arguments and environment, the Sunday check and `FORCE_CHECK`, the replies, notices and joins, `RESTIC_TIMEOUT`, a stop during a backup, a resume that fails, `exchange/locks/` as a link, the schedule across a daylight-saving change, backups off, the bridge's channels and delivery stopped and started with a new webhook secret, `/status` answered while `/backup` waits, the commands' arguments and exit codes, `restore`'s refusals and its one restic call, in `backup.test.mjs`; `SIGUSR1` to `scooter bridge` as a process, in `bridge.test.mjs`.
-
-Not verified:
-- **A real bucket** (gate G4): R2 or B2, with real credentials, and a backup and a restore through it. The round trip uses a repository in a folder.
-- **Backups in Docker** (milestone 13): the bridge's connection to `runner.sock` through the runner's volume, mounted read-only in its container, which by the kernel's rules a read-only mount doesn't stop, and `restore` there, where the bridge's container can't write `runner/log/`.
-- **A native restore** (milestone 12, gate G2), as root, with the services of `setup`. The root test restores with a user whose number changed, in a container.
-- **A backup during a real run**, with the runner packing its repository past its time: the tests hold the socket and `run.lock` themselves.
-- **arm64 and macOS.** Nothing here knows the architecture; restic's arguments are the same, and Unix sockets and `lstat` are the same on macOS.
-
-### 10.5 The review of this milestone
-
-The review of the pull request, at `6006dd8`, found the milestone's "done when" met, asked for one change, and noted seven smaller points. Each is below, with what became of it.
-
-| # | Point | What became of it |
-|---|---|---|
-| Must 1 | A stop of the WhatsApp channel can lose a message for good: intake left the message whose download the stop cut short, and stored the records queued behind it, so catch-up, from two minutes before the newest of those, never listed it again | Fixed (D179), the review's way: once a stop has left a message of a channel, intake stores nothing more of that channel until the bridge says it starts again, which it does before it starts a channel a backup stopped. D179's reason and DESIGN.md 5's row for `stop()` say so, and ARCHITECTURE.md 5.4. Tests: in `whatsapp`, the review's probe, a photo whose download hangs, then a text and a command five minutes later, then a stop: nothing is stored, and once the channel starts, catch-up lists from the bridge's first start and stores all three, in order, the photo with its file; in `backup`, the same through a backup the bridge makes, which also checks that the bridge says the channel starts again; in `intake`, with another channel's message stored meanwhile. A gap of the same kind that is on `main` too, a catch-up cut short between its rows after the webhook stored a newer message, is recorded under D179 and not changed |
-| 1 | `systemctl kill -s USR1 scooter-bridge` signals every process of the unit, and the email reader's Node opens its debugger on it | Fixed (D196), both of the review's ways: the reader runs with `--disable-sigusr1`, which leaves no moment before a listener would be added; the plan's milestone 14 says `--kill-whom=main`, and its milestone 12 that the unit's main process is Node. Test in `email`: Node, started with the reader's options and signalled, neither opens its debugger nor exits; without them it opens it |
-| 2 | `forget` keeps old snapshots for good when the set of folders changes | Fixed (D195), the review's first way, `--group-by host,tags`, and on `backup` too, which picks its parent the same way. DESIGN.md 5.5 has both commands. Tests in `backup`: the arguments; and with the real restic, a backup without `mail/`, then one with it, the same day, of which `forget` with one daily snapshot keeps only the second |
-| 3 | A restore as root on a machine without Scooter's users makes every file root's, and says nothing | Fixed (D190): as root, `restore` refuses until the three users are there, and says to run `setup` first; the plan's milestones 12 and 14 say that `setup` comes first. DESIGN.md 5.5 and 8.4, ARCHITECTURE.md 2.11. Test in `backup`, with a `lookupUser` that answers as `id` does without the user: exit code 2, and nothing asked of restic. The root test of owners by name makes Scooter's users first, as `setup` will |
-| 4 | No test runs a backup with email on | A test in `backup`, the review's shape: the reader is gone before restic starts, `mail/` is among restic's folders, and the reader starts again after. It passes on `6006dd8`, as the review found |
-| 5 | One failure in 88 repeated runs: `scooter bridge` as a process timed out waiting for sync to start again after the backup | The test of `6006dd8`, with a listener put on port 8787 while restic held the backup, fails just so: the bridge can't listen again, stops, and the test waits for sync. The test now skips when the bridge stops because another process took the port then, as it already did at the start, and a wait that times out shows the bridge's last log lines, which hold no message's text. That the review's failure was this isn't confirmed: 48 runs below didn't meet it |
-| 6 | A `/backup` whose backup ends as the bridge stops may get no reply | Fixed (D187), the review's way: the backups' stop waits for every backup asked for to be told, not for the one in progress only. Test in `backup`: a stop that comes as a backup's result is kept is over only once its reply is written; on `6006dd8` it was over first |
-| 7 | ARCHITECTURE.md 4.4 has the bridge read the datastore before it removes a leftover `backup.lock` | Corrected to `main.mjs`'s order |
-
-Facts found:
-- **restic 0.19.1** groups snapshots by host and paths unless given `--group-by`, in `forget` and in `backup`'s choice of a parent. `forget` also keeps a group's oldest snapshot while the group holds fewer days than `--keep-daily` asks for ("oldest daily snapshot"), so of two snapshots on one day, `--keep-daily 7` keeps both, and `--keep-daily 1` the newer. As root, `restore --ownership-by-name` gives a file whose owner's name isn't a user there to root, and exits with 0 (the review's probe, in the root container).
-- **Node 22.23.2** with `--disable-sigusr1` ignores `SIGUSR1` altogether: it opens no debugger, doesn't exit, and calls no listener of the program's. Without it and without a listener, it opens its debugger on `127.0.0.1:9229`.
-- **systemd 255**: `systemctl kill` signals every process of the unit unless given `--kill-whom` ("If omitted, defaults to all").
-
-Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1, from clean clones of the branch at `124e5d6`, which holds all the changes; the commit after it changes only this section:
-
-| Command | Result |
-|---|---|
-| `npm ci && npm test` | 708 tests: 663 pass, none fail. 45 skip themselves, as before: 34 need the image, 10 need root, 1 needs root and `SCOOTER_ROOT_TESTS=1`. The real restic tests run |
-| `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 710 tests: 699 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left |
-| The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 708 tests, 653 pass, none fail, 55 skip. All 31 backup tests pass as root, the round trip, the grouping and the restore by name among them |
-| The `backup`, `whatsapp`, `intake`, `bridge`, `email`, `status`, `rebuild` and `delivery` tests, 48 times, 8 at once | No failure. `scooter bridge` as a process skipped itself 14 times for the port: 11 times in use at its start, 3 times taken as the bridge started |
-| The new tests against the code of `6006dd8` | Each fails there, but the test with email on, which passes, as the review found |
-| By hand, restic alone: one snapshot of a folder, then four of it and another, a day apart each (`--time`), then `forget --keep-daily 2 --dry-run` | By host and paths it keeps three, the first among them; with `--group-by host,tags`, the newest two. The test in `backup` can't date its snapshots, so it shows the same within one day |
-
-Nothing is left unverified beyond what 10.4 lists.
-
 ## Milestone 11: the agent's instructions
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.5, 6.1, 7.1, 7.2, 7.3 and section 10, to say what this milestone settled (11.3 here). It also settled the three smaller points of the second review of milestone 10, and the point milestone 9 left for this one (11.2).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.5, now [Restore](architecture/backups.md#restore), 6.1, 7.1, 7.2, 7.3 and section 10, to say what this milestone settled (11.3 here). It also settled the three smaller points of the second review of milestone 10, which are in [backups](architecture/backups.md) and [the exchange](architecture/exchange.md), and the point milestone 9 left for this one (11.2).
 
 What the milestone left in the repository:
 
@@ -2626,8 +1672,6 @@ What the milestone left in the repository:
 | `config/image/build.json` | Unchanged: it was final (D203) |
 | `src/runner/protocol.md` | The last pass against the parser (D202) |
 | `src/runner/config.mjs` | A skill's `SKILL.md` checked at startup (D197) |
-| `src/bridge/backup.mjs` | `restore` refuses a link at `runner/` or `exchange/` (D198) |
-| `src/common/instance.mjs` | The bound of the socket's queue, said (D183) |
 | `test/instructions.test.mjs` | This milestone's tests, which read the files against DESIGN.md and the protocol against the parser |
 | `test/config.test.mjs`, `backup.test.mjs`, `sandbox.test.mjs` | A skill's `SKILL.md`; the link at `runner/` or `exchange/`; one batch through the real sandbox with the files of `config/` |
 | `test/live/openrouter.mjs` | The live check, now with the files of `config/` |
@@ -2639,12 +1683,6 @@ What the milestone left in the repository:
 *Choice:* the runner's validation reads each skill's frontmatter as pi does, a first line `---` and YAML up to the next line that starts `---`, a byte-order mark and Windows line breaks allowed, and refuses, naming the skill's field (`agents.lifelog.skills[1] names skills/runs, whose SKILL.md has no description, …`): no frontmatter; frontmatter that isn't YAML, or isn't a map; no `name`, or one other than the folder's; a name pi doesn't take, which is at most 64 lowercase letters, digits and single hyphens between them; no `description`, or an empty one; and one longer than 1,024 characters. Other keys, such as `license`, are left alone.
 *Reason:* an owner who adds a skill and forgets its description would otherwise have a runner that starts and an agent that never sees the skill, and nothing would say so; a name other than the folder's would have pi offer the model `expense-tracking` where the prompt says `(skill: expenses)`. 6.1's rule is that any error stops the runner with a message that names the field. The two numbers are pi's, not tuning numbers, so they stay beside the check in `config.mjs`, as Gondolin's socket limits stay in `gondolin.mjs`.
 *Cost:* a skill folder named as pi only warns about, such as `Receipts` or `receipts_old`, is refused.
-
-**D198. `restore` refuses a link at `runner/` or `exchange/`** (the second review of milestone 10, smaller point 1).
-*Question:* restic replaces a link at a folder it restores, or inside one, but follows one at a folder between. The review's probe, with `runner` and `exchange` links to folders elsewhere and `restore --force`, had restic delete a file in `<elsewhere>/log/`, write the snapshot's log there, and empty `<elsewhere>/outbox/`. Natively the data folder is root's and only root can write it (D151, the plan's milestone 12), so the runner's user can't put those links there, but `restore` didn't rest on anything that said so.
-*Choice:* before restic restores, `restore` looks at each folder between the data folder and the folders it restores, which are `runner/` and `exchange/`, without following a link, and refuses with 2 when one is a link, saying restic would write and delete where it leads, or when it isn't a folder. One that isn't there is fine: restic makes it. Only the `snapshots` listing has been asked of restic then.
-*Reason:* the review's first way. It costs a `lstat` for each, and leaves nothing resting on how the data folder was set up, which in Docker (milestone 13), or with a `RESTORE_TARGET` elsewhere, isn't `setup`'s.
-*Not changed:* the data folder itself, and the folders above it, may be links: where the data lives is the owner's choice, as `RESTORE_TARGET` is.
 
 **D199. The default `config/agents.yaml` is the example of 6.1.**
 *Choice:* 6.1's example as it stands, with its comments, the commented `once` and `backfill` entries among them, under a two-line comment that says what the file is. So the evening check-in at 21:30 is on. One comment says the paths are "relative to this config folder", where 6.1 says `/config`, which is the folder's name in Docker only.
@@ -2658,7 +1696,7 @@ What the milestone left in the repository:
 - a guess is marked in the row's `note`, which starts with ❓ and says what was guessed;
 - for a scanned PDF, `pdftoppm` to make the page images 7.2 says to read;
 - the two memory files and their lines (7.4), shown at the end of the system prompt (6.5).
-*Reason:* every CSV of 7.3 has a `note` column, so a guess can be marked without making a number unreadable to whoever adds up a column, and the backfill's summary (D178) counts a row with ❓ anywhere in it. `pdftoppm` is in the image, with `pdftotext` (D203). The rest is what a model would otherwise choose differently from one run to the next, in files that people read, and that a later assistant will read (section 12).
+*Reason:* every CSV of 7.3 has a `note` column, so a guess can be marked without making a number unreadable to whoever adds up a column, and the backfill's summary (D178) counts a row with ❓ anywhere in it. `pdftoppm` is in the image, with `pdftotext` (D203). The rest is what a model would otherwise choose differently from one run to the next, in files that people read, and that a later assistant will read ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)).
 
 **D201. What the skills settle that 7.3 leaves open.**
 *Choice:* each skill holds what 7.3 gives it word for word, its view, its header, the categories and the day page's template, then a line for each column, and how to file what the owner sends. Inside that, choices of their own:
@@ -2696,14 +1734,6 @@ What the milestone left in the repository:
 
 ### 11.2 The reviews of the pull requests merged before this one
 
-Pull request 11, milestone 10, was approved by its second review with three smaller points. All three are settled:
-
-| # | Point | What became of it |
-|---|---|---|
-| 1 | A forced restore follows a link at `runner/` or `exchange/` | Settled (D198), the review's first way. Test in `backup`: each of the two as a link, then as a file, is refused with 2 and nothing restored, and the folder a link led to keeps its file; a link at `agents/`, which restic replaces, doesn't stop it. It fails on `main` |
-| 2 | D183's reason holds for the first 511 checks only | Settled by recording the bound, as the review proposed: under D183, and where `instance.mjs` checks |
-| 3 | The gap D179 leaves isn't handed on | Settled: a rule in the plan's milestone 14, among what isn't done, for the owner, beside D160's |
-
 The points earlier reviews and milestones left, as 10.2 has them:
 
 | From | Point | What became of it |
@@ -2716,12 +1746,11 @@ The points earlier reviews and milestones left, as 10.2 has them:
 ### 11.3 Changes to DESIGN.md
 
 None changes what Scooter does beyond what section 7 and the review left open:
-- 5.5: `restore` refuses while `runner/` or `exchange/` is a link (D198); section 10's Backups says so.
 - 6.1: a skill's `SKILL.md` gives its folder's name and a description, as pi takes them (D197); 7.3's first sentence and section 10's Config say so.
 - 7.1: only the last message is read, the instruction lines at the start of their own lines, and `Now:` is "today" (D202).
 - 7.2: the CSV files, and where a guess's ❓ goes (D200).
 
-ARCHITECTURE.md 2.11 says the same of `restore`. The plan's milestone 14 has what this milestone leaves for the README, and the review's third point.
+The plan's milestone 14 has what this milestone leaves for the README, and the review's third point.
 
 ### 11.4 What was run to verify the milestone, and what wasn't verified
 
@@ -2733,7 +1762,7 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'` | 721 tests: 710 pass, none fail, in 114 seconds. The 11 that need root skip themselves. No QEMU left. The new sandbox test passes: pi in a VM, run by the runner with the files of `config/`, is given the protocol, the prompt and the memory in that order, is offered the six skills at their copies in `run/config/` with their descriptions, reads `expenses/SKILL.md` there, finds the six programs the instructions name, writes `expenses.csv` and a day page, and the runner commits both and reacts ✅ |
 | The root-test command of section 3 of the plan, on a second clone, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 719 tests, 663 pass, none fail. 56 skip themselves: 35 need the image, 11 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, and 2 run `scooter bridge` as a process. This milestone's tests all run there, and pass |
 | The `instructions`, `config`, `backup`, `agentdir`, `answer`, `planning`, `runner` and `backfill` tests, 16 times, 8 at once | No failure |
-| The new tests against the code of `main` | The test of D198 fails against `backup.mjs` of `main`, and that of D197 against its `config.mjs`. The tests of the files need `config/`, which `main` doesn't have |
+| The new tests against the code of `main` | The test of D197 fails against `config.mjs` of `main`, and that of `restore`'s refusal of a link against its `backup.mjs`. The tests of the files need `config/`, which `main` doesn't have |
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'node test/live/openrouter.mjs'`, with the network | The plan's "done when". On each route the runner, with the files of `config/` and a dummy key, ran the pinned pi in a VM through the real policy. pi's request, 23,934 bytes on the messages route and 23,872 on the chat route, reached OpenRouter, which answered 401; the runner took it as a setup error, paused runs and counted no attempt; and `curl https://example.com/` in a VM of the same sandbox was refused. Exit code 0, no QEMU left |
 | By hand: `debugfs` on the test image, which `config/image/build.json` built | `pdftotext`, `pdftoppm`, `heif-convert`, `curl`, `git`, `rg`, `fd`, `node`, and busybox's `sort`, `awk` and `sed` are there (D203) |
 
@@ -2755,7 +1784,7 @@ Not verified:
 
 ## Milestone 12: native install
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, with gates G1 and G2 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.3, now [delivery](architecture/delivery.md), 6.1, 7.3, 8.4, 8.5, 8.6 and sections 9 and 10, to say what this milestone settled (12.4 here). It also settled the eight smaller points of the review of milestone 11, and the point the first review of milestone 4 left for this one (12.3).
 
 What the milestone left in the repository:
 
@@ -2764,9 +1793,6 @@ What the milestone left in the repository:
 | `src/ops/setup.mjs` | `scooter setup [--no-services]`: the checks, the users, the folders, the env files, the command and the services (D209 to D213) |
 | `src/ops/doctor.mjs` | `scooter doctor` (D214) |
 | `deploy/systemd/scooter-bridge.service`, `scooter-runner.service` | The two units (D207) |
-| `src/bridge/channels/whatsapp.mjs` | `scooter pair` (D215) |
-| `src/bridge/outbox.mjs`, `commands.mjs`, `backup.mjs`; `src/common/outbox.mjs`, `paths.mjs` | The bridge writes nothing in the runner's outbox: its record of an entry is in `bridge/sending/`, and its own entries in `bridge/outbox/` (D205) |
-| `src/common/files.mjs` | `settleFolder`, and `ensureDir` setting modes and owners through it (D206) |
 | `src/common/proc.mjs` | `findUser`, which any user may ask, and `findGroup` |
 | `src/common/limits.mjs` | `DOCTOR_TIMEOUT` and `DOCTOR_RESPONSE_MAX_BYTES` |
 | `src/cli.mjs` | `setup`, `doctor` and `pair` built: every command of 8.4 is |
@@ -2776,22 +1802,6 @@ What the milestone left in the repository:
 | `test/delivery.test.mjs`, `files.test.mjs`, `whatsapp.test.mjs`, `config.test.mjs` | The record in `bridge/`, and the link swapped in once an entry is taken; `settleFolder`; `pair`; the skill checks |
 
 ### 12.1 Decisions
-
-**D205. The bridge writes nothing in the runner's outbox** (the plan's rule for this milestone; D136's cost, the review of milestone 6).
-*Question:* the bridge, as root, wrote `sending.json` into an entry's folder in `exchange/outbox/` before each message (D101), and handed its own entries off into that outbox. The runner's user owns the outbox and could swap a link in between the bridge's look and its write, steering the write, as root, into the folder the link leads to.
-*Choice:*
-- The bridge keeps its record of a runner's entry, `{ entry, sent }` as before, in its own folder, as `bridge/sending/<id>.json`. It reads `entry.json` once, as before, without following a link, writes the record before anything goes out, and from then on the record wins over what the entry's folder holds: what the runner's user does to the folder changes nothing the bridge sends. It writes the record after the last message too, so a crash while the entry is removed sends nothing again.
-- The bridge's own entries, its replies to commands and its backup messages, go to its own outbox, `bridge/outbox/`, in the same form, with their `sending.json` in their folders there. `writeOutboxEntry` takes the outbox to write to.
-- The two outboxes and the records are taken together, in the order of their IDs; of a bridge's entry and a runner's with the same ID, made in the same millisecond, the bridge's goes first.
-- The runner's entry is removed as before, by the name it holds, now only `entry.json`, and its record once nothing of it is left to take again: its folder gone, no folder any more, such as a link put in its place, or holding no `entry.json`. A link in an entry's place is left, and logged once, as D136 has it.
-*Reason:* the plan's example. The bridge then writes nothing in the folders other users control but `backup.lock`, which the runner must see where it looks (below). A root test isn't needed to show it: the test of the swap, the review's case, runs as any user, the folder the link leads to being one the bridge must not write. Against `main`, a probe of that case (12.5) saw the bridge write `sending.json` where the link led; on this branch nothing.
-*Not changed:* `backup.lock` in `exchange/locks/`, which the bridge makes as root while that folder is the runner's and not a link (D184): a link swapped in between that check and the lock's making could steer where it is made, under that name, with the lock's text. The lock coordinates with the runner, so it must be in the folder the runner looks in. DESIGN.md section 9 says so.
-*Cost:* two entries of the two services made in the same millisecond go in no set order between them; within each service, entries keep their order. No install has entries of the old form: a folder of the runner's outbox holding a `sending.json` of an older bridge would be refused, as holding no `entry.json`, and left.
-
-**D206. Root sets a folder's mode and owner through what it opened.**
-*Question:* found while settling D205. `ensureDir` made a folder, then set its mode and owner by its path. The bridge makes wacli's folders in `wacli/`, and the email reader's spool in `mail/`, if they are missing, as root, at every start of the channel, nightly after the backup among them; and the outbox and `exchange/locks/` in the runner's `exchange/`. The folder's owner could rename what root made, and put a link in its place, between the making and the `chmod` and `chown`, which followed the link: a malicious wacli, deleting `wacli/cache` and racing the next start, could have been given whatever its link led to, `/etc/shadow` among them.
-*Choice:* `settleFolder` opens the folder without following a link, as a folder (`O_DIRECTORY | O_NOFOLLOW`), and sets its mode and owner through the descriptor; a link in its place, or anything that isn't a folder, makes it throw, changing nothing. `ensureDir` sets every folder it makes so, and `setup` every folder it makes or sets.
-*Reason:* the descriptor reaches only the folder that was opened. A folder another user swaps in for root's is one of theirs, given to them again. Linux answers `ENOTDIR` for a link opened so, not `ELOOP`.
 
 **D207. The two units, and how they restart** (the first review of milestone 4, point 4; the plan's rule for this milestone).
 *Choice:* `deploy/systemd/scooter-bridge.service` runs `/usr/local/bin/scooter bridge` as root; `scooter-runner.service` runs `/usr/local/bin/scooter runner` as `scooter-runner`, with its group and `SupplementaryGroups=kvm`. Both: `Type=exec`, `Environment=TZ=UTC`, `KillMode=control-group`, `Restart=on-failure`, after `network-online.target`, wanted by `multi-user.target`, and no `EnvironmentFile`: each service reads its own env file (8.2). The restarts:
@@ -2815,7 +1825,7 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 *Choice:* the data in `/var/lib/scooter`, the env files in `/etc/scooter`, the config in `/etc/scooter/config`, the command in `/usr/local/bin`, the units in `/etc/systemd/system` (8.5). Every step is safe to repeat:
 - the checks come first, and make nothing (D210);
 - users and the `kvm` group's membership are added when missing (D212);
-- the folders of 3.2 in the data folder are made when missing, and those directly in it given their owners and modes again; a folder in another user's folder, such as `wacli/store`, is made when missing, through `settleFolder` (D206), and otherwise left alone, as that user's; the data folder itself may be a link the owner made to another disk;
+- the folders of 3.2 in the data folder are made when missing, and those directly in it given their owners and modes again; a folder in another user's folder, such as `wacli/store`, is made when missing, through `settleFolder` ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)), and otherwise left alone, as that user's; the data folder itself may be a link the owner made to another disk;
 - the config is copied, through a temporary folder renamed into place, only when `/etc/scooter/config` isn't there, root's with the runner's group, folders 0750 and files 0640: it is the owner's from then on;
 - the env files are written only when missing, and otherwise given their owners and modes again, their text left alone (D211);
 - the command and the units are written again each time, so a moved Node or a changed unit is taken up.
@@ -2835,11 +1845,11 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 
 **D212. Scooter's users.**
 *Choice:* `useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin`, the shell `/sbin/nologin` or `/bin/false` where that isn't there; `scooter-runner` added to `kvm` with `usermod --append --groups`. A machine with no `kvm` group, such as a container, gets none: `setup` says pi's VMs will run under emulation, that `doctor` says how to enable KVM, and that running `setup` again adds the runner to the group. The names are `USERS`; the root test gives names of its own.
-*Reason:* 3.2 and row 4: system users, which the system numbers, named everywhere. No home: wacli's is given by the bridge, the runner's set by the runner, and the email reader's by the bridge (5.1, 5.6, 6.6); `/nonexistent` is Debian's way. Creating a `kvm` group where the kernel offers no KVM would change nothing.
+*Reason:* [Processes and users](ARCHITECTURE.md#processes-and-users): system users, which the system numbers, named everywhere. No home: wacli's is given by the bridge, the runner's set by the runner, and the email reader's by the bridge ([Running wacli](architecture/whatsapp.md#running-wacli), [The email reader](architecture/email.md#the-email-reader), 6.6); `/nonexistent` is Debian's way. Creating a `kvm` group where the kernel offers no KVM would change nothing.
 
 **D213. `/usr/local/bin/scooter`.**
 *Choice:* a shell script, root's, mode 0755, that `exec`s the real path of the Node that ran `setup` with the code's `src/cli.mjs`, both in single quotes, and refuses a path that holds one. The first `setup` is run as `sudo node /opt/scooter/src/cli.mjs setup`, or `sudo /opt/scooter/src/cli.mjs setup`, since it writes the command.
-*Reason:* the plan's rule (D196): with `exec`, Node is the service's main process, which `systemctl kill --kill-whom=main -s USR1 scooter-bridge` reaches. G2 shows it (12.5).
+*Reason:* the plan's rule ([When backups run](architecture/backups.md#when-backups-run)): with `exec`, Node is the service's main process, which `systemctl kill --kill-whom=main -s USR1 scooter-bridge` reaches. G2 shows it (12.5).
 
 **D214. `doctor`.**
 *Choice:* it runs as the runner's user, with the runner's settings, and reports, in order, each check as `ok`, `warn` or `fail`, with a fix for what isn't `ok`: `agents.yaml`, as the runner checks it; the accelerator; QEMU, the system emulator and `qemu-img`; the image, as the runner checks it; the folders of 3.2 against `setup`'s own table (D209), those it can look at; the env files, the runner's its own and 0600, the bridge's out of its reach, none in Docker; whether `openrouter.ai` answers; and, with ZDR on, the configured model's endpoints in OpenRouter's public list of the endpoints that keep no data, `GET /api/v1/endpoints/zdr`, with those with safety retention marked. It exits with 1 when something failed, and 0 otherwise.
@@ -2847,11 +1857,7 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 - How to enable KVM depends on where it runs: natively, the `kvm` group, through `setup` and the unit; in Docker (`/.dockerenv`), the device and `group_add` for rootful Docker, or the README's udev rule for rootless; and the firmware, or nested virtualization, when there is no `/dev/kvm`.
 - The fixes name `sudo scooter setup` and `sudo scooter build-image` natively, and in Docker the command that would do it.
 - It sends OpenRouter no key and nothing of the owner's, and reads at most `DOCTOR_RESPONSE_MAX_BYTES` within `DOCTOR_TIMEOUT`.
-*Reason:* 8.4. The runner's own checks, of the config, the image and the accelerator, are what it uses: `src/cli.mjs` hands them to `doctor` as `runner`, as it hands `runRunner` its sandbox, so `src/ops` still imports only `src/common` (ARCHITECTURE.md 4.2), as `setup.mjs` does.
-
-**D215. `pair`.**
-*Choice:* it asks `wacli --json --read-only auth status` first, and when wacli is linked says so and does nothing; otherwise it runs `wacli auth`, or `wacli auth --phone <digits>`, as `scooter-wacli`, with wacli's environment alone (5.1) and the terminal attached. `--phone` takes the number in international format, as `OWNER_NUMBER` is read, and gives wacli its digits. It makes wacli's folders when missing, as the channel does. It lives in `whatsapp.mjs`, the only module that runs wacli.
-*Reason:* 8.4. A running bridge finds the link at its next pairing check, within a minute (D45). Linking again over a live link is unlinking first, which is the owner's to do on the phone.
+*Reason:* 8.4. The runner's own checks, of the config, the image and the accelerator, are what it uses: `src/cli.mjs` hands them to `doctor` as `runner`, as it hands `runRunner` its sandbox, so `src/ops` still imports only `src/common` ([The code's layers](ARCHITECTURE.md#the-codes-layers)), as `setup.mjs` does.
 
 **D216. The day page's travel line, and two sentences of the prompt** (the review of milestone 11, points 1, 2 and 7).
 *Choice:*
@@ -2864,7 +1870,7 @@ The runner's home and temporary folder aren't set in its unit: the runner sets b
 
 - **systemd's restart counter** (systemd 255, on the Linux machine, with a unit of the user's own manager that failed at once, then after running 8 seconds): with `RestartSteps` and `RestartMaxDelaySec` the waits grow as D207 has them, 1, 2, 4 and 8 seconds for 1 second, 3 steps and 8 seconds; and the counter doesn't go back after a run that lasted: the waits stayed at their longest. It goes back when the unit is started by hand.
 - **`systemd-analyze verify`** exits with 0 when a unit has a setting it doesn't know, or a value it can't take, and says so on stderr; it fails when the command isn't there. So the test gives each unit a stand-in command, and wants nothing on either stream.
-- **A link opened with `O_DIRECTORY | O_NOFOLLOW`** fails with `ENOTDIR` on Linux, not `ELOOP` (D206).
+- **A link opened with `O_DIRECTORY | O_NOFOLLOW`** fails with `ENOTDIR` on Linux, not `ELOOP` ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)).
 - **Scooter's VMs don't boot inside the root VM.** Under nested KVM, in the Ubuntu 24.04 VM of gate G2 (QEMU 8.2.2 on the machine, `-cpu host`, 4 processors), QEMU's `microvm` machine, as Gondolin 0.14.0 starts it with KVM and `VM_CPUS` 2, hangs in the guest kernel's APIC setup, after `ACPI: Core revision`: every run there failed as "the VM couldn't start", a setup error, and runs paused, as 6.9 says. Booted by hand, the image's kernel boots with 1 processor, or with the machine's ACPI off (`acpi=off`), and not with other CPU models, kernel switches or a `q35` machine around it. Gondolin's `machineType: "q35"` booted a VM there in 2.1 seconds, and ran a command in it. On the machine itself, `microvm` boots in about 2 seconds (milestone 7). Nothing in G2 needs a VM to boot; G3 does: the plan's milestone 13 has it.
 - **A native image build as root**, in the root VM: 16 seconds, 527 MB, and `.image-build/` gone afterwards (D151).
 - Ubuntu 24.04's cloud image has no `bzip2`, which restic's release needs to be unpacked; G1 installs it with the rest.
@@ -2889,7 +1895,6 @@ The points earlier reviews and milestones left, as 11.2 has them:
 | From | Point | What became of it |
 |---|---|---|
 | Milestone 4, first review, point 4 | `RestartSec` for the runner's unit | Settled (D207) |
-| Milestone 6, D136's cost; the plan's rule for this milestone | The bridge's writes into the outbox | Settled (D205); with D206, found on the way |
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Left, recorded as a cost under D160, for the owner in the plan's milestone 14 |
 | Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as before: a choice of what the runner says, which the README covers (milestone 14) |
 | Milestone 10, 10.4 | A native restore | Run at G2 (12.5) |
@@ -2897,16 +1902,14 @@ The points earlier reviews and milestones left, as 11.2 has them:
 ### 12.4 Changes to DESIGN.md
 
 None changes what Scooter does beyond what this milestone settled:
-- 5.3: the bridge keeps `sending.json` in `bridge/sending/`, and its own entries in `bridge/outbox/`, and removes only `entry.json` from the runner's outbox (D205).
 - 6.1: a skill doesn't set `disable-model-invocation: true` (D208).
 - 7.3: the template's travel line is the "Booked:" one, on a Saturday (D216).
 - 8.4: `setup`'s steps and `--no-services`; what `doctor` checks, and its exit code (D209, D214).
 - 8.5: the first `setup`, the units' restarts, and the command's `exec` (D207, D213).
 - 8.6: `DOCTOR_TIMEOUT` and `DOCTOR_RESPONSE_MAX_BYTES`.
-- Section 9: the bridge writes nothing in other users' folders but `backup.lock`, and sets the owner and mode of a folder it makes there through what it opened (D205, D206).
 - Section 10: Least privilege, with `setup`'s root test; Delivery, with the link swapped in once an entry is taken.
 
-ARCHITECTURE.md 3.3 and 5.3 say the same. The plan's milestone 13 has what 12.2 found of Scooter's VMs in the root VM, and its milestone 14 what this milestone leaves for the README.
+The plan's milestone 13 has what 12.2 found of Scooter's VMs in the root VM, and its milestone 14 what this milestone leaves for the README.
 
 ### 12.5 What was run to verify the milestone, and what wasn't verified
 
@@ -2918,7 +1921,6 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, at `515dcb8` | 746 tests: 734 pass, none fail, in 113 seconds. The 12 that need root skip themselves. No QEMU left |
 | The root-test command of section 3 of the plan, on a second clean clone at `4ef9630`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 744 tests, 684 pass, none fail. 60 skip themselves: 35 need the image, 4 `mke2fs`, 4 wacli, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 14 are about what root can read or write anyway. `setup`'s root test runs, and passes; so do the restic round trip and the restore of owners by name |
 | The same, at `515dcb8`, without restic | 744 tests, 681 pass, none fail, 63 skip |
-| A probe of D205's case, the runner's entry swapped for a link once the bridge has sent its first message, against `main`'s `outbox.mjs` and this branch's | On `main` the bridge wrote `sending.json` where the link led, and removed it with the entry; on this branch nothing was written there. Both sent the whole entry |
 | By hand, a user unit of systemd 255 restarted with `RestartSteps` | 12.2: the waits grew, and didn't go back after runs that lasted |
 
 **Gate G1**, in a throwaway Ubuntu 24.04 VM on the Linux machine: the official cloud image, checked against its `SHA256SUMS`, on a fresh 40 GB disk, with KVM, `-cpu host`, 4 processors and 8 GB, user-mode networking, SSH on `127.0.0.1` only, booted in 12 seconds; `/dev/kvm` there.
@@ -2961,7 +1963,7 @@ Not verified:
 
 ## Milestone 13: Docker
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 3.2, 4.3, 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan, which has rootless Docker, with gate G3 in a throwaway root VM on it (section 6 of the plan). Nothing went to the owner: every open point below was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 3.2, now [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), 4.3, 6.6, 6.12, 8.3, 8.4, 8.5, 13.4 and sections 9, 10 and 14, to say what this milestone settled (13.4 here). It also settled the seven smaller points of the review of milestone 12, and the point the second review of milestone 6 left for this one (13.3).
 
 What the milestone left in the repository:
 
@@ -2974,8 +1976,6 @@ What the milestone left in the repository:
 | `src/runner/sandbox/image.mjs` | `build-image` in the runner's container says which container builds (D220) |
 | `src/ops/doctor.mjs`, `src/cli.mjs` | A VM's boot, the runner's user, and the fixes in Docker (D224) |
 | `src/ops/setup.mjs` | The kvm group, with services (D225) |
-| `src/bridge/outbox.mjs`, `src/common/files.mjs` | The runner's outbox: names that are IDs, `entry.json` alone, and the bridge's own entries while it is refused (D226) |
-| `src/bridge/channels/whatsapp.mjs` | Catch-up waits for the first check of the pairing (D227) |
 | `src/common/proc.mjs`, `src/bridge/main.mjs` | `inDocker`, which `doctor` and `build-image` ask; a comment (13.3) |
 | `test/docker.test.mjs` | This milestone's tests: the Dockerfile and the Compose files against `setup.mjs`, 8.3 and 0.2, and `docker compose config` where Docker is installed |
 | `test/live/data-mounts.mjs` | A live check, run by hand in the runner's container: a run's mounts with the data folder at `/data` (row 14) |
@@ -2984,9 +1984,9 @@ What the milestone left in the repository:
 ### 13.1 Decisions
 
 **D217. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included** (the plan's rule for this milestone, the outbox's owner in rootless Docker; the second review of milestone 6, smaller point 3).
-*Question:* 8.3 ran the runner as the container's root under rootless Docker, with no `user:`, because only the user that runs Docker could be given `/dev/kvm`. The runner then makes its folders, the outbox among them, as uid 0, and the bridge, which takes the runner's entries only while the outbox is `scooter-runner`'s (D136), looks that user up as 10002 and refuses the outbox for good. Which user owns the runner's folders there, and how does the bridge know?
+*Question:* 8.3 ran the runner as the container's root under rootless Docker, with no `user:`, because only the user that runs Docker could be given `/dev/kvm`. The runner then makes its folders, the outbox among them, as uid 0, and the bridge, which takes the runner's entries only while the outbox is `scooter-runner`'s ([Folders other users control](ARCHITECTURE.md#folders-other-users-control)), looks that user up as 10002 and refuses the outbox for good. Which user owns the runner's folders there, and how does the bridge know?
 *Choice:* `scooter-runner`, because the runner runs as `scooter-runner` under rootless Docker too, as under rootful Docker and natively; the bridge knows it as it always has, by its name, 10002 in the image. Rootless Docker gives each uid of a container a uid of its own on the host, from the range `/etc/subuid` gives the user that runs Docker: 10002 is that range's start plus 10001, 175537 on the Linux machine, whose range starts at 165536. The udev rule `compose.kvm-rootless.yaml` gives, and the README will, lets that uid read and write `/dev/kvm` with an ACL, set again at each of the device's events: `SUBSYSTEM=="misc", KERNEL=="kvm", RUN+="/usr/bin/setfacl -m u:<uid>:rw $devnode"`. The uid comes from Docker's own map, as the user that runs Docker: `docker run --rm --entrypoint awk scooter:local '$1 <= 10002 && 10002 < $1 + $3 { print $2 + 10002 - $1 }' /proc/self/uid_map`.
-*Reason:* the runner is its own unprivileged user everywhere (3.2; ARCHITECTURE.md decision 14), and the bridge's checks hold as they are, with no setting and no second case: nothing in the code changes. The runner as the container's root would be, on the host, the user that runs Docker and its daemon; it would make its files root's, which a later switch to another variant would leave the runner unable to write; and it would make one volume for the whole data folder (D219) unsafe, since the container's root reads every folder in it. An ACL for one host uid is the narrowest grant there is.
+*Reason:* the runner is its own unprivileged user everywhere ([Processes and users](ARCHITECTURE.md#processes-and-users); [Why it is built this way](ARCHITECTURE.md#why-it-is-built-this-way)), and the bridge's checks hold as they are, with no setting and no second case: nothing in the code changes. The runner as the container's root would be, on the host, the user that runs Docker and its daemon; it would make its files root's, which a later switch to another variant would leave the runner unable to write; and it would make one volume for the whole data folder (D219) unsafe, since the container's root reads every folder in it. An ACL for one host uid is the narrowest grant there is.
 *Cost:* the owner works out a uid with the command above and writes it in the rule; a change of the Docker user's range needs the rule again. systemd's `uaccess`, which Ubuntu gives `/dev/kvm`, sets the users' ACLs afresh at the device's events while a seat has an active session, as on a desktop, which is what 13.4 saw on the Linux machine; the rule's `setfacl` then puts this one back, so a VM starting in that moment, milliseconds after another VM of the machine started or stopped, could fail to start, a setup error that pauses runs for 30 minutes. A server has no seat session, and in the root VM the ACL stayed through every VM (13.5). `MODE="0666"` on `/dev/kvm`, systemd's own default, would leave no such moment, and would give every user of the machine KVM, which Ubuntu chose not to; the owner may choose it. DESIGN.md 8.3 now runs the rootless runner as `scooter-runner`, and gives that uid, not the Docker user, the access of its own.
 
 **D218. pi's VMs run on QEMU's `q35` machine on x86_64** (the plan's rule for this milestone, Scooter's VMs inside the root VM; 12.2).
@@ -3010,7 +2010,7 @@ What the milestone left in the repository:
 
 **D221. The image.**
 *Choice:* 8.3's two stages. `golang:1.27-trixie` builds wacli 0.26.0 with 13.1's command. `node:24-trixie-slim` installs 8.3's packages without their recommendations, QEMU for `TARGETARCH` (`qemu-system-x86` or `qemu-system-arm`), and `qemu-utils`, for `qemu-img`, which Gondolin runs and `doctor` checks. restic 0.19.1 is checked against the checksums milestone 0 took from the release's `SHA256SUMS` (0.2), written in the Dockerfile for each architecture, rather than against a `SHA256SUMS` fetched beside it, which would only say that the two came from the same place. The users are made as `setup` makes them (D212), at 10001 to 10003; the data folder as D219 says; the app is root's, installed with `npm ci --omit=dev --ignore-scripts`; `TZ=UTC`; and the entry point is `tini -- node /app/src/cli.mjs`, with `help` when no command is given. `.dockerignore` lets only `package.json`, the lock file and `src/` into the build, so no env file or data folder is copied in. A test holds the users, the folders and restic's checksums to `setup.mjs` and this file.
-*Reason:* 8.3. tini passes a signal on to Node, the service's main process, so `docker compose kill -s SIGUSR1 bridge` starts a backup (D196); as the container's first process it takes every process of the container with it when it ends, so the runner's QEMU doesn't outlive the runner's container (6.6; 13.5).
+*Reason:* 8.3. tini passes a signal on to Node, the service's main process, so `docker compose kill -s SIGUSR1 bridge` starts a backup ([When backups run](architecture/backups.md#when-backups-run)); as the container's first process it takes every process of the container with it when it ends, so the runner's QEMU doesn't outlive the runner's container (6.6; 13.5).
 *Found:* the image is 775 MB, with QEMU 10.0.13 and Node 24.22.3. It built in 28 seconds on the Linux machine, wacli's stage in 12.
 
 **D222. `compose.yaml`, and the KVM cases as files of their own.**
@@ -3020,10 +2020,10 @@ What the milestone left in the repository:
 
 **D223. Backups and restore in Docker** (the plan's rule for this milestone).
 *Choice, and what was found:*
-- The bridge tells a runner at work from one that is gone by connecting to `runner/runner.sock` (D183). In the one volume (D219), from the bridge's container to the runner's, the socket answers, and `restore`, in a container of its own, found the bridge's (13.5).
-- `restore` runs as natively, in a container of the bridge's: `docker compose stop`, then `docker compose run --rm bridge restore [snapshot] [--force]`. It refuses while either service runs, by their sockets, and writes `runner/log/` with the rest, each file to its owner by name (D190), which the image's users make the same uids in every container.
-- The bridge's `hostname: scooter` holds in the containers `docker compose run` makes of it too, so restic's locks and its snapshots name the host `scooter` in every one (5.5).
-- `docker compose kill -s SIGUSR1 bridge` reaches the bridge through tini, and starts a backup (D196).
+- The bridge tells a runner at work from one that is gone by connecting to `runner/runner.sock` ([The locks](architecture/exchange.md#the-locks)). In the one volume (D219), from the bridge's container to the runner's, the socket answers, and `restore`, in a container of its own, found the bridge's (13.5).
+- `restore` runs as natively, in a container of the bridge's: `docker compose stop`, then `docker compose run --rm bridge restore [snapshot] [--force]`. It refuses while either service runs, by their sockets, and writes `runner/log/` with the rest, each file to its owner by name ([Restore](architecture/backups.md#restore)), which the image's users make the same uids in every container.
+- The bridge's `hostname: scooter` holds in the containers `docker compose run` makes of it too, so restic's locks and its snapshots name the host `scooter` in every one ([What a backup holds](architecture/backups.md#what-a-backup-holds)).
+- `docker compose kill -s SIGUSR1 bridge` reaches the bridge through tini, and starts a backup ([When backups run](architecture/backups.md#when-backups-run)).
 *Reason:* the plan's rules. One volume makes Docker's restore the native one.
 
 **D224. `doctor` boots a VM, and runs as the runner's user** (the review of milestone 12, smaller points 2 and 7).
@@ -3037,17 +2037,6 @@ What the milestone left in the repository:
 **D225. With services, `setup` makes the kvm group when there is none** (the review of milestone 12, smaller point 1).
 *Choice:* `setup`, when it installs the services, makes a system group `kvm` on a machine that has none, then puts `scooter-runner` in it. Without services it makes none, and says pi's VMs will run under emulation, as before (D212).
 *Reason:* the runner's unit names the group (`SupplementaryGroups=kvm`), and systemd refuses to start a unit whose group isn't there (216/GROUP, the review's probe). With the group and no `/dev/kvm`, the runner starts, and falls back to emulation, which `doctor` explains.
-
-**D226. What the bridge takes from the runner's outbox** (the review of milestone 12, smaller points 3, 4 and 5).
-*Choice:*
-- It takes only folders named as `createIds` names them (`isId`), and leaves any other name, logged once, with its first 64 characters and its length. Its record of an entry is named after the entry (D205), so a name of 240 characters made the record's name too long for the system, and every look failed.
-- It removes only `entry.json` from an entry's folder there; in its own outbox, also its `sending.json` and what a write of it cut short left. A folder holding an older bridge's `sending.json` is then left once sent, and logged once, as D205's cost says.
-- While the runner's outbox isn't one to take from, a link or another user's folder, the bridge's own entries still go, `/status`'s reply among them. None of the runner's is taken meanwhile, not even one the bridge has a record of, whose removal would reach through the link. That is logged once, and once again when the outbox can be taken from.
-*Reason:* the review's ways for points 3 and 4, and the choice it offered for point 5. The look no longer fails, with waits that grow, for something only the runner's user can do.
-
-**D227. Catch-up waits for the first check of the pairing** (the review of milestone 12, smaller point 7).
-*Choice:* catch-up, which ran as soon as the channel started, waits for the answer to the first check of the pairing since that start, and then lists only while wacli is paired, as before.
-*Reason:* with an unpaired wacli, every start of the channel, nightly after the backup among them, logged `whatsapp.catchup_failed` beside `whatsapp.not_paired`. *Cost:* a paired channel's first catch-up comes after one `auth status`, a fraction of a second later.
 
 **D228. arm64 isn't verified** (the plan's rule for this milestone).
 *Choice:* the image builds for the machine's architecture by `TARGETARCH`: QEMU's package, restic's file and checksum, and wacli from source; an architecture other than amd64 or arm64 stops the build, saying so. `machineArch`, `qemuProgram` and `machineType` choose by Node's `process.arch`, and the VM image's build file names no architecture (D5).
@@ -3086,11 +2075,8 @@ Pull request 13, milestone 12, was approved by its review with seven smaller poi
 |---|---|---|
 | 1 | Without a kvm group, the runner's unit can't start, though `setup` says its VMs will run under emulation | Settled (D225), the review's first way: with services, `setup` makes the group. Test in `setup`, with a machine without one |
 | 2 | `sudo scooter doctor`, as root, reports a failure that isn't one | Settled (D224), the review's first way: where `scooter-runner` is there, `doctor` runs as it alone, and says how. Test in `doctor`; and in the runner's container as root, exit code 2 (13.5) |
-| 3 | The bridge names its record after whatever a folder in the runner's outbox is called | Settled (D226), the review's way: only names that are IDs. Test in `delivery`, with the review's 240 characters; it fails on `main` |
-| 4 | In the runner's outbox the bridge still removes `sending.json` | Settled (D226): a predicate for each outbox, so the code says what 5.3 and D205 say. Test in `delivery`; it fails on `main` |
-| 5 | A broken runner's outbox still holds back the bridge's own entries | Settled (D226), the choice the review offered: they go. Test in `delivery`, which also shows a record of a runner's entry left alone meanwhile; it fails on `main` |
 | 6 | Stale words | Settled: the comment in `main.mjs`, `RUNNER_CHECKS` in `doctor.mjs`, and section 14 of DESIGN.md, which now says G2 built the image natively |
-| 7 | For milestone 13: `doctor` says KVM where no VM boots; catch-up fails while wacli is unpaired | Settled: `doctor` boots a VM (D224), and `q35` boots under nested KVM (D218); catch-up waits for the pairing's first check (D227). Tests in `doctor`, `sandbox` and `whatsapp`; the last fails on `main` |
+| 7 | For milestone 13: `doctor` says KVM where no VM boots; catch-up fails while wacli is unpaired | Settled: `doctor` boots a VM (D224), and `q35` boots under nested KVM (D218); catch-up waits for the pairing's first check ([Catch-up](architecture/whatsapp.md#catch-up)). Tests in `doctor`, `sandbox` and `whatsapp`; the last fails on `main` |
 
 The points earlier reviews and milestones left, as 12.3 has them:
 
@@ -3104,7 +2090,6 @@ The points earlier reviews and milestones left, as 12.3 has them:
 ### 13.4 Changes to DESIGN.md
 
 None changes what Scooter does beyond what 8.3 left open and the review asked:
-- 3.2: in Docker one volume holds the data folder, and the owners and modes keep each user to its folders, as natively; the runner is `scooter-runner` in every Docker setup (D217, D219). 4.3: where attachments are copied from.
 - 6.6: pi's VMs run on `q35` on x86_64 (D218).
 - 6.12: in Docker, `build-image` runs in a container of its own, privileged (D220).
 - 8.3: the image (D221); one volume, the runner's user, `build-image`'s container, and the KVM files, with the udev rule for scooter-runner's uid under rootless Docker (D217, D219, D220, D222); `restore` in Docker (D223).
@@ -3135,7 +2120,7 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 |---|---|---|
 | `docker compose build` succeeds | `docker compose build` | 28 seconds the first time, wacli's stage 12; 775 MB. restic's checksum `OK`. QEMU 10.0.13 |
 | The VM image | `docker compose run --rm build-image` | 14 seconds, 527 MB, pi 1.5.2, into `/data/runner/image`. As root in the runner's container: refused (13.2); as `scooter-runner`: exit code 2, saying to use `build-image`'s container |
-| Both services start | `docker compose up -d` | Both up. The runner opened the sandbox under emulation (`kvm: ENOENT`), wrote `status.json`, and sent the emulation notice, which the bridge took from the outbox, `scooter-runner`'s, and held for the pairing. The bridge waited for `pair`, with no `whatsapp.catchup_failed` (D227) |
+| Both services start | `docker compose up -d` | Both up. The runner opened the sandbox under emulation (`kvm: ENOENT`), wrote `status.json`, and sent the emulation notice, which the bridge took from the outbox, `scooter-runner`'s, and held for the pairing. The bridge waited for `pair`, with no `whatsapp.catchup_failed` ([Catch-up](architecture/whatsapp.md#catch-up)) |
 | `doctor` reports emulation, and why | `docker compose run --rm runner doctor` | Exit code 0: `warn accelerator: emulation, since KVM can't be used`, with the fix naming `compose.kvm.yaml` and `compose.kvm-rootless.yaml`; `VM boot: a VM booted in 4.3 seconds, with emulation`; the folders, the env files (none, the settings in the environment), OpenRouter and its 6 endpoints that keep no data. With `--user root`: exit code 2, saying to run it as `scooter-runner` |
 | wacli and the email reader run as their users | `docker compose run -d --rm bridge pair`, then `docker top`; the bridge as a one-off with email on, towards an address that never answers, then `docker top` | `wacli auth` ran as uid 10001, and showed a QR code, which nobody scanned; the reader, `node --disable-sigusr1 /app/src/mail/reader.mjs run`, as uid 10003 |
 | …and can't read the other folders | Node, as `scooter-wacli` and as `scooter-mail` in the bridge's container, reading `datastore`, `agents`, `agents/lifelog/state.json`, `exchange`, `exchange/outbox`, `runner`, `runner/status.json`, `bridge`, `bridge/state.json`, and the other's folder | `EACCES` for every one; each reads its own. As `scooter-runner`: the datastore read, `bridge/`, its state, `wacli/` and `mail/` refused |
@@ -3172,7 +2157,7 @@ Not verified:
 
 ## Milestone 14: docs and final check
 
-Done on 2026-11-18, on the Linux machine of section 3 of the plan. Three choices the plan's rules for this milestone listed as the owner's were put to the owner after milestone 13 was merged, and answered before this milestone started (14.1): two gaps are closed here, D179's and D229's, and D160 stays as it is. Everything else was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.1, 5.2, 5.4, 6.3, 6.9, 8.3, 8.4, 8.5, 8.6 and sections 9, 10 and 14 (14.4). The milestone settled the five smaller points of the review of milestone 13, and the points earlier reviews had left (14.3), and made the final check of the plan (14.5).
+Done on 2026-11-18, on the Linux machine of section 3 of the plan. Three choices the plan's rules for this milestone listed as the owner's were put to the owner after milestone 13 was merged, and answered before this milestone started (14.1): two gaps are closed here, catch-up's ([Catch-up](architecture/whatsapp.md#catch-up)) and D229's, and D160 stays as it is. Everything else was settled by rule 3 of section 2 of the plan, the simplest option that keeps the principles. Section 2 of DESIGN.md is unchanged. DESIGN.md changed in 5.1, 5.2 and 5.4, now [the WhatsApp channel](architecture/whatsapp.md) and [/status](architecture/bridge.md#status), and in 6.3, 6.9, 8.3, 8.4, 8.5, 8.6 and sections 9, 10 and 14 (14.4). The milestone settled the five smaller points of the review of milestone 13, and the points earlier reviews had left (14.3), and made the final check of the plan (14.5).
 
 What the milestone left in the repository:
 
@@ -3180,33 +2165,30 @@ What the milestone left in the repository:
 |---|---|
 | `README.md` | Installing and running Scooter, natively and in Docker, and "Check on the first real run" (D230) |
 | `bridge.env.example`, `runner.env.example` | Final: an example number, the app password, the key's guardrail as 6.13 gives it |
-| `src/bridge/channels/whatsapp.mjs`, `intake.mjs`, `state.mjs` | Catch-up from where it had got to, in each of the owner's chats, kept in the bridge's state (D179) |
 | `src/runner/restarts.mjs`, `main.mjs`, `status.mjs`; `src/common/runnerstatus.mjs`; `src/bridge/status.mjs`; `src/cli.mjs`; `deploy/systemd/scooter-runner.service` | The runner's own waits between starts, where its service manager doesn't wait, and `/status` saying so (D229) |
 | `src/runner/sandbox/gondolin.mjs`, `src/ops/doctor.mjs` | `doctor` closes its VM when it is stopped, and boots in `/tmp` when `TMPDIR` is too long a path (D231) |
 | `Dockerfile` | The app readable by every user, whatever the checkout's modes (D232) |
 | `src/bridge/outbox.mjs`, `src/common/limits.mjs`, `src/cli.mjs`, `test/live/data-mounts.mjs` | The review's three small things, and a stale line of `scooter help` (D233) |
 | `test/restarts.test.mjs` | This milestone's test of D229 |
-| `test/whatsapp.test.mjs`, `intake`, `status`, `runner`, `runnerfiles`, `units`, `doctor`, `sandbox`, `delivery`, `docker`, `limits`, `paths` | The cases of D179, D229 and the review's points |
+| `test/whatsapp.test.mjs`, `intake`, `status`, `runner`, `runnerfiles`, `units`, `doctor`, `sandbox`, `delivery`, `docker`, `limits`, `paths` | The cases of catch-up ([Catch-up](architecture/whatsapp.md#catch-up)), D229 and the review's points |
 
 ### 14.1 The questions for the owner, and the answers
 
-The plan's rules for this milestone listed three choices as the owner's. They were put to the owner on 2026-11-18, after milestone 13 was merged and before this milestone started, by the session that coordinates the milestone loop. The milestone didn't stop on them; they are recorded here, as the task asked.
+The plan's rules for this milestone listed three choices as the owner's; the first two are here. They were put to the owner on 2026-11-18, after milestone 13 was merged and before this milestone started, by the session that coordinates the milestone loop. The milestone didn't stop on them; they are recorded here, as the task asked.
 
 *The questions, as put to the owner:*
 1. Docker restarts (D229): "if a fault persists after pi has run, Docker restarts the runner at once and pi runs again each time, spending on OpenRouter. The reviewer measured 12 seconds from one start to the next. Natively, systemd waits up to 30 minutes. I would close this one before using Docker for real."
 2. A request the agent sends itself (D160): "a misled agent can make a failed run look like an OpenRouter outage, and the batch is then tried again every 30 minutes for as long as that message is in it."
-3. A catch-up cut short (D179, "Not changed"): "a stop or a crash during WhatsApp's catch-up can leave messages unstored for good. Backups stop the channel every night." The owner asked: "did you mean that potentially one could lose message history?" The reply was yes, in a narrow case: messages sent while Scooter was down or stopped can stay out of the datastore for good, though they stay in WhatsApp and in wacli's own store. It ended: "I would close it. It is the only one of the three that loses something from the record, and the fix is small: a catch-up that was cut short runs again from where it started."
 
 Then: "Run milestone 14 through the loop, with the fixes in it?"
 
 *The owner's answers, in the owner's words:*
 1. Docker restarts: "ok"
 2. A request the agent sends itself: "this is ok"
-3. A catch-up cut short: "yes"
 
 To running milestone 14 through the loop with the fixes in it: "Yes, both fixes".
 
-*What follows:* D229 and the gap D179 left are closed in this milestone, as the plan's rules for it say, written from these answers by the session that coordinates the loop; only the quoted words above are the owner's. D160 stays as it is, and the README lists it among the known limits. Each decision records what was done: D179, D229 and D160 in their own entries above.
+*What follows:* D229 is closed in this milestone, as the plan's rules for it say, written from these answers by the session that coordinates the loop; only the quoted words above are the owner's. D160 stays as it is, and the README lists it among the known limits. Each decision records what was done: D229 and D160 in their own entries above. The third question, a catch-up cut short, and its answer are beside the rule they settled, in [Catch-up](architecture/whatsapp.md#catch-up).
 
 ### 14.2 Decisions
 
@@ -3228,8 +2210,6 @@ To running milestone 14 through the loop with the fixes in it: "Yes, both fixes"
 
 **D233. Three small things, and a stale line** (the review of milestone 13, smaller point 5).
 *Choice:*
-- The 64 characters of a name the bridge logs is `LOGGED_NAME_MAX_CHARS`, in `limits.mjs` and 8.6.
-- `outbox.runner_outbox_taken` is logged once the runner's outbox is taken from again, not while it isn't there. Test in `delivery`, which fails on `main`.
 - `test/live/data-mounts.mjs` says that a check in the runner's container that kills a QEMU needs tini first, `--entrypoint tini` with `node …` as the command, and the README's development section says so. `docker run --entrypoint tini scooter:local -- node …` was run: Node's parent was tini, pid 1.
 - `scooter help` said `build-image` runs "in Docker, the runner container", which D220 changed: it now names its own container.
 
@@ -3256,22 +2236,20 @@ The points earlier reviews and milestones left, as 13.3 has them:
 |---|---|---|
 | Milestone 8, point 1 | A request the agent makes itself decides the cause of a failure | Put to the owner (14.1), who accepted it, "this is ok": recorded under D160, in the README's known limits, and among section 9's accepted risks |
 | Milestone 9, point 4 | A warning at the runner's start when the last commit is a rebuild's batch | Left, as the review allowed, a choice of what the runner says: the README says to look at the last commit after a crash, a reboot or a restore, and to run the rebuild again when it reads `lifelog: rebuild #…`, as the plan's rule for the README asks |
-| Milestone 10, second review, point 3 | The gap D179 leaves: a catch-up cut short | Put to the owner (14.1), who chose to close it: closed (D179), with every way of the same kind the plan asked to go through |
 
 ### 14.4 Changes to DESIGN.md
 
 None changes section 2, or what Scooter does beyond what the owner's answers and the review asked:
-- 5.1, 5.2 step 7: the bridge's state keeps where catch-up has got to in each of the owner's chats, and catch-up starts from there, moved on only by what it lists itself, never by what the webhook stored, nor by the bot's own rows; every chat the owner wrote from is listed (D179).
-- 5.4, 6.3, 6.9: the runner's own waits between starts where its service manager doesn't wait, its notice, and `/status` and `status.json` saying so (D229).
+- `/status`, 6.3, 6.9: the runner's own waits between starts where its service manager doesn't wait, its notice, and `/status` and `status.json` saying so (D229).
 - 8.3: the runner's restarts in Docker; the app's modes in the image (D229, D232).
 - 8.4: `doctor` closes the VM it booted when it is stopped (D231).
 - 8.5: the runner's unit tells the runner that systemd keeps the waits (D229).
 - 8.6: `RUNNER_RESTART_WAITS` and `LOGGED_NAME_MAX_CHARS`, and the eight constants of `limits.mjs` the table didn't list (D234).
 - Section 9: a request the agent sends itself, among the accepted risks (D160).
 - Section 10: Intake's catch-up and the Runner's restart waits, as this milestone tests them.
-- After the review (14.7): 6.3, a stop during the wait takes `restart` out of `status.json`; 6.9, a start that stops before its wait waits for nothing; section 14, how wacli stores and lists the owner's chat after downtime.
+- After the review (14.7): 6.3, a stop during the wait takes `restart` out of `status.json`; 6.9, a start that stops before its wait waits for nothing; and the README's first real run, how wacli stores and lists the owner's chat after downtime.
 
-ARCHITECTURE.md 2.2, 5.2 and 6 say the same of catch-up and of the runner's restarts.
+ARCHITECTURE.md 5.2 and 6 say the same of the runner's restarts.
 
 ### 14.5 The final check: DESIGN.md, section by section
 
@@ -3279,17 +2257,6 @@ The plan's final check, step 1: DESIGN.md read again, section by section, each r
 
 | DESIGN.md | What was built, and where |
 |---|---|
-| 1. Principles | Each is held by the sections below: the append-only datastore (4), the bridge and runner as the only parts that talk out (3.1, 6.13), the planner and protocol (6.4, 7.1), the sandbox (6.6), the owner's config (6.1, 8.5), quiet mode (6.8) |
-| 2. Decisions | All, as the table has them; the platforms' arm64 is unverified (D228), and macOS deferred (section 12) |
-| 3, 3.1, 3.2 | The two services and their users; no listening port but the webhook on loopback; the folders with their owners and modes, natively (`setup`, milestone 12) and in Docker (the image's `/data`, milestone 13), each held to `dataFolders` by a test; each service's env file alone |
-| 4. The datastore | Milestone 1: the layout, the line format, writing, recovery, duplicates (row 9), attachment names and the size limit |
-| 5. Channels | The channel functions, WhatsApp's and email's (milestones 2, 5, 6) |
-| 5.1 wacli | Milestone 2; its environment, the supervisor, the pairing check, `pair` (milestone 12). The webhook secret is on wacli's command line, which 0.6 found it takes no other way |
-| 5.2 Intake | Milestone 2; step 7 as changed here (D179) |
-| 5.3 Delivery | Milestone 5, with D205 and D226: order, pacing, chunks, the cut at `TEXT_MAX_CHARS`, `--no-preview`, retries and `SEND_ATTEMPTS`, the record in `bridge/sending/` |
-| 5.4 Commands | Milestones 5 and 10; `/status`'s line of the runner's restart waits (D229) |
-| 5.5 Backups | Milestone 10; restore in Docker (D223); natively at G2 |
-| 5.6 Email | Milestone 6 |
 | 6.1 to 6.5 | Milestones 3 and 11 |
 | 6.6 Running pi | Milestones 4 and 7; `q35` (D218). "Ignore the stderr line 'Warning: No project session found…'": nothing reads pi's stderr but its last line, for OpenRouter's error (`openRouterMessage`), and a run's outcome is its exit code |
 | 6.7, 6.8 | Milestone 4 |
@@ -3298,7 +2265,6 @@ The plan's final check, step 1: DESIGN.md read again, section by section, each r
 | 6.12 The VM image | Milestone 7; natively at G2, in Docker in milestone 13 (D220) |
 | 6.13 The network policy | Milestone 8 |
 | 7. The agent's instructions | Milestone 11 |
-| 8.1 Layout | As suggested, with `src/ops/` |
 | 8.2 Environment | Every variable is one `settings.mjs` knows, on its side, and each example explains it (a test); `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` too, which 8.2 names in a row |
 | 8.3 Docker | Milestone 13; the other architecture not built (below) |
 | 8.4 CLI | Every command, as `scooter help` lists them; `build-image`'s line corrected (D233) |
@@ -3306,14 +2272,11 @@ The plan's final check, step 1: DESIGN.md read again, section by section, each r
 | 8.6 Constants | Every number in `limits.mjs`, which a test holds to its values, and now every one of them in the table (D234) |
 | 9. Security | Each control is built, and tested where 10 asks; the accepted risks, with D160 |
 | 10. Testing | Each required test, as each milestone's "what was run" lists it; this milestone's are in 14.6 |
-| 11. Development plan | Milestones 0 to 14 of the plan. 11.7's README (D230), and pi run for real in the sandbox with a dummy key (14.6); 11.8's checklist in the README as "Check on the first real run" |
-| 12. Out of scope | Nothing of it built; `AGENT_ACCEL=hvf` refused on Linux, as 6.6 says |
 | 14. Not verified yet | In the README as "Check on the first real run", gate G4's items |
 
 Not done, or not verified:
 - **Gate G4**, the first real run, with the owner's phone, accounts and keys: every item of section 14 not marked checked, in the README's "Check on the first real run". The install on the machine Scooter will live on stays with the owner too.
-- **arm64**, and building the image for the other architecture with `docker buildx`, which 11.5 asks where Docker can: the plan's machine has no arm64 emulation (D228). macOS, Docker Desktop, OrbStack and Colima are deferred (section 12).
-- **A WhatsApp message that reaches wacli late**, more than `CATCHUP_OVERLAP` after a later message of the owner's was listed, and whose webhook was lost: not closed with `messages list` (D179); in the README's known limits.
+- **arm64**, and building the image for the other architecture with `docker buildx`, which 11.5 asks where Docker can: the plan's machine has no arm64 emulation (D228). macOS, Docker Desktop, OrbStack and Colima are deferred ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)).
 - **A request the agent sends itself** can decide the cause of a failure: accepted by the owner (D160).
 - **The moment `uaccess` leaves** on a desktop with rootless Docker's udev rule (D217): unverified, and in the README.
 - **The README's native install as a whole**, as text, on a fresh machine: its steps were run at G1 and G2 in milestone 12.
@@ -3328,7 +2291,6 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, on the same clone | 776 tests: 764 pass, none fail, in 117 seconds. The 12 that need root skip themselves. Boots with KVM: 2.1 to 2.2 seconds, and 1.6 for `doctor`'s boot check. No QEMU left |
 | The root-test command of section 3 of the plan, on a second clean clone at `c753450`, with `~/.local/bin/restic` mounted at `/usr/local/bin/restic` | Node 24.22.3: 774 tests, 711 pass, none fail. 63 skip themselves: 37 need the image, 14 are about what root can read or write anyway, 4 need wacli, 4 `mke2fs`, 2 run `scooter bridge` as a process, 1 `systemd-analyze`, and 1 Docker. This milestone's tests all run there, and pass |
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'node test/live/openrouter.mjs'`, with the network, from the working tree at `25766da`'s code | "all as it should be", exit code 0: on each route pi's request, about 24 KB, went through the policy to OpenRouter, which answered 401; the runner took it as a setup error, paused runs and counted no attempt; `curl https://example.com/` in a VM was refused. No QEMU left |
-| The new tests against the code of `main` | The tests of D179 that change what is stored fail against `main`'s `whatsapp.mjs`: the review's case by a stop (`--after` 15:57, past R3), by a crash, the webhook that never came, and the chat switch (R3, M1 and A1 never stored); the bot's rows and the held row fail on `catchUp`, which `main` hasn't. The intake test fails on `again`, the delivery test on `outbox.runner_outbox_taken` logged while the outbox was missing, and the sandbox test of the boot check, with the image, on a boot `main` doesn't stop. The tests of D229 need `restarts.mjs` |
 | The new tests of `restarts`, 3 times | No failure |
 
 **D229 in Docker**, by hand, on the Linux machine's rootless Docker, from the working tree at `25766da`'s code: `docker compose -p scooter14 build`, then `run --rm build-image` (14 seconds, 527 MB); `runner.env` with a well-formed key OpenRouter doesn't know and `AGENT_ACCEL=emulation`; a message stored with the bridge's store; and, as the fault that stays after pi has run, the volume's `exchange/outbox` made a file, so the notice of the run's setup error can't be written and the runner stops before the run is recorded. Then `up -d runner`:
@@ -3347,7 +2309,6 @@ The tests the plan asks of this milestone, and where they are:
 
 | Required | Where |
 |---|---|
-| D179: the review's case by a stop and by a crash, and each further case found | `whatsapp.test.mjs`: the stop, the crash, the webhook that never came, the bot's rows, every chat, the row held; `intake.test.mjs`: a record that fails for a bug is handed again |
 | D229: the choice, with a test | `restarts.test.mjs`; `units.test.mjs`, the unit's setting and the waits against systemd's; `status.test.mjs` and `runnerfiles.test.mjs`, `/status` and `status.json` |
 | The final check | 14.5, and the runs above |
 
@@ -3356,7 +2317,6 @@ Beyond those: the review's points in `doctor`, `sandbox`, `docker` and `delivery
 Not verified:
 - **Gate G4**, with the owner's phone, accounts and keys, and the install on the machine Scooter will live on (14.5).
 - **arm64** (D228), and macOS, deferred.
-- **The real wacli's catch-up after downtime**, and the case D179 leaves: the tests run the wacli stub.
 - **The restart notice in Docker**: the check's fault was an outbox that can't be written, so the notice couldn't be; the test shows it in the runner's own outbox.
 - **The README's native install as a whole**, on a fresh machine: its steps ran at G1 and G2 (12.5). No root VM was started for this milestone: none of its work is a gate of G1 to G3.
 
@@ -3368,9 +2328,6 @@ The review of the pull request, at `c7d3722`, found the milestone's checks and r
 |---|---|---|
 | Must 1 | The README's native upgrade fails as written, and leaves the pinned pi stale: `build-image` ran while the runner was up, which it refuses, and before the merge of `config/`, so natively it built from the owner's old `image/build.json` | Fixed in the README, the review's way. The native block stops the runner first; shows what the upgrade changed in `config/` (`git diff ORIG_HEAD HEAD -- config/`); says to merge it into `/etc/scooter/config` before `build-image`, `image/build.json` above all, which the runner and `build-image` read there, and that copying it is the merge for an owner who never changed it; then `setup`, `build-image`, and both services. The paragraph on upgrades in "The agent's instructions" says the pin is in the owner's copy natively. Of the two times to build, after each upgrade or when `build.json` changed, the README now says after each upgrade, natively and in Docker, as DESIGN.md 8.3 and the Docker install already did: the image holds Gondolin's own programs for the VM too (`sandboxd`, `sandboxfs`), which an upgrade of Gondolin changes while `build.json` stays as it was |
 | 1 | A start that fails before its wait isn't recorded, and the next start doesn't wait, where D229, 6.9 and the README said it waits too | The text corrected, not the code: D229's cost, DESIGN.md 6.9, and the README's restarts. Such a start runs nothing of pi's, so the plan's rule holds, and recording it would pace nothing: the next start stops in the same steps before it comes to the wait. Waiting before those steps would put the wait before the checks that say what is wrong, and before `status.json`, which needs the sandbox opened, and `/status` would then not say that the runner waits. Docker's own restarts pace such a start, with waits of a minute at most, and natively systemd waits as after any stop |
-| 2 | Catch-up after downtime, which D179 and 14.6 leave to G4, isn't in "Check on the first real run" | Added there: a stop of the bridge, messages meanwhile, and each stored once, in order; what to look at in wacli; and `wacli messages changes` for the case D179 leaves. DESIGN.md section 14 lists it too, since the README's list is section 14's items |
-| 3 | The bucket example puts comments after values, which the env files' loader refuses | Each comment on a line of its own, and B2's lines as comments |
-| 4 | `RESTORE_TARGET=/tmp/look scooter restore` needs root natively, where `sudo` drops a variable set before it, and has no Docker form | `sudo RESTORE_TARGET=/tmp/look scooter restore [snapshot]` natively; in Docker, `docker compose run --name scooter-look -e RESTORE_TARGET=/tmp/look bridge restore`, then `docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look`, run by hand (below). The services may run meanwhile: `restore` refuses only for the data folder it would write into |
 | 5 | `setfacl` needs the `acl` package, which the README didn't say | Said beside the udev rule, as `compose.kvm-rootless.yaml` says it |
 | 6 | `doctor` ignores Ctrl-C after the boot check, and waits up to `DOCTOR_TIMEOUT` for OpenRouter | Fixed (D231): the signal that closes the boot check's VM also ends the wait for OpenRouter's answer, and no check of OpenRouter is made then. Test in `doctor`, which hangs on `c7d3722` |
 | 7 | D234 says nine constants and names eight | Eight, by a script over `main`'s `limits.mjs` and 8.6: corrected in D234, 14.4 and the pull request's description |
@@ -3384,7 +2341,6 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | `SCOOTER_TEST_IMAGE=~/ww/scooter-scratch/image sg kvm -c 'npm test'`, on the same clone | 777 tests: 765 pass, none fail, in 114 seconds. The 12 that need root skip themselves. No QEMU left |
 | The two new tests against `c7d3722`'s `main.mjs` and `doctor.mjs` | The test in `restarts` fails on `restart` still in `status.json`; the test in `doctor` waits on OpenRouter's answer, and the file's tests after it are cancelled |
 | `git diff ORIG_HEAD HEAD -- config/` in a scratch repository, after a `git pull` that brought a change to `config/`, then after one that brought nothing | The change, then nothing: a pull with nothing new leaves no older diff behind |
-| The README's Docker command for `RESTORE_TARGET`, by hand: a Compose project of the check's own from `compose.yaml` and the image built from the working tree, a local restic repository mounted into the bridge's container, `backup-init`, then `up -d bridge` and `kill -s SIGUSR1 bridge` | The backup finished, snapshot `923ba6bb`. With the bridge still running, `docker compose run --name scooter-look -e RESTORE_TARGET=/tmp/look bridge restore` restored it into `/tmp/look/data`, exit code 0; the container had no restart policy; `docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look` gave a folder of the user's own, every file readable. Then `down -v` |
 
 Not verified:
 - **The README's native upgrade**, as a whole, and `sudo RESTORE_TARGET=… scooter restore`: no root on the machine, and no root VM was started for this, as none of it is a gate of G1 to G3. That `sudo` takes a variable after it, and drops one before, is how `sudoers` treats the environment, with Ubuntu's default rule, which allows any command.

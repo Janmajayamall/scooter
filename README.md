@@ -2,7 +2,7 @@
 
 Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets and a page per day, and asks you when it's unsure. Everything is backed up every night, encrypted.
 
-This README is for installing and running it on Linux, natively or with Docker. `docs/DESIGN.md` is the specification, `docs/ARCHITECTURE.md` maps the parts, and `docs/DECISIONS.md` records every choice made while building it. Section numbers such as (6.9) below are DESIGN.md's.
+This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`; `docs/DESIGN.md` and `docs/DECISIONS.md` still hold what the parts whose documents aren't written yet do, and the choices made while building them. Section numbers such as (6.9) below are DESIGN.md's.
 
 - [How it fits together](#how-it-fits-together)
 - [What you need](#what-you-need)
@@ -82,7 +82,7 @@ cd /opt/scooter && sudo npm ci --omit=dev --ignore-scripts
 sudo node /opt/scooter/src/cli.mjs setup
 ```
 
-It checks first, and stops, listing every problem, unless Node and the code are root's, writable by root alone, and readable by every user, since the bridge runs both as root. Then it makes the three users, puts `scooter-runner` in the `kvm` group (making the group if the machine has none), makes the data folder `/var/lib/scooter` with the owners and modes of 3.2, copies the repository's `config/` to `/etc/scooter/config`, writes `/etc/scooter/bridge.env` and `runner.env` from the examples, writes `/usr/local/bin/scooter`, and installs and enables the two services without starting them. It is safe to run again: it never overwrites an env file or the config, and puts owners and modes right. An env file you copied there by hand must set `DATA_DIR=/var/lib/scooter` and `CONFIG_DIR=/etc/scooter/config`, as `setup` does, or it refuses it.
+It checks first, and stops, listing every problem, unless Node and the code are root's, writable by root alone, and readable by every user, since the bridge runs both as root. Then it makes the three users, puts `scooter-runner` in the `kvm` group (making the group if the machine has none), makes the data folder `/var/lib/scooter` with the owners and modes of [Folders and their owners](docs/ARCHITECTURE.md#folders-and-their-owners), copies the repository's `config/` to `/etc/scooter/config`, writes `/etc/scooter/bridge.env` and `runner.env` from the examples, writes `/usr/local/bin/scooter`, and installs and enables the two services without starting them. It is safe to run again: it never overwrites an env file or the config, and puts owners and modes right. An env file you copied there by hand must set `DATA_DIR=/var/lib/scooter` and `CONFIG_DIR=/etc/scooter/config`, as `setup` does, or it refuses it.
 
 **4. Fill in the env files**, `/etc/scooter/bridge.env` and `/etc/scooter/runner.env` (see [The env files](#the-env-files) and [The accounts and keys](#the-accounts-and-keys)).
 
@@ -365,7 +365,7 @@ The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker c
 
 ## The security model
 
-What each part can reach, and what protects what (section 9):
+What each part can reach, and what protects what ([The boundaries](docs/ARCHITECTURE.md#the-boundaries), and section 9 of `docs/DESIGN.md`):
 
 - **Strangers** can't reach the agent: the bridge keeps WhatsApp messages only from your number and IDs, never from groups, and email only from your addresses when it passes DMARC. Replies have no recipient field: they always go to you.
 - **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees the datastore read-only, and can write only its views, its memory and its copy of the current session. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
@@ -405,9 +405,9 @@ Lines of one request share its `id`. No line holds a header, a body or a query s
 ## Known limits
 
 - **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `/status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 (`docs/DECISIONS.md`, D160).
-- **A WhatsApp message that reaches wacli long after messages sent later**, more than 2 minutes, and whose webhook to the bridge was also lost, may never be stored. Catch-up lists wacli's store by the messages' own times, from where it had got to, less 2 minutes; your messages normally reach wacli in their order. It stays in WhatsApp and in wacli's own store (D179).
+- **A WhatsApp message that reaches wacli long after messages sent later**, more than 2 minutes, and whose webhook to the bridge was also lost, may never be stored. Catch-up lists wacli's store by the messages' own times, from where it had got to, less 2 minutes; your messages normally reach wacli in their order. It stays in WhatsApp and in wacli's own store ([Catch-up](docs/architecture/whatsapp.md#catch-up)).
 - **The image on arm64**, Docker Desktop, OrbStack, Colima and macOS have never been run.
-- **A native bridge runs as root**, so that it can start wacli and the email reader as their own users.
+- **A native bridge runs as root**, so that it can start wacli and the email reader as their own users: a flaw in it would expose the whole machine, not one container. Running it as its own user, with systemd starting the other two, is a possible later change.
 
 ## Upgrading
 
@@ -458,7 +458,7 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] A receipt photo ends up in `expenses.csv`: the model reads photos through pi's `read` tool.
 - [ ] A real batch runs end to end in the sandbox, with your key.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
-- [ ] wacli: how an edit and a deletion of yours arrive, `FromMe` and `Chat` included (`docs/DECISIONS.md`, D42 and 3.3); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (0.8 says how to tell); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
-- [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli (`docs/DECISIONS.md`, D179): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case D179 leaves (see [Known limits](#known-limits)).
+- [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
+- [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli ([Catch-up](docs/architecture/whatsapp.md#catch-up)): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case catch-up leaves (see [Known limits](#known-limits)).
 - [ ] Email: IDLE with the app password, over TLS; the `Authentication-Results` header and its `dmarc=` result, as `email-check` shows them; your own mail passes DMARC; a forwarded booking and an audio attachment are parsed.
 - [ ] A backup to the real bucket, and a restore of it into an empty folder.
