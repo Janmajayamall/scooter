@@ -1,6 +1,6 @@
-// The agent's instructions (`docs/architecture/agent.md`; the plan's milestone 11): the default config
-// in `config/`, its prompt and its six skills, read against the documents themselves, and the protocol that
-// ships with the runner, read against the parser of its answers.
+// The agent's instructions (`docs/architecture/agent.md`; the plan's milestone 11): the default
+// config in `config/`, its prompt and its six skills, read against the documents themselves, and the
+// protocol that ships with the runner, read against the parser of its answers.
 //
 // The files are the repository's own, as `setup` copies them and Docker mounts them. What the
 // agent's document gives word for word, the views' list, the CSV headers, the categories and the day
