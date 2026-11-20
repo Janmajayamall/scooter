@@ -1,0 +1,111 @@
+# The WhatsApp channel
+
+The WhatsApp channel is how the owner reaches Scooter, and how Scooter answers. It runs wacli, a third-party, unofficial WhatsApp client linked to the bot's number, and is the only code that does. It receives the owner's messages, by wacli's webhook and by catching up, drops everything that isn't the owner's, downloads media, and sends texts and reactions for [delivery](delivery.md). It is one channel of [the bridge](bridge.md#channels), and takes commands.
+
+wacli runs as `scooter-wacli`, reaches only its own folder, `wacli/`, and gets none of the bridge's settings ([The boundaries](../ARCHITECTURE.md#the-boundaries)). Everything wacli says is input to check, and nothing that isn't the owner's reaches the core.
+
+## Files
+
+- `src/bridge/channels/whatsapp.mjs`: the channel: wacli's environment and supervision, the pairing check, the webhook, wacli's two formats, the filters and owner matching, catch-up, downloads, sending, and `scooter pair`.
+
+## Settings
+
+In `bridge.env`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OWNER_NUMBER` | required | The owner's WhatsApp number, in international format. It may be written with `+`, spaces, hyphens and brackets, and is kept as digits |
+| `OWNER_JIDS` | empty | Other IDs that are the owner, such as `…@lid`, comma-separated |
+
+## Running wacli
+
+- **Environment.** Every wacli call runs as `scooter-wacli` with exactly six variables: `HOME` its folder, `WACLI_STORE_DIR` its `store/`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` its `config/`, `state/` and `cache/`, and `TZ=UTC` (`wacliEnv`). No `PATH`: the program is found as [Running programs](shared-code.md#running-programs) says. Its folders are made when missing, with the owner and mode of [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners); `setup` makes them in an install.
+- **Sync.** The long-running process is `wacli sync --follow --webhook http://127.0.0.1:<WEBHOOK_PORT>/wacli --webhook-secret <secret> --webhook-allow-private`, supervised as [Running programs](shared-code.md#running-programs) says: started again with the waits of `RESTART_BACKOFF` whenever it exits, and stopped by a signal.
+- **The webhook secret** is random, and new each time the channel starts: at the bridge's start, and after each backup. A restart of sync keeps it, since the webhook server, which checks it, keeps running. It goes on sync's command line, where other users can read it ([Secrets](../ARCHITECTURE.md#secrets)): wacli 0.26.0 takes it no other way ([Facts about wacli 0.26.0](#facts-about-wacli-0260)). *Cost:* the email reader, or any user of the machine, could read it and post fake WhatsApp messages to the bridge, which is no worse than the fake emails a malicious reader could hand over.
+- **Other calls** use `--json` and take the `data` part of the answer. While sync runs, wacli hands them to it internally, and nothing special is needed. Every call but sync is stopped after `WACLI_CALL_TIMEOUT`. *Why:* wacli stops its own calls after 5 minutes (`--timeout`); this bounds a call that doesn't, so one stuck download can't hold up every message after it.
+- **Logs** hold nothing wacli writes: its errors can name chats and files.
+
+## Pairing
+
+- **Before every start of sync**, restarts included, the channel asks `wacli --json --read-only auth status`, and reads `data.authenticated`. Until wacli is paired it asks again every `AUTH_CHECK_INTERVAL`, and logs once that the owner should run `scooter pair` (`whatsapp.not_paired`). *Why:* a session logged out from the phone makes sync fail at once on every restart; checking first turns that into one log line and a check at that interval.
+- **`ready()`** is true only while wacli is paired and sync runs ([Waiting and failed sends](delivery.md#waiting-and-failed-sends)).
+- **`status()`** says `linked`, `not linked; run scooter pair`, `starting`, `stopped`, or that wacli stopped and starts again shortly.
+- **`scooter pair [--phone <number>]`** asks `auth status` first, and when wacli is linked says so and does nothing: linking again over a live link is unlinking first, which is the owner's to do on the phone. Otherwise it runs `wacli auth`, or `wacli auth --phone <digits>`, as `scooter-wacli`, with wacli's environment alone and the terminal attached, which shows a QR code, or a pairing code with `--phone`. `--phone` takes the number in international format, and gives wacli its digits. It makes wacli's folders when missing, as the channel does. A running bridge finds the link at its next pairing check.
+
+## The webhook
+
+- The server listens on `127.0.0.1` only, at `WEBHOOK_PORT`, and answers: 404 for any path but `/wacli`, query strings included; 405 for any method but `POST`; 413 for a body over `WEBHOOK_MAX_BYTES`, by its `content-length` or by what arrives, closing the connection; 401 for a missing or wrong `X-Wacli-Signature`, which must be `sha256=` and the lowercase hex HMAC-SHA256 of the raw body with the secret, compared in constant time; and 200 for a signed body, before it is handled. *Why:* wacli waits at most 5 seconds and never tries again.
+- A signed body that isn't JSON, or is a message without an ID, is logged by its size only. One with an `EventType` field, a receipt or presence, is ignored: messages have none.
+- Tests set `WEBHOOK_PORT` to 0, and the URL given to sync names the port the server got. The server logs the address it listens on (`whatsapp.started`).
+
+## From a message to a record
+
+1. **Normalize** each webhook payload or list row into: chat, id, sender, timestamp, fromMe, text, media (type, caption, filename, MIME type, size), replyToId, replyToPreview, reactionToId, reactionEmoji, edited, revoked and forwarded. wacli's two formats are read in `fromWebhook` and `fromListRow`, and nowhere else.
+2. **Drop** what isn't the owner's, in `dropReason`: messages from the bot (`FromMe`); chats ending in `@g.us`, `@broadcast` or `@newsletter`; senders that aren't the owner, logged by their ID with the hint "add it to OWNER_JIDS if this is you"; stickers; and empty messages. Drops are logged from webhooks only, by message ID and reason: catch-up lists the bot's own replies again and again.
+3. **Hand over** the record (`toRecord`): the message without its chat, sender and `fromMe`. A media message's text is its caption, `Media.Caption` or `MediaCaption`, not `Text`: wacli also writes `[Audio]` there for audio without one, which the owner never wrote.
+   - **A location**, or a live location, which wacli gives a `Media` of its own type with the place's name as the caption and no file, becomes an attachment with `error: "not a file, so not stored"`, and so does any other media without a file. The line has the caption as its text. *Why:* the line format has no field for coordinates, and a list row has none at all, so writing the webhook's into the text would store one message two ways. *Cost:* the coordinates are lost; keeping them would be a change to [the line format](datastore.md#the-line-format).
+   - The channel keeps the chat of each record it hands over, by the record, since `download` needs it.
+
+## Owner matching
+
+- A JID is compared in lower case, without its `:device` suffix and without the `.agent` part before it. User parts are digits, so nothing else is lost.
+- The owner is `<OWNER_NUMBER digits>@s.whatsapp.net`, `<digits>@c.us`, and every ID in `OWNER_JIDS`.
+- The bridge's state keeps `ownerChat`, `{ jid, at }`: the chat of the owner's newest message, and its time. It moves only to a message at least as new, so catch-up delivering older rows doesn't move it back. One that can't be written is logged, and the message goes on. Replies go to that chat, or to `<digits>@s.whatsapp.net` before the owner has written.
+
+## Catch-up
+
+The webhook is best-effort, so catch-up is what makes intake complete: it lists every chat the owner has written from and hands the rows over through the same steps as the webhook's, and the store's duplicate rules let the two overlap ([Rules](datastore.md#rules)).
+
+- **When:** at the channel's start, once the first pairing check since that start has answered, and then every `CATCHUP_INTERVAL`, only while wacli is paired. One that fails is logged (`whatsapp.catchup_failed`), and the next comes at the usual time. *Why:* while wacli is unpaired there is nothing to list, and every start of the channel would log a failure.
+- **What:** for each chat, `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit <CATCHUP_LIMIT>`. The chats are the one replies go to and every other chat an owner's message came from, such as an `@lid` one.
+- **Where each chat starts.** The bridge's state keeps, in `catchUp`, for each chat, the time of the newest of the owner's rows that catch-up has listed there with every row before it handled: stored, skipped as a duplicate or for an unknown target, or dropped as the steps above drop it. The next catch-up of the chat starts `CATCHUP_OVERLAP` before it. A chat catch-up hasn't listed yet starts from the bridge's first start.
+- **Never before the bridge's first start**, which on the very first start is the current time: the chat's earlier history is never imported. What the steps above drop on purpose stays dropped.
+- **Only what catch-up itself lists moves it on.** Never what the webhook stored, nor a line from another channel: a message whose webhook never came, a stop or a crash between catch-up's rows, or an email that arrived while wacli was down would otherwise move the start past a message never stored, for good. Nor do the bot's own rows: wacli stores a reply with the time it was sent, and after downtime a reply can go out before wacli has received the owner's messages from while it was down, whose times are older.
+- **Saved** after each page and when the catch-up ends, done, failed or stopped. A crash keeps nothing in memory, and the next start lists again from the last save, storing nothing twice.
+- **A row intake must be handed again**, with `again: true` ([Intake](bridge.md#intake)), holds catch-up where it is, for that chat: the rows after it are still handed over and stored, and the next catch-up lists from before it again, saying so once (`whatsapp.catchup_held`). *Cost:* a row intake fails on every time, as a bug could make, holds catch-up there until the bug is mended.
+- **Pages.** A full page goes on from a second before its last row's time, since `--after` is strict to the second and other rows may share it. A full page that all falls within one second goes on from that second, and the rest of that second is skipped: `CATCHUP_LIMIT` messages in one second don't come from one person. A full page whose last row isn't after the time asked for ends the catch-up, with a warning.
+- It stops between rows when the channel stops, and hands its rows over one at a time. Each catch-up logs how many rows it read, delivered and dropped.
+- **A state an older bridge wrote** has no `catchUp`: catch-up starts, as that bridge did, from the newest incoming WhatsApp line, in the chat it listed, and saves that at once.
+
+*The owner's answer:* asked on 2026-11-18 whether to close the case of a catch-up cut short, which could leave messages out of the datastore for good ("a catch-up that was cut short runs again from where it started"), the owner answered "yes".
+
+What catch-up can't close with wacli as it is, a message that reaches wacli late, is in the README's [Known limits](../../README.md#known-limits). wacli's `messages changes` would close it, and isn't used: nothing here can run it against a paired wacli, and it would replace a catch-up the tests check with one nothing has seen.
+
+## Downloads
+
+- `download` runs `wacli media download --chat <chat> --id <id> --output <staging>/<a name of its own>`, into `wacli/staging/`, and checks that wacli says it saved the file there. It copies it to the `path` the core gave, in `bridge/incoming/`, with `copyUntrustedFile`, only if it is `scooter-wacli`'s and no larger than `ATTACHMENT_MAX_BYTES`, by the rules of [Folders other users control](../ARCHITECTURE.md#folders-other-users-control). *Cost:* each attachment is copied twice.
+- The bridge gives its downloads names that start with an ID, and those are the only names it removes in `wacli/staging/`, at the channel's start and after each download. Anything else there, a folder wacli left in a download's place among it, is counted, each time, in `whatsapp.staging_kept`. Staging that can't be used by those rules isn't cleared, which is logged (`whatsapp.staging_not_cleared`). *Why unlinking those names is safe:* a name that starts with an ID is also an outbox entry's, which is a folder, and unlinking refuses a folder; and a download waiting in `bridge/incoming/`, named `<id>-<n>`, is in the bridge's own folder, emptied at every start and empty whenever staging is cleared, so a link in staging's place leads to none of them.
+- **A stop** stops the channel's wacli calls in progress, catch-up's `messages list`, the pairing check's `auth status` and `media download`, through a signal they take; a download stopped so fails at once, with the code `ESTOPPED`, for intake to leave its message ([Intake](bridge.md#intake)). A call that ended well as the signal came is a success: a send that went out isn't sent again. *Why:* a backup stops the channels every night, and waiting for each call, up to `WACLI_CALL_TIMEOUT` for each of three tries, would hold it up.
+
+## Sending
+
+For [delivery](delivery.md), WhatsApp can send and react.
+
+- **`sendText`** runs `wacli send text --to <owner chat> --message <text> --no-preview`, with `--reply-to <ID>` when it quotes. The chat is the owner's ([Owner matching](#owner-matching)).
+- **`--no-preview` on every text.** Without it, wacli fetches the first URL in the text to build a link preview. Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request. So links reach the owner as plain text. *The owner's answer*, 2026-11-16, to the proposal "the bridge always passes `--no-preview`, so links arrive as plain text": "Yes, both" (with a second answer, about the agent's sessions). A reaction carries the emoji from the config, and v2 sends no files, so nothing else Scooter sends through wacli carries the agent's words.
+- **`react`** runs `wacli send react --to <owner chat> --id <ID> --sender <owner chat> --reaction <emoji>`: in a one-to-one chat the owner's JID is the chat's.
+- Each resolves with `data.id`, the new message's ID, or null when wacli gives none. `signal` stops wacli, for a bridge that is stopping.
+- wacli's warning on stderr that two sends came less than 5 seconds apart isn't a failure: the send goes out all the same ([Pacing](delivery.md#pacing)).
+
+## wacli's formats
+
+Read from wacli's source at v0.26.0, on 2026-11-16, not from a paired wacli; a correction belongs in `fromWebhook` or `fromListRow`.
+
+- **A webhook payload** (`internal/app/webhook.go`) is wacli's `ParsedMessage` with Go's field names, no JSON tags: `Chat`, `ID`, `SenderJID`, `Timestamp` (RFC 3339, UTC), `FromMe`, `Text`, `PushName`; `ReplyToID`, `ReplyToSenderJID` and `ReplyToDisplay`, a short text of the quoted message; `ReactionToID`, `ReactionEmoji`, `IsForwarded`, `ForwardingScore`, `Edited` and `Revoked`; others such as `Buttons`, `Location`, `Poll` and `Call`; with `Media` replaced by `{Type, Caption, Filename, MimeType, FileLength}`, and `ChatName` added. JIDs are `"user@server"` strings; known LIDs are turned into phone-number JIDs, and unknown ones stay `…@lid`. Messages without an ID aren't posted, and other kinds of event carry an `EventType`.
+- **An edit** (`extractProtocolMutation` in `internal/wa/messages.go`) carries the ID of the message it changes, `Edited: true` and the new text; **a deletion** the ID and `Revoked: true`, with no text and no media. Its time is the edit's or the deletion's. The same code sets `Chat` and `FromMe` from the key the sender's phone wrote, so the owner's own deletion, and an edit that isn't encrypted, probably arrive with `FromMe: true` and the bot's JID as `Chat`, and are dropped as the bot's.
+- **A list row** (`internal/store/types.go`) is the stored message, with Go's field names except `quoted_msg_id` and `quoted_sender_jid`: `ChatJID`, `MsgID`, `SenderJID`, `Timestamp`, `FromMe`, `Text`, `DisplayText`, `ReactionToID`, `ReactionEmoji`, `MediaType`, `MediaCaption`, `Filename`, `MimeType`, `LocalPath` and more. It has no preview of what it quotes and no size for its media. An edit updates the stored message, so an edited row has the current text and `Edited: true`, and `fromListRow` hands it over as the message and then its edit, the store skipping whichever is stored. So a message missed while wacli was down and edited since is stored as it is now, and a missed edit is stored as an edit, but only while catch-up reaches the message: wacli keeps a row's time when an edit arrives, so a missed edit of an older message isn't listed. A deletion moves the row's time to its own, so it is listed, and becomes a deletion, skipped when the message isn't stored. An edited row listed before a newer edit came by webhook, and handled after it, puts the older text back, within the time one page takes.
+- **`messages list --after`** (`ListMessages` in `internal/store/messages.go`) lists rows strictly after the time, compared in whole seconds, oldest first with `--asc`. Its answer is `{"messages": …, "page": {"has_more": …, "next_cursor": …}, …}` in `data`, and `messages` is `null`, not an empty list, when there are none. With `--read-only` it fails when the message store doesn't exist yet.
+- **`media download --output <file>`** (`cmd/wacli/media_download.go`) saves to the file as given, and answers with `data.path`, `data.bytes` and `data.source`.
+
+## Facts about wacli 0.26.0
+
+From its help, its documentation and its source at the release's tag, and from runs of an unpaired wacli; sending and receiving need a paired number, and weren't run (the README's [Check on the first real run](../../README.md#check-on-the-first-real-run)).
+
+- **Unofficial.** A change of WhatsApp's protocol can break it, and WhatsApp could ban the bot's number ([The bot number](../../README.md#the-bot-number)). The bot's number must be registered in WhatsApp Business on a phone that is opened at least every two weeks, or the linked device is logged out.
+- **Global flags:** `--json`, `--read-only` and `--store`; `WACLI_STORE_DIR` sets the message store. The message store has a lock, and while `sync` runs, other calls are handed to it over a socket.
+- **JSON output:** `{"success":true,"data":…}` on stdout. An error prints `{"success":false,"data":null,"error":"…"}` on stderr and exits with 1. A flag it doesn't know stops it with `unknown flag`; a text that begins with `--` is taken as the text.
+- **`auth status`** with `--read-only` answers `{authenticated: false}`, with exit code 0, nothing on stderr and no message store made, or `{authenticated: true, linked_jid, phone}`. The exit code doesn't tell paired from unpaired. Calls that need the session, `sync` among them, fail at once with `not authenticated; run \`wacli auth\``. `wacli auth` pairs with a QR code, or with a pairing code given `--phone`.
+- **`sync --follow`:** a loopback webhook URL needs `--webhook-allow-private`; `--max-reconnect` defaults to 5m; `--webhook-events` chooses among `message`, the default, `receipt` and `chat_presence`; delivery is best-effort, with a 5-second timeout and no retries. `--webhook-secret` is a plain flag: no variable of its environment sets it, and of the nine variables wacli reads, `WACLI_STORE_DIR` and `WACLI_READONLY` among them, none is about webhooks; its `config.yaml` holds accounts only.
+- **Sending:** `send text --to <jid> --message <text> [--no-preview] [--reply-to <message ID>] [--reply-to-sender <jid>]` answers `data: {sent, to, id}`; `--reply-to` quotes a message, which must be in wacli's message store, incoming or sent. `send file --to --file [--caption] [--reply-to]` and `send react --to --id --reaction [--sender]` also answer the sent message's `id`. wacli keeps the messages it sends in its message store. `send text` and `send react` have `--post-send-wait`, default 2 seconds, which keeps wacli's connection open after a send (from the installed program's help, 2026-11-16).
+- **Link previews:** unless given `--no-preview`, `send text` fetches the first `http://` or `https://` URL in the text, and the image that page names, refusing private and local addresses, following up to 3 redirects and giving up after 10 seconds; when the fetch fails, the text goes out without a preview, and wacli prints a line on stderr that starts `warning: link preview skipped for`. While `sync` runs, the sync process fetches, and the flag travels with the send, as the `no_preview` field of the request it is handed (`cmd/wacli/send_ipc.go`). With the flag, `fetchLinkPreview` (`cmd/wacli/send.go`) returns before it looks for a URL.
+- **Pace** (`warnRapidSendIfNeeded` in `cmd/wacli/send_helpers.go`, called from `send.go` and `send_ipc.go`): before it sends, wacli writes the time of the attempt to `.last-send-at` in its message store's folder, and prints a warning on stderr when the next attempt comes less than 5 seconds after it. It does so for a text sent directly, and for every kind of send handed to the sync process: text, file, sticker, edit and reaction. The time is taken when the send reaches the check, after wacli has resolved the recipient; while `sync --follow` runs, the check and its warning are the sync process's. So at exactly 5 seconds apart a warning can still appear now and then. `sync --send-spacing` makes the sync process wait between the sends handed to it, with a random gap; it isn't used.

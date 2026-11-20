@@ -4,308 +4,11 @@ This document is the specification for Scooter v2, written for the agent that wi
 
 An earlier prototype has been removed from the repository. Whatever it taught us about the tools is already in section 13.
 
-When this document doesn't settle a question, pick the simplest option that keeps the principles in section 1, and record the choice in `docs/DECISIONS.md`. Don't change anything in section 2 without asking the owner.
+When this document doesn't settle a question, pick the simplest option that keeps [the principles](ARCHITECTURE.md#what-scooter-does), and record the choice in `docs/DECISIONS.md`. Don't change anything among [the owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices) without asking the owner.
 
 Two documents go with this one. `docs/ARCHITECTURE.md` maps the components, their boundaries and the decisions behind them; its section 8 lists the changes made to this document on 2026-11-15, while planning, with the reason for each. Changes made since, while building, are recorded in `docs/DECISIONS.md`. The implementation plan, under `docs/plans/`, sets the order of work.
 
-## 1. What Scooter does
-
-The owner sends receipts, run screenshots, food photos, travel tickets, notes about time spent with people, and other short notes to a second WhatsApp number, the bot. They can also email things to a mailbox of Scooter's own, such as a forwarded booking or a file. Scooter keeps every message permanently. An AI agent turns the messages into spreadsheets and a page per day, and asks the owner when it's unsure. Everything is backed up nightly, encrypted. Answering questions about the data, and acting for the owner, are for a separate assistant later (section 12).
-
-Principles:
-
-1. **The datastore is the record.** Every message in and out is appended to it and never changed. Everything else is derived from it and can be rebuilt.
-2. **Only Scooter's own code talks to the outside world.** The bridge holds the WhatsApp session, the mailbox and the backup credentials; the runner holds the OpenRouter key. The agent reaches nothing directly: everything it sends goes through the runner, which checks and logs it.
-3. **The model does the judgment; code does the bookkeeping.** The runner decides what the agent works on, tracks progress, retries and commits. The agent reads messages, updates files and reports what it handled.
-4. **The agent is sandboxed.** pi runs in a fresh virtual machine for every batch, with no secrets, and can write only its own views, memory and session. It can reach OpenRouter and nothing else, unless the owner turns its internet access on. The runner checks and logs every request, and nothing pi does survives the VM.
-5. **The configuration belongs to the owner.** The agent can't change its config, prompt or skills.
-6. **Quiet by default.** The bot speaks when it has a question or is asked something. Otherwise it reacts ✅.
-
-## 2. Decisions already made
-
-These were settled with the owner.
-
-| Topic | Decision |
-|---|---|
-| Channel | WhatsApp. The bot has its own number, registered in WhatsApp Business on the owner's phone. wacli v0.26.0 runs as a linked device of that number. |
-| Email | The owner can also email Scooter, at a mailbox used only by Scooter (5.6). Email only comes in: Scooter never sends any, and replies about an email arrive on WhatsApp. Only mail from the owner's own addresses that passes DMARC is kept. |
-| Default channel | Replies go back to the channel of the message they answer. What Scooter sends on its own, such as scheduled tasks and notices, and replies about emails go to `DEFAULT_CHANNEL`, which in v2 can only be `whatsapp` (5.3). |
-| Agent | pi (`@earendil-works/pi-coding-agent`) through OpenRouter. The model is configurable; the default is `anthropic/claude-sonnet-5.5`. |
-| Sandbox | pi runs in a fresh Gondolin micro-VM for every batch (6.6). The runner holds the OpenRouter key and swaps it in on pi's requests; pi only ever sees a placeholder. |
-| Data retention | Every OpenRouter request goes only to endpoints that keep no prompts or responses. The runner adds OpenRouter's zero-data-retention flag to each request (`OPENROUTER_ZDR=on`, the default), and the owner also enforces it on Scooter's OpenRouter key (6.13). |
-| Number of agents | One agent, named `lifelog`. The config format allows more later; v2 refuses more than one. |
-| Code | Node.js, ES modules. The runner uses `yaml` to read `agents.yaml`, pinned to an exact version (for example 2.9.1), and `@earendil-works/gondolin` to run pi in a VM (6.6), pinned the same way (for example 0.14.0). The email reader, which runs apart as its own user (5.6), uses `imapflow` and `postal-mime` (for example 2.11.0 and 4.2.1). The bridge uses no third-party library. Tests use `node:test`. |
-| Platforms | Linux, on amd64 and arm64. macOS comes later, and nothing is built or tested for it until then (section 12). pi's VMs run fast with KVM, and fall back to much slower emulation where it isn't available, such as in a container that can't open `/dev/kvm` (6.6). |
-| Deployment | The owner's choice: native systemd services, or Docker Compose with one image and two services (`bridge` and `runner`). Either way there are no published ports (section 8). |
-| Backups | restic 0.19.1 to an S3-compatible bucket (Cloudflare R2 or Backblaze B2), encrypted on the server before upload, nightly. |
-| Settings | Time zone, home currency, reply mode, model, the agent's internet access and how its VMs are accelerated are configurable. |
-| Internet | The agent has no internet access unless the owner turns it on (`AGENT_INTERNET=on`). Off, its VM can reach only OpenRouter's two chat endpoints. On, it can also reach public HTTPS websites. In both modes the runner refuses requests that would make OpenRouter fetch from the web for the agent, and logs every request: when, which host and path, and how many bytes each way, but not what was sent (6.13). |
-| Time | Every time Scooter stores or compares is in UTC: the datastore's times and day folders, the times in `state.json`, outbox IDs and logs. The owner's time zone (`SCOOTER_TZ`) is used only for what the owner sees or sets: replies, `/status`, views and day pages, the times in the agent's prompt, and the schedule settings (scheduled tasks, `BACKUP_TIME`, `SESSION_ROLLOVER_HOUR`), which code turns into UTC instants. |
-| Replies | Quiet mode by default. |
-| Preferences | Standing instructions the owner gives by message go in the agent's memory (`preferences.md`). There's no approval step and no change notice; git history is the audit trail. |
-
-## 3. Architecture
-
-```
-you (WhatsApp, email) ──▶ bridge ──▶ datastore ──▶ runner ──▶ pi, in a VM ──▶ views, memory
-         ▲                  │                        │
-         └───── replies ────┘◀────── outbox ─────────┘
-
-pi's requests ──▶ the runner's network policy ──▶ OpenRouter, and HTTPS websites when allowed
-```
-
-| Component | Runs as | Does | Writes |
-|---|---|---|---|
-| Bridge | root | Runs wacli and the email reader, each as its own user. Writes incoming messages to the datastore. Delivers outbox entries, choosing the channel for each, and logs them. Handles `/status`, `/backup` and `/help`, and runs the backups. | datastore, exchange, its own state |
-| wacli | user `scooter-wacli`, started by the bridge | Keeps the WhatsApp session, downloads media, sends messages | its own folder |
-| Email reader | user `scooter-mail`, started by the bridge | Reads the mailbox, parses each email, and hands it to the bridge through a spool folder (5.6) | its own folder |
-| Runner | user `scooter-runner`, with access to the machine's hypervisor | Reads `agents.yaml`. Decides when the agent runs and what it works on. Starts a VM for each run and runs pi in it, applying the network policy and logging every request (6.6, 6.13). Reads pi's answer, keeps `state.json`, commits to git, writes the outbox. Handles `/new`. | the agent's folder, exchange, its own folder |
-| pi | inside a fresh VM for each run | Reads messages and attachments, updates views and memory, writes its answer | `views/`, `memory/` and its copy of the current session, through the folders the runner mounts |
-
-The bridge and the runner are two services: natively under systemd, or as two containers from one image in Docker (section 8). They don't talk over the network; they work through shared folders, mainly the datastore and the exchange.
-
-### 3.1 Network access
-
-- **The bridge** only makes outbound connections: to WhatsApp through wacli, to the mail server through the email reader, and to the backup bucket. It sends every text with wacli's link previews off, so a link in a reply makes wacli fetch nothing (5.3).
-- **The runner** makes outbound HTTPS requests to OpenRouter, and to public websites when internet access is on. It makes them itself, on pi's behalf.
-- **pi's VM** has no network of its own. Everything it sends goes through the runner's network policy (6.13): DNS is answered inside the runner, only HTTP(S) to allowed hosts goes out, and UDP, raw TCP and private addresses are refused.
-- Nothing listens for connections from outside.
-
-### 3.2 Folders
-
-The paths in this document are as they appear in Docker, under `/data`. Natively they live under `DATA_DIR` instead (8.2).
-
-| Folder | Bridge | Runner | Contents |
-|---|---|---|---|
-| `datastore` | read-write | read-only, and mounted read-only into the VM | the log and attachments |
-| `agents` | read-write (backups, restore, `/status`) | read-write | one folder per agent |
-| `exchange` | read-write | read-write | `outbox/`, `locks/` |
-| `runner` | read-only (backups, `/status`) | read-write | the network log, the VM image, `status.json` (6.3), and the runner's home and temporary folder (6.6) |
-| `bridge` | read-write | — | the bridge's own state |
-| `wacli` | read-write, as wacli | — | the WhatsApp session and wacli's message store |
-| `mail` | read-write, as the email reader | — | the email reader's position and its spool |
-| `config` | — | read-only | `agents.yaml`, prompts, skills and the VM image's build file. In Docker, a bind mount of `./config`. |
-
-In Docker one volume holds the whole data folder, at `/data` in both containers, so that `build-image` and `restore` work in it as natively. What each service reads and writes is then kept by the owners and modes below, as it is natively (`docs/DECISIONS.md`, D219).
-
-Scooter uses four Unix users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user, and on Ubuntu its group can write the system's mail spool (13.3). Sharing an account would share its files and its environment too.
-- In Docker the image defines them with the uids 10001, 10002 and 10003, so the data volume's files are theirs in every container. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included (8.3; `docs/DECISIONS.md`, D217).
-- Natively, `setup` creates them as system users (8.4). It lets the system choose their uids, and everything refers to them by name.
-- `scooter-runner` is also in the host's `kvm` group (8.3, 8.5).
-
-**Who can read what.** Each program reaches only what it needs. wacli and the email reader talk to the outside world and run third-party code, so they're kept out of Scooter's other folders. pi sees only what the runner mounts into its VM (6.6).
-
-| Folder | Owner and mode | Readable by |
-|---|---|---|
-| `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | root and the runner |
-| `agents`, `exchange`, `runner` | `scooter-runner`, 0700 | the runner and root |
-| `bridge` | root, 0700 | root |
-| `wacli` | `scooter-wacli`, 0700 | wacli and root |
-| `mail` | `scooter-mail`, 0700 | the email reader and root |
-
-Each program's environment also holds only its own settings. The bridge reads `bridge.env` and the runner `runner.env` (8.2). Within the bridge, wacli gets none of it and the email reader only the mailbox settings (5.6). pi gets only what 6.6 lists, with a placeholder in place of the key. No secret goes on a command line, where every user on the machine can read it, except wacli's webhook secret (5.1).
-
-## 4. The datastore
-
-### 4.1 Layout
-
-```
-/data/datastore/
-  2026/11/09/
-    log.jsonl      one JSON object per line, in the order the bridge wrote them
-    1042.jpg       attachments: <seq>.<ext>, and <seq>-2.<ext>, <seq>-3.<ext>… for further files of the same message
-```
-
-The folder is the **arrival date** in UTC: the day the bridge wrote the line. The message's own time is in `at`. The two differ only for messages that arrive late, for example ones caught up after downtime. Filing by arrival keeps the files, read in date order, in `seq` order. If the clock ever reads earlier than the newest folder's date, the line goes in the newest folder, so folder dates never go backwards. Folders are only storage: the agent dates entries by the owner's day (7.2), so a day page may link to attachments in the folder before or after its date.
-
-### 4.2 Line format
-
-| Field | Type | Present | Meaning |
-|---|---|---|---|
-| `seq` | integer | always | The message's permanent number. Starts at 1, goes up by 1, never reused. |
-| `kind` | string | always | `message`, `edit`, `delete`, `reaction` or `command` |
-| `dir` | string | always | `in` (from a source) or `out` (sent by Scooter) |
-| `at` | string | always | When it was sent: ISO 8601 in UTC (`Z`), to the second |
-| `source` | string | always | The channel: `whatsapp` or `email` |
-| `sourceId` | string | when the source has one | The channel's own ID: the WhatsApp message ID, or the email's `Message-ID` |
-| `trust` | string | `dir: in` | `owner` (may give instructions) or `external` (data only; unused in v2) |
-| `by` | string | `dir: out` | Who produced it: the agent's name, `runner` or `bridge` |
-| `text` | string | `message`, `edit`, `command` | The text, a media caption, or an email's body. `""` if none. |
-| `subject` | string | emails | The email's subject. `""` if none. |
-| `files` | array | messages with stored attachments | `[{"path": "1042.jpg", "mime": "image/jpeg", "name": "receipt.jpg", "bytes": 482113}]`. `path` is relative to the day folder; `name` is the original file name, if the source gave one. |
-| `media` | object | media that couldn't be stored | `{"type": "image", "mime": "image/jpeg", "error": "download failed"}` |
-| `replyTo` | integer | replies | `seq` of the quoted message |
-| `quoted` | string | when the source gives it | A short preview of the quoted message, useful when it predates the datastore |
-| `forwarded` | boolean | when true | The message was forwarded, so it's someone else's words |
-| `target` | integer | `edit`, `delete`, `reaction` | `seq` of the message it refers to |
-| `emoji` | string | `reaction` | The reaction; `""` means it was removed |
-
-Example:
-
-```jsonl
-{"seq":1042,"kind":"message","dir":"in","at":"2026-11-09T15:43:02Z","source":"whatsapp","sourceId":"3EB0A1B2C3D4E5F6A7B8","trust":"owner","text":"","files":[{"path":"1042.jpg","mime":"image/jpeg","bytes":482113}]}
-{"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T15:43:40Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}
-{"seq":1044,"kind":"message","dir":"in","at":"2026-11-09T15:50:11Z","source":"whatsapp","sourceId":"3EB0A1C9D8E7F6A5B4C3","trust":"owner","replyTo":1043,"quoted":"Blue Tokai, ₹450 at 12:40: work or personal?","text":"work"}
-{"seq":1045,"kind":"reaction","dir":"out","at":"2026-11-09T15:50:30Z","source":"whatsapp","sourceId":"3EB0FF02A3B4C5D6E7F8","by":"lifelog","target":1044,"emoji":"✅"}
-```
-
-An email with an attachment:
-
-```jsonl
-{"seq":1071,"kind":"message","dir":"in","at":"2026-11-09T16:12:40Z","source":"email","sourceId":"CAF3x9qR2-example@mail.gmail.com","trust":"owner","subject":"Call with Sam","text":"Recording from today's call.","files":[{"path":"1071.eml","mime":"message/rfc822","bytes":19262388},{"path":"1071-2.m4a","mime":"audio/mp4","name":"Call with Sam.m4a","bytes":14206977}]}
-```
-
-### 4.3 Writing
-
-- Only the bridge writes to the datastore. All writes, incoming and outgoing, go through one queue in the bridge, so `seq` order matches the order of lines in the files.
-- For each line: take the next `seq`; copy any attachments into the day folder under a temporary name (they come from wacli's staging folder or the email spool, which other users own, and which may be on other file systems) and rename them to their final names (4.1); then append the line with a single `write` call followed by `fsync`.
-- On startup, read every `log.jsonl` in date order. If the last line of the newest file is incomplete, truncate it. Rebuild the in-memory index (`seq` to line, and `(source, sourceId)` to `seq`) and work out the next `seq`. An attachment whose `seq` has no line is left over from a crash and may be overwritten.
-- Never rewrite or delete a line. Edits, deletions and reactions are new lines that point at the original.
-- Directories are 0750 and files 0640, owned by root with group `scooter-runner`, so only root and the runner can read them (3.2). pi sees the datastore through a read-only mount in its VM (6.6).
-
-### 4.4 Rules
-
-- **Duplicates:** a `message` whose `(source, sourceId)` is already in the index is ignored. The webhook and catch-up can both deliver the same event (5.2), so the other kinds need a rule too:
-  - an `edit` carries the original message's ID (13.1), so it's skipped when its text equals its target's current text;
-  - a `delete` is skipped when its target is already deleted;
-  - a `reaction` is skipped when its own `(source, sourceId)` is already stored.
-- **Attachment names:** the extension comes from the original file name if there is one, else from the MIME type, else `.bin`.
-- **Size limit:** attachments over 100 MB aren't downloaded; the line gets a `media` object explaining why.
-- **Not stored:** messages from anyone but the owner, group and broadcast chats, stickers, empty messages, the bot's own messages echoed back by wacli, and emails that fail the sender check (5.6). The bridge logs its own messages when it sends them.
-
-## 5. The bridge
-
-The bridge reaches the owner through **channels**: WhatsApp (5.1, 5.2), which receives and sends, and email (5.6), which only receives. Each channel is one module in `src/bridge/channels/`, and only that module deals with its service: only `whatsapp.mjs` runs wacli, and only `email.mjs` runs the email reader. wacli and the email reader are the programs that talk to the outside world, and each runs as its own user that can reach only its own folder (3.2). The rest of the bridge, the **core**, calls every channel through the same functions, so adding one later, such as Telegram, means writing one more module.
-
-| Function | Does | WhatsApp | Email |
-|---|---|---|---|
-| `start(onRecord)` | Starts receiving, and calls `onRecord` for each message from the owner. The module drops everything else itself. | wacli sync, the webhook and catch-up (5.1; 5.2 steps 1–5 and 7) | Starts the email reader, and reads its spool (5.6) |
-| `stop()` | Stops receiving, for backups and shutdown | Stops wacli sync and its calls in progress; a download it cuts short leaves its message, and the ones after it until the channel starts again, for catch-up (5.2) | Stops the email reader, and waits for the spool folder it is taking |
-| `download(record, n, path)` | Saves the record's `n`th attachment | `wacli media download` into wacli's staging folder, then a copy | A copy from the spool |
-| `sendText(text, quoteId)` | Sends text, quoting `quoteId` if given, and returns the new message's ID | `wacli send text --no-preview` | — |
-| `react(id, emoji)` | Reacts to a message and returns the reaction's ID | `wacli send react` | — |
-| `status()` | One line for `/status` | The link state | Whether the reader is connected, and the emails stored and skipped in the last 24 hours |
-| `ready()` | Whether it can send now | While wacli is paired and sync runs | — |
-
-Each channel also says whether it can send and whether it can react (5.3): WhatsApp can do both, and email neither.
-
-A **record** is the normalized message of 5.2 step 3 without the fields only WhatsApp needs (chat, sender, fromMe), plus `subject` for email. The core turns records into datastore lines (5.2 step 6), chooses the channel for each outbox entry (5.3), and runs the commands and backups. Tests can drive the core with a fake channel.
-
-### 5.1 wacli
-
-- Every wacli call runs as user `scooter-wacli` with `HOME=/data/wacli`, `WACLI_STORE_DIR=/data/wacli/store`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and `XDG_CACHE_HOME` under `/data/wacli`, `TZ=UTC`, and nothing else in its environment. It can read and write only `/data/wacli` (3.2). Media downloads go to `/data/wacli/staging`, and the bridge copies them from there.
-- The long-running process is `wacli sync --follow --webhook http://127.0.0.1:8787/wacli --webhook-secret <random, new on every start> --webhook-allow-private`. Other users in the container can read the secret on wacli's command line. wacli 0.26.0 takes it no other way: `--webhook-secret` is a plain flag, and no variable of its environment sets it (`docs/DECISIONS.md`, 0.6, wacli 1). So it stays there, the one exception of 3.2. Restart it with backoff (5 seconds, doubling up to 5 minutes) whenever it exits. To stop it, send SIGTERM, then SIGKILL after 15 seconds.
-- Before starting sync, check `wacli --json --read-only auth status`. If it isn't authenticated, log that the owner should run `pair`, and check again every minute.
-- Other calls use `--json` and return the `data` part of the result (13.1). While sync runs, wacli passes these calls to it internally; no special handling is needed.
-- The bridge keeps `/data/bridge/state.json` (written atomically): the owner's chat JID, the time of the first start, the last backup (date, snapshot ID, result), the `seq` of the newest command it has answered (5.4), and where catch-up has got to in each of the owner's chats (5.2 step 7).
-
-### 5.2 Intake
-
-Steps 1–5 and 7 belong to the WhatsApp module. Step 6 belongs to the core, and applies to email too.
-
-1. The webhook server listens on `127.0.0.1:8787` only. It accepts only `POST /wacli`, with a body of at most 2 MB and a valid `X-Wacli-Signature` (HMAC-SHA256 of the raw body, compared in constant time). It answers 200 right away and processes the message afterwards, because wacli waits at most 5 seconds and never retries.
-2. Payloads with an `EventType` field (receipts, presence) are ignored. Message payloads have none.
-3. Normalize each payload (13.1) into: chat, id, sender, timestamp, fromMe, text, media (type, caption, filename, MIME type, size), replyToId, replyToPreview, reactionToId, reactionEmoji, edited, revoked and forwarded.
-4. Drop messages that are `FromMe`; chats ending in `@g.us`, `@broadcast` or `@newsletter`; senders that aren't the owner (log the sender ID with the hint "add it to OWNER_JIDS if this is you"); stickers; and empty messages.
-5. **Owner matching:** canonicalize JIDs (lowercase, without any `:device` suffix). The owner is `<OWNER_NUMBER digits>@s.whatsapp.net`, `<digits>@c.us`, and every ID in `OWNER_JIDS`. Remember the chat JID of the latest owner message in the bridge state; replies go to that chat, or to `<digits>@s.whatsapp.net` before the owner has written.
-6. **Mapping to datastore lines:**
-   - A plain or media message becomes a `message`. Download each attachment with the channel's `download` (for WhatsApp, `wacli media download --chat <chat> --id <id> --output /data/wacli/staging/<name>`), retrying twice if it fails, then copy the file into the day folder (4.3) and delete the staged one.
-   - If `ReplyToID` is set, `replyTo` is the `seq` of that `sourceId` when it's known, and `quoted` is `ReplyToDisplay`.
-   - A reaction becomes a `reaction` with its `target`. Skip it if the target is unknown.
-   - An edit becomes an `edit` with its `target` and the new text. A revoked message becomes a `delete` with its `target`. Skip either if the target is unknown.
-   - WhatsApp text that is one of the commands in 5.4 becomes a `command`. An email is never a command.
-7. **Catch-up:** at startup and every 10 minutes, list each of the owner's chats with `wacli --json --read-only messages list --chat <chat> --after <time> --asc --limit 500`, and pass the rows through the same steps. Duplicate checks make this safe.
-   - The bridge's state keeps where catch-up has got to in each chat: the time of the newest of the owner's rows it has listed there, with every row before it handled, stored, skipped as a duplicate, or dropped as the steps above drop it. Catch-up starts 2 minutes before that, and saves where it has got to after each page and when it ends. So a catch-up cut short, by a stop or a crash, runs again from where it started, whatever was stored meanwhile (`docs/DECISIONS.md`, D179).
-   - Only what catch-up itself lists moves it on, never what the webhook stored, nor a line from another channel: a message whose webhook never came, a stop or a crash between catch-up's rows, or an email that arrived while wacli was down would otherwise move the start past a message never stored, for good. Nor do the bot's own rows, which wacli stores with the time they were sent: after downtime a reply can go out before wacli has received the owner's messages from while it was down, which have older times. A row intake must be handed again, such as one whose download a stop cut short, holds catch-up where it is until it is stored.
-   - The chats are the one replies go to, and every other chat the owner has written from, such as an `@lid` one; a chat catch-up hasn't listed yet starts from the bridge's first start.
-   - Never before the time of the bridge's first start (5.1), which on the very first start is the current time: the chat's earlier history is never imported.
-
-### 5.3 Delivery: the outbox
-
-The runner asks for messages to be sent by writing entries to `/data/exchange/outbox/`. Only the runner's user and root can write there (3.2). pi can't: the exchange isn't mounted into its VM (6.6).
-
-- **Entries:** each entry is a folder `outbox/<id>/` containing `entry.json`. The runner creates it as `outbox/.tmp-<id>/` and renames it once it's complete. Entry IDs are the UTC creation time plus a counter, so they sort in creation order, for example `20261109T155015123-0001`.
-- **`entry.json`:**
-  ```json
-  {"type": "text", "by": "lifelog", "text": "Blue Tokai, ₹450 at 12:40: work or personal?", "replyTo": 1042}
-  {"type": "text", "by": "lifelog", "text": "Logged the run and the coffee.", "about": 1061}
-  {"type": "text", "by": "runner", "text": "⚠️ I couldn't process your last messages (timeout). I'll try again."}
-  {"type": "react", "by": "lifelog", "target": 1044, "emoji": "✅"}
-  ```
-  There is no recipient field. Everything goes to the owner. `replyTo` is the message a text answers, quoted. `about` is the newest message a text answers, not quoted: the runner sets it on an answer's text before the first `REPLY_TO` (6.7), and replies to commands carry the command's `seq`. A text with neither is something Scooter says on its own.
-- **Choosing the channel:** the bridge looks at the line that `replyTo`, `about` or `target` points at, and uses its `source`. The agent never names a channel; it only refers to messages by `seq`.
-  - A `text` goes to that line's channel if the channel can send, quoting the line if it's `replyTo`. Otherwise, for an email or a line that doesn't exist, it goes to `DEFAULT_CHANNEL` without a quote.
-  - A `react` goes to `target`'s channel if the channel can react. A reaction to an email becomes a text on `DEFAULT_CHANNEL` instead, such as `✅ Email: Call with Sam`, so the owner knows it arrived; it is cut as an entry's text is. A reaction to an unknown line is dropped, and so is one to a line Scooter sent: Scooter reacts only to the owner's messages.
-  - A `text` with neither `replyTo` nor `about` goes to `DEFAULT_CHANNEL`: scheduled tasks, notices, the backfill summary and the bridge's backup messages.
-
-  `DEFAULT_CHANNEL` (8.2) must be a channel that can send, so in v2 it can only be `whatsapp`; the bridge refuses to start with anything else.
-- **Processing:** the bridge checks the folder every second and handles entries in order, sending at most one message every 5 seconds.
-  - A text is at most 14,000 characters (`TEXT_MAX_CHARS`), which goes out as four to eight messages. A longer one is cut when the entry is written, ending with a line that says so: the agent's texts are its own to make as long as it likes, and one of a megabyte would take the bot number half an hour to send. U+0000 in a text is written as U+FFFD, since wacli takes the text as a command-line argument, and no program takes one with U+0000 in it; the bridge refuses an entry that holds one.
-  - `text`: split the text into chunks of at most 3,500 characters at paragraph or line breaks, and send each with the channel's `sendText`, quoting only with the first. WhatsApp: `wacli send text --to <owner chat> --message <chunk> --no-preview`, and on the first chunk `--reply-to <sourceId of replyTo>`.
-  - Every text is sent with `--no-preview`. Without it, wacli fetches the first URL in the text to build a link preview (13.1). Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request (3.1, 6.13). So links reach the owner as plain text.
-  - `react`: the channel's `react`. WhatsApp: `wacli send react --to <owner chat> --id <sourceId of target> --sender <owner JID> --reaction <emoji>`.
-  - After each successful send, log an `out` line with the channel as `source` and the ID it returned as `sourceId`, then delete the entry. A chunk that quoted a line has that line's `seq` as `replyTo`. If the datastore already holds a line with that ID, the `out` line is logged without it.
-  - If `replyTo` points at a message whose `sourceId` is unknown, send it without quoting.
-  - While an entry's channel can't send, such as WhatsApp before `pair`, the entry waits, and the ones after it with it. A send that fails is tried again after a wait that doubles from 5 seconds up to 5 minutes, without its quote from the fifth try on. After 8 failed tries made while the channel could send (`SEND_ATTEMPTS`), the entry no longer holds back the ones after it, so that one which can never go out doesn't hold back every reply after it, `/status`'s among them: it is still tried first, after its own wait, and the next entries go on when it fails. It is given up on, and logged, only when a message of a later entry has gone out since and its next try fails too. Before an entry behind ones passed over is tried, they are tried again, in order, whatever their own waits. So an outage, during which wacli says it is linked and every send fails, gives up on nothing, and the entries then go in order. The one exception is an entry tried in the look during which sends began to work again, after the ones passed over ahead of it failed in that look: it goes first, and they follow, in order.
-  - **Removing an entry:** the runner's user owns the outbox, and could put a link in its place, or in an entry's. The bridge takes entries only while `outbox/` is that user's folder and not a link, and writes nothing there. It removes an entry by the name one holds, `entry.json`, and then the folder, which goes only once that empties it. What it can't remove so, or what isn't a folder, it leaves, and logs once (`docs/DECISIONS.md`, D136).
-- **Crash safety:** before sending, the bridge records the entry, and how many chunks have gone out, in `sending.json`, rewriting it after each one, once its `out` line is logged. At startup, it sends each entry it has a `sending.json` of again from the first chunk that doesn't record as sent; a reaction is simply sent again. So a crash can repeat one message, and never loses one. The bridge doesn't search wacli's store for what already went out. Nothing is sent that `sending.json` couldn't then record, such as on a full disk, or a bridge restarted for it would send the same chunk at every start. The bridge keeps `sending.json` in its own folder, as `/data/bridge/sending/<id>.json` for an entry of the runner's, which wins over what the entry's folder holds from then on: the runner's user could otherwise swap a link in, between the bridge's look at an entry and its write, and steer the write as root (`docs/DECISIONS.md`, D205).
-- The bridge's own messages (replies to `/status`, `/backup` and `/help`, and backup failure notices) are entries in its own outbox, `/data/bridge/outbox/`, which only root can write, with their `sending.json` in their folders there. They are sent the same way, in the order of their IDs with the runner's, and logged with `by: "bridge"`.
-
-### 5.4 Commands
-
-Commands come only from WhatsApp. They're logged as `command` lines and never given to the agent, and the reply goes back where the command was sent (5.3).
-
-| Command | Handled by | Effect |
-|---|---|---|
-| `/status` | bridge | Replies with each channel's state (WhatsApp's link; whether the email reader is connected, and the emails stored and skipped in the last 24 hours), the newest message, the agent's last run and its result, how pi's VMs are accelerated, when the VM image was built, whether zero data retention is on, whether runs are paused and why, whether the runner waits before it goes on after stopping on an error, until when and why (6.9), the counts of pending, retrying and failed messages (from `state.json`), any backfill in progress and how far it has got, the last backup with its snapshot ID, the next scheduled backup, whether the agent's internet access is on, and the number of requests and of different hosts in the network log over the last 24 hours (6.13), with times in `SCOOTER_TZ`. |
-| `/backup` | bridge | Runs a backup now, or joins the one in progress, and replies with the snapshot ID or the error once it is over. The commands sent after it are answered meanwhile. |
-| `/help` | bridge | Lists the commands. |
-| `/new` | runner | Starts a fresh pi session for the rest of the day and replies "Started a fresh conversation." |
-
-The bridge reads neither `/config` nor `runner.env` (3.2). What `/status` says about the runner comes from three of the runner's files: `state.json` and `status.json` (6.3), and the network log (6.13). It reports what it can read, and says so when the runner hasn't written them yet. It reads them as files the runner's user controls: without following a link, without waiting on a FIFO, and only if each is a regular file, of at most `STATUS_FILE_MAX_BYTES` for the first two.
-
-A reply to a command that the bridge can't write, as on a full disk, is tried again after a wait that doubles from 5 seconds up to 5 minutes.
-
-### 5.5 Backups
-
-- The backup logic is a module in the bridge, `src/bridge/backup.mjs`, and the only code that runs restic. It runs restic directly, with the arguments as a list and the settings in restic's environment, never through a shell. That environment holds the repository, the password, the bucket's credentials, a temporary folder and `TZ`, and nothing else. Its operations are `init`, `run`, `snapshots`, `check` and `restore [snapshot] [--force]`, which the commands in 8.4 call.
-  - A command exits with code 2 and a clear message if `RESTIC_REPOSITORY` or `RESTIC_PASSWORD` isn't set.
-  - `init` is safe to repeat: it runs `restic cat config` first.
-  - `run` runs `restic backup /data/datastore /data/agents /data/wacli /data/bridge /data/mail /data/runner/log /data/exchange/outbox --host scooter --tag scooter --group-by host,tags --exclude /data/wacli/cache --exclude /data/agents/.discarded --exclude-caches`, leaving out a folder that isn't there, such as `mail/` with email off, then `restic forget --host scooter --tag scooter --group-by host,tags --keep-daily <RESTIC_KEEP_DAILY> --keep-weekly <RESTIC_KEEP_WEEKLY> --keep-monthly <RESTIC_KEEP_MONTHLY> --prune` (defaults 7, 4 and 12). `--group-by host,tags` makes Scooter's snapshots one group whatever folders each holds, so a folder that appears doesn't keep the last snapshot without it for good. It runs `restic check` on Sundays (ISO weekday 7) in `SCOOTER_TZ`, or after every backup when `FORCE_CHECK=1`. A step stops the backup when it fails, and one that takes longer than `RESTIC_TIMEOUT` is stopped: the channels are stopped and the runner waits for as long as a backup lasts. restic keeps its cache in `/data/bridge/backup-cache`, which marks itself as a cache, so `--exclude-caches` leaves it out; the commands run at a terminal use none.
-  - `restore` restores into `RESTORE_TARGET` (default `/`), each folder at the path it was backed up from, and refuses a non-empty destination without `--force`. With `--force`, each folder the snapshot holds becomes the snapshot's: restic deletes what the snapshot doesn't hold inside those folders, and nothing outside them, such as the VM image. It gives every file its owner by name, so a machine whose users have other numbers gets them right; restic gives a file whose owner isn't a user there to root, so as root it refuses until `setup` has made Scooter's users. It restores only a snapshot whose folders are those of one data folder, and refuses to write into the data folder while the bridge or the runner runs on it. It also refuses while `runner/` or `exchange/` there is a link, which restic would follow, writing and deleting where it leads (`docs/DECISIONS.md`, D198).
-- **Schedule:** daily at `BACKUP_TIME` (`HH:MM` in `SCOOTER_TZ`, or `off`). If `RESTIC_REPOSITORY` isn't set, disable backups with a warning at startup instead of failing every night. If the bridge starts after the day's backup time, the first backup is the next day. `/backup` and `SIGUSR1` start one at any time, `BACKUP_TIME=off` or not, and a request during a backup joins it.
-- **Consistency:**
-  1. Create `/data/exchange/locks/backup.lock`.
-  2. Wait for `locks/run.lock` to disappear. The lock records when its run must be over (6.4). If it's still there 2 minutes after that, and no runner holds `runner/runner.sock`, a runner that died left it, and the backup goes ahead. A runner that still holds its socket is at work after its run, packing its repository or freeing what pi wrote, neither of which has a time limit (6.8, 6.9), and the backup waits on.
-  3. Stop the channels (wacli sync and the email reader) and pause outbox processing.
-  4. Run the backup.
-  5. Restart the channels and remove the lock.
-
-  The runner doesn't start a run while `backup.lock` exists. Each side creates its own lock before it looks for the other's, so a run and a backup can't both start at the same instant: when the two locks appear together, the runner gives way (6.4). A rebuild's own steps take `run.lock` the same way (6.10). At startup the bridge removes a leftover `backup.lock`, which would otherwise stop the agent for good. `exchange/locks/` is the runner's folder, so the bridge uses it only while it is that and not a link, and reads `run.lock` as it reads the runner's other files (5.4).
-- **Results:** read the snapshot ID from restic's `snapshot <id> saved` line. If a scheduled backup fails, or one `SIGUSR1` started, message the owner. A backup requested with `/backup` always replies, also when the bridge stops it. The bridge's state keeps the last backup's time, snapshot and result, and its reason when it failed, in restic's words where it gave any, which no log holds; `/status` shows them, and the next scheduled backup.
-
-### 5.6 Email
-
-The owner can also email Scooter: a forwarded booking or invoice, or a file such as a voice memo, perhaps announced in a WhatsApp message ("I've emailed you the recording"). Email only comes in. Scooter never sends email, so replies about an email go to `DEFAULT_CHANNEL` (5.3). Email is on when `EMAIL_IMAP_HOST` is set (8.2).
-
-- **The mailbox:** an address used only by Scooter, at a provider that allows IMAP with an app password, such as Gmail, iCloud or Fastmail. Never the owner's own mailbox, or the bridge would see all their mail.
-- **The email reader:** a separate program, `src/mail/reader.mjs`. The bridge starts it as user `scooter-mail` and restarts it with backoff (5 seconds, doubling up to 5 minutes), like wacli. It's the only part of Scooter that uses `imapflow` and `postal-mime` (section 2), so their code never runs in the bridge process. Its environment holds only `HOME=/data/mail`, `TZ=UTC`, `PATH`, `LANG` and the mailbox settings (`EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, `EMAIL_OWNER_ADDRESSES`, `EMAIL_CHECK_SECONDS`), and the password never goes on its command line. It can read and write only `/data/mail` (3.2).
-- **Reading:** the reader keeps a TLS connection to the mailbox, opens `INBOX` read-only, and waits for new mail with IDLE, checking at least every `EMAIL_CHECK_SECONDS` (default 60) in case IDLE misses something. For each new message, in UID order, it fetches the headers first, and the whole message only if a `From` header names one of `EMAIL_OWNER_ADDRESSES`, a looser test than the sender check below, so every message that check could keep is fetched. Other mail is handed over with its headers only, so the bridge can log and count it. A message over 100 MB isn't fetched; mail providers cap messages far below that. Its headers are handed over, and if it passes the sender check it is stored without its body, with a `media` object that says so. The reader ignores UIDs below `next`, because for `n:*` IMAP always returns the newest message, even an older one. It never deletes, moves or flags mail, so the mailbox doubles as a copy. Any error with the mailbox ends it, and the bridge's restart with backoff is how it reconnects.
-- **Position:** `/data/mail/state.json` keeps the mailbox's `UIDVALIDITY` and `next`, the UID after the last message handed over, and when the newest message handed over arrived, plus whether the reader is connected and when it last checked, for `/status`. The first time email is on, `next` is the mailbox's `UIDNEXT`, so nothing already there is imported. If `UIDVALIDITY` changes, the server has renumbered the mailbox: log it, hand over the messages from the first that arrived `SINCE` the day before the newest one handed over, and let the bridge's duplicate check (4.4) skip what's already stored.
-- **Parsing:** with `postal-mime`. The body is the plain-text part, or else the HTML part turned into text: tags dropped, entities decoded, line breaks kept at block elements. Every attachment postal-mime finds is one, an image shown inside the body included. If parsing fails, the reader hands over the raw message with an error instead, so one malformed email can't hold up the ones after it; so it does with a message it was parsing when it last ended, killed or out of memory, which `state.json` records.
-- **The spool:** each message becomes a folder in `/data/mail/spool/`, written as `.tmp-<id>/` and renamed when complete, with IDs that sort in arrival order, like outbox entries (5.3). It holds `message.eml` (the raw message, or only its headers), `parsed.json` (the UID, `UIDVALIDITY`, arrival time, size, whether it was fetched whole and parsed, subject, text, and the list of attachments) and the attachments as `part-1`, `part-2`…. The reader advances `next` once the folder is renamed. It keeps the subject and the text to one character past where the bridge cuts them, and hands over an email whose description would pass `EMAIL_PARSED_MAX_BYTES` as one it couldn't parse.
-- **The bridge's side:** every second, the bridge takes the complete spool folders in order. It treats them as untrusted: the spool must be the reader's folder and not a link, `parsed.json` must be valid and within size limits, every file is read without following a link and only if it is the reader's, and the bridge picks file names itself. Then it applies the sender check, writes the datastore line or logs the skip, and deletes the folder. A folder whose `parsed.json` or `message.eml` isn't one to take is logged and deleted.
-  - It deletes a folder by the names the reader writes in one, `message.eml`, `parsed.json` and `part-<n>`, and then the folder, which goes only once that empties it. The reader owns `mail/`, and could put a link in the spool's place or a folder's; deleting everything under a path would then delete, as root, whatever the link leads to. What isn't the reader's, or isn't a folder, and a folder holding anything else, the bridge leaves where it is, and logs once (`docs/DECISIONS.md`, D136).
-  - An email the bridge can't store whole for a reason of its own, such as a full disk, stays in the spool, whole, and is tried again after a wait that doubles from 5 seconds up to 5 minutes: one the store can't take, and one whose files the bridge can't copy out of the spool or into the day folder. Only a file in the spool that is missing, isn't the reader's or is too large leaves an email stored without it, with a `media` object saying so.
-- **Only the owner:** the sender check is Scooter's own code, in the bridge, not library code. It reads the raw headers in `message.eml` and keeps a message only if it has exactly one `From` header, holding a single address listed in `EMAIL_OWNER_ADDRESSES`, and its topmost `Authentication-Results` header, which the mailbox's provider adds when the mail arrives, names `EMAIL_AUTHSERV_ID` and holds exactly one `dmarc` result, `pass`. The topmost is the first after unfolding; its server name is its first token; and comments are no part of a result. Addresses and the server name are compared without regard to case. Anything ambiguous is skipped, since the owner's own mail never is: a header block that doesn't end within `EMAIL_HEADER_MAX_BYTES`, or holds a line that is no header. Anyone can write the owner's address in `From`; the DMARC result says whether the owner's own provider really sent it. Skipped mail is logged with its sender, the reason and its UID, never its subject or contents, and counted in `/status`.
-- **The datastore line:** a `message` with `source: "email"` and `trust: "owner"`.
-  - `sourceId` is the `Message-ID` without its angle brackets, or `imap-<UIDVALIDITY>-<UID>` if there is none.
-  - `at` comes from the `Date` header, or from the arrival time if `Date` is missing or unreadable. A date without a zone is unreadable: it would be read in the bridge's own.
-  - `subject` is the subject, cut at 1,000 characters (`EMAIL_SUBJECT_MAX_CHARS`) with a note saying so.
-  - `text` is the body, cut at 20,000 characters with a note saying so.
-  - `files` starts with the whole message as `<seq>.eml`, followed by the attachments (4.1).
-  - An email that couldn't be parsed is stored with its `.eml` and a `media` object saying so.
-- **What email doesn't carry:** commands, edits, deletions and reactions come only from WhatsApp.
+Sections 1 to 5, 8.1, 11 and 12, and the parts of the others about the bridge's side, have moved: what belongs to no single component to [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), and each component's rules to its document, as [the map](ARCHITECTURE.md#the-map) lists them. What is left here are the rules of the components whose documents aren't written yet. The sections keep their numbers.
 
 ## 6. The runner
 
@@ -394,9 +97,9 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - `backfill` exists only while a backfill is in progress (6.11). `backfillDone` lists the finished ones.
 - `paused` exists only while a setup error or an outage holds runs back (6.9): since when, the reason, and the next try.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day in `SCOOTER_TZ`, because the session and the schedule follow that day.
-- **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context (6.5); commands never are (5.4).
+- **Work items** are `in` lines from a source listed in `reads`, of kind `message`, `edit` or `delete`. Everything else (`out` lines, reactions, commands) isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context (6.5); commands never are ([Commands](architecture/bridge.md#commands)).
 
-**`status.json`.** The bridge reads neither `/config` nor `runner.env`, so the runner tells it what `/status` needs from them (5.4). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, each agent's `timeout_minutes` and `reads`, and, where the runner keeps its own waits between starts, whether this start waits before it goes on, until when and why (6.9). A runner stopped during that wait writes it again without it.
+**`status.json`.** The bridge reads neither `/config` nor `runner.env` ([Secrets](ARCHITECTURE.md#secrets), [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners)), so the runner tells it what `/status` needs from them ([/status](architecture/bridge.md#status)). At startup the runner writes `/data/runner/status.json`, atomically: the accelerator in use, whether ZDR and the agent's internet access are on, the model, when the VM image was built, each agent's `timeout_minutes` and `reads`, and, where the runner keeps its own waits between starts, whether this start waits before it goes on, until when and why (6.9). A runner stopped during that wait writes it again without it.
 
 ### 6.4 When the agent runs
 
@@ -404,8 +107,8 @@ The runner alone writes `state.json`, atomically (a temporary file, then a renam
 - **`at`:** once a day (or a week) at that time. If a run is in progress, the task waits for it. If the runner starts after the time, the task waits until the next day. A scheduled run gets its task and no messages.
 - **`once`:** at startup, the runner runs each `once` task whose ID isn't in `onceDone`, then records the ID.
 - **`backfill`:** at startup, the runner starts the first `backfill` whose ID isn't in `backfillDone`. Its batches run only when nothing live is waiting (6.11).
-- **Overlap:** runs never overlap, with each other or with a backup. To start a run, the runner first creates `/data/exchange/locks/run.lock`, recording in it when the run must be over: its start plus the agent's timeout. Then it looks for `locks/backup.lock`. If a backup holds that, the runner removes its own lock and waits; otherwise it runs, and removes its lock when the run is finished. Taking its own lock before looking for the other's is what keeps a run and a backup from starting at the same instant (5.5). The runner removes a leftover `run.lock` at startup.
-- **Commands:** before building a batch, the runner handles the command lines newer than `commandSeq` (6.3) itself, and saves the state at once. Going by the cursor instead would handle the same command again after a run cut short by a crash, which leaves the cursor where it was (6.9). `/new` bumps the session and replies, with `about` set to the command (5.3). It applies to all work not yet given to the agent, wherever the command sits among the waiting messages. The other commands belong to the bridge and are skipped.
+- **Overlap:** runs never overlap with each other. A run takes `run.lock` before it starts, and removes it when it is finished; how that keeps runs and backups apart is in [The locks](architecture/exchange.md#the-locks).
+- **Commands:** before building a batch, the runner handles the command lines newer than `commandSeq` (6.3) itself, and saves the state at once. Going by the cursor instead would handle the same command again after a run cut short by a crash, which leaves the cursor where it was (6.9). `/new` starts a fresh pi session for the rest of the day, by bumping the session, and replies "Started a fresh conversation.", with `about` set to the command ([Outbox entries](architecture/exchange.md#outbox-entries)). It applies to all work not yet given to the agent, wherever the command sits among the waiting messages. The other commands belong to the bridge and are skipped.
 - **While paused** (6.9), nothing runs until the next try: no batches, scheduled tasks or backfill batches. Commands still work.
 
 ### 6.5 What the agent is given
@@ -467,7 +170,7 @@ Every run gets a fresh Gondolin micro-VM (13.4), booted from Scooter's image (6.
 - **Acceleration** (`AGENT_ACCEL`, 8.2):
   - `auto`, the default, uses the fastest one available: KVM, otherwise emulation. The runner logs which one at startup, and `/status` shows it. Falling back to emulation also sends the owner one notice, since runs become much slower (13.4). The notice goes out when the accelerator changes to emulation, not at every start, or a runner that keeps restarting would message the owner each time.
   - `kvm` or `emulation` forces one. If a forced accelerator can't be used, the runner stops with an error that says how to enable it (8.3, 8.5), rather than quietly using another.
-  - `hvf`, Apple's hypervisor, is a known value kept for macOS (section 12). On Linux it can't be used, so it stops the runner like any other forced accelerator that isn't there.
+  - `hvf`, Apple's hypervisor, is a known value kept for macOS ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)). On Linux it can't be used, so it stops the runner like any other forced accelerator that isn't there.
 - **The machine:** QEMU's `q35` on x86_64, with KVM as under emulation. Gondolin 0.14.0 would give KVM `microvm`, which hangs in the guest kernel's APIC setup under nested KVM with 2 processors (`VM_CPUS`), as in a VM of a cloud provider, where `q35` boots; on the machine itself `q35` boots sooner too. On arm64, Gondolin's `virt` (`docs/DECISIONS.md`, D218).
 - **The command**, run in the VM in `/data/agents/lifelog`:
   ```
@@ -509,7 +212,7 @@ The runner parses pi's final answer (stdout) line by line. These lines, after tr
 | `REPLY_TO: <seq>` | The text after this line, up to the next `REPLY_TO` or the end, is one message, sent as a reply to `<seq>`. |
 | `NO_REPLY` | Send no text. |
 
-- Every other line is message text. Text before the first `REPLY_TO` is a plain message. In a batch, its `about` is the batch's newest item, so it follows the owner's latest message (5.3). Empty messages are dropped.
+- Every other line is message text. Text before the first `REPLY_TO` is a plain message. In a batch, its `about` is the batch's newest item, so it follows the owner's latest message ([Outbox entries](architecture/exchange.md#outbox-entries)). Empty messages are dropped.
 - `DONE` or `FAILED` for a `seq` that wasn't in the batch is ignored and logged. `REPLY_TO` with a `seq` that doesn't exist sends the message without quoting.
 - With `can_message: false`, nothing is sent.
 - One answer sends at most 25 texts (`ANSWER_MAX_TEXTS`), the first ones; the rest are dropped, and their number logged, so a misled run can't flood the owner's chat. A message whose reply was dropped gets its ✅ instead.
@@ -552,7 +255,7 @@ Steps 1 and 2 read what pi left, so an error in either, such as a git command th
   After every failed run, as after a successful one, the cursor moves to the highest `seq` the batch covered (6.8): the batch's items are in `retry` then, which comes first in the next batch (6.5). Only a run cut short, by a crash or by stopping the runner, leaves the cursor where it was.
 - **The notice:** the first failure in a row sends the owner one notice ("⚠️ I couldn't process your last messages (<short reason>). I'll try again."); later failures send nothing until a run succeeds. The short reason is OpenRouter's error when it refused or failed a request, such as no endpoint meeting the data policy; otherwise it's pi's exit status, or "timed out". A setup error's notice also says that runs are paused until it's fixed.
 - **Items run out of attempts:** send one notice listing them, for example "⚠️ I gave up on #1051 ("coffee 120") after 4 attempts. Send it again if it matters."
-- Notices are outbox entries with `by: "runner"`, and go to `DEFAULT_CHANNEL` (5.3).
+- Notices are outbox entries with `by: "runner"`, and go to `DEFAULT_CHANNEL` ([Choosing the channel](architecture/delivery.md#choosing-the-channel)).
 - **The runner stops on an error** that isn't pi's, such as a damaged datastore or a state it can't save, and its service manager starts it again. A fault that stays after pi has run would then run pi, and spend on OpenRouter, at every start. So the starts wait 1 minute after the first stop in a row, about 5½ after the second, and 30 after each one from the third, OpenRouter's outage waits: natively systemd keeps them (8.5); where the service manager doesn't wait, as Docker's restart policy doesn't (8.3), the runner keeps the same waits itself (`docs/DECISIONS.md`, D229):
   - It keeps how its starts ended in `/data/runner/restarts.json`. A start that follows a stop on an error waits from that stop, or from the start before it when the stop couldn't be recorded, such as after a kill, before anything can run pi; then it records itself as the next stop in a row, and runs nothing if it can't.
   - The wait comes after the steps of a start that run nothing of pi's (6.6, 6.12), which say what is wrong first. A start that stops in those steps, such as on a bad `agents.yaml`, a missing VM image or a damaged datastore, runs nothing of pi's, records nothing and waits for nothing: the service manager's own restarts pace it, Docker's with waits of a minute at most, and it sends no notice, as natively.
@@ -575,7 +278,7 @@ Cut short, by a stop, a closed terminal or a crash, a rebuild leaves the views r
 **Replayed batches**, here and in backfills (6.11):
 - A batch's items come from one of the owner's days: every item it takes was sent on the local date, in `SCOOTER_TZ`, of the first, and it stops at the first sent on another. Within that, it is drawn as a live batch is (6.5): due retries first, at most 20, and within the prompt's size limit. A message that an edit or a deletion in it brings in (6.5) joins whatever its day, shown with its date. Each original day gets its own session: `lifelog-rebuild-<day>`, or `lifelog-backfill-<id>-<day>`; with `session: none`, none. A replay's sessions are removed once it is over.
 - `Now:` in the prompt is the time of the batch's newest item, not the current time, so "today" and "yesterday" in old messages mean what they meant then.
-- Each batch takes `locks/run.lock` and gives way to `locks/backup.lock`, as a normal run does (6.4), so a backup never sees half a batch.
+- Each batch takes `locks/run.lock` and gives way to `locks/backup.lock`, as a normal run does ([The locks](architecture/exchange.md#the-locks)), so a backup never sees half a batch.
 - A message is shown as it is now, as 6.5 shows every message: with its latest edit, even one sent on a later day. A rebuild reads the datastore once, when it starts, so for it "now" is then.
 
 Rules the owner sent as messages are learned again at the point they were sent. Rules in `/config` apply to all of history.
@@ -704,7 +407,7 @@ Each skill uses the Agent Skills format: frontmatter with `name`, the skill fold
 | `meals` | `views/meals.csv` | Header `date,time,meal,description,est_kcal,place,note,source`. Calorie estimates are marked as estimates. |
 | `travel` | `views/travel.csv` | Header `date,depart_time,from,to,mode,carrier,number,seat,booking_ref,arrive,note,source`. One row per leg. |
 | `people` | `views/people.csv` | Header `date,start,minutes,person,topic,note,source`. One row per person, so an hour with two people is two rows with the same start and minutes. Add rows only when the owner tells you about time spent with someone; a person mentioned in passing, such as "lunch with Sam" on a food photo, stays in that entry. `date` and `start` are when it began, worked out from the message time: "for the past 30 minutes", sent at 21:13, started at 20:43. If no start can be worked out, leave it empty rather than ask. Write each person's name the same way every time. Ask when the length is missing or a name could mean two people. |
-| `day-pages` | `views/days/YYYY/MM/YYYY-MM-DD.md` | The template below, totals per currency, ❓ markers, and links to attachments relative to the page. From a day page, an attachment is at `../../../../../../datastore/YYYY/MM/DD/<file>`, using the folder in the attachment's path, which can differ from the page's date (4.1). |
+| `day-pages` | `views/days/YYYY/MM/YYYY-MM-DD.md` | The template below, totals per currency, ❓ markers, and links to attachments relative to the page. From a day page, an attachment is at `../../../../../../datastore/YYYY/MM/DD/<file>`, using the folder in the attachment's path, which can differ from the page's date ([Layout](architecture/datastore.md#layout)). |
 
 The day page template (leave out empty sections):
 
@@ -739,63 +442,25 @@ The day page template (leave out empty sections):
 
 ## 8. Configuration and files
 
-### 8.1 Repository layout (suggested)
-
-```
-docs/DESIGN.md, docs/ARCHITECTURE.md, docs/DECISIONS.md, docs/plans/
-src/cli.mjs          entry point: bridge, runner, setup, doctor, build-image, pair, email-check, backup-init,
-                     snapshots, check, restore, rebuild
-src/common/          settings, limits.mjs (every constant, 8.6), logging, time zones, atomic files, processes,
-                     locks, and the formats both services share: datastore lines and their reader, outbox
-                     entries, the network log, state.json and status.json
-src/bridge/          store.mjs (the only datastore writer), intake, outbox and routing, commands,
-                     backup.mjs (the only code that runs restic)
-src/bridge/channels/ whatsapp.mjs (wacli client and supervisor), email.mjs (runs the email reader, reads its spool, sender check)
-src/mail/            the email reader, run as scooter-mail: imapflow, postal-mime, the spool writer
-src/runner/          agents.yaml, state, triggers, batches and prompts, answer parsing, git, notices, rebuild, protocol.md
-src/runner/sandbox/  the VM (gondolin), acceleration, the network policy and its log, the image build
-src/ops/             setup and doctor
-config/              agents.yaml, prompts/lifelog.md, skills/*/SKILL.md, image/build.json
-deploy/systemd/      scooter-bridge.service, scooter-runner.service
-test/                unit and end-to-end tests, stubs for wacli, pi and restic, a fake sandbox that runs the pi
-                     stub locally, sample OpenRouter requests, sample emails, and a fake mailbox for the email reader
-Dockerfile, compose.yaml, bridge.env.example, runner.env.example, README.md
-```
-
-The bridge and the runner never import each other's code. They share only `src/common/` (`docs/ARCHITECTURE.md`, 4.2).
-
 ### 8.2 Environment
 
 | Variable | Default | Used by | Meaning |
 |---|---|---|---|
-| `OWNER_NUMBER` | required | bridge | The owner's WhatsApp number, in international format |
-| `OWNER_JIDS` | empty | bridge | Other IDs that are the owner (for example `…@lid`), comma-separated |
-| `DEFAULT_CHANNEL` | `whatsapp` | bridge | Where messages Scooter sends on its own go, and replies about emails (5.3). In v2 only `whatsapp` is allowed. |
-| `EMAIL_IMAP_HOST` | empty | email reader | The Scooter mailbox's IMAP server, such as `imap.gmail.com`. Empty turns email off. |
-| `EMAIL_IMAP_PORT` | `993` | email reader | IMAP over TLS |
-| `EMAIL_USER`, `EMAIL_PASSWORD` | required for email | email reader | The mailbox's address, and an app password for it |
-| `EMAIL_OWNER_ADDRESSES` | required for email | bridge, email reader | The owner's addresses, comma-separated; mail from any other address is skipped |
-| `EMAIL_AUTHSERV_ID` | required for email | bridge | The server name the mailbox's provider writes in `Authentication-Results`, such as `mx.google.com`; `email-check` shows it (8.4), and runs without it. The bridge doesn't start with email on and without it |
-| `EMAIL_CHECK_SECONDS` | `60` | email reader | The longest the reader goes between checks, even with IDLE |
 | `OPENROUTER_API_KEY` | required | runner | The key the runner swaps in on pi's requests to OpenRouter (6.13). It never enters pi's VM. |
 | `OPENROUTER_ZDR` | `on` | runner | `on` sends every OpenRouter request only to endpoints that keep no prompts or responses (6.13) |
-| `SCOOTER_TZ` | `Asia/Kolkata` | both | The owner's IANA time zone, used only for what the owner sees or sets (section 2) |
+| `SCOOTER_TZ` | `Asia/Kolkata` | both | The owner's IANA time zone, used only for what the owner sees or sets ([the owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choices)) |
 | `HOME_CURRENCY` | `INR` | runner | ISO currency code |
 | `BATCH_SECONDS` | `8` | runner | How long the owner must be quiet before a batch runs |
 | `SESSION_ROLLOVER_HOUR` | `4` | runner | The local hour when the daily session changes |
 | `AGENT_INTERNET` | `off` | runner | `on` lets pi reach public HTTPS websites through the runner's network policy, which logs every request (6.13). `/status` shows it, from the runner's `status.json` (6.3). |
 | `AGENT_ACCEL` | `auto` | runner | How pi's VMs run: `auto`, `kvm` or `emulation`. `hvf` is kept for macOS (6.6). |
-| `BACKUP_TIME` | `03:30` | bridge | `HH:MM` in `SCOOTER_TZ`, or `off` |
-| `RESTIC_REPOSITORY`, `RESTIC_PASSWORD` | required for backups | bridge | The restic repository and its password |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | `AWS_DEFAULT_REGION=auto` | bridge | R2 credentials (or `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for B2) |
-| `RESTIC_KEEP_DAILY`, `RESTIC_KEEP_WEEKLY`, `RESTIC_KEEP_MONTHLY` | `7`, `4`, `12` | bridge | Snapshots kept |
-| `FORCE_CHECK` | `0` | bridge | `1` runs `restic check` after every backup, not only on Sundays (5.5) |
-| `RESTORE_TARGET` | `/` | bridge | Where `restore` puts what it restores: each folder goes to this folder joined with the path it was backed up from, so `/` puts it back (5.5) |
 | `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` in Docker; natively set by `setup` (8.5) | both | Roots for all paths; tests override them |
 
-- **Two files, one per service.** The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service needs, so neither sees the other's secrets. Natively they're in `/etc/scooter/`, owned by root and by `scooter-runner` respectively, mode 0600; in Docker, `compose.yaml` gives each service its own file. Values already in the environment win over the file.
-- Inside the bridge, wacli gets none of `bridge.env`, and the email reader gets only its own settings (5.6). pi gets only what 6.6 lists.
-- Code never depends on the process's time zone: it stores UTC and converts to `SCOOTER_TZ` explicitly where the owner sees or sets a time. The services run with `TZ=UTC`. Only pi gets `TZ=<SCOOTER_TZ>` (6.6), because it writes what the owner reads.
+The bridge's own settings are in the documents of the components that read them: [WhatsApp](architecture/whatsapp.md#settings), [email](architecture/email.md#settings), [delivery](architecture/delivery.md#settings) and [backups](architecture/backups.md#settings).
+
+- **Two files, one per service**, as [Secrets](ARCHITECTURE.md#secrets) says. Natively they're in `/etc/scooter/`, owned by root and by `scooter-runner` respectively, mode 0600; in Docker, `compose.yaml` gives each service its own file. Values already in the environment win over the file.
+- pi gets only what 6.6 lists; what the bridge's programs get is in [Secrets](ARCHITECTURE.md#secrets).
+- The services run with `TZ=UTC`, and code never depends on it ([Time](architecture/shared-code.md#time)). Only pi gets `TZ=<SCOOTER_TZ>` (6.6), because it writes what the owner reads.
 - `bridge.env.example` and `runner.env.example` explain every variable and note that values containing `$` need single quotes.
 
 ### 8.3 Running in Docker (optional)
@@ -806,8 +471,8 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
   - `golang:1.27-trixie` builds wacli from source (13.1).
   - `node:24-trixie-slim` is the runtime. It installs `ca-certificates curl bzip2 git tini tzdata cpio lz4 e2fsprogs`, QEMU for the image's architecture (`qemu-system-x86` or `qemu-system-arm`) and `qemu-utils`, for `qemu-img`, plus:
     - restic 0.19.1 from its GitHub release, checked against the checksum the release's `SHA256SUMS` gives, which the Dockerfile holds (`docs/DECISIONS.md`, 0.2);
-    - the users `scooter-wacli` (10001), `scooter-runner` (10002) and `scooter-mail` (10003);
-    - the data folder, `/data`, with the folders of 3.2 and their owners and modes: a new volume mounted there starts as a copy of it;
+    - the users of [Processes and users](ARCHITECTURE.md#processes-and-users), with their uids;
+    - the data folder, `/data`, with the folders of [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners) and their owners and modes: a new volume mounted there starts as a copy of it;
     - the app and its dependencies, with `npm ci --omit=dev --ignore-scripts`, readable by every user and writable by root alone, whatever modes the checkout gave it.
 
     The entrypoint is `tini -- node /app/src/cli.mjs`. pi isn't installed here; it lives in the VM image (6.12). `docs/DECISIONS.md`, D221, has the rest.
@@ -815,13 +480,13 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
   - `bridge`: `command: ["bridge"]`, `hostname: scooter`, `env_file: bridge.env`.
   - `runner`: `command: ["runner"]`, `user: scooter-runner`, `env_file: runner.env`, `read_only: true` (a read-only root filesystem) with a `tmpfs` at `/tmp`, `./config` read-only at `/config`, and the KVM settings below.
 
-  Both have one volume for the whole data folder at `/data` (3.2; `docs/DECISIONS.md`, D219), `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`. A third service, `build-image`, runs only when asked (below).
+  Both have one volume for the whole data folder at `/data` ([Folders and their owners](ARCHITECTURE.md#folders-and-their-owners); `docs/DECISIONS.md`, D219), `restart: unless-stopped`, `security_opt: [no-new-privileges:true]`, `stop_grace_period: 30s`, and log rotation (10 MB × 3). Neither needs added capabilities, `privileged` or seccomp changes (13.4). There are no `ports:`. A third service, `build-image`, runs only when asked (below).
 - **Restarts:** Docker starts a container that ran longer than 10 seconds again at once, which a runner that ran pi always has. So the runner keeps its own waits between starts, those of the native unit (6.9; `docs/DECISIONS.md`, D229); `docker compose restart runner` ends one.
 - **The VM image:** build it after installing and after each upgrade (6.12), with `docker compose run --rm build-image`, with the runner stopped. It runs `build-image` in a container of its own, from the same image, as root and `privileged`: Gondolin's builder makes a chroot with `/proc` and `/dev` mounted in it, which neither the runner's container nor its root can do. Under rootful Docker that container is root on the host, as a native build is (row 8; section 9). It builds in `/data/.image-build/` and renames the image into `/data/runner/image/`, in the one volume (`docs/DECISIONS.md`, D220).
 - **Both architectures:** the image must build for `linux/amd64` and `linux/arm64`. Docker builds for the host's architecture by default, so an arm64 host builds `arm64`. Use `TARGETARCH` for downloads (restic's assets are named `linux_amd64` and `linux_arm64`), and keep building wacli from source inside the image so it always matches. Only amd64 has been built (`docs/DECISIONS.md`, D228).
-- **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git. `restore` writes into the data folder with both services stopped: `docker compose stop`, then `docker compose run --rm bridge restore` (5.5; `docs/DECISIONS.md`, D223).
+- **Commands** (`pair`, `backup-init`, `restore`, `rebuild`…) run through `docker compose run`, so the host needs nothing but Docker and git. `restore` writes into the data folder with both services stopped: `docker compose stop`, then `docker compose run --rm bridge restore` ([Restore](architecture/backups.md#restore); `docs/DECISIONS.md`, D223).
 
-**KVM in Docker.** pi's VMs only run fast if the runner container can open the host's `/dev/kvm`. The runner runs as `scooter-runner` in each case. `compose.yaml` alone is the third case below; each of the other two is a file added to it, named in `COMPOSE_FILE` in a `.env` file beside it (`docs/DECISIONS.md`, D222). `doctor`, run in the runner container, says which case applies (8.4).
+**KVM in Docker.** pi's VMs only run fast if the runner container can open the host's `/dev/kvm`. The runner's user is the same in each case ([Processes and users](ARCHITECTURE.md#processes-and-users)). `compose.yaml` alone is the third case below; each of the other two is a file added to it, named in `COMPOSE_FILE` in a `.env` file beside it (`docs/DECISIONS.md`, D222). `doctor`, run in the runner container, says which case applies (8.4).
 - **Rootful Docker on Linux**, the usual install, `compose.kvm.yaml`: it gives the runner `devices: ["/dev/kvm:/dev/kvm"]`, and `group_add` with the host's `kvm` group id (`getent group kvm`), `KVM_GID` in `.env`. Access goes through the group, which Ubuntu's device rules leave alone (13.4).
 - **Rootless Docker on Linux**, `compose.kvm-rootless.yaml`: the host's `kvm` group never reaches a rootless container (13.4), and rootless Docker gives `scooter-runner` a uid of its own on the host, from the range `/etc/subuid` gives the user that runs Docker. That uid needs access of its own. A one-off `setfacl` doesn't last, because Ubuntu's device rules reset it whenever a VM starts or stops; the README gives the udev rule that keeps it, which `compose.kvm-rootless.yaml` holds, with the command that finds the uid. Then the runner gets `devices: ["/dev/kvm:/dev/kvm"]` (`docs/DECISIONS.md`, D217).
 - **A host without KVM, or a container that can't open it:** pi's VMs run under emulation: about 11 seconds more per run, and pi and its tools about ten times slower (13.4). `AGENT_ACCEL=auto` falls back to it with a warning.
@@ -832,15 +497,15 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 |---|---|---|
 | `bridge` | bridge | Runs the bridge (the service's default command) |
 | `runner` | runner | Runs the runner (the service's default command) |
-| `setup [--no-services]` | the host, as root | Natively: checks that the service users can run Node and read the code, which only root may change (8.5), creates the users and folders in 3.2, adds `scooter-runner` to the `kvm` group, copies the code's `config/` to `/etc/scooter/config` if it isn't there, writes `bridge.env` and `runner.env` from the examples if they don't exist, writes `/usr/local/bin/scooter`, and installs and enables the two services (8.5), without starting them. `--no-services` leaves the services out, where systemd doesn't run. Safe to repeat (`docs/DECISIONS.md`, milestone 12). |
+| `setup [--no-services]` | the host, as root | Natively: checks that the service users can run Node and read the code, which only root may change (8.5), creates the users and folders of [Processes and users](ARCHITECTURE.md#processes-and-users) and [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), adds `scooter-runner` to the `kvm` group, copies the code's `config/` to `/etc/scooter/config` if it isn't there, writes `bridge.env` and `runner.env` from the examples if they don't exist, writes `/usr/local/bin/scooter`, and installs and enables the two services (8.5), without starting them. `--no-services` leaves the services out, where systemd doesn't run. Safe to repeat (`docs/DECISIONS.md`, milestone 12). |
 | `doctor` | runner | Checks what the runner needs, and changes nothing: which accelerator it can use and, if none, how to enable one in this setup (8.3, 8.5); QEMU; the VM image and its pi version; that a VM boots from it with that accelerator, and how long it took, closing that VM if `doctor` is stopped meanwhile; `agents.yaml`; folder owners and modes, and the env files'; whether `openrouter.ai` is reachable; and, with ZDR on, which of the configured model's endpoints qualify. It reports each with its fix, and exits with 1 when something must be fixed. It runs as `scooter-runner` alone where that user is there, and exits with 2 otherwise (`docs/DECISIONS.md`, D224). |
 | `build-image` | the host, as root; in Docker, a container of its own: `docker compose run --rm build-image` | Builds the VM image (6.12) |
-| `pair [--phone +91…]` | bridge | Runs `wacli auth` as `scooter-wacli` with the terminal attached, to show a QR code (or a pairing code with `--phone`) |
-| `email-check` | bridge | Runs the email reader once, as user `scooter-mail`, to list the mailbox's newest 5 messages, each with its `From`, the server named in its topmost `Authentication-Results` header, and whether it would pass the sender check (5.6). Stores nothing. Runs before `EMAIL_AUTHSERV_ID` is set, which it helps find. |
-| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | Run the backup module's operations (5.5). `restore` restores the latest snapshot unless one is named, needs the bridge and the runner stopped to write into the data folder, and, as root, Scooter's users, which `setup` makes |
+| `pair [--phone +91…]` | bridge | [Pairing](architecture/whatsapp.md#pairing) |
+| `email-check` | bridge | [email-check](architecture/email.md#email-check) |
+| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | [The CLI commands](architecture/backups.md#the-cli-commands), [Restore](architecture/backups.md#restore) |
 | `rebuild <agent>` | runner, with its service stopped | Section 6.10 |
 
-Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`, and build the VM image with `docker compose run --rm build-image`. Sending `SIGUSR1` to the bridge starts a backup immediately: in Docker, `docker compose kill -s SIGUSR1 bridge`.
+Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`, and build the VM image with `docker compose run --rm build-image`.
 
 ### 8.5 Running natively
 
@@ -873,36 +538,9 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `SETUP_RETRY_WAIT` | 30 minutes | 6.9 | The wait between tries after a setup error |
 | `RUNNER_RESTART_WAITS` | 1 minute, 1 minute × √30 (about 5½), 30 minutes | 6.9, 8.3 | The waits before a runner that stopped on an error goes on again, after one, two, and three or more stops in a row, where its service manager doesn't wait: the native unit's, as systemd works them out |
 | `FAILED_KEEP` | 100 | 6.8 | How many entries `failed` keeps |
-| `POLL_INTERVAL` | 1 second | 5.3, 5.6, 6.4 | How often the runner looks for new lines, and the bridge checks the outbox and the email spool |
-| `SEND_INTERVAL` | 5 seconds | 5.3 | At most one WhatsApp message this often, so the bot number doesn't look like spam. wacli warns about sends closer together than 5 seconds (13.1) |
-| `CHUNK_CHARS` | 3,500 | 5.3 | The longest piece of a reply, under WhatsApp's limit |
-| `TEXT_MAX_CHARS` | 14,000 | 5.3 | The longest text one outbox entry sends, four chunks, which go out as four to eight messages; a longer one is cut when written, so one answer can't keep the bot number sending for half an hour |
-| `OUTBOX_ENTRY_MAX_BYTES` | 1 MB | 5.3 | The largest outbox entry file the bridge reads; a text at its longest takes far less |
-| `SEND_RETRY_BACKOFF`, `SEND_ATTEMPTS` | 5 seconds, doubling up to 5 minutes; 8 | 5.3, 5.4 | The waits before a failed send, or a reply to a command that couldn't be written, is tried again, and the tries after which an entry no longer holds back the rest, so one that can never go out doesn't |
-| `WEBHOOK_MAX_BYTES` | 2 MB | 5.2 | The largest webhook body accepted from wacli |
-| `WEBHOOK_PORT` | 8787 | 5.1, 5.2 | Where wacli posts its webhooks, on loopback |
-| `CATCHUP_INTERVAL`, `CATCHUP_OVERLAP`, `CATCHUP_LIMIT` | 10 minutes, 2 minutes, 500 rows | 5.2 | WhatsApp catch-up: how often, how far back before where it had got to, how many rows a page |
-| `MEDIA_DOWNLOAD_RETRIES`, `MEDIA_DOWNLOAD_RETRY_WAIT` | 2; 10 seconds | 5.2 | Retries for a failed media download, and the wait before each, enough for a reconnecting wacli to come back |
-| `WACLI_CALL_TIMEOUT` | 6 minutes | 5.1, 5.2 | The longest a wacli call other than `sync` may take, so one stuck download can't hold up every message after it; wacli stops its own after 5 |
-| `ATTACHMENT_MAX_BYTES` | 100 MB | 4.4, 5.6 | The largest attachment, or email, that's stored |
-| `ATTACHMENT_EXT_MAX_CHARS` | 10 | 4.4 | The longest extension a stored attachment's name takes from its original name; a longer one is no extension, and the MIME type decides |
-| `EMAIL_TEXT_MAX_CHARS` | 20,000 | 5.6 | Where an email's body is cut |
-| `EMAIL_SUBJECT_MAX_CHARS` | 1,000 | 5.3, 5.6 | Where an email's subject is cut, so the `✅ Email:` text is one message |
-| `EMAIL_HEADER_MAX_BYTES` | 256 KB | 5.6 | The most of an email's header block the sender check reads; one that doesn't end within it is skipped |
-| `EMAIL_PARSED_MAX_BYTES` | 1 MB | 5.6 | The largest `parsed.json` the bridge reads from the spool |
-| `ATTACHMENT_NAME_MAX_CHARS` | 255 | 5.6 | The longest original file name of an email's attachment: the reader cuts a longer one, and the bridge refuses a `parsed.json` with one |
-| `LOGGED_NAME_MAX_CHARS` | 64 | 5.3 | The most of a name the bridge logs of one it leaves in a folder another user controls, such as the runner's outbox; its length is logged beside it |
-| `SPOOL_RETRY_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.6 | The waits before a spool folder the store couldn't take is tried again |
-| `EMAIL_CHECK_COUNT`, `EMAIL_CHECK_TIMEOUT` | 5; 2 minutes | 8.4 | How many messages `email-check` lists, and how long its run of the reader may take |
-| `STATUS_FILE_MAX_BYTES` | 4 MB | 5.4, 5.5 | The largest file of the runner's, or of the email reader's, that the bridge reads for `/status`, and the largest `run.lock` it reads before a backup |
+| `POLL_INTERVAL` | 1 second | 6.4 | How often the runner looks for new lines. The bridge's uses are in its documents |
 | `MODEL_REQUEST_MAX_BYTES` | 50 MB | 6.13 | The largest model request the network policy reads |
-| `RESTART_BACKOFF` | 5 seconds, doubling up to 5 minutes | 5.1, 5.6 | Restart waits for wacli and the email reader |
-| `STOP_GRACE` | 15 seconds | 5.1 | From SIGTERM to SIGKILL when stopping wacli |
-| `AUTH_CHECK_INTERVAL` | 1 minute | 5.1 | How often an unpaired wacli is checked again |
-| `BACKUP_LOCK_EXTRA` | 2 minutes | 5.5 | How long past the time in `run.lock` a backup still waits for the run to finish; past it, only while a runner still holds its socket |
-| `RESTIC_CHECK_WEEKDAY` | 7 (Sunday) | 5.5 | The day backups also run `restic check` |
-| `RESTIC_TIMEOUT` | 6 hours | 5.5 | The longest one step of a backup, restic's backup, forget or check, may take. The channels are stopped and the runner waits meanwhile, so a restic that hung would stop Scooter for good |
-| `STATUS_WINDOW` | 24 hours | 5.4, 6.13 | The period `/status` counts over |
+| `STATUS_WINDOW` | 24 hours | 6.13; [/status](architecture/bridge.md#status) | The period `/status` counts over |
 | `NETLOG_LINE_MAX_BYTES` | 16 KB | 6.9, 6.13 | The longest line of the network log a reader takes, so reading it needs the same memory however large pi made it |
 | `NETLOG_PATH_MAX_CHARS` | 1,000 | 6.13 | The longest path a line of the network log keeps, so every line the policy writes fits within `NETLOG_LINE_MAX_BYTES` |
 | `RUN_REQUESTS_MAX`, `RUN_REFUSALS_LOGGED_MAX` | 1,000; 100 | 6.13 | The most requests one run may make that go out, and the most refusals the log takes from it one by one; the rest are counted in one line, so what a run adds to the log is bounded |
@@ -922,36 +560,25 @@ They aren't settings. A value becomes a setting (8.2) only when the owner has a 
 | `CONFIG_RANGES`, `SETTING_RANGES` | `timeout_minutes` 1 to 120; `BATCH_SECONDS` 1 to 600, `SESSION_ROLLOVER_HOUR` 0 to 23, `EMAIL_IMAP_PORT` 1 to 65535, `EMAIL_CHECK_SECONDS` 10 to 3600, `RESTIC_KEEP_DAILY` 1 to 3650, `RESTIC_KEEP_WEEKLY` 0 to 520, `RESTIC_KEEP_MONTHLY` 0 to 1200 | 6.1, 8.2 | The values a number in `agents.yaml`, or a numeric setting, may take; one outside stops the service at startup |
 | `DOCTOR_TIMEOUT`, `DOCTOR_RESPONSE_MAX_BYTES` | 30 seconds; 32 MB | 8.4 | The longest `doctor` waits for OpenRouter's list of the endpoints that keep no data, and the most of it it reads; the list was 1.2 MB on 2026-11-18 |
 
+The constants of the bridge's side are described in `src/common/limits.mjs`, beside their values, and named in the rules that use them, in the documents of [the map](ARCHITECTURE.md#the-map).
+
 ## 9. Security
 
-The controls, and what each one protects against:
+The controls of the runner's side, and what each one protects against. Those of the bridge's side, and the boundaries, are in [The boundaries](ARCHITECTURE.md#the-boundaries) and the documents of [the map](ARCHITECTURE.md#the-map).
 
-- **Strangers:** the bridge accepts WhatsApp messages only from the owner's IDs and ignores groups, and keeps email only from the owner's addresses, when it passes DMARC (5.6). Outbox entries have no recipient field, so replies always go to the owner.
-- **A misled agent sending data out:** pi runs in a VM with no network of its own. The runner's policy lets it reach only OpenRouter's two chat endpoints, with the configured model, and refuses anything that would make OpenRouter fetch from the web (6.13). DNS never leaves the runner, and private addresses are refused. The bridge sends the agent's replies with wacli's link previews off, so a link in a reply is never fetched from the bridge's side (5.3). With internet access off, the default, OpenRouter's two chat endpoints are the agent's only way out. With it on, pi can also reach public HTTPS websites. Every request is logged.
-- **Key theft:** the OpenRouter key exists only in the runner. The WhatsApp session, the mailbox password and the backup credentials exist only in the bridge. pi sees only a placeholder, which is worthless outside the runner.
-- **Third-party code that faces the outside:** wacli and the email reader each run as their own user, with only their own settings in their environment and only their own folder to read and write (3.2). Neither can read the keys, the datastore, the agent's folder (with the views' history in `.git`), the exchange, or the runner's and the bridge's state.
+- **A misled agent sending data out:** pi runs in a VM with no network of its own. The runner's policy lets it reach only OpenRouter's two chat endpoints, with the configured model, and refuses anything that would make OpenRouter fetch from the web (6.13). DNS never leaves the runner, and private addresses are refused. What the bridge does with a link in a reply is in [Sending](architecture/whatsapp.md#sending). With internet access off, the default, OpenRouter's two chat endpoints are the agent's only way out. With it on, pi can also reach public HTTPS websites. Every request is logged.
 - **Filling the disk:** a run may write at most `RUN_WRITE_MAX_BYTES`, and make at most `RUN_NAMES_MAX_COUNT` names, through the VM's writable mounts; past either the VM is closed and the run fails (6.6), and the clean-up frees what it wrote (6.9). The VM's own disk is an overlay no larger than the image.
-- **Folders other users control:** the bridge, as root, takes what it needs out of `mail/spool/`, `wacli/staging/` and `exchange/outbox/`, which the email reader, wacli and the runner's user control. It uses each only while it is that user's folder and not a link, reads a file only without following a link and if it is a regular file with one name, and removes only the names it gives or expects there, a folder only once that empties it. So a link left in place can't turn the bridge's reads or removals on anything else.
 - **Tampering with the record:** pi's VM sees the datastore read-only, and the agent's folder read-only except `views/`, `memory/` and its session copy, with `sessions/` hidden altogether (6.6). So it can't change the log, the outbox, the locks, `state.json`, the git history, other sessions or `/config`.
 - **Persistence after a malicious document:** every run starts a fresh VM from the same image, so whatever pi leaves inside one is gone when it closes. pi ignores project files (`--no-approve`) and starts with extension, skill, prompt-template and context-file discovery turned off, and its MCP support too. Skills load only from a copy of `/config` that pi can't write. It gets only a copy of the current session, so it can't plant a session for later. What pi can change, its views and memory, is in git, so the owner can see and revert it, a run that leaves a file git wouldn't record fails, and the modes git doesn't record are put back (6.8).
-- **The webhook:** it listens on loopback only, with a new random secret on every start and a constant-time HMAC check.
-- **Logs:** they contain IDs, kinds, sizes and timings, never message text or file contents. The network log also names the hosts and paths the agent reached.
-- **Backups:** restic encrypts everything before upload, so the bucket holds only ciphertext. `bridge.env` and `runner.env` aren't backed up; the owner keeps `RESTIC_PASSWORD` in a password manager.
+- **Logs:** they hold no content ([Logging](architecture/shared-code.md#logging)). The network log also names the hosts and paths the agent reached.
 
 Accepted risks:
 - OpenRouter and the model provider see the content of messages while they process them. With zero data retention (6.13) neither keeps it afterwards, except that OpenRouter screens every request for child sexual abuse material and may keep what it flags (13.3).
 - With internet access on, a misled run can send the owner's data to any public website, and even an ordinary lookup tells a website what was looked up. The log shows when, which host and path, and how much, not what.
 - A malicious document can still mislead the agent into misfiling things, editing its memory, or telling the owner something wrong. Git history shows what changed.
 - A request the agent sends itself, with the placeholder, in the shape of pi's, passes the network policy, and the runner reads what came of it as OpenRouter's answer to pi: nothing tells the two apart. So a misled agent can make a failed run look like an outage or a setup error, and its batch is then tried every 30 minutes, without using its attempts, for as long as the message that misled it is in it (6.9; `docs/DECISIONS.md`, D160). The owner accepted this on 2026-11-18.
-- A flaw in QEMU or the guest kernel could let pi out of its VM and into the runner. There it would reach the OpenRouter key and the agent's folders, but not the bridge's secrets, because the runner is its own unprivileged user, apart from the bridge.
 - Gondolin is pre-1.0 (13.4). Its next version moves the policy hooks into a separate program, so upgrading it means porting the policy and running its tests again.
-- On a native install the bridge runs as root, so that it can start wacli and the email reader as their own users. A flaw in the bridge would then expose the whole machine, not just one container. Running the bridge as its own user, with systemd starting wacli and the email reader, is a possible later change.
 - A native build of the VM image also runs as root on the host: Gondolin's builder, then Alpine's shell, npm and git in a chroot, which doesn't contain root (6.12). No code from pi's packages runs there, and the build runs only when the owner starts it. It builds in a folder only root can write, and changes the runner's folder only by renaming the image in and the old one out, so a link the runner's user puts there leads it nowhere (`docs/DECISIONS.md`, D151). In Docker it runs in a privileged container of its own, which under rootful Docker is root on the host just the same (D220).
-- In Docker, one volume holds the whole data folder, as natively one folder does, so the services' containers are kept apart from each other's folders by the owners and modes of 3.2 alone, not also by read-only mounts: the bridge, as root, could write `runner/`, which it only reads (`docs/DECISIONS.md`, D219).
-- wacli is unofficial, so WhatsApp could ban the bot number. The owner must also open WhatsApp Business at least every two weeks, or the linked device is logged out.
-- The mailbox's provider keeps the emails sent to Scooter. Anyone who controls the owner's email account can give Scooter instructions, as with their WhatsApp.
-- Node has no calls relative to a folder it has open, so a user who controls one of the folders above can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, and empty folders. The bridge writes nothing in those folders, but `backup.lock` in `exchange/locks/`, which only the runner's user controls, and which an escape from pi's VM is needed to reach: a swap there can steer where the bridge makes it (5.5), under that name (`docs/DECISIONS.md`, D136, D205). Where root makes a folder in a folder another user owns, it sets the folder's owner and mode through what it opened, so a link swapped in leads it nowhere (D206).
-- wacli and the email reader can reach the internet. A malicious version of either, or of a library the reader uses, could send out what it holds (the WhatsApp session and the messages it handles, or the mailbox password and the emails), and could hand the bridge fake messages from the owner. If wacli's webhook secret has to stay on its command line (5.1), the email reader could read it and post fake WhatsApp messages too, which is no worse than posting fake emails.
 
 ## 10. Testing
 
@@ -961,39 +588,21 @@ Accepted risks:
   - The pi stub reads the prompt and picks its answer from keywords in the messages. That lets tests drive `DONE`, `FAILED`, unreported items, questions, unexpected files and crashes.
   - The runner runs pi through a sandbox interface. Unit tests use a fake sandbox that runs the pi stub as a local process, in a temporary folder laid out like the VM's mounts. The real Gondolin sandbox has its own tests (below).
   - The network policy is tested by giving its hook sample requests shaped like the pinned pi's (13.2), with a fake upstream.
-  - The email reader reaches the mailbox through a small adapter, so its tests use a fake mailbox. The bridge's side is tested by placing folders in the spool.
-- Run the bridge and the runner as real processes, or in-process with an injectable clock and paths, against temporary folders that stand in for the data folders. Behavior that needs root (users, folder modes) or a hypervisor is checked in the sandbox and deployment milestone (11.5), natively and in Docker; unit tests cover the decisions, such as which mounts and settings are used.
+  - The bridge's side of email is tested by placing folders in the spool; the email reader's tests use a fake mailbox ([The email reader](architecture/email.md#the-email-reader)).
+- Run the bridge and the runner as real processes, or in-process with an injectable clock and paths, against temporary folders that stand in for the data folders. Behavior that needs root (users, folder modes) or a hypervisor was checked by hand, natively and in Docker (`docs/DECISIONS.md`, milestones 12 and 13); unit tests cover the decisions, such as which mounts and settings are used.
 
 **Where the tests run:** the code and the tests must run natively on Linux (Node ≥ 22.19).
-- Without `setup`, the processes usually run as an ordinary user. Then skip switching users and changing ownership, and log one warning. An installed Scooter, native or in Docker, always has its users, so production behavior is the same. Tests cover both paths where they can.
+- Without `setup`, the processes usually run as an ordinary user, and switching users and changing ownership are skipped ([Running programs](architecture/shared-code.md#running-programs)). Tests cover both paths where they can.
 - Run the whole suite as an ordinary user, and also as root, in Docker: `docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'`. That exercises the root-only paths. The tests that create users run only with `SCOOTER_ROOT_TESTS=1`, so running the suite as root on a real machine creates none. The restic round trip skips itself when restic isn't installed, and the sandbox tests skip themselves when QEMU isn't.
 
-**Keeping macOS cheap to add** (section 12). These rules cost nothing now, so keep them:
+**Keeping macOS cheap to add** ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)). These rules cost nothing now, so keep them:
 - Don't depend on Linux-only features: no `/proc`, no `fs.watch` (poll instead), and no GNU-only command flags such as `sed -i`, `date -d`, `stat -c` or `readlink -f`.
 - macOS file systems are usually case-insensitive, so never create two files whose names differ only in case.
 
 Passing the suite on a Mac isn't required until macOS is.
 
-Required tests, at least:
-- **Datastore:** `seq` order across days, day folders by UTC date that never go backwards (even when the clock does), recovery from an incomplete last line, duplicates, attachment names, and the index rebuilt on restart.
-- **Time:** stored times are UTC, while the prompt, replies and `/status` show `SCOOTER_TZ`; scheduled tasks fire at the right local time across a daylight-saving change; changing `SCOOTER_TZ` between restarts doesn't stall the runner or reorder the datastore.
-- **Intake:**
-  - Signatures accepted and rejected.
-  - Filtering of non-owners, `@lid` owners, groups, `FromMe` messages, stickers and empty messages.
-  - Media downloads, including failures.
-  - Replies, reactions, edits and deletions mapped to `seq` numbers.
-  - The same edit, deletion or reaction delivered twice is stored once.
-  - Commands logged.
-  - Catch-up after a gap, without duplicates, from where catch-up itself had got to: a catch-up cut short between its rows, by a stop or by a crash, after the webhook stored a newer message, lists the rest when the bridge starts again; a message whose webhook never came is listed though a newer one was stored; the bot's own rows, and emails, don't move it on; every chat the owner wrote from is listed; a row intake must be handed again holds it; no history imported on the first start.
-- **Email:**
-  - The reader against a fake mailbox: headers first, whole messages only from the owner's addresses, the `n:*` quirk, IDLE with the periodic check, errors and backoff.
-  - The position: kept across restarts, nothing imported the first time, and a `UIDVALIDITY` change handled without duplicates.
-  - The spool: a folder counts only once renamed; the bridge refuses a bad `parsed.json` and picks file names itself; a duplicate `Message-ID` is skipped; an email that couldn't be parsed is stored with its `.eml` and an error, and the ones after it still arrive; an email whose files the bridge can't copy, as on a full disk, stays whole and is stored with them later; and a spool, or a folder in it, that is a link or isn't the reader's makes the bridge remove nothing outside `mail/`.
-  - The sender check: another `From` address, several `From` headers or addresses, no `Authentication-Results`, another server's header on top, `dmarc=fail`, and a forged header below the provider's.
-  - Parsing sample emails as Gmail, Apple Mail and Outlook send them, HTML-only mail included.
-  - The datastore line: `subject`, the 20,000-character cut, `<seq>.eml` first, and attachment names.
-  - An email is never a command.
-- **Least privilege:** the folders Scooter creates get the owners and modes in 3.2, and `setup` makes the users and folders, as root, without services, and the kvm group with them where there is none; the Docker image's users, data folder and Compose files are those 3.2 and 8.3 give; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
+Required tests of the runner's side, at least:
+- **Least privilege:** the folders Scooter creates get the owners and modes of [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), and `setup` makes the users and folders, as root, without services, and the kvm group with them where there is none; the Docker image's users, data folder and Compose files are those [The boundaries](ARCHITECTURE.md#the-boundaries) and 8.3 give; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
 - **Runner:**
   - Batching after the quiet period, and the batch's two limits: 20 items, and the prompt's size, with an over-long item shown cut.
   - Cursor, retry and failed transitions with an injected clock (a 1-minute wait between attempts; 4 attempts).
@@ -1020,8 +629,6 @@ Required tests, at least:
   - Started again at once after each stop, as Docker starts it, a fault that stays after pi has run runs pi 1 minute after the first stop, about 5½ after the second, then every 30; the first wait sends one notice, and `status.json` says so; a stop the runner is asked for ends the waiting, and a run recorded makes the next stop the first in a row; with `SCOOTER_RESTART_WAITS=systemd` it keeps no waits; and a start that can't record itself runs nothing.
   - The commit message, and `can_message: false`.
 - **Answer parsing:** every instruction line, text segments, and unknown `seq` numbers.
-- **Delivery:** order, pacing, chunking, `--no-preview` on every text, `--reply-to` with the right WhatsApp ID, reactions, `out` lines logged with wacli's IDs, and recovery from `sending.json`: after a crash, only the chunks it doesn't record as sent go out again, and an entry the runner's user swaps for a link once the bridge has taken it leads the bridge to write nothing where the link leads. Entries wait while their channel can't send; a failed send is tried again, no longer holds back the rest after `SEND_ATTEMPTS`, and is given up on once a later entry's message goes and it fails again; an outage of any length gives up on nothing, and the entries then go in order; a text over `TEXT_MAX_CHARS` is cut, and U+0000 in one is replaced; an outbox that is a link makes the bridge remove nothing it leads to, and still lets the bridge's own entries go; a name in it that isn't an entry's ID is left; and the bridge removes only `entry.json` from a runner's entry.
-- **Routing:** `replyTo` and `about` follow their line's channel; a reply about an email reaches `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices, scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that can't send stops the bridge at startup.
 - **Network policy:**
   - A request shaped like the pinned pi's passes on each endpoint, and goes out with the real key in place of the placeholder.
   - Each refusal: another model, an `:online` model, a tool that isn't `function` or is a server tool, `plugins`, `mcp_servers`, an unknown top-level field or `anthropic-beta` value, an image or document given by URL, another path or method on `openrouter.ai`, another host with internet access off, and plain HTTP with it on.
@@ -1041,50 +648,7 @@ Required tests, at least:
   - A run that writes more than `RUN_WRITE_MAX_BYTES`, or makes more than `RUN_NAMES_MAX_COUNT` names, through its writable mounts is stopped. The sandbox keeps the start of stdout and the end of stderr, and says when an answer was cut.
   - A missing image, or one built for another pi version, stops the runner, and so does a `SCOOTER_TZ` the image doesn't know.
   - As root, `build-image` builds outside the runner's folder, and links the runner's user puts in that folder during the build lead it nowhere: nothing they lead to is written, given away or removed. This one needs root, not QEMU.
-- **Backups:** lock coordination with a restic stub: a backup waits for a run to finish, goes ahead once `run.lock` is 2 minutes past its time and no runner holds its socket, waits on while one does, and a leftover `backup.lock` is removed at startup; the channels and delivery stop while restic runs, and start again after; restic gets only the backup settings; the schedule across a daylight-saving change; and `/backup` replies, without holding back the commands after it. When restic is installed, a real round trip: init, back up, the repository contains no plaintext, the wrong password fails, the restore matches, and `--force` is needed for a non-empty target; and, as root, a restore gives files their owners by name. A restore refuses a `runner/` or an `exchange/` that is a link.
 - **Config:** each validation error names the field, a skill whose `SKILL.md` doesn't give its folder's name and a description is one, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, a VM that doesn't boot, wrong folder modes) with its fix, and runs only as the runner's user where that user is there.
-
-## 11. Development plan
-
-The implementation plan under `docs/plans/` splits these milestones into smaller ones, and sets their order, files and checks. Where its order differs from this one, follow the plan. Each milestone ends with `npm test` passing and a commit that describes it.
-
-1. **Foundations.** `package.json` (Node ≥ 22.19; `yaml`, `@earendil-works/gondolin`, `imapflow` and `postal-mime` pinned), a `src/cli.mjs` skeleton, settings and their validation (both env files), the constants module (8.6), time-zone helpers, logging, atomic file writes, running processes with timeouts and a uid/gid, locks, and the datastore module (4.3, 4.4).
-   *Done when* the datastore tests pass, including recovery from an incomplete last line.
-2. **Bridge intake.** The channel interface (5), the wacli client and sync supervisor (5.1), the webhook server, normalization, filtering, media, replies, reactions, edits, deletions, commands and catch-up (5.2), and email: the reader and the spool (5.6).
-   *Done when* signed webhook posts end up as the right datastore lines and attachments, and unsigned ones don't; and the same goes for sample emails from a fake mailbox, while mail that fails the sender check isn't stored.
-3. **Runner core.** `agents.yaml` (6.1), the agent's folder and git (6.2), state (6.3), triggers and locks (6.4), batches and prompts (6.5), running pi through the sandbox interface, with the fake sandbox (6.6), parsing its answer (6.7), state updates and commits (6.8), and failures (6.9).
-   *Done when* the pi stub can take a message from the datastore to a committed view and a correct `state.json`, including retries and failures.
-4. **Delivery and commands.** The outbox writer and processor, routing and `DEFAULT_CHANNEL`, pacing, chunking, quoting, reactions, `out` lines and crash recovery (5.3), notices, and `/status`, `/help`, `/backup` (with a stub) and `/new` (5.4).
-   *Done when* an end-to-end test goes from a webhook to a quoted reply sent through the wacli stub and logged as an `out` line, another goes from an email to an unquoted reply on WhatsApp, and `/status` reports the runner's state.
-5. **Sandbox and deployment.** The Gondolin sandbox and acceleration (6.6), the VM image and `build-image` (6.12), the network policy and its log (6.13), `setup` and `doctor` (8.4), the systemd services (8.5), the `Dockerfile` and `compose.yaml` (8.3), the other CLI commands (8.4), `rebuild` (6.10) and backfills (6.11).
-   *Done when* the network policy tests pass, and also:
-   - where QEMU is available: the sandbox tests pass; with KVM, a VM boots in under 3 seconds; and pi in a VM reaches OpenRouter's chat endpoint with a dummy key (OpenRouter answers 401), while `https://example.com` is refused;
-   - natively, after `setup`: the services start, `doctor` passes, and wacli and the email reader run as their own users and can't read the `datastore`, `agents`, `exchange`, `runner` or `bridge` folders;
-   - if Docker is available: `docker compose build` succeeds, and the same checks pass in the containers, with KVM where the host allows it (8.3). If Docker can build for other platforms (`docker buildx` with emulation), also build the other architecture.
-6. **Backups.** The backup module, the schedule, lock coordination, pausing the channels and the outbox, and failure notices (5.5).
-   *Done when* the stubbed flow and the real restic round trip pass.
-7. **Agent instructions and docs.** The protocol (7.1), `config/prompts/lifelog.md` (7.2), the six skills (7.3), the default `config/agents.yaml`, `config/image/build.json`, `bridge.env.example`, `runner.env.example`, and a `README.md`. The README covers:
-   - setup natively (8.5) and in Docker (8.3), including how to enable KVM in each case, the udev rule for rootless Docker, and what emulation costs;
-   - the bot number, the Scooter mailbox and its app password, Scooter's OpenRouter key and its guardrail (6.13), the env files, `build-image`, `doctor`, `backup-init`, `pair` and `email-check`;
-   - daily use (including copying the views out), commands, backups and restore, rebuilds, and development;
-   - the security model, including what turning internet access on means, and how to read the network log.
-
-   *Done when* the files are complete. If it's feasible, also run the pinned pi for real in the sandbox through one batch end to end, with a dummy key (OpenRouter answers 401, which still exercises the whole path); if it isn't, record why in `docs/DECISIONS.md`.
-8. **Final check.** Re-read this document and tick off every requirement. List anything not done in `docs/DECISIONS.md`. Make sure `npm test` passes from a clean checkout on Linux (section 10). Put the checklist from section 14 in the README as "Check on the first real run".
-
-## 12. Out of scope for v2
-
-- macOS. v2 is built and tested on Linux only. Adding macOS later means launchd daemons for the two services, Apple's hypervisor for pi's VMs (`AGENT_ACCEL=hvf`), a data folder such as `/usr/local/var/scooter`, and the test suite passing on a Mac. Notes for then:
-  - Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Catch-up collects what arrived while it slept.
-  - Docker Desktop gives containers no hypervisor (13.3), so on a Mac the native install is the fast one.
-  - With Docker Desktop, OrbStack or Colima, keep the project folder in the home folder (Colima shares only that), and set Docker to start at login so `restart: unless-stopped` brings Scooter back.
-- More than one agent, and channels other than WhatsApp and the owner's email, such as Telegram or bank alerts.
-- Sending email, and keeping email from anyone but the owner.
-- Approvals for preference changes, notices about them, and an `/undo` command.
-- A `/retry` command that puts messages in `failed` back in the queue. Until then, editing or resending a message brings it back (6.5).
-- Group chats, and messages typed directly on the bot's phone.
-- Voice transcription, reminders, and a web interface.
-- Answering questions about the data, sending views as files, and acting for the owner, such as creating calendar events. These belong to a separate assistant agent, later.
 
 ## 13. Verified facts about the tools
 
@@ -1094,33 +658,7 @@ The implementation plan under `docs/plans/` splits these milestones into smaller
 - **Prebuilt Linux releases** also exist; both are CGO builds:
   - `wacli_0.26.0_linux_amd64.tar.gz`, sha256 `2c28f65e2f9aaf32585288229db1f916c6c5fb5db9513715017d528513604b44`
   - `wacli_0.26.0_linux_arm64.tar.gz`, sha256 `777a5dccece12421b7ee4af001b074e5ebc1c7a63f732cf642c3e7b3c4d7c7b9`
-- **Global flags:** `--json`, `--read-only` and `--store`; the environment variable `WACLI_STORE_DIR` sets the store. The store has a lock, and while `sync` runs, other commands are handed to it over a socket.
-- **JSON output:** `{"success":true,"data":…}` on stdout. Errors print `{"success":false,"data":null,"error":"…"}` on stderr and exit with code 1.
-- **`wacli sync --follow --webhook <url> --webhook-secret <secret> --webhook-allow-private`:**
-  - A loopback URL needs `--webhook-allow-private`.
-  - `--max-reconnect` defaults to 5m.
-  - `--webhook-events` chooses among `message` (the default), `receipt` and `chat_presence`.
-  - Delivery is best-effort, with a 5-second timeout and no retries.
-- **Signature header:** `X-Wacli-Signature: sha256=<lowercase hex HMAC-SHA256(secret, raw body)>`.
-- **Message webhook payload:** the fields of wacli's `ParsedMessage`, with Go field names (no JSON tags):
-  - `Chat`, `ID`, `SenderJID`, `Timestamp` (RFC 3339, UTC), `FromMe`, `Text` and `PushName`.
-  - `ReplyToID`, `ReplyToSenderJID` and `ReplyToDisplay` (a short text of the quoted message).
-  - `ReactionToID`, `ReactionEmoji`, `IsForwarded`, `ForwardingScore`, `Edited` and `Revoked`.
-  - Others such as `Buttons`, `Location`, `Poll` and `Call`.
-  - Plus `Media` (`{Type, Caption, Filename, MimeType, FileLength}`) and `ChatName`.
-
-  JIDs are `"user@server"` strings. Known LIDs are converted to phone-number JIDs; unknown ones stay `…@lid`. Other event kinds carry an `EventType` field; message payloads don't.
-- **Edits and deletions:** wacli's edit handling (`internal/app/sync_edits.go`) appears to report an edit as a message with `Edited: true` and the original message's `ID`. Deletions set `Revoked`. Confirm both with a real edit and deletion.
-- **`wacli --read-only messages list --chat <jid> --after <time> --asc --limit <n>`:** returns rows with `ChatJID`, `MsgID`, `SenderJID`, `Timestamp`, `FromMe`, `Text`, `DisplayText`, `quoted_msg_id`, `quoted_sender_jid`, `ReactionToID`, `ReactionEmoji`, `MediaType`, `MediaCaption`, `Filename`, `MimeType`, `LocalPath` and more.
-- **`wacli media download --chat <jid> --id <id> --output <path>`:** returns `data.path`, `data.bytes` and `data.source`.
-- **`wacli --read-only auth status`:** returns `{authenticated: false}` or `{authenticated: true, linked_jid, phone}`. `wacli auth` pairs with a QR code, or with a pairing code given `--phone`.
-- **Sending:**
-  - `wacli send text --to <jid> --message <text> [--no-preview] [--reply-to <message ID>] [--reply-to-sender <jid>]` returns `data: {sent, to, id}`. `--reply-to` quotes a message, which must be in wacli's local store (incoming or sent).
-  - Link previews: unless `--no-preview` is given, `send text` fetches the first `http://` or `https://` URL in the text, and the image that page names, to send a preview with the message. The fetch refuses private and local addresses, follows up to 3 redirects, and gives up after 10 seconds. While `sync` runs, it is the sync process that fetches, and the flag travels with the send. This is from wacli's `docs/send.md` and its source (`fetchLinkPreview` in `cmd/wacli/send.go`), read on 2026-11-16. Sending needs a paired number, so it hasn't been run (section 14).
-  - `send file --to --file [--caption] [--reply-to]` and `send react --to --id --reaction [--sender]` also return the sent message's `id`.
-  - Pace: wacli notes the time of each send it attempts, and prints a warning on stderr when the next one comes less than 5 seconds later. The send still goes out. It does this for a text sent directly, and for every kind of send handed to the sync process, reactions included. While `sync` runs, it is the sync process that checks and warns. This is from wacli's source (`warnRapidSendIfNeeded` in `cmd/wacli/send_helpers.go`), read on 2026-11-16, and it hasn't been run.
-  - wacli keeps the messages it sends in its store.
-- **Phone:** the bot number must be registered in WhatsApp Business on a phone that's opened at least every two weeks.
+- The rest of what is known of wacli 0.26.0 is in [Facts about wacli 0.26.0](architecture/whatsapp.md#facts-about-wacli-0260) and [wacli's formats](architecture/whatsapp.md#waclis-formats).
 
 ### 13.2 pi (`@earendil-works/pi-coding-agent`)
 
@@ -1148,11 +686,8 @@ The implementation plan under `docs/plans/` splits these milestones into smaller
 
 ### 13.3 Other
 
-- **restic 0.19.1:** download `restic_0.19.1_linux_<arch>.bz2` (`amd64` or `arm64`) from `https://github.com/restic/restic/releases/download/v0.19.1/` and check it against `SHA256SUMS`.
-  - R2: `RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/scooter` with `AWS_DEFAULT_REGION=auto`.
-  - B2: `b2:<bucket>:scooter`.
+- **restic 0.19.1:** download `restic_0.19.1_linux_<arch>.bz2` (`amd64` or `arm64`) from `https://github.com/restic/restic/releases/download/v0.19.1/` and check it against `SHA256SUMS`. The repository's form for R2 and B2 is in [Settings](architecture/backups.md#settings).
 - **Linux command lines:** one argument can be at most 128 KB. On Ubuntu 24.04, an argument of 120,000 bytes worked, and one of 140,000 failed with "Argument list too long".
-- **The `mail` user:** Ubuntu 24.04 has one (uid 8, group `mail`), and `/var/mail` is writable by that group. Debian 12 and Alpine 3.24 images have a `mail` user too. The `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account.
 - **Docker:** its default seccomp profile blocks creating user namespaces, so sandboxes like bubblewrap don't work inside containers. Gondolin's VMs don't need them (13.4). Docker Desktop on macOS gives containers no KVM.
 - **OpenRouter** can fetch from the web on a request's behalf: the server tools `openrouter:web_search` and `openrouter:web_fetch` (which fetches any URL the model picks), the `web` plugin, the `:online` model suffix, and images given by URL. The settings on an account's Plugins tab don't apply to server tools, and its guardrails can limit a key's models and spending but not these tools, so only the runner's network policy can stop them (6.13). A request with a dummy key gets 401; a well-formed but unknown key gets "User not found".
 - **OpenRouter's zero data retention (ZDR)**, from its docs on 2026-11-15:
@@ -1203,9 +738,9 @@ Checked in a prototype on an Ubuntu 24.04 server on 2026-11-15.
 
 ## 14. Not verified yet
 
-Check these during implementation where you can, and put the rest in the README as "Check on the first real run":
+Check these during implementation where you can, and put the rest in the README as "Check on the first real run". Those of the bridge's side are there already, in [Check on the first real run](../README.md#check-on-the-first-real-run).
 
-Milestone 0 settled five of them on the Linux machine, marked "Checked" below: the fields and `anthropic-beta` values pi sends, and that it needs no other path; `--skill` with `--no-skills`; pi installed with `--ignore-scripts`; `--no-mcp` with `-p`; and the webhook secret. `docs/DECISIONS.md`, 0.4 to 0.6, says what was run and what was found. Milestones 12 and 13 checked the native and the Docker installs, marked so below.
+Milestone 0 settled five of them on the Linux machine, marked "Checked" below: the fields and `anthropic-beta` values pi sends, and that it needs no other path; `--skill` with `--no-skills`; pi installed with `--ignore-scripts`; `--no-mcp` with `-p`; and the webhook secret, which is in [Facts about wacli 0.26.0](architecture/whatsapp.md#facts-about-wacli-0260). `docs/DECISIONS.md`, 0.4 and 0.5, says what was run and what was found for the other four. Milestones 12 and 13 checked the native and the Docker installs, marked so below.
 
 - The model reads photos through pi's `read` tool (send a receipt, then check `expenses.csv`).
 - The top-level fields and `anthropic-beta` values the pinned pi sends on both OpenRouter routes, for the network policy (13.2), and whether pi needs any other OpenRouter path, such as `GET /api/v1/models/user`. pi's docs say it falls back to listing every model when that request is refused. *Checked: captured for every model, and pi needs no other path (pi 6).*
@@ -1218,17 +753,6 @@ Milestone 0 settled five of them on the Linux machine, marked "Checked" below: t
 - That pi and its tools work when pi was installed with `npm install --ignore-scripts` (6.12, 13.2). *Checked: they do (pi 8).*
 - That `--no-mcp` works together with `-p` (6.6). *Checked: it does (pi 4).*
 - The runner container with a read-only root filesystem (8.3). *Checked in milestone 13: it runs pi in its VMs (`docs/DECISIONS.md`, 13.5).*
-- `wacli send react --sender` in a one-to-one chat.
-- That a text with a link, sent with `wacli send text --no-preview`, arrives without a preview, and that wacli fetches nothing for it (5.3, 13.1).
-- How wacli reports edits and deletions (13.1).
-- How `wacli send text` and `send react` fail when wacli can't reach WhatsApp, and whether `SEND_ATTEMPTS` and dropping the quote from the fifth try on fit those failures (5.3).
-- What `send text` and `send react` return as `id`: the new message's, as 13.1 has it, or another, such as the message reacted to, which the datastore already holds (5.3).
-- Owner matching when WhatsApp delivers the owner's messages from an `@lid` ID.
-- How wacli stores and lists the owner's chat after downtime, which catch-up relies on (5.2 step 7): the bot's own rows with the time they were sent, and an `@lid` chat listed from its own place. And whether `wacli messages changes` could close the case catch-up leaves (`docs/DECISIONS.md`, D179). The tests run a stub of wacli.
-- `imapflow` with an app password at the chosen mail provider, over TLS, IDLE included, and the `Authentication-Results` header the provider adds: its server name (Gmail's should be `mx.google.com`) and its `dmarc=` result. The tests run imapflow against a small IMAP server of their own, without TLS.
-- That mail from the owner's address passes DMARC, which needs its domain to publish a DMARC record.
-- `postal-mime` on real emails from the owner's mail apps, including a forwarded booking and an audio attachment.
-- Whether wacli can take its webhook secret from the environment instead of its command line (5.1). *Checked: it can't (wacli 1).*
 - `docker compose build`, and the Docker image on both `amd64` and `arm64`. *Checked on amd64, under rootless and rootful Docker, in milestone 13; arm64 can't be checked on the plan's machine (`docs/DECISIONS.md`, D228).*
 
-With macOS, later (section 12): Gondolin natively on a Mac with Apple's hypervisor; the launchd services; building the VM image on a Mac; and the stack under Docker Desktop, OrbStack and Colima, including the `./config` bind mount.
+With macOS, later ([Deferred and out of scope](ARCHITECTURE.md#deferred-and-out-of-scope)): Gondolin natively on a Mac with Apple's hypervisor; the launchd services; building the VM image on a Mac; and the stack under Docker Desktop, OrbStack and Colima, including the `./config` bind mount.
