@@ -2,7 +2,7 @@
 
 The bridge backs Scooter up with restic to an S3-compatible bucket, Cloudflare R2 or Backblaze B2, encrypted before it leaves the machine: nightly at `BACKUP_TIME`, on `/backup`, and on `SIGUSR1`. It also restores. The backup logic is a module of [the bridge](bridge.md), and restic is the only program it runs. That backups are restic, nightly and encrypted, and that consistency comes from stopping the writers, not from snapshots, is [the owner's fixed choice](../ARCHITECTURE.md#the-owners-fixed-choices).
 
-*The owner's answer*, 2026-11-15: the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same CLI commands and behaviour, so there is one language and one test framework.
+*The owner's answer*, 2026-11-15: the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same CLI commands and behavior, so there is one language and one test framework.
 
 ## Files
 
@@ -18,8 +18,8 @@ In `bridge.env`. Without `RESTIC_REPOSITORY` backups are off; the backup setting
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | `AWS_DEFAULT_REGION=auto` | R2's credentials; or `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for B2 |
 | `BACKUP_TIME` | `03:30` | `HH:MM` in `SCOOTER_TZ`, or `off` |
 | `RESTIC_KEEP_DAILY`, `RESTIC_KEEP_WEEKLY`, `RESTIC_KEEP_MONTHLY` | `7`, `4`, `12` | The snapshots kept |
-| `FORCE_CHECK` | `0` | `1` runs `restic check` after every backup, not only on Sundays |
-| `RESTORE_TARGET` | `/` | Where `restore` puts what it restores: each folder at this folder joined with the path it was backed up from, so `/` puts it back |
+| `FORCE_CHECK` | `0` | `0` or `1`. `1` runs `restic check` after every backup, not only on Sundays |
+| `RESTORE_TARGET` | `/` | Where `restore` puts what it restores, an absolute path: each folder at this folder joined with the path it was backed up from, so `/` puts it back |
 
 `FORCE_CHECK` and `RESTORE_TARGET` are settings like any other, so the environment wins over the file: `RESTORE_TARGET=/tmp/look scooter restore` works for one restore. `bridge.env` and `runner.env` aren't backed up; the owner keeps `RESTIC_PASSWORD` in a password manager, since without it no backup can be read.
 

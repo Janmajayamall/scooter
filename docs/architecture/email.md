@@ -21,7 +21,7 @@ In `bridge.env`. Email is on when `EMAIL_IMAP_HOST` is set; off, the other mailb
 | `EMAIL_IMAP_HOST` | empty | email reader | The Scooter mailbox's IMAP server, such as `imap.gmail.com`. Empty turns email off |
 | `EMAIL_IMAP_PORT` | `993` | email reader | IMAP over TLS |
 | `EMAIL_USER`, `EMAIL_PASSWORD` | required for email | email reader | The mailbox's address, and an app password for it |
-| `EMAIL_OWNER_ADDRESSES` | required for email | both | The owner's addresses, comma-separated; mail from any other address is skipped |
+| `EMAIL_OWNER_ADDRESSES` | required for email | both | The owner's addresses, comma-separated, kept in lower case, since [the sender check](#the-sender-check) compares them without regard to case; mail from any other address is skipped |
 | `EMAIL_AUTHSERV_ID` | required by the bridge for email | the bridge | The server name the mailbox's provider writes in `Authentication-Results`, such as `mx.google.com` |
 | `EMAIL_CHECK_SECONDS` | `60` | email reader | The longest the reader goes between looks, even with IDLE |
 
@@ -65,7 +65,7 @@ With `postal-mime`, in `parse.mjs`.
 
 ## The spool
 
-Each message becomes a folder in `mail/spool/`, written as `.tmp-<id>/` and renamed when complete, with IDs that sort in arrival order ([Files](shared-code.md#files)). `spool.mjs` writes it, and the email module checks it, field by field, refusing any other.
+Each message becomes a folder in `mail/spool/`, written as `.tmp-<id>/` and renamed when complete, with IDs that sort in arrival order ([Atomic files and hand-offs](shared-code.md#atomic-files-and-hand-offs)). `spool.mjs` writes it, and the email module checks it, field by field, refusing any other.
 
 - `message.eml`: the raw message, or only its headers.
 - `parsed.json`: `{ uid, uidValidity, arrivedAt, size, fetched, parsed, subject, text, attachments }`, each attachment `{ name, mime, bytes }` in the order of the parts. `fetched` is `whole` or `headers`; `parsed` is false for an email postal-mime couldn't parse, which then has no subject, text or attachments.
@@ -75,12 +75,12 @@ Sizes are bounded on both sides, so a well-behaved reader never writes what the 
 
 ## The spool, the bridge's side
 
-The `mail/` folder is the reader's, and the bridge, as root, takes what it needs from it as from any folder another user controls ([Folders other users control](../ARCHITECTURE.md#folders-other-users-control)).
+The `mail/` folder is the reader's, and the bridge, as root, takes what it needs from it by the rules of [Folders other users control](../ARCHITECTURE.md#folders-other-users-control).
 
-- Every `POLL_INTERVAL` it takes the complete folders in order, only while the spool is the reader's folder and not a link. A look that finds otherwise takes and removes nothing, is logged, and is tried again after `SPOOL_RETRY_BACKOFF`.
-- A folder is taken only if it is a folder, and the reader's when the bridge knows its user. `parsed.json` is read with `readUntrustedFile`, up to `EMAIL_PARSED_MAX_BYTES`; `message.eml`'s header block with `readUntrustedStart`; and the parts are copied with `copyUntrustedFile`; all without following a link, as regular files with one name, belonging to `scooter-mail` ([Files](shared-code.md#files)). The bridge never takes a file name from `parsed.json`: it reads `part-<n>` by position, and the store names the stored file.
-- A folder whose `parsed.json` or `message.eml` isn't one to take is logged as refused (`email.refused`), with the reason, and removed. A skipped email is counted and removed; a stored or duplicate one is removed.
-- **Removing.** A folder is removed by the names the reader writes in one, `message.eml`, `parsed.json` and `part-<n>`, each unlinked, and then the folder, which goes only once that empties it. What isn't the reader's, or isn't a folder, and a folder holding anything else, is left where it is, and logged once (`email.not_removed`). *Why:* the reader could put a link in the spool's place or a folder's, and deleting everything under a path would then delete, as root, whatever the link leads to.
+- Every `POLL_INTERVAL` it takes the complete folders in order. A look that can't use the spool by those rules is logged, and tried again after `SPOOL_RETRY_BACKOFF`.
+- A folder is taken only if it is a folder, and the reader's when the bridge knows its user. `parsed.json` is read with `readUntrustedFile`, up to `EMAIL_PARSED_MAX_BYTES`; `message.eml`'s header block with `readUntrustedStart`; and the parts are copied with `copyUntrustedFile`; each, like the folder, only if it is the reader's ([Files another program controls](shared-code.md#files-another-program-controls)). The bridge never takes a file name from `parsed.json`: it reads `part-<n>` by position, and the store names the stored file.
+- A folder that isn't the reader's, or isn't a folder, is left, and logged once as refused (`email.refused`, with `left`). A folder whose `parsed.json` or `message.eml` isn't one to take is logged as refused, with the reason, and removed. A skipped email is counted and removed; a stored or duplicate one is removed.
+- **Removing.** The names the bridge removes in a folder of the spool are those the reader writes there: `message.eml`, `parsed.json` and `part-<n>`. A folder that holds anything else is left, and logged once (`email.not_removed`).
 - **An email the bridge can't store whole for a reason of its own** stays in the spool, whole, and is tried again after `SPOOL_RETRY_BACKOFF`; the folders after it wait, in order. That is one the store can't take, and one whose files the bridge can't copy out of the spool or into the day folder ([Intake](bridge.md#intake)). A failure to open a file of the spool is the email's own only when it is `ENOENT` on that file, a file that isn't the reader's or isn't a regular file with one name (`EUNTRUSTED`), or one too large (`EFBIG`); anything else, such as `EMFILE`, is the bridge's. Only a file of the email's own that fails so leaves the email stored without it, with a `media` object saying so. *Cost:* a fault of the bridge's that lasts, such as a `bridge/incoming/` it can't write, holds back every email behind the first, until it is mended. When the store has stopped, the consumer stops with the bridge.
 - `stop()` stops the reader, and waits for the spool folder it is taking.
 
@@ -111,7 +111,7 @@ A record ([Channels](bridge.md#channels)) with `source: "email"`, which intake w
 
 ## What /status says of email
 
-`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started` instead. Times past the window are dropped whenever one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps a day of times at most. *Why:* skips are stored nowhere else, and a record in memory is the simplest.
+`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started, 21:20` instead, with the time it started. Times past the window are dropped whenever one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps the times of one `STATUS_WINDOW` at most. *Why:* skips are stored nowhere else, and a record in memory is the simplest.
 
 ## email-check
 

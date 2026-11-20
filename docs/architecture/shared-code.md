@@ -1,6 +1,6 @@
 # Shared code
 
-`src/common/` holds what both services, and the email reader, need. This document covers the part of it that belongs to no other component: files, running programs, one service per data folder, logging, time and the paths of the data folder. The formats the services share are each with the component that owns them, as [the map](../ARCHITECTURE.md#the-map) lists them, and so are the settings and the constants. Nothing here holds behaviour that belongs to one side.
+`src/common/` holds what both services, and the email reader, need. This document covers the part of it that belongs to no other component: files, running programs, one service per data folder, logging, time and the paths of the data folder. The formats the services share are each with the component that owns them, as [the map](../ARCHITECTURE.md#the-map) lists them, and so are the settings and the constants. Nothing here holds behavior that belongs to one side.
 
 ## Files
 
