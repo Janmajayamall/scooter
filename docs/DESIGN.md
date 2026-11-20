@@ -502,7 +502,7 @@ Docker is one of two ways to run Scooter; the other is natively (8.5). The owner
 | `build-image` | the host, as root; in Docker, a container of its own: `docker compose run --rm build-image` | Builds the VM image (6.12) |
 | `pair [--phone +91…]` | bridge | [Pairing](architecture/whatsapp.md#pairing) |
 | `email-check` | bridge | [email-check](architecture/email.md#email-check) |
-| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | [The commands](architecture/backups.md#the-commands), [Restore](architecture/backups.md#restore) |
+| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge | [The CLI commands](architecture/backups.md#the-cli-commands), [Restore](architecture/backups.md#restore) |
 | `rebuild <agent>` | runner, with its service stopped | Section 6.10 |
 
 Natively, run a command as its service's user: `sudo scooter pair`, or `sudo -u scooter-runner scooter doctor`. `setup` and `build-image` run as root. In Docker, run a command with `docker compose run --rm <service> <command>`, and build the VM image with `docker compose run --rm build-image`.

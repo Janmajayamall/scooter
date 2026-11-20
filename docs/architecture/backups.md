@@ -2,11 +2,11 @@
 
 The bridge backs Scooter up with restic to an S3-compatible bucket, Cloudflare R2 or Backblaze B2, encrypted before it leaves the machine: nightly at `BACKUP_TIME`, on `/backup`, and on `SIGUSR1`. It also restores. The backup logic is a module of [the bridge](bridge.md), and restic is the only program it runs. That backups are restic, nightly and encrypted, and that consistency comes from stopping the writers, not from snapshots, is [the owner's fixed choice](../ARCHITECTURE.md#the-owners-fixed-choices).
 
-*The owner's answer*, 2026-11-15: the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same commands and behaviour, so there is one language and one test framework.
+*The owner's answer*, 2026-11-15: the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same CLI commands and behaviour, so there is one language and one test framework.
 
 ## Files
 
-- `src/bridge/backup.mjs`: the backup module, the only code that runs restic: its operations, `init`, `run`, `snapshots`, `check` and `restore`; the bridge's backups, with their schedule, locks, results, replies and notices; and the commands `backup-init`, `snapshots`, `check` and `restore`.
+- `src/bridge/backup.mjs`: the backup module, the only code that runs restic: its operations, `init`, `run`, `snapshots`, `check` and `restore`; the bridge's backups, with their schedule, locks, results, replies and notices; and the CLI commands `backup-init`, `snapshots`, `check` and `restore`.
 
 ## Settings
 
@@ -27,8 +27,8 @@ In `bridge.env`. Without `RESTIC_REPOSITORY` backups are off; the backup setting
 
 - restic runs directly, with its arguments as a list, never through a shell, as the bridge's user, root in an install, found on Scooter's own `PATH` ([Running programs](shared-code.md#running-programs)).
 - **Its environment** is `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, the bucket's credentials (`AWS_*` or `B2_*`), `TMPDIR`, the bridge's own temporary folder, and `TZ`, and nothing else. `TZ` is UTC, so restic writes a snapshot's time in UTC, except for `snapshots`, whose list the owner reads, which gets `SCOOTER_TZ`.
-- **Its cache.** The nightly backup keeps restic's cache in `bridge/backup-cache/`, which restic marks with a `CACHEDIR.TAG`, so `--exclude-caches` leaves it out of the backup. The commands run at a terminal use `--no-cache`. *Why:* without a home or a cache folder restic stops before it does anything, and a cache saves the nightly backup reading the repository's index from the bucket; `restore` mustn't keep one, since it can delete inside `bridge/`, where the cache is.
-- **Every command** exits with 2, saying so, when `RESTIC_REPOSITORY` isn't set; without `RESTIC_PASSWORD` the settings stop it with 2 already.
+- **Its cache.** The nightly backup keeps restic's cache in `bridge/backup-cache/`, which restic marks with a `CACHEDIR.TAG`, so `--exclude-caches` leaves it out of the backup. The CLI commands use `--no-cache`. *Why:* without a home or a cache folder restic stops before it does anything, and a cache saves the nightly backup reading the repository's index from the bucket; `restore` mustn't keep one, since it can delete inside `bridge/`, where the cache is.
+- **Each CLI command** exits with 2, saying so, when `RESTIC_REPOSITORY` isn't set; without `RESTIC_PASSWORD` the settings stop it with 2 already.
 
 ## What a backup holds
 
@@ -84,7 +84,7 @@ A backup stops the writers for as long as restic reads:
 
 `lastBackup` in the bridge's state is `{ at, ok, snapshot, reason }`: the backup's start, whether it worked, the snapshot, and why it failed, in restic's words where it gave any, which no log holds. `/status` says, for example, `Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.`, or that the last failed and why, `none yet`, that one is in progress and since when, and whether it waits for the agent's run to end, that none is scheduled because `BACKUP_TIME` is `off`, or that backups are off, and why.
 
-## The commands
+## The CLI commands
 
 - **`backup-init`**, `snapshots` and `check` take no arguments; `restore` at most a snapshot's ID, eight to 64 hexadecimal digits, or `latest`, and `--force`, once each. Each passes restic's own output on, and ends a failure with a line that says why, in words for restic's exit codes 10 to 12.
 - **`backup-init`** is safe to repeat: it runs `restic cat config` first, and says nothing was changed when the repository is there.
@@ -110,7 +110,7 @@ A backup stops the writers for as long as restic reads:
 Found by hand on the Linux machine, and in the tests' round trip:
 
 - **Exit codes:** 0; 1 for an error; 3 for a backup that saved a snapshot without some files, a source folder that isn't there among them; 10 for a repository that isn't there, `cat config` too; 11 for one locked; 12 for a wrong password. `check` takes an exclusive lock, and a temporary cache.
-- Without `HOME`, `XDG_CACHE_HOME` or a cache option, every command stops with 1, "unable to locate cache directory". The cache folder holds a `CACHEDIR.TAG`, and `--exclude-caches` leaves it out of a backup.
+- Without `HOME`, `XDG_CACHE_HOME` or a cache option, every restic command stops with 1, "unable to locate cache directory". The cache folder holds a `CACHEDIR.TAG`, and `--exclude-caches` leaves it out of a backup.
 - Without `TZ` it writes a snapshot's time in the machine's zone.
 - `snapshots --json` answers `[]` and 0 for an ID it doesn't find, and for `latest` with no snapshot.
 - `restore <id>:<folder>` makes its target 0700, whatever the folder was. Restoring a folder above, with `--include` for each folder wanted and `--delete`, restores those with their own modes, gives the folders between the snapshot's modes, and deletes inside the included folders only. `--ownership-by-name` as an ordinary user gives no error; as root it gives a file its owner by name, also when the user's number has changed since the backup, and gives a file whose owner's name isn't a user there to root, exiting with 0.

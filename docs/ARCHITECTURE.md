@@ -198,7 +198,7 @@ The interfaces between components. Changing one means changing both sides. Each 
 ## The code's layers
 
 ```
-src/cli.mjs ──▶ one side per command
+src/cli.mjs ──▶ one side per CLI command
 
 src/bridge  ──▶ src/common          no third-party libraries
 src/runner  ──▶ src/common          yaml (config only), @earendil-works/gondolin (sandbox only)
@@ -211,7 +211,7 @@ The rules, which `test/imports.test.mjs` checks by reading every file under `src
 1. `src/common` imports nothing from the other folders.
 2. `src/bridge` and `src/runner` never import each other. They share only what is in `src/common`. `src/ops` imports only `src/common`.
 3. `src/mail` imports from `src/common` only `files`, `limits` and `log`, and doesn't reach `settings.mjs` through another module either.
-4. Each of the four libraries is imported only where the diagram allows, `yaml` only by `src/runner/config.mjs` and Gondolin only in `src/runner/sandbox/`, and nothing else is imported that isn't a `node:` module. `src/cli.mjs` imports a command's code only with `import()`, so a command loads only its side.
+4. Each of the four libraries is imported only where the diagram allows, `yaml` only by `src/runner/config.mjs` and Gondolin only in `src/runner/sandbox/`, and nothing else is imported that isn't a `node:` module. `src/cli.mjs` imports a CLI command's code only with `import()`, so a CLI command loads only its side.
 5. One place for each outside contact, as the test sees it:
    - only `src/bridge/store.mjs` appends to the datastore: only it imports `encodeLine`, and nothing in `src/common/datastore/` calls a function that changes a file;
    - only `src/common/proc.mjs` imports `node:child_process`, and in the bridge only the two channel modules, `backup.mjs` and `main.mjs`, which makes the one `proc` the bridge shares and looks up its users, import `proc.mjs`;
@@ -275,15 +275,15 @@ The project's own names, each used one way in these documents.
 | datastore | The append-only log of lines, a `log.jsonl` per day folder with the attachments beside it |
 | day folder | `datastore/YYYY/MM/DD`, the UTC date a line was written |
 | intake | The core's half of receiving: records to lines |
-| store | The datastore's one writer, `src/bridge/store.mjs` |
+| store | The datastore's one writer, `src/bridge/store.mjs`. wacli's own is its message store |
 | index | What the bridge and the runner each keep in memory of the datastore: lines by `seq` and by channel ID, and what each message says now |
 | webhook | wacli's post to the bridge, on loopback, for each message it receives |
-| catch-up | The bridge listing wacli's store for what the webhook missed |
+| catch-up | The bridge listing wacli's message store for what the webhook missed |
 | pairing | Linking wacli to the bot's number; wacli is linked when paired |
 | email reader | The program, run as `scooter-mail`, that reads the mailbox |
 | spool | `mail/spool/`, where the email reader hands each email over as a folder |
 | sender check | The bridge's test that an email is the owner's |
-| command | `/status`, `/backup`, `/help` or `/new`, sent on WhatsApp |
+| command | `/status`, `/backup`, `/help` or `/new`, sent on WhatsApp. A command of `src/cli.mjs`, such as `scooter restore`, is a CLI command |
 | exchange | `exchange/`, the runner's folder that holds the outbox and the locks |
 | outbox | Where messages to send wait as entries: the runner's, `exchange/outbox/`, and the bridge's own, `bridge/outbox/` |
 | entry | One message to send, a folder holding `entry.json` |
@@ -324,7 +324,7 @@ The project's own names, each used one way in these documents.
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [configuration](architecture/configuration.md) (not yet written) |
 | A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [configuration](architecture/configuration.md) (not yet written) |
-| A command of the CLI | `src/cli.mjs` | `test/cli.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
+| A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
 | `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
 | When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) (not yet written) |
 | Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs` | [the runner](architecture/runner.md) (not yet written) |
@@ -363,7 +363,7 @@ The project's own names, each used one way in these documents.
 
 ## Old text, still to be moved
 
-The text of the old `docs/ARCHITECTURE.md` for the components whose documents pieces 2 and 3 write, as it was, but for its headings, one level down, and references that would otherwise lead nowhere. Numbers in parentheses, such as (6.6), are sections of `docs/DESIGN.md`. It goes as those documents are written.
+The text of the old `docs/ARCHITECTURE.md` for the components whose documents are still to be written, as it was, but for its headings, one level down, the rows and sentences of the bridge's side, which moved, and references that would otherwise lead nowhere. Numbers in parentheses, such as (6.6), are sections of `docs/DESIGN.md`. It goes as those documents are written.
 
 ### 2. Components
 
