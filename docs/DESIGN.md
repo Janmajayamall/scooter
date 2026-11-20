@@ -147,7 +147,7 @@ The constants of the bridge's side and the runner's are described in `src/common
 
 - `npm test` runs everything with `node --test`. Tests use no real credentials and no network. Each test works in its own temporary folder and sets `TMPDIR` inside it, which restic needs.
 - **Stubs and fakes:**
-  - Small Node scripts stand in for `wacli` and `pi`, and for `restic` in the backup coordination tests, behind shell wrappers placed first on `PATH`. They record their arguments and environment to a file and answer from fixtures.
+  - Small Node scripts stand in for `wacli`, and for `restic` in the backup coordination tests, behind shell wrappers placed first on `PATH`; the one for `pi` is run by the fake sandbox ([The sandbox interface](architecture/sandbox.md#the-sandbox-interface)). They record their arguments and environment to a file and answer from fixtures.
   - The bridge's side of email is tested by placing folders in the spool; the email reader's tests use a fake mailbox ([The email reader](architecture/email.md#the-email-reader)).
 - Run the bridge and the runner as real processes, or in-process with an injectable clock and paths, against temporary folders that stand in for the data folders. Behavior that needs root (users, folder modes) or a hypervisor was checked by hand, natively and in Docker (`docs/DECISIONS.md`, milestones 12 and 13); unit tests cover the decisions, such as which mounts and settings are used.
 
@@ -161,7 +161,7 @@ The constants of the bridge's side and the runner's are described in `src/common
 
 Passing the suite on a Mac isn't required until macOS is.
 
-Required tests of the runner's side, at least:
+Required tests, at least:
 - **Least privilege:** the folders Scooter creates get the owners and modes of [Folders and their owners](ARCHITECTURE.md#folders-and-their-owners), and `setup` makes the users and folders, as root, without services, and the kvm group with them where there is none; the Docker image's users, data folder and Compose files are those [The boundaries](ARCHITECTURE.md#the-boundaries) and 8.3 give; wacli and the email reader, run as their users, can't read `datastore`, `agents`, `exchange`, `runner` or `bridge`; each service reads only its own env file; wacli and the email reader get only their own settings; and no password or key appears on a command line.
 - **Config:** each validation error names the field, a skill whose `SKILL.md` doesn't give its folder's name and a description is one, and `doctor` reports each missing piece (no accelerator, no QEMU, no image, a VM that doesn't boot, wrong folder modes) with its fix, and runs only as the runner's user where that user is there.
 

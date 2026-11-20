@@ -136,7 +136,7 @@ So a value can't contain a single quote at all.
 - Every fault is reported at once, each naming its variable. No message repeats a value, because a value may be a secret.
 - When email and backups are on, and which of their settings each then needs, and how the owner's number and email addresses are read: the Settings of [the WhatsApp channel](architecture/whatsapp.md#settings), [the email channel](architecture/email.md#settings) and [backups](architecture/backups.md#settings).
 - `DATA_DIR` and `CONFIG_DIR` default to `/data` and `/config` and must be absolute paths.
-- `AGENT_ACCEL=hvf` passes the settings. The runner refuses it when it picks the accelerator ([Acceleration](architecture/sandbox.md#acceleration)).
+- `AGENT_ACCEL=hvf` passes the settings; what the runner does with it is in [Acceleration](architecture/sandbox.md#acceleration).
 - `SCOOTER_ENV_DIR` is read from the environment alone.
 
 **D20. Constants: units, how tests change them, and two additions.**
@@ -227,7 +227,7 @@ What the milestone left in the repository:
 **D56. Paths in the config, and what a skill is.**
 - A path is relative to the config folder, cleaned (`./`, `//` and a trailing `/` don't matter), and must name something inside the folder after links are followed. A link out of it is a fault.
 - A skill's name is its folder's name, and two skills can't share one: a backfill names its skill that way, and the name is a folder in `run/config/`.
-- A skill's folder holds only files and folders, and a `SKILL.md`. A link inside one is a fault at startup; one that appears later, `prepareRun` refuses to copy ([A run](architecture/run.md#a-run)).
+- A skill's folder holds only files and folders, and a `SKILL.md`. A link inside one is a fault at startup; what a run does with one that appears later is in [A run](architecture/run.md#a-run).
 
 **D57. `ack_reaction` is one emoji, or "".**
 *Choice:* one grapheme, such as `✅`, `👍🏽` or `❤️`, with no space or control character in it.
@@ -239,7 +239,7 @@ What the milestone left in the repository:
 
 **D59. The entries of `run`.**
 - Each entry has exactly one of `on`, `at`, `once` and `backfill`, and only the keys that go with it.
-- `on: new-messages` is the only `on`, and is given at most once. Without it, messages wait.
+- `on: new-messages` is the only `on`, and is given at most once. What it does is in [When the agent runs](architecture/runner.md#when-the-agent-runs).
 - `at` values are unique, as the plan's rule says: they are the keys of `scheduled`.
 - `once` and `backfill` IDs are lowercase letters, digits and hyphens, and unique within their kind. They go into session names and commit messages ([rebuild and backfill](architecture/rebuild-and-backfill.md)).
 - `run` may be empty: an agent that runs on nothing is the owner's to configure.
@@ -315,7 +315,7 @@ What the milestone left in the repository:
 |---|---|
 | `config/agents.yaml` | The default config: the example of 6.1 (D199) |
 | `src/runner/config.mjs` | A skill's `SKILL.md` checked at startup (D197) |
-| `test/instructions.test.mjs` | This milestone's tests, which read the files against DESIGN.md and the protocol against the parser |
+| `test/instructions.test.mjs` | This milestone's tests, which read the files against DESIGN.md 6.1 and [agent.md](architecture/agent.md), and the protocol against the parser |
 | `test/config.test.mjs`, `backup.test.mjs`, `sandbox.test.mjs` | A skill's `SKILL.md`; the link at `runner/` or `exchange/`; one batch through the real sandbox with the files of `config/` |
 | `test/live/openrouter.mjs` | The live check, now with the files of `config/` |
 
@@ -356,8 +356,8 @@ What the milestone left in the repository:
 - the runner's after 1 minute, then about 5½, then 30 minutes, and every 30 after (`RestartSec=1min`, `RestartSteps=2`, `RestartMaxDelaySec=30min`): the runner's waits ([Restarts](architecture/runner.md#restarts));
 - the bridge's after 5 seconds, doubling to 5 minutes (`RestartSec=5s`, `RestartSteps=6`, `RestartMaxDelaySec=5min`): `RESTART_BACKOFF`, as the bridge restarts wacli and the email reader.
 
-The runner's home and temporary folder aren't set in its unit: the runner sets both under `runner/` when it opens the sandbox, from `DATA_DIR` ([The runner's own folders](architecture/sandbox.md#the-runners-own-folders)), which the plan's rule allows, and one place says where they are.
-*Reason:* the runner stops on an error and leans on its service manager, whose waits are its own ([Restarts](architecture/runner.md#restarts)). Each of its starts waits out the quiet period first, so systemd's start limit, 5 starts in 10 seconds, never stops one that keeps failing after pi has run. `Type=exec` makes a start fail when the command can't be run.
+The runner's home and temporary folder aren't set in its unit: the runner sets them itself ([The runner's own folders](architecture/sandbox.md#the-runners-own-folders)), which the plan's rule allows, and one place says where they are.
+*Reason:* the runner stops on an error and leans on its service manager, whose waits are its own ([Restarts](architecture/runner.md#restarts)). Each of its starts waits out the quiet period first ([When the agent runs](architecture/runner.md#when-the-agent-runs)), so systemd's start limit, 5 starts in 10 seconds, never stops one that keeps failing after pi has run. `Type=exec` makes a start fail when the command can't be run.
 *Cost:* systemd counts the restarts until the unit is started by hand or the machine starts again, not after a run that lasted (12.2): from a third crash since then, the runner comes back after 30 minutes. Messages wait meanwhile, and none is lost. `RestartSteps` needs systemd 254; Ubuntu 24.04 has 255, and an older systemd warns of the two settings and restarts every minute.
 
 **D208. The skill checks the review of milestone 11 asked for** (its points 3, 4 and 5).
@@ -506,7 +506,7 @@ What the milestone left in the repository:
 | `src/ops/setup.mjs` | The kvm group, with services (D225) |
 | `src/common/proc.mjs`, `src/bridge/main.mjs` | `inDocker`, which `doctor` and `build-image` ask; a comment (13.3) |
 | `test/docker.test.mjs` | This milestone's tests: the Dockerfile and the Compose files against `setup.mjs`, 8.3 and 0.2, and `docker compose config` where Docker is installed |
-| `test/live/data-mounts.mjs` | A live check, run by hand in the runner's container: a run's mounts with the data folder at `/data` (row 14) |
+| `test/live/data-mounts.mjs` | A live check, run by hand in the runner's container: a run's mounts with the data folder at `/data` ([Mounts](architecture/sandbox.md#mounts)) |
 | `test/delivery.test.mjs`, `doctor`, `setup`, `image`, `sandbox`, `whatsapp` | The review's points, the boot check and the machine |
 
 ### 13.1 Decisions
@@ -525,7 +525,7 @@ What the milestone left in the repository:
 **D220. In Docker, `build-image` runs in a container of its own: `docker compose run --rm build-image`, as root and privileged** (the plan's rule for this milestone; 8.3 left the command to when it was first tried).
 *Question:* as root in the runner's container if the builder's chroot works there, otherwise as a one-off with the privileges it needs ([build-image](architecture/sandbox.md#build-image)).
 *Found:* it doesn't work in the runner's container. As `scooter-runner` the build needs root, or a container runtime, which the container doesn't have. As root (`docker compose run --rm --user root runner build-image`), Gondolin's native builder can't make its cache under the read-only root file system, and the mount of `/proc` its chroot needs is refused there without `CAP_SYS_ADMIN` (13.2).
-*Choice:* a service of its own in `compose.yaml`, `build-image`, from the same image, which only `docker compose run` starts (its profile): `user: root`, `privileged: true`, the data volume and `./config` read-only, and no env file: it reads only `DATA_DIR` and `CONFIG_DIR`, which `compose.yaml` sets. It builds natively, as root, as `sudo scooter build-image` does, in the one volume. In the runner's container `build-image` says to use it ([build-image](architecture/sandbox.md#build-image)).
+*Choice:* a service of its own in `compose.yaml`, `build-image`, from the same image, which only `docker compose run` starts (its profile): `user: root`, `privileged: true`, the data volume and `./config` read-only, and no env file: it reads only `DATA_DIR` and `CONFIG_DIR`, which `compose.yaml` sets. It builds natively, as root, as `sudo scooter build-image` does, in the one volume. What `build-image` says in the runner's container is in [build-image](architecture/sandbox.md#build-image).
 *Reason:* the privileges Gondolin's own container build takes, `--privileged`, on a container that runs only the build, only when the owner starts it, and is removed afterwards; the runner's service keeps none of them. Fewer, such as `CAP_SYS_ADMIN` with Docker's masks of `/proc` and AppArmor's profile lifted, weren't tried: they differ between rootful and rootless Docker, for a container that runs nothing else.
 *Cost:* under rootful Docker a privileged container is root on the host, with its devices: the build runs what a native build as root runs ([build-image](architecture/sandbox.md#build-image)). Under rootless Docker it is the user that runs Docker, with no root on the host. The build took 14 to 17 seconds, and the image was 527 MB (13.5).
 
@@ -624,7 +624,7 @@ Run on 2026-11-18, on the Linux machine, Node 22.23.2, QEMU 8.2.2, restic 0.19.1
 | …and can't read the other folders | Node, as `scooter-wacli` and as `scooter-mail` in the bridge's container, reading `datastore`, `agents`, `agents/lifelog/state.json`, `exchange`, `exchange/outbox`, `runner`, `runner/status.json`, `bridge`, `bridge/state.json`, and the other's folder | `EACCES` for every one; each reads its own. As `scooter-runner`: the datastore read, `bridge/`, its state, `wacli/` and `mail/` refused |
 | The runner with its read-only root file system | A message stored with the bridge's store, then the runner's log | The runner ran pi in a VM, booted in 4.4 seconds under emulation; pi's request reached `openrouter.ai/api/v1/messages`, which answered 401; the run was a setup error, runs paused, no attempt counted, and the notice went to the outbox. The network log had its three lines. `/app` and `/etc` refused a write; `/tmp` took one |
 | pi reaches OpenRouter, and `https://example.com` is refused | `docker compose run --rm -v ./test:/app/test:ro -v ./config:/app/config:ro -e SCOOTER_TEST_IMAGE=/data/runner/image --entrypoint node runner /app/test/live/openrouter.mjs` | `all as it should be`, exit code 0: on both routes OpenRouter answered 401, the runner took it as a setup error and counted no attempt, and `curl https://example.com/` in a VM was refused by the policy |
-| The mounts with the data under `/data` (row 14) | With the runner stopped, `docker compose run --rm -v ./test:/app/test:ro --entrypoint node runner /app/test/live/data-mounts.mjs` | Every line ok: in the VM `/data` held `agents` and `datastore` alone, and wasn't a mount; `runner`, `exchange`, `bridge`, `wacli`, `mail` and `/config` weren't there; `sessions/` wasn't there and couldn't be made; the datastore and the agent's folder were read-only; `run/session/` took a write |
+| The mounts with the data under `/data` ([Mounts](architecture/sandbox.md#mounts)) | With the runner stopped, `docker compose run --rm -v ./test:/app/test:ro --entrypoint node runner /app/test/live/data-mounts.mjs` | Every line ok: in the VM `/data` held `agents` and `datastore` alone, and wasn't a mount; `runner`, `exchange`, `bridge`, `wacli`, `mail` and `/config` weren't there; `sessions/` wasn't there and couldn't be made; the datastore and the agent's folder were read-only; `run/session/` took a write |
 | Backups in Docker (D223) | A local restic repository mounted into the bridge's container by a Compose file of the check's own; `backup-init`; `docker compose kill -s SIGUSR1 bridge`; `snapshots`; `restore` with the services up, then stopped, without and with `--force` | The signal reached the bridge through tini: it stopped WhatsApp, backed up (`backup` and `forget`, exit codes 0), started it again, snapshot `5950bedf`, made by `root@scooter`. `restore` refused while the bridge ran, naming its socket, and a folder that wasn't empty, both with 2; `--force` restored the snapshot, `runner/log/` with it, its file `scooter-runner`'s, and removed a file made since. From the bridge's container, `runner/runner.sock` answered while the runner ran |
 
 **Gate G3**, in a throwaway Ubuntu 24.04 VM on the Linux machine: the official cloud image, checked against its `SHA256SUMS`, on a fresh 40 GB disk, with KVM, `-cpu host` (an Intel Core Ultra 7 155H, nested virtualization on), 4 processors and 8 GB, user-mode networking, SSH on `127.0.0.1` only; SSH answered 10 seconds after the start. Docker 29.10.0 and Compose 5.8.0 from Docker's own repository, with its rootless extras. The code was cloned from the pull request's branch at `462daa1`, and built there.
@@ -641,7 +641,7 @@ The tests the plan asks of this milestone, and where they are:
 | Required | Where |
 |---|---|
 | The checks of the milestone, on the Linux machine | By hand, above; the Docker files themselves in `docker.test.mjs`, which reads them against `setup.mjs`, 8.3 and 0.2, and has `docker compose config` read each combination |
-| The mounts with the data under `/data` (row 14) | `test/live/data-mounts.mjs`, run in the runner's container |
+| The mounts with the data under `/data` ([Mounts](architecture/sandbox.md#mounts)) | `test/live/data-mounts.mjs`, run in the runner's container |
 | Gate G3 | Above |
 
 Beyond those: the review's points, in `delivery`, `doctor`, `setup` and `whatsapp`; the boot check and `q35`, in `sandbox`; `build-image` in the runner's container, in `image`.
@@ -678,8 +678,8 @@ What the milestone left in the repository:
 **D231. `doctor`'s VM, when `doctor` is stopped, and a long `TMPDIR`** (the review of milestone 13, smaller points 2 and 3).
 *Choice:*
 - `doctor` takes `SIGTERM`, `SIGINT` and `SIGHUP` while it runs, and gives the boot check a signal, which closes the VM it started ([The boot check](architecture/sandbox.md#the-boot-check)); the checks after it are left, and `doctor` says what stopped it and exits with 1. The same signal ends its wait for OpenRouter's answer, up to `DOCTOR_TIMEOUT`, which its handlers had left to run out (the review of milestone 14, smaller point 6).
-- The boot check makes its folder where Gondolin's sockets fit ([The boot check](architecture/sandbox.md#the-boot-check)).
-*Reason:* the review's first way for each. A native `doctor` killed during the boot left a QEMU running; nothing else stops it ([Supervision](architecture/sandbox.md#supervision)). And the misleading fix came from a folder the owner's `TMPDIR` placed, which `/tmp` avoids, rather than a message that names it.
+- Where the boot check makes its folder, and why: [The boot check](architecture/sandbox.md#the-boot-check).
+*Reason:* the review's first way for each. A native `doctor` killed during the boot left a QEMU running; nothing else stops it ([Supervision](architecture/sandbox.md#supervision)).
 *Tests:* in `doctor`, the signal given to the boot check, and no check after it, and a stop while OpenRouter hasn't answered; in `sandbox`, with the image, a boot check stopped during the boot leaves no QEMU and no folder, and one with a `TMPDIR` of over 100 characters boots.
 
 **D232. The image's app is readable by every user, whatever the checkout's modes** (the review of milestone 13, smaller point 4).
@@ -716,8 +716,6 @@ None changes [the owner's fixed choices](ARCHITECTURE.md#the-owners-fixed-choice
 - 8.6: `RUNNER_RESTART_WAITS` and `LOGGED_NAME_MAX_CHARS`, and the eight constants of `limits.mjs` the table didn't list (D234).
 - Section 10: the required tests of intake: catch-up, as this milestone tests it.
 - After the review (14.7): the README's first real run, how wacli stores and lists the owner's chat after downtime.
-
-ARCHITECTURE.md 6 says the same of the runner's restarts.
 
 ### 14.5 The final check: DESIGN.md, section by section
 

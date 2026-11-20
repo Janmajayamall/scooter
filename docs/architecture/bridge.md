@@ -89,7 +89,7 @@ Intake also tells the bridge when it has stored a command, and keeps the time of
 
 ## Commands
 
-Commands come only from WhatsApp. They're logged as `command` lines, and the runner never shows them to the agent ([The prompt](runner.md#the-prompt)). *Why:* a command is an instruction to Scooter, not a message to file.
+Commands come only from WhatsApp. They're logged as `command` lines, and the runner never shows them to the agent ([State](runner.md#state)). *Why:* a command is an instruction to Scooter, not a message to file.
 
 | Command | Handled by | Effect |
 |---|---|---|
@@ -115,7 +115,7 @@ The bridge answers from the datastore, as the runner does with its own. Its stat
 - for each agent `status.json` names, from its `state.json`: its last run, with its result, what it held and how long it took; whether runs are paused, since when, why and the next try; the messages pending, retrying and failed, pending being the work items after its cursor from the sources it reads (`reads` in `status.json`); and a backfill and how far it has got;
 - the backups ([What the bridge keeps of a backup](backups.md#what-the-bridge-keeps-of-a-backup)).
 
-What it says about the runner comes from three of the runner's files, since it reads neither the runner's env file nor `config/` ([Secrets](../ARCHITECTURE.md#secrets), [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners)): `status.json`, each agent's `state.json`, and the network log ([The contracts](../ARCHITECTURE.md#the-contracts)). It reports what it can read. Before the runner has ever started there is no `status.json`, and `/status` says so, with no agent to report on. A file that can't be read is said to be so, with the reason's code, and the rest is reported. The format of `status.json` refuses an agent's name `agents.yaml` wouldn't allow, because the bridge makes a path of it.
+What it says about the runner comes from three of the runner's files, since it reads neither the runner's env file nor `config/` ([Secrets](../ARCHITECTURE.md#secrets), [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners)): `status.json`, each agent's `state.json`, and the network log ([The contracts](../ARCHITECTURE.md#the-contracts)). It reports what it can read. Before the runner has ever started there is no `status.json`, and `/status` says so, with no agent to report on. A file that can't be read is said to be so, with the reason's code, and the rest is reported. The agents' names it makes paths of are checked as [status.json](runner.md#statusjson) says.
 
 It reads them as files the runner's user controls: `status.json` and `state.json` with `readUntrustedFile`, up to `STATUS_FILE_MAX_BYTES`, and each day of the network log opened without following a link and without waiting on a FIFO, and read only if it is a regular file. One that isn't is unreadable, with the code `EUNTRUSTED`. *Why:* the bridge reads them as root; a FIFO in place of `status.json` kept `/status`, and the bridge's one thread, waiting.
 
