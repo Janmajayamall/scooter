@@ -2,7 +2,7 @@
 
 Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets and a page per day, and asks you when it's unsure. Everything is backed up every night, encrypted.
 
-This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`; `docs/DESIGN.md` and `docs/DECISIONS.md` still hold what the parts whose documents aren't written yet do, and the choices made while building them. Section numbers such as (6.9) below are DESIGN.md's.
+This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`; `docs/DESIGN.md` and `docs/DECISIONS.md` still hold what the parts whose documents aren't written yet do, and the choices made while building them.
 
 - [How it fits together](#how-it-fits-together)
 - [What you need](#what-you-need)
@@ -365,7 +365,7 @@ The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker c
 
 ## The security model
 
-What each part can reach, and what protects what ([The boundaries](docs/ARCHITECTURE.md#the-boundaries), and section 9 of `docs/DESIGN.md`):
+What each part can reach, and what protects what ([The boundaries](docs/ARCHITECTURE.md#the-boundaries), [the sandbox](docs/architecture/sandbox.md) and [the network policy](docs/architecture/network-policy.md)):
 
 - **Strangers** can't reach the agent: the bridge keeps WhatsApp messages only from your number and IDs, never from groups, and email only from your addresses when it passes DMARC. Replies have no recipient field: they always go to you.
 - **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees the datastore read-only, and can write only its views, its memory and its copy of the current session. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
@@ -404,7 +404,7 @@ Lines of one request share its `id`. No line holds a header, a body or a query s
 
 ## Known limits
 
-- **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `/status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 (`docs/DECISIONS.md`, D160).
+- **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `/status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 ([Failures](docs/architecture/run.md#failures)).
 - **A WhatsApp message that reaches wacli long after messages sent later**, more than 2 minutes, and whose webhook to the bridge was also lost, may never be stored. Catch-up lists wacli's store by the messages' own times, from where it had got to, less 2 minutes; your messages normally reach wacli in their order. It stays in WhatsApp and in wacli's own store ([Catch-up](docs/architecture/whatsapp.md#catch-up)).
 - **The image on arm64**, Docker Desktop, OrbStack, Colima and macOS have never been run.
 - **A native bridge runs as root**, so that it can start wacli and the email reader as their own users: a flaw in it would expose the whole machine, not one container. Running it as its own user, with systemd starting the other two, is a possible later change.
@@ -427,7 +427,7 @@ docker compose stop runner && docker compose run --rm build-image
 docker compose up -d
 ```
 
-- **Natively, merge before `build-image`.** The runner and `build-image` read your copy of the config, `/etc/scooter/config`, which `git pull` doesn't change. So merge into it what the upgrade changed in the repository's `config/`, and `image/build.json` above all: it pins pi's version, and the new version's network policy and protocol are written for that pi. An image of an older pi can have its requests refused, which pauses runs as a setup error (6.9). If you never changed your `build.json`, copying it is the merge: `sudo cp /opt/scooter/config/image/build.json /etc/scooter/config/image/build.json`, which keeps your copy's owner and mode. The prompt and skills are yours to merge as you see fit (see [The agent's instructions](#the-agents-instructions)).
+- **Natively, merge before `build-image`.** The runner and `build-image` read your copy of the config, `/etc/scooter/config`, which `git pull` doesn't change. So merge into it what the upgrade changed in the repository's `config/`, and `image/build.json` above all: it pins pi's version, and the new version's network policy and protocol are written for that pi. An image of an older pi can have its requests refused, which pauses runs as a setup error ([Failures](docs/architecture/run.md#failures)). If you never changed your `build.json`, copying it is the merge: `sudo cp /opt/scooter/config/image/build.json /etc/scooter/config/image/build.json`, which keeps your copy's owner and mode. The prompt and skills are yours to merge as you see fit (see [The agent's instructions](#the-agents-instructions)).
 - **`build-image` after each upgrade**, with the runner stopped, natively and in Docker: the image holds pi at its pinned version and Gondolin's own programs for the VM, and an upgrade can change either.
 
 ## Development

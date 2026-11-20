@@ -1,10 +1,11 @@
-// The agent's instructions (section 7 of DESIGN.md; the plan's milestone 11): the default config in
-// `config/`, its prompt and its six skills, read against DESIGN.md itself, and the protocol that
-// ships with the runner, read against the parser of its answers.
+// The agent's instructions (`docs/architecture/agent.md`; the plan's milestone 11): the default
+// config in `config/`, its prompt and its six skills, read against the documents themselves, and the
+// protocol that ships with the runner, read against the parser of its answers.
 //
-// The files are the repository's own, as `setup` copies them and Docker mounts them. What 7.2 and
-// 7.3 give word for word, the views' list, the CSV headers, the categories and the day page's
-// template, is taken from DESIGN.md, so the two can't drift apart.
+// The files are the repository's own, as `setup` copies them and Docker mounts them. What the
+// agent's document gives word for word, the views' list, the CSV headers, the categories and the day
+// page's template, is taken from it, and the example of `agents.yaml` from DESIGN.md, so the two
+// can't drift apart.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,16 +23,18 @@ import { makeTestDir } from './support/tmp.mjs'
 const REPO = path.resolve(import.meta.dirname, '..')
 const CONFIG = path.join(REPO, 'config')
 const DESIGN = fs.readFileSync(path.join(REPO, 'docs', 'DESIGN.md'), 'utf8')
+const AGENT = fs.readFileSync(path.join(REPO, 'docs', 'architecture', 'agent.md'), 'utf8')
 const read = (...parts) => fs.readFileSync(path.join(CONFIG, ...parts), 'utf8')
 const linesOf = text => text.split('\n')
 
-// The section of DESIGN.md that starts with `heading`, up to the next heading of its level.
-function designSection(heading) {
-  const start = DESIGN.indexOf(`\n${heading}\n`)
+// The section of a document, DESIGN.md unless another is given, that starts with `heading`, up to
+// the next heading of its level.
+function designSection(heading, text = DESIGN) {
+  const start = text.indexOf(`\n${heading}\n`)
   assert.notEqual(start, -1, heading)
   const level = heading.match(/^#+ /)[0]
-  const end = DESIGN.indexOf(`\n${level}`, start + heading.length + 1)
-  return DESIGN.slice(start, end === -1 ? undefined : end)
+  const end = text.indexOf(`\n${level}`, start + heading.length + 1)
+  return text.slice(start, end === -1 ? undefined : end)
 }
 
 // The fenced blocks of a Markdown text, as `{ info, body }`.
@@ -41,7 +44,7 @@ function fencedBlocks(text) {
 
 // 7.3's table: for each skill, its view and what the row says of it.
 function designSkills() {
-  const rows = [...designSection('### 7.3 Skills (`config/skills/<name>/SKILL.md`)').matchAll(/^\| `([a-z-]+)` \| `([^`]+)` \| (.*) \|$/gm)]
+  const rows = [...designSection('## Skills', AGENT).matchAll(/^\| `([a-z-]+)` \| `([^`]+)` \| (.*) \|$/gm)]
   return rows.map(([, name, view, contents]) => ({ name, view, contents, header: /^Header `([^`]+)`/.exec(contents)?.[1] ?? null }))
 }
 
@@ -93,7 +96,7 @@ test('instructions: every skill folder has a SKILL.md with its name and a descri
 
 test('instructions: each view in the prompt names a skill that exists, as 7.2 lists them', () => {
   const prompt = read('prompts', 'lifelog.md')
-  const block = fencedBlocks(designSection('### 7.2 The prompt (`config/prompts/lifelog.md`)')).find(fenced => fenced.body.startsWith('Views (all under views/):')).body
+  const block = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.body.startsWith('Views (all under views/):')).body
   // The list is in the prompt as 7.2 gives it, line for line.
   assert.ok(prompt.includes(block), block)
 
@@ -133,7 +136,7 @@ test('instructions: each CSV header is the one 7.3 gives, and the expenses skill
 
 test("instructions: the day-pages skill has 7.3's template, and its links lead from a page to the datastore", () => {
   const skill = read('skills', DAY_PAGES_SKILL, 'SKILL.md')
-  const template = fencedBlocks(designSection('### 7.3 Skills (`config/skills/<name>/SKILL.md`)')).find(block => block.info === 'markdown').body
+  const template = fencedBlocks(designSection("### The day page's template", AGENT)).find(block => block.info === 'markdown').body
   assert.deepEqual(fencedBlocks(skill).filter(block => block.info === 'markdown').map(block => block.body), [template])
 
   // A link as the skill gives it, from a page of another day than the attachment's folder, in
