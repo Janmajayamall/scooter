@@ -19,7 +19,7 @@ The config folder's `prompts/` and `skills/` are the owner's, which `setup` copi
 
 ## How pi is run
 
-The runner gives the sandbox this command, run in the VM in the agent's folder (`piArgs` and `PI_TOOLS`, in `src/runner/run.mjs`):
+The runner gives the sandbox this command line, run in the VM in the agent's folder (`piArgs` and `PI_TOOLS`, in `src/runner/run.mjs`):
 
 ```
 pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-context-files --no-mcp --offline \
@@ -31,7 +31,7 @@ pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-contex
    -- "<prompt>"
 ```
 
-- `-p` prints the final answer and exits; pi never asks for permission. `--no-approve` ignores the project's `.pi` files, and `--no-extensions`, `--no-skills`, `--no-prompt-templates` and `--no-context-files` turn off each kind of discovery, so pi loads nothing the run didn't give it. `--no-mcp` turns off pi's built-in MCP support, and either it or `--no-extensions` alone keeps an MCP server from starting: the command keeps both. `--offline` and `PI_OFFLINE` keep pi from asking anything but the model's answers.
+- `-p` prints the final answer and exits; pi never asks for permission. `--no-approve` ignores the project's `.pi` files, and `--no-extensions`, `--no-skills`, `--no-prompt-templates` and `--no-context-files` turn off each kind of discovery, so pi loads nothing the run didn't give it. `--no-mcp` turns off pi's built-in MCP support, and either it or `--no-extensions` alone keeps an MCP server from starting: the command line keeps both. `--offline` and `PI_OFFLINE` keep pi from asking anything but the model's answers.
 - The model is the agent's configured model, and `--thinking` its level when `agents.yaml` gives one. pi talks to OpenRouter at its usual address, with `OPENROUTER_API_KEY`, which holds a placeholder ([The key](network-policy.md#the-key)), so it needs no `models.json`.
 - The seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`.
 - The session is the run's copy in `run/session/`, by its ID ([Sessions](runner.md#sessions), [The session's copy](run.md#the-sessions-copy)); with `session: none`, `--no-session` instead.
@@ -163,10 +163,10 @@ Checked in VMs from the image, in milestone 0; the checks are tests in `test/too
   - a normal run exits with 0, and stdout holds the text of the model's last message, exactly as written, leading and trailing blanks included, followed by one line break. What the model thought, and what it said before its tool calls, isn't printed. stderr is empty, apart from the session warning;
   - a 401, 402, 403 or 404 ends with exit code 1 after one request, stdout empty, and stderr's last line holds the status and OpenRouter's answer: `401 {"type":"error","error":{…,"message":"User not found.",…},"request_id":null}` on the messages route, and `401: {"message":"User not found.","code":401}` on the chat route;
   - a 500, and a 429, are tried three more times, 2, 4 and 8 seconds apart, and then end as a 401 does, so an outage costs a run about 15 seconds;
-  - a closed VM gives no exit code: the command is rejected.
+  - a closed VM gives no exit code: Gondolin's call is rejected.
 
   So the answer to read is stdout as it is, any exit code but 0 is a failure, and OpenRouter's own words are in the last line of stderr and nowhere else the runner can read: text from outside, which belongs in the notice to the owner and not in Scooter's logs.
-- **Its environment:** `PI_CODING_AGENT_DIR` (its config folder: settings, `models.json`, extensions and skills), `PI_CODING_AGENT_SESSION_DIR`, `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY` and `OPENROUTER_API_KEY`. `models.json`'s `providers.<id>.baseUrl` overrides a built-in provider's URL and keeps its models, and its `apiKey` is a literal, `$ENV_NAME` or `!command`. pi gives the commands its tools run variables of its own, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_CODING_AGENT` and `AI_AGENT`, and puts `/root/.pi/agent/bin` first on their `PATH`.
+- **Its environment:** `PI_CODING_AGENT_DIR` (its config folder: settings, `models.json`, extensions and skills), `PI_CODING_AGENT_SESSION_DIR`, `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY` and `OPENROUTER_API_KEY`. `models.json`'s `providers.<id>.baseUrl` overrides a built-in provider's URL and keeps its models, and its `apiKey` is a literal, `$ENV_NAME` or `!command`. pi gives the programs its tools run variables of its own, `PI_MODEL`, `PI_PROVIDER`, `PI_REASONING_LEVEL`, `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_CODING_AGENT` and `AI_AGENT`, and puts `/root/.pi/agent/bin` first on their `PATH`.
 - **Discovery:** pi loads extensions from its config folder's `extensions/`, and skills from its config folder and `~/.agents/skills/`. A project's own `.pi/` resources load only when the project is trusted.
 - **It has no sandbox of its own**, and its documents recommend running the whole process in a container; Scooter runs it in a VM ([the sandbox](sandbox.md)). It ships without sub-agents, which an example extension adds.
 - **Models:** `pi --list-models` listed the OpenRouter models `anthropic/claude-sonnet-5.5`, which accepts images, and `anthropic/claude-haiku-5.5`, cheaper.

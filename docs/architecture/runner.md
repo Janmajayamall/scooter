@@ -73,7 +73,7 @@ The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the 
 
 - **The quiet period** counts from when the runner saw the newest incoming line arrive, not from its `at`. Any `in` line counts, of any kind and any source. Lines already there when the runner starts count as seen then, so a start waits `BATCH_SECONDS`. *Why:* `at` is the channel's: a message caught up after downtime has an old one, and a batch would start while catch-up is still storing lines; an email's comes from its `Date` header, which can lie in the future.
 - **Scheduled tasks.** `at` is `HH:MM`, or a weekday and `HH:MM`, in `SCOOTER_TZ`, by the rule of [Time](shared-code.md#time) (`previousLocalTime`). `scheduled[at]` is the owner's date of the last occurrence dealt with. A task is due when its last occurrence has a later date. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once. Its date is recorded once it has run, or failed for pi's own reasons; one that meets a setup error or an outage keeps its old date, so it stays due. A scheduled run gets its task and no messages.
-- **At a start**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, in the zone the runner starts with, so a runner that starts after the time waits until the next day, and a changed `SCOOTER_TZ` takes effect at once. Entries for `at` values no longer in the config are dropped. A start during a pause keeps every date as it is instead, so a task a pause holds back stays due across the start, and is the try the start brings forward. *Why:* comparing dates of the owner's day keeps one run a day across clock changes, and overwriting at a start lets a changed zone start from where it is, where a date from a zone far ahead would hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all; and a zone changed during a pause takes effect for the dates only at the first start after the pause.
+- **At a start**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, in the zone the runner starts with, so a runner that starts after the time waits until the next day, and a changed `SCOOTER_TZ` takes effect at once. The dates of `at` values no longer in the config are dropped. A start during a pause keeps every date as it is instead, so a task a pause holds back stays due across the start, and is the try the start brings forward. *Why:* comparing dates of the owner's day keeps one run a day across clock changes, and overwriting at a start lets a changed zone start from where it is, where a date from a zone far ahead would hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all; and a zone changed during a pause takes effect for the dates only at the first start after the pause.
 - **Overlap:** runs never overlap. A run takes `run.lock` before it starts and removes it when it is finished; how that keeps runs and backups apart is in [The locks](exchange.md#the-locks).
 
 ## Commands
@@ -106,13 +106,13 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 
 - `cursor` is the highest `seq` the runner has dealt with, by giving it to the agent or by skipping it. Everything after it is new.
 - `commandSeq` is the `seq` of the newest command line the runner has handled.
-- `retry` entries may have 0 `attempts`: after a setup error or an outage, a new item waits there with its count unchanged.
+- An item in `retry` may have 0 `attempts`: after a setup error or an outage, a new item waits there with its count unchanged.
 - `paused` exists only while a setup error or an outage holds runs back: `{ since, cause, reason, next, tries }`, `cause` being `setup` or `outage`, and `tries` the failed tries in a row.
 - `backfill` exists only while a backfill is in progress; `backfillDone` lists the finished ones ([Backfill](rebuild-and-backfill.md#backfill)).
 - `lastRun` is `{ at, ok, seqs, durationMs }`, `at` being the run's start. A scheduled or `once` task is a live run too, with no `seqs`.
 - An agent that has never run has `cursor` and `commandSeq` 0, empty lists, `scheduled` `{}`, and `session` and `lastRun` null.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day, since the session and the schedule follow it.
-- The check is strict: every field above, of its type, and no other. It refuses a `retry` entry after its lane's cursor, the backfill's included.
+- The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
 **Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines, reactions and commands, isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context ([The prompt](#the-prompt)); commands never are ([Commands](bridge.md#commands)).
 
@@ -129,7 +129,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 A batch is due retries first, then work items after the cursor, oldest first, at most `BATCH_MAX_ITEMS` in all.
 
 - **An edit or a deletion in the batch brings in the message it changes** when that message waits in `retry`, due or not, or is in `failed`. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. These may take the batch past `BATCH_MAX_ITEMS`. *Why:* otherwise the edit could be handled before the message it changes, and the retry would later file the old text.
-- A `retry` entry whose line isn't a work item of the agent, which only a changed `reads` or a damaged state gives, is never due, and starts no batch.
+- An item in `retry` whose line isn't a work item of the agent, which only a changed `reads` or a damaged state gives, is never due, and starts no batch.
 - **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line. After the run, whether it succeeds or fails, the cursor moves there, past the context, the commands and the lines of sources the agent doesn't read in that stretch ([Failures](run.md#failures)).
 - **The context:** the `out` lines and reactions from the oldest item to the end of what the batch covers, plus every message an item quotes.
 - **The newest item**, which an answer's plain text is about ([Reading the answer](run.md#reading-the-answer)), is the item with the highest `seq`.
