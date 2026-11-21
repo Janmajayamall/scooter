@@ -1,11 +1,11 @@
 // The agent's instructions (`docs/architecture/agent.md`; the plan's milestone 11): the default
-// config in `config/`, its prompt and its six skills, read against the documents themselves, and the
+// config in `config/`, its prompt and its five skills, read against the documents themselves, and the
 // protocol that ships with the runner, read against the parser of its answers.
 //
 // The files are the repository's own, as `setup` copies them and Docker mounts them. What the
-// agent's document gives word for word, the views' list, the CSV headers, the categories and the day
-// page's template, is taken from it, so the two can't drift apart. The default `agents.yaml` is held
-// to the tests' own example of the format, `exampleYaml`, which the other tests of the config use.
+// agent's document gives word for word, the views' list, the CSV headers and the categories, is
+// taken from it, so the two can't drift apart. The default `agents.yaml` is held to the tests' own
+// example of the format, `exampleYaml`, which the other tests of the config use.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -15,7 +15,7 @@ import { limits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { prepareRun } from '../src/runner/agentdir.mjs'
 import { answerEntries, parseAnswer, reportsOf } from '../src/runner/answer.mjs'
-import { DAY_PAGES_SKILL, loadConfig, parseConfig, skillFileProblem } from '../src/runner/config.mjs'
+import { loadConfig, parseConfig, skillFileProblem } from '../src/runner/config.mjs'
 import { SECTIONS, loadProtocol } from '../src/runner/prompt.mjs'
 import { SKILLS, exampleYaml, fillerLines, indexOf, line, writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
@@ -88,7 +88,6 @@ test('instructions: every skill folder has a SKILL.md with its name and a descri
   }
   // The skills of the agent's document, no more and no fewer.
   assert.deepEqual(designSkills().map(skill => skill.name), SKILLS)
-  assert.ok(SKILLS.includes(DAY_PAGES_SKILL))
 })
 
 test('instructions: each view in the prompt names a skill that exists, as the agent\'s document lists them', () => {
@@ -111,9 +110,10 @@ test('instructions: each view in the prompt names a skill that exists, as the ag
 
 test('instructions: each CSV header is the one the agent\'s document gives, and the expenses skill has its categories', () => {
   const csvSkills = designSkills().filter(skill => skill.header !== null)
+  // Every skill keeps a CSV view.
   assert.deepEqual(
     csvSkills.map(skill => skill.name),
-    SKILLS.filter(name => name !== DAY_PAGES_SKILL),
+    SKILLS,
   )
   for (const { name, view, header } of csvSkills) {
     assert.ok(view.endsWith('.csv'), view)
@@ -131,26 +131,7 @@ test('instructions: each CSV header is the one the agent\'s document gives, and 
   assert.deepEqual([...listed.matchAll(/`([^`]+)`/g)].map(match => match[1]), categories)
 })
 
-test("instructions: the day-pages skill has the template of the agent's document, and its links lead from a page to the datastore", () => {
-  const skill = read('skills', DAY_PAGES_SKILL, 'SKILL.md')
-  const template = fencedBlocks(designSection("### The day page's template", AGENT)).find(block => block.info === 'markdown').body
-  assert.deepEqual(fencedBlocks(skill).filter(block => block.info === 'markdown').map(block => block.body), [template])
-
-  // A link as the skill gives it, from a page of another day than the attachment's folder, in
-  // Docker's data folder and in a native one.
-  const link = /an attachment is at `([^`]+)`/.exec(skill)[1]
-  assert.equal(link, '../../../../../../datastore/YYYY/MM/DD/<file>')
-  for (const dataDir of ['/data', '/var/lib/scooter']) {
-    const paths = makePaths({ dataDir, configDir: '/config' })
-    const page = path.join(paths.agentViews('lifelog'), 'days', '2026', '11', '2026-11-10.md')
-    const target = link.replace('YYYY/MM/DD', '2026/11/09').replace('<file>', '1042.jpg')
-    assert.equal(path.resolve(path.dirname(page), target), path.join(paths.dayDir('2026/11/09'), '1042.jpg'))
-  }
-  // The skill's own example says the same.
-  assert.ok(skill.includes('`../../../../../../datastore/2026/11/09/1042.jpg`'))
-})
-
-test("instructions: a run's system prompt is the protocol, then the prompt, then the memory, with the six skills copied for pi", t => {
+test("instructions: a run's system prompt is the protocol, then the prompt, then the memory, with the five skills copied for pi", t => {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG })
   const [agent] = loadConfig({ paths }).agents

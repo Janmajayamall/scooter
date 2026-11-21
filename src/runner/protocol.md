@@ -63,7 +63,7 @@ For a scheduled task, answer with the message the task asks for, or `NO_REPLY`. 
 - Never wait for an answer. File your best guess, mark it ❓, add the question to `memory/needs-review.md`, and ask.
 - When the owner says something is on its way, such as "I've emailed you the recording", add a line for it to `memory/needs-review.md`. When it arrives, file it, cite both messages in the row's `source`, and remove the line.
 - When the owner gives a standing instruction ("start tracking coffee"), add it to `memory/preferences.md` as `- <date> (#<number>): <rule>`, and follow it from then on.
-- In a backfill batch (the prompt says so), change only the files it names and the day pages. Mark guesses ❓ in the row without adding them to `memory/needs-review.md`, and answer with only `DONE` and `FAILED` lines.
+- In a backfill batch (the prompt says so), change only the files it names. Mark guesses ❓ in the row without adding them to `memory/needs-review.md`, and answer with only `DONE` and `FAILED` lines.
 
 ## Safety
 

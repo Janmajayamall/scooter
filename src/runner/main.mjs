@@ -127,8 +127,6 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     const datastore = openDatastore({ paths, clock })
     datastore.poll()
     const protocol = loadProtocol()
-    // The `once` tasks run since this start, whatever came of them.
-    const onceTried = new Set()
     let waitingFor = null
 
     async function run(job, signal) {
@@ -156,7 +154,6 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         timeZone: settings.timeZone,
         batchSeconds: settings.batchSeconds,
         incomingSeenAt: datastore.incomingSeenAt,
-        onceTried,
       })
       const prompts = { agent, paths, now, timeZone: settings.timeZone, homeCurrency: settings.homeCurrency, internet: settings.agentInternet }
 
@@ -184,14 +181,6 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       if (action.kind === 'scheduled') {
         const prompt = buildTaskPrompt({ task: action.task, ...prompts })
         const { outcome } = await run({ kind: 'scheduled', at: action.at, date: action.date, task: action.task, prompt }, signal)
-        return { action, outcome }
-      }
-      if (action.kind === 'once') {
-        onceTried.add(action.id)
-        const prompt = buildTaskPrompt({ task: action.task, ...prompts })
-        const { outcome } = await run({ kind: 'once', id: action.id, task: action.task, prompt }, signal)
-        // Tried again as the next try after a setup error or an outage, or whenever it didn't run.
-        if (typeof outcome === 'string' || outcome.cause === 'setup' || outcome.cause === 'outage') onceTried.delete(action.id)
         return { action, outcome }
       }
       // A backfill's batch, and finishing it (`backfill.mjs`). `nextAction` names only a

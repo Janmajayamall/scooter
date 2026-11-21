@@ -49,7 +49,7 @@ The runner reads pi's final answer, its stdout as pi prints it ([Facts about pi 
 - In quiet mode the runner also writes a `react` entry with `ack_reaction` for each item reported `DONE` that is a message, still there, and not answered by a `REPLY_TO`: those got a reply instead. Reacting to a message the owner has deleted would say nothing.
 - The texts go to the outbox first, in order, then the reactions, by `seq`.
 - One answer sends at most `ANSWER_MAX_TEXTS` texts, the first ones; the rest are dropped and counted in the log as `runner.answer_texts_dropped`, so a misled run can't flood the owner's chat. A message whose `REPLY_TO` was dropped gets its reaction instead. An answer of 2,000 `REPLY_TO` lines had made 2,000 outbox entries, nearly 3 hours of sending.
-- In a scheduled or `once` task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)).
+- In a scheduled task, `DONE` and `FAILED` are ignored and logged, and the texts have no `about`, so they go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)).
 - With `can_message: false`, nothing the agent says is sent.
 
 ## After a successful run
@@ -68,14 +68,14 @@ In this order:
    - the file at which their sizes, as the file system gives them, pass `AGENT_FILES_MAX_BYTES` together.
 
    Then `git status --ignored=matching` names any file git ignores. Last comes staging, `git add -A --ignore-errors -- views memory`, so a path git refuses, such as `git~1`, or a file it couldn't read, is left unstaged and named. Staging is part of the check because only git knows every name it refuses. The path is logged cut to `REASON_MAX_CHARS`: it is a name pi chose, which could hold a message's words.
-   *Why the limits:* git reads every byte of a file to add it, holes included, and pi can make a file of any size in an instant, all holes; some of git's work, such as taking names out of its index again, grows faster than their number, and pi can make hundreds of thousands of names in a run ([Facts about git, Node and Linux](#facts-about-git-node-and-linux)). They are on the two folders together, so that many small files can't add up to the same wait. Within the path limit a tree is at most about 2,000 folders deep, which the walk and git handle. *Cost:* a last commit past either limit, which only a commit by hand or a lower limit could make, or about 50 years of day pages, fails every run until it is smaller.
+   *Why the limits:* git reads every byte of a file to add it, holes included, and pi can make a file of any size in an instant, all holes; some of git's work, such as taking names out of its index again, grows faster than their number, and pi can make hundreds of thousands of names in a run ([Facts about git, Node and Linux](#facts-about-git-node-and-linux)). They are on the two folders together, so that many small files can't add up to the same wait. Within the path limit a tree is at most about 2,000 folders deep, which the walk and git handle. *Cost:* a last commit past either limit, which only a commit by hand or a lower limit could make with the default skills, fails every run until it is smaller.
    *Why ordinary runs pass:* pi 1.5.2's `edit` and `write` leave nothing beside the files they change, no temporary files, dotfiles or locks.
 2. **What git doesn't record, put back,** just before staging, once the rest of the check has passed:
    - **the modes:** every folder 0700, and every file 0600, or 0700 when its owner may run it, which is all git keeps of a mode, setting only a mode that differs. *Why:* a folder left without write access, or a file left read-only, made every later run fail to write there, and nothing in git said why. A mode that keeps the runner from reading still fails the run: the check has to read what it checks. The files' times aren't put back: no later run depends on them;
-   - **the empty folders,** removed, the deepest first, so a folder that held only empty folders goes too, and after the modes, so a folder pi left without write access can't hold one back. They don't fail the run: an ordinary run can leave one, such as a month's folder once its only day page is gone.
+   - **the empty folders,** removed, the deepest first, so a folder that held only empty folders goes too, and after the modes, so a folder pi left without write access can't hold one back. They don't fail the run: an ordinary run can leave one, such as a folder once the only file a skill kept in it is gone.
 
    So after a successful run `views/` and `memory/` hold nothing the commit doesn't, with the runner's modes, and nothing hidden carries over to later runs.
-3. **The commit,** only if what was staged differs from the last commit: `lifelog: #1050 #1051 #1053`, every item of the batch, `lifelog: scheduled task 21:30` or `lifelog: once task poems`, as `Scooter <scooter@localhost>`, unsigned. A backfill's and a rebuild's are in [rebuild and backfill](rebuild-and-backfill.md).
+3. **The commit,** only if what was staged differs from the last commit: `lifelog: #1050 #1051 #1053`, every item of the batch, or `lifelog: scheduled task 21:30`, as `Scooter <scooter@localhost>`, unsigned. A backfill's and a rebuild's are in [rebuild and backfill](rebuild-and-backfill.md).
 4. **The session,** copied back ([The session's copy](#the-sessions-copy)).
 5. **The outbox:** the texts and reactions of [Reading the answer](#reading-the-answer).
 6. **The state:** items reported `DONE` leave `retry`; items reported `FAILED` go to `failed`; items not reported have used the attempt this run was ([Failures](#failures)); the cursor moves to what the batch covered; and `lastRun` is recorded.
@@ -116,7 +116,7 @@ A run fails when pi exits with a code other than 0, times out, is stopped, or it
 
 Notices are outbox entries `by: "runner"`, which go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)), and go out also with `can_message: false`, as the reply to `/new` does ([Commands](runner.md#commands)).
 
-- **The first failure in a row** sends one notice; later failures send nothing until a run succeeds: "⚠️ I couldn't process your last messages (<short reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it, "run the scheduled task 21:30" or "run the task poems", and says when it runs again. A task is a live run, so a failing task can be the first failure of a row, and one that gets through ends the row.
+- **The first failure in a row** sends one notice; later failures send nothing until a run succeeds: "⚠️ I couldn't process your last messages (<short reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it, "run the scheduled task 21:30", and says when it runs again. A task is a live run, so a failing task can be the first failure of a row, and one that gets through ends the row.
 - **Items given up on:** one notice listing them: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds.
 - **The emulation notice** ([status.json](runner.md#statusjson)) and **the restart notice** ([Restarts](runner.md#restarts)).
 
@@ -147,7 +147,7 @@ These rules, and those of [After a successful run](#after-a-successful-run), ans
 
 | Path | Holds | In git |
 |---|---|---|
-| `views/` | `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv`, `people.csv`, and the day pages in `days/YYYY/MM/YYYY-MM-DD.md` | yes |
+| `views/` | `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv` | yes |
 | `memory/` | `preferences.md` and `needs-review.md` ([Memory](agent.md#memory)) | yes |
 | `sessions/` | pi's sessions, hidden from the VM ([The session's copy](#the-sessions-copy)) | no |
 | `run/` | made again before each run: `system.md`, `config/` and `session/` ([A run](#a-run)) | no |

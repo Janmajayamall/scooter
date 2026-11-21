@@ -21,7 +21,7 @@ function backfillYaml({ backfill = true, writes = '[views/people.csv]' } = {}) {
   lifelog:
     model: anthropic/claude-sonnet-5.5
     prompt: prompts/lifelog.md
-    skills: [skills/expenses, skills/people, skills/day-pages]
+    skills: [skills/expenses, skills/people]
     reads: [whatsapp, email]
     session: daily
     reply_mode: quiet
@@ -70,15 +70,14 @@ test('backfills: until is the live cursor when it starts, every message up to it
   const [first] = sandbox.seen()
   assert.deepEqual(first.items, [1, 3])
   const prompt = first.prompt.split('\n')
-  assert.equal(prompt[0], 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and the day pages.')
+  assert.equal(prompt[0], 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv.')
   assert.equal(prompt[1], '[scooter] Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.')
   assert.match(first.prompt, /^#2 12:31 you sent: "Logged."$/m)
-  // Its own session for the day, the backfill's skill and day-pages, and the live system prompt.
+  // Its own session for the day, the backfill's skill alone, and the live system prompt.
   assert.equal(sessionOf(first), 'lifelog-backfill-people-1-2026-11-07')
-  assert.deepEqual(skillsOf(first), ['people', 'day-pages'])
+  assert.deepEqual(skillsOf(first), ['people'])
   assert.match(first.systemPrompt, /You are lifelog\./)
-  assert.equal(git('log', '-1', '--format=%s'), 'lifelog: backfill people-1 #1-#3\n')
-  assert.equal(views('days/2026/11/2026-11-07.md'), '- #1\n- #3\n')
+  assert.equal(git('log', '-1', '--format=%s', '--name-only'), 'lifelog: backfill people-1 #1-#3\n\nviews/people.csv\n')
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 3, retry: [], skipped: [] })
   // Silent, and the live runs' own record is left alone.
   assert.deepEqual(outbox(), [])
@@ -155,7 +154,7 @@ test('backfills: its batches run only when nothing live is waiting, and a messag
   assert.deepEqual(state().backfill.until, 5)
 })
 
-test('backfills: a batch that changes anything outside its writes and the day pages fails, is thrown away, and its items are skipped after 4 attempts', async t => {
+test('backfills: a batch that changes anything outside its writes fails, is thrown away, and its items are skipped after 4 attempts', async t => {
   const { runner, clock, state, outbox, git, views, paths, events } = await openBackfill(t, { words: { 3: 'OUTSIDE' } })
   const failed = { ok: false, cause: 'other' }
   assert.deepEqual((await runner.tick()).outcome, failed)
@@ -278,10 +277,12 @@ test('backfill: the prompt line, and what a batch may change', () => {
   const entry = { id: 'people-1', skill: 'people', writes: ['views/people.csv', 'views/people/'] }
   assert.equal(
     backfillIntro(entry),
-    'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv, views/people/ and the day pages.',
+    'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and views/people/.',
   )
-  for (const file of ['views/people.csv', 'views/people/2026.csv', 'views/people/a/b.md', 'views/days/2026/11/2026-11-09.md']) assert.equal(mayChange(file, entry.writes), true, file)
-  for (const file of ['views/people.csv.bak', 'views/peoples.csv', 'views/expenses.csv', 'views/days', 'memory/preferences.md', 'views/people']) assert.equal(mayChange(file, entry.writes), false, file)
+  assert.equal(backfillIntro({ ...entry, writes: ['views/people.csv'] }).endsWith(' Change only views/people.csv.'), true)
+  // Only what `writes` names: a file it names, and anything in a folder it names.
+  for (const file of ['views/people.csv', 'views/people/2026.csv', 'views/people/a/b.md']) assert.equal(mayChange(file, entry.writes), true, file)
+  for (const file of ['views/people.csv.bak', 'views/peoples.csv', 'views/expenses.csv', 'views/trips/2026/goa.md', 'memory/preferences.md', 'views/people']) assert.equal(mayChange(file, entry.writes), false, file)
 })
 
 test("backfill: counting a CSV's rows, and those marked ❓", () => {

@@ -2,7 +2,7 @@
 
 ## What Scooter is
 
-Scooter keeps a log of its owner's life from what they send it: receipts, run screenshots, food photos, tickets and short notes, sent on WhatsApp to a number of its own, the bot, or emailed to a mailbox of its own. Two services share a data folder on one Linux machine. The bridge talks to WhatsApp and the mailbox, keeps every message in an append-only datastore, sends the replies and makes the backups. The runner gives new messages to an AI agent, pi, which runs in a fresh VM for every batch, and commits the spreadsheets and day pages it writes. It is written in Node.js, as ES modules in `.mjs` files.
+Scooter keeps a log of its owner's life from what they send it: receipts, run screenshots, food photos, tickets and short notes, sent on WhatsApp to a number of its own, the bot, or emailed to a mailbox of its own. Two services share a data folder on one Linux machine. The bridge talks to WhatsApp and the mailbox, keeps every message in an append-only datastore, sends the replies and makes the backups. The runner gives new messages to an AI agent, pi, which runs in a fresh VM for every batch, and commits the spreadsheets it writes. It is written in Node.js, as ES modules in `.mjs` files.
 
 ## The documents, and the order to read them
 

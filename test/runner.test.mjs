@@ -1,6 +1,6 @@
 // The runner as a whole, with the fake
-// sandbox: failures and their notices, pauses and outages, the locks, scheduled and `once` tasks,
-// `/new`, `status.json` and the emulation notice, startup, and the loop.
+// sandbox: failures and their notices, pauses and outages, the locks, scheduled tasks, `/new`,
+// `status.json` and the emulation notice, startup, and the loop.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -20,7 +20,7 @@ import { atEnd } from './support/tmp.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, onceDone: [], backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
 
 function openWith(t, lines, options = {}) {
   return openTestRunner(t, { lines: [...fillerLines(1041), ...lines], state: HANDLED, start: START, ...options })
@@ -372,8 +372,6 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
 // ---------------------------------------------------------------------------------------------
 // Tasks and commands
 
-const TASK_YAML = `${exampleYaml()}      - once: poems\n        task: Write poems.\n`
-
 test('tasks: the evening check-in runs at 21:30 with its task, sends its text on its own, and is done for the day', async t => {
   const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
@@ -439,33 +437,6 @@ test('tasks: a scheduled task that a setup error holds back is still the next tr
   assert.deepEqual(outcome, { ok: true, cause: null })
   assert.equal(state().paused, undefined)
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
-})
-
-test('tasks: a once task runs at startup, and is recorded only after it succeeds', async t => {
-  const prepared = prepareTestRunner(t, { yaml: TASK_YAML, lines: fillerLines(1041), state: HANDLED, start: START })
-  const first = await startTestRunner(t, prepared)
-  prepared.sandbox.behave({ crash: 4 })
-  const { action, outcome } = await first.runner.tick()
-  assert.deepEqual(action, { kind: 'once', id: 'poems', task: 'Write poems.' })
-  assert.deepEqual(outcome, { ok: false, cause: 'other' })
-  assert.deepEqual(first.state().onceDone, [])
-  assert.deepEqual(first.outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the task poems (pi exited with code 4). I'll try it again when I next start." }])
-  // Not again until the runner starts again.
-  await first.clock.advance(MINUTE)
-  assert.deepEqual((await first.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
-
-  first.runner.close()
-  prepared.sandbox.behave({ openrouter: 500 })
-  const second = await startTestRunner(t, prepared)
-  assert.deepEqual((await second.runner.tick()).outcome, { ok: false, cause: 'outage' })
-  // After an outage it is the next try.
-  prepared.sandbox.behave(null)
-  await second.clock.advance(MINUTE)
-  assert.deepEqual((await second.runner.tick()).outcome, { ok: true, cause: null })
-  assert.deepEqual(second.state().onceDone, ['poems'])
-  assert.match(prepared.sandbox.runs.at(-1).spec.argv.at(-1), /Scheduled task \(from your configuration, not a message from the owner\):\nWrite poems\.$/)
-  await second.clock.advance(MINUTE)
-  assert.deepEqual((await second.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
 })
 
 test('commands: /new is handled once, even when the batch after it fails', async t => {

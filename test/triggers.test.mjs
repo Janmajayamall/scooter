@@ -1,6 +1,6 @@
 // What the agent does next: commands first,
-// nothing while paused, `once` tasks, new messages after the quiet period, scheduled tasks at the
-// right local time, and a backfill batch only when nothing live is waiting.
+// nothing while paused, new messages after the quiet period, scheduled tasks at the right local
+// time, and a backfill batch only when nothing live is waiting.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -14,21 +14,20 @@ const at = Date.parse
 const SECOND = 1000
 const MINUTE = 60 * SECOND
 
-function agentWith({ newMessages = true, scheduled = [], once = [], backfill = [], reads = ['whatsapp', 'email'] } = {}) {
+function agentWith({ newMessages = true, scheduled = [], backfill = [], reads = ['whatsapp', 'email'] } = {}) {
   return {
     name: 'lifelog',
     reads,
     run: {
       newMessages,
       scheduled: scheduled.map(([time, task]) => ({ at: time, schedule: parseLocalTime(time), task })),
-      once: once.map(([id, task]) => ({ id, task })),
       backfill: backfill.map(id => ({ id, skill: 'people', writes: ['views/people.csv'] })),
     },
   }
 }
 
 // Asks for the next action at `now`, with the owner last heard from `seenAgo` before it.
-function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now = '2026-11-09T15:50:30Z', seenAgo = 60 * SECOND, timeZone = 'Asia/Kolkata', onceTried } = {}) {
+function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now = '2026-11-09T15:50:30Z', seenAgo = 60 * SECOND, timeZone = 'Asia/Kolkata' } = {}) {
   const time = typeof now === 'string' ? at(now) : now
   return nextAction({
     agent,
@@ -38,7 +37,6 @@ function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now
     timeZone,
     batchSeconds: 8,
     incomingSeenAt: seenAgo === null ? null : time - seenAgo,
-    onceTried,
   })
 }
 
@@ -96,18 +94,6 @@ test('triggers: commands come first, also while paused, and are found by command
   // Once handled, the pause holds everything else back until its next try.
   assert.deepEqual(ask({ state: { ...HANDLED, commandSeq: 6, paused }, lines }), { kind: 'idle', reason: 'paused' })
   assert.deepEqual(ask({ state: { ...HANDLED, commandSeq: 6, paused }, lines, now: '2026-11-09T16:10:00Z' }), { kind: 'messages' })
-})
-
-test('triggers: once tasks run before anything else, once each per start of the runner', () => {
-  const agent = agentWith({ once: [['poems', 'Write poems.'], ['tidy', 'Tidy up.']] })
-  const lines = [...EARLIER, line.text(4, '2026-11-09T15:50:00Z', 'lunch')]
-  assert.deepEqual(ask({ agent, state: HANDLED, lines }), { kind: 'once', id: 'poems', task: 'Write poems.' })
-  assert.deepEqual(ask({ agent, state: { ...HANDLED, onceDone: ['poems'] }, lines }), { kind: 'once', id: 'tidy', task: 'Tidy up.' })
-  // One tried since the start isn't tried again until the next start, whatever came of it.
-  assert.deepEqual(ask({ agent, state: { ...HANDLED, onceDone: ['poems'] }, lines, onceTried: new Set(['tidy']) }), { kind: 'messages' })
-  // Not while paused.
-  const paused = { since: '2026-11-09T15:40:00Z', cause: 'outage', reason: 'OpenRouter answered 503', next: '2026-11-09T15:55:00Z', tries: 2 }
-  assert.deepEqual(ask({ agent, state: { ...HANDLED, paused }, lines }), { kind: 'idle', reason: 'paused' })
 })
 
 test('triggers: a scheduled task runs at its time, once, and waits for messages and pauses', () => {

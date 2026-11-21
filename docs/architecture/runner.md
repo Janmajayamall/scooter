@@ -62,12 +62,11 @@ The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the 
 
 1. **Commands** newer than `commandSeq` ([Commands](#commands)), on every round, also while paused, and without waiting for the quiet period.
 2. **Nothing while paused** ([Failures](run.md#failures)) until the next try: no batches, scheduled tasks or backfill batches.
-3. **`once` tasks**: each whose ID isn't in `onceDone` and hasn't been tried since this start. Once it succeeds its ID goes to `onceDone`; after a setup error or an outage it is the next try.
-4. **New messages**, with `on: new-messages`: when there are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without `on: new-messages`, messages wait.
-5. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
-6. **A backfill batch**, only when nothing live is waiting ([Backfill](rebuild-and-backfill.md#backfill)).
+3. **New messages**, with `on: new-messages`: when there are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without `on: new-messages`, messages wait.
+4. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
+5. **A backfill batch**, only when nothing live is waiting ([Backfill](rebuild-and-backfill.md#backfill)).
 
-*Why this order:* `once` tasks are the start's; messages before a scheduled task, because the evening check-in reports what was filed; the backfill last, so that it never holds up live work.
+*Why this order:* messages before a scheduled task, because the evening check-in reports what was filed; the backfill last, so that it never holds up live work.
 
 - **The quiet period** counts from when the runner saw the newest incoming line arrive, not from its `at`. Any `in` line counts, of any kind and any source. Lines already there when the runner starts count as seen then, so a start waits `BATCH_SECONDS`. *Why:* `at` is the channel's: a message caught up after downtime has an old one, and a batch would start while catch-up is still storing lines; an email's comes from its `Date` header, which can lie in the future.
 - **Scheduled tasks.** `at` is `HH:MM`, or a weekday and `HH:MM`, in `SCOOTER_TZ`, by the rule of [Time](shared-code.md#time) (`previousLocalTime`). `scheduled[at]` is the owner's date of the last occurrence dealt with. A task is due when its last occurrence has a later date. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once. Its date is recorded once it has run, or failed for pi's own reasons; one that meets a setup error or an outage keeps its old date, so it stays due. A scheduled run gets its task and no messages.
@@ -94,7 +93,6 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
   "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
   "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
   "session": {"day": "2026-11-09", "bump": 0},
-  "onceDone": ["poems"],
   "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
   "backfillDone": [],
   "scheduled": {"21:30": "2026-11-09"},
@@ -107,7 +105,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - An item in `retry` may have 0 `attempts`: after a setup error or an outage, a new item waits there with its count unchanged.
 - `paused` exists only while a setup error or an outage holds runs back: `{ since, cause, reason, next, tries }`, `cause` being `setup` or `outage`, and `tries` the failed tries in a row.
 - `backfill` exists only while a backfill is in progress; `backfillDone` lists the finished ones ([Backfill](rebuild-and-backfill.md#backfill)).
-- `lastRun` is `{ at, ok, seqs, durationMs }`, `at` being the run's start. A scheduled or `once` task is a live run too, with no `seqs`.
+- `lastRun` is `{ at, ok, seqs, durationMs }`, `at` being the run's start. A scheduled task is a live run too, with no `seqs`.
 - An agent that has never run has `cursor` and `commandSeq` 0, empty lists, `scheduled` `{}`, and `session` and `lastRun` null.
 - Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day, since the session and the schedule follow it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
@@ -119,7 +117,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 ## Sessions
 
 - **The session's day** is the owner's local date, or the day before while the local clock is before `SESSION_ROLLOVER_HOUR`. It goes by the clock, not by hours since midnight, so on a day the clocks change it still changes at that hour.
-- **The session's ID** is `<agent>-<day>`, and `-<n>` after the nth `/new` of that day: `session` holds the day of the newest `/new` and how many there were; on another day there were none. With `session: none`, pi runs without one. A scheduled or `once` task runs in the day's session too, so the evening check-in knows what the day's runs filed.
+- **The session's ID** is `<agent>-<day>`, and `-<n>` after the nth `/new` of that day: `session` holds the day of the newest `/new` and how many there were; on another day there were none. With `session: none`, pi runs without one. A scheduled task runs in the day's session too, so the evening check-in knows what the day's runs filed.
 - How a session is kept, and what a run may do to it, is in [The session's copy](run.md#the-sessions-copy).
 
 ## The batch
@@ -177,7 +175,7 @@ For context only (no action, no DONE):
         attachment "Call with Sam.m4a" /data/datastore/2026/11/09/1071-2.m4a (audio/mp4)
         whole email /data/datastore/2026/11/09/1071.eml
   ```
-- **A scheduled or `once` run** shows `Scheduled task (from your configuration, not a message from the owner):` and the task, instead of messages.
+- **A scheduled run** shows `Scheduled task (from your configuration, not a message from the owner):` and the task, instead of messages.
 
 **The system prompt.** Before each run the runner writes `run/system.md`, which pi gets with `--append-system-prompt`. It holds, in order:
 1. the protocol, `src/runner/protocol.md`, which ships with the runner ([The protocol](agent.md#the-protocol));

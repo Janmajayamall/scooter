@@ -22,7 +22,7 @@ function rebuildYaml() {
   lifelog:
     model: anthropic/claude-sonnet-5.5
     prompt: prompts/lifelog.md
-    skills: [skills/expenses, skills/runs, skills/people, skills/day-pages]
+    skills: [skills/expenses, skills/runs, skills/people]
     reads: [whatsapp, email]
     session: daily
     reply_mode: quiet
@@ -31,8 +31,6 @@ function rebuildYaml() {
     timeout_minutes: 10
     run:
       - on: new-messages
-      - once: poems
-        task: Write poems.
       - backfill: people-1
         skill: people
         writes: [views/people.csv]
@@ -51,7 +49,7 @@ const HISTORY = [
   line.reaction(5, '2026-11-08T04:01:00Z', 4, '👍'),
   line.text(6, '2026-11-08T05:00:00Z', 'coffee 120'), // Sun 8 Nov, 10:30
 ]
-const HANDLED = { cursor: 6, commandSeq: 3, retry: [], failed: [], session: { day: '2026-11-07', bump: 1 }, onceDone: ['poems'], backfillDone: [], scheduled: {}, lastRun: { at: '2026-11-08T05:00:30Z', ok: true, seqs: [6], durationMs: 1000 } }
+const HANDLED = { cursor: 6, commandSeq: 3, retry: [], failed: [], session: { day: '2026-11-07', bump: 1 }, backfillDone: [], scheduled: {}, lastRun: { at: '2026-11-08T05:00:30Z', ok: true, seqs: [6], durationMs: 1000 } }
 
 function commitByHand(paths, message) {
   gitOf(paths, 'add', '-A', '--', 'views', 'memory')
@@ -152,7 +150,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.ok(seen.every(call => !call.prompt.includes('/new') && !call.prompt.includes('#7')))
   assert.match(seen[0].systemPrompt, /## memory\/preferences\.md\n\n\(empty\)/)
   // Every skill.
-  assert.equal(seen[0].skills.length, 4)
+  assert.equal(seen[0].skills.length, 3)
 
   // The views and memory, rebuilt, in one commit on the tagged one.
   assert.equal(gitOf(paths, 'rev-parse', TAG).trim(), before)
@@ -168,14 +166,13 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   // Its sessions served it alone, and the old one is gone.
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
-  // The state: `cursor` and `commandSeq` at #6, the once task and every backfill done.
+  // The state: `cursor` and `commandSeq` at #6, and every backfill done.
   assert.deepEqual(state(paths), {
     cursor: 6,
     commandSeq: 6,
     retry: [],
     failed: [],
     session: null,
-    onceDone: ['poems'],
     backfillDone: ['people-1', 'runs-1'],
     scheduled: {},
     lastRun: null,

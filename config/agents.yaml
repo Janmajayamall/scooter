@@ -11,7 +11,6 @@ agents:
       - skills/meals
       - skills/travel
       - skills/people
-      - skills/day-pages
     reads: [whatsapp, email]             # the sources this agent works on
     session: daily                       # daily or none
     reply_mode: quiet                    # quiet or confirm
@@ -24,8 +23,6 @@ agents:
         task: >-
           Evening check-in. List in a few lines what you filed today,
           mention anything that looks missing, and list the open questions.
-      # - once: poems                    # runs once; the ID is remembered
-      #   task: Write poems for my earlier images captioned "poem".
       # - backfill: people-1             # fills a newly added view from the whole datastore
       #   skill: people
-      #   writes: [views/people.csv]     # what it may change, besides the day pages
+      #   writes: [views/people.csv]     # what it may change

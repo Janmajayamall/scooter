@@ -16,7 +16,7 @@ import { MINUTE, SECOND, outboxOf, prepareTestRunner } from './support/test-runn
 import { atEnd } from './support/tmp.mjs'
 
 const START = '2026-11-09T15:50:30Z'
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, onceDone: [], backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
 
 test('restarts: the waits are the native unit\'s, from the stop, and the reason is the error\'s code or name', () => {
   assert.deepEqual([0, 1, 2, 3, 4, 50].map(restartWait), [0, MINUTE, limits.RUNNER_RESTART_WAITS[1], 30 * MINUTE, 30 * MINUTE, 30 * MINUTE])

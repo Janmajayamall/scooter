@@ -58,7 +58,6 @@ test('config: the example config is read as it stands', t => {
           task: 'Evening check-in. List in a few lines what you filed today, mention anything that looks missing, and list the open questions.',
         },
       ],
-      once: [],
       backfill: [{ id: 'people-1', skill: 'people', writes: ['views/people.csv'] }],
     },
   })
@@ -85,8 +84,6 @@ test('config: what else is accepted', t => {
         task: Morning.
       - at: Sun 18:00
         task: Weekly review.
-      - once: poems
-        task: Write poems.
       - backfill: people-1
         skill: people
         writes: [views/people.csv, views/people/]
@@ -100,7 +97,6 @@ test('config: what else is accepted', t => {
       ['Sun 18:00', { weekday: 7, hour: 18, minute: 0 }],
     ],
   )
-  assert.deepEqual(run.once, [{ id: 'poems', task: 'Write poems.' }])
   assert.deepEqual(run.backfill, [{ id: 'people-1', skill: 'people', writes: ['views/people.csv', 'views/people/'] }])
   // Paths are cleaned: a leading ./ and a trailing / don't matter.
   const agent = parse(base.replace('prompt: prompts/lifelog.md', 'prompt: ./prompts//lifelog.md').replace('- skills/runs', '- skills/runs/')).agents[0]
@@ -173,8 +169,8 @@ test('config: each error in `run` names the entry and the field', t => {
   const withRun = entries => base.replace(/    run:[\s\S]*$/, `    run:\n${entries}`)
   const cases = [
     ['    run: new-messages\n', 'agents.lifelog.run', /must be a list of when the agent runs/],
-    ['      - new-messages\n', 'agents.lifelog.run[0]', /must be a map with one of on, at, once or backfill/],
-    ['      - on: new-messages\n        at: "21:30"\n', 'agents.lifelog.run[0]', /must have exactly one of on, at, once or backfill/],
+    ['      - new-messages\n', 'agents.lifelog.run[0]', /must be a map with one of on, at or backfill/],
+    ['      - on: new-messages\n        at: "21:30"\n', 'agents.lifelog.run[0]', /must have exactly one of on, at or backfill/],
     ['      - task: Something.\n', 'agents.lifelog.run[0]', /must have exactly one of/],
     ['      - on: old-messages\n', 'agents.lifelog.run[0].on', /must be new-messages/],
     ['      - on: new-messages\n      - on: new-messages\n', 'agents.lifelog.run[1].on', /is given twice/],
@@ -184,9 +180,8 @@ test('config: each error in `run` names the entry and the field', t => {
     ['      - at: "21:30"\n', 'agents.lifelog.run[0].task', /is missing/],
     ['      - at: "21:30"\n        task: "  "\n', 'agents.lifelog.run[0].task', /must be the task, as text/],
     ['      - at: "21:30"\n        task: Check in.\n        skill: people\n', 'agents.lifelog.run[0].skill', /doesn't belong with at/],
-    ['      - once: Poems!\n        task: Poems.\n', 'agents.lifelog.run[0].once', /must be an ID of lowercase letters, digits and hyphens/],
-    ['      - once: poems\n        task: A.\n      - once: poems\n        task: B.\n', 'agents.lifelog.run[1].once', /is poems, which another once entry has too/],
-    ['      - backfill: b1\n        skill: day-pages\n        writes: [views/x.csv]\n', 'agents.lifelog.run[0].skill', /can't be day-pages/],
+    ['      - backfill: People!\n        skill: people\n        writes: [views/x.csv]\n', 'agents.lifelog.run[0].backfill', /must be an ID of lowercase letters, digits and hyphens/],
+    ['      - backfill: b1\n        skill: people\n        writes: [views/x.csv]\n        task: Also this.\n', 'agents.lifelog.run[0].task', /doesn't belong with backfill/],
     ['      - backfill: b1\n        skill: swimming\n        writes: [views/x.csv]\n', 'agents.lifelog.run[0].skill', /must name one of the agent's skills/],
     ['      - backfill: b1\n        skill: people\n        writes: views/people.csv\n', 'agents.lifelog.run[0].writes', /must be a list of what the backfill may change/],
     ['      - backfill: b1\n        skill: people\n        writes: []\n', 'agents.lifelog.run[0].writes', /must be a list/],
@@ -201,11 +196,11 @@ test('config: each error in `run` names the entry and the field', t => {
     assert.match(problem.message, message, field)
   }
 
-  // What a backfill may change: files, or folders ending in /, inside views/ and outside views/days/.
-  for (const write of ['views/days/2026/11/2026-11-09.md', 'views/days/', 'views/days', 'views/', 'views', 'memory/x.md', 'views/../memory/x.md', 'views/./x.csv', 'views//x.csv', 'views/.hidden', '/views/x.csv', 'x.csv']) {
+  // What a backfill may change: files, or folders ending in /, inside views/.
+  for (const write of ['views/', 'views', 'memory/x.md', 'views/../memory/x.md', 'views/./x.csv', 'views//x.csv', 'views/.hidden', '/views/x.csv', 'x.csv']) {
     const problems = faults(withRun(`      - backfill: b1\n        skill: people\n        writes: ["${write}"]\n`))
     assert.ok(
-      problems.some(problem => problem.field === 'agents.lifelog.run[0].writes[0]' && /inside views\/ and outside views\/days\//.test(problem.message)),
+      problems.some(problem => problem.field === 'agents.lifelog.run[0].writes[0]' && problem.message.endsWith('must be a file, or a folder ending in /, inside views/')),
       `${write}: ${JSON.stringify(problems)}`,
     )
   }
@@ -355,7 +350,7 @@ test('config: no prompt or skill lies inside another skill\'s folder, where thei
   fs.mkdirSync(path.join(configDir, 'skills', 'expenses-old'))
   fs.writeFileSync(path.join(configDir, 'skills', 'expenses-old', 'SKILL.md'), '---\nname: expenses-old\ndescription: Old expenses.\n---\n')
   const { agents } = parseConfig(base.replace('- skills/runs', '- skills/expenses-old'), { configDir })
-  assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people', 'day-pages'])
+  assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people'])
 })
 
 test('config: loadConfig reads agents.yaml from the config folder, and names it when it can\'t', t => {

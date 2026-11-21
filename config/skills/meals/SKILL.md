@@ -16,7 +16,7 @@ One row per meal or drink, under that header. The CSV rules of your instructions
 - `date`, `time`: when it was eaten. A photo sent at the table is the message's time. A meal described later takes the time the owner gives, or else is empty.
 - `meal`: one of `breakfast`, `lunch`, `dinner`, `snack` or `drink`, from what it is and when.
 - `description`: what it was, in a few words: `poke bowl with salmon and rice`. Name a dish as the menu or the owner does.
-- `est_kcal`: your estimate of its calories, a whole number rounded to the nearest 10: `650`. It is always an estimate, from the photo, the portion and the dish, and the column's name says so; the day page writes it as `~650 kcal`. When the owner gives the number, from a label or an app, use theirs and say where it came from in `note`.
+- `est_kcal`: your estimate of its calories, a whole number rounded to the nearest 10: `650`. It is always an estimate, from the photo, the portion and the dish, and the column's name says so. When the owner gives the number, from a label or an app, use theirs and say where it came from in `note`.
 - `place`: where it was eaten: the restaurant's or café's name, `home`, `office`, or empty.
 - `note`: anything else worth keeping, such as who it was with ("with Sam"), or a guess, which starts the note with ❓.
 - `source`: the message numbers, such as `#1050`.

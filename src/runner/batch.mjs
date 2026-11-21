@@ -165,7 +165,7 @@ export function buildBatch({ agent, state, index, paths, now, timeZone, homeCurr
   return fitBatch({ agent, lane: state, index, candidates, fresh, viewOf: () => view })
 }
 
-// The prompt of a scheduled or `once` task. No messages, and no context.
+// The prompt of a scheduled task. No messages, and no context.
 export function buildTaskPrompt({ agent, task, paths, now, timeZone, homeCurrency, internet }) {
   return renderTaskPrompt(task, { header: headerFor({ agent, paths, now, timeZone, homeCurrency, internet }) })
 }

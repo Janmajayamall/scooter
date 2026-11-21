@@ -6,7 +6,6 @@
 //     "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
 //     "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
 //     "session": {"day": "2026-11-09", "bump": 0},
-//     "onceDone": ["poems"],
 //     "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
 //     "backfillDone": [],
 //     "scheduled": {"21:30": "2026-11-09"},
@@ -23,7 +22,7 @@
 // - `failed`: items given up on, the newest `FAILED_KEEP`.
 // - `session`: the owner's day of the newest `/new`, and how many there were that day. Null before
 //   the first `/new`: a day without one has the session `<agent>-<day>`.
-// - `onceDone`, `backfillDone`: the IDs of the `once` tasks and backfills that have finished.
+// - `backfillDone`: the IDs of the backfills that have finished.
 // - `backfill`: only while a backfill is in progress. Its own cursor, its retries, and the
 //   items it gave up on.
 // - `scheduled`: for each `at` of the config, the owner's date of the last time it came due that
@@ -41,7 +40,7 @@ import { isDate, parseIsoSeconds } from './time.mjs'
 
 export const PAUSE_CAUSES = ['setup', 'outage']
 
-const FIELDS = ['cursor', 'commandSeq', 'retry', 'failed', 'session', 'onceDone', 'backfill', 'backfillDone', 'scheduled', 'lastRun', 'paused']
+const FIELDS = ['cursor', 'commandSeq', 'retry', 'failed', 'session', 'backfill', 'backfillDone', 'scheduled', 'lastRun', 'paused']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isCount = value => Number.isSafeInteger(value) && value >= 0
@@ -57,7 +56,6 @@ export function initialAgentState() {
     retry: [],
     failed: [],
     session: null,
-    onceDone: [],
     backfillDone: [],
     scheduled: {},
     lastRun: null,
@@ -146,7 +144,6 @@ export function checkAgentState(state) {
   if (state.session !== undefined && state.session !== null) {
     shape('session', state.session, { day: [isDate, 'a date such as 2026-11-09'], bump: [isCount, 'a whole number, 0 or more'] })
   }
-  if (state.onceDone !== undefined) ids('onceDone', state.onceDone)
   if (state.backfillDone !== undefined) ids('backfillDone', state.backfillDone)
   if (state.backfill !== undefined) {
     shape('backfill', state.backfill, {

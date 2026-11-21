@@ -1,6 +1,6 @@
 # Scooter
 
-Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets and a page per day, and asks you when it's unsure. Everything is backed up every night, encrypted.
+Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets, and asks you when it's unsure. Everything is backed up every night, encrypted.
 
 This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`, and `AGENTS.md` says how to work on the code.
 
@@ -32,7 +32,7 @@ you (WhatsApp, email) ──▶ bridge ──▶ datastore ──▶ runner ─�
 ```
 
 - **The bridge** runs as root. It runs [wacli](https://github.com/openclaw/wacli), a WhatsApp client linked to the bot's number, as the user `scooter-wacli`, and the email reader as `scooter-mail`. It writes every message from you to the **datastore**, a log that is only ever appended to. It sends the replies, answers `/status`, `/backup` and `/help`, and makes the backups.
-- **The runner** runs as `scooter-runner`. It holds the OpenRouter key. When you have been quiet for 8 seconds it gives your new messages to the agent, [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), which runs in a fresh virtual machine for every batch, with no secrets and no network of its own. Everything pi sends goes through the runner's network policy, which allows OpenRouter's two chat endpoints and nothing else, and logs every request. pi writes the **views** (CSV files and day pages) and its **memory**; the runner checks what it wrote, commits it to git, and writes the replies to the outbox.
+- **The runner** runs as `scooter-runner`. It holds the OpenRouter key. When you have been quiet for 8 seconds it gives your new messages to the agent, [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), which runs in a fresh virtual machine for every batch, with no secrets and no network of its own. Everything pi sends goes through the runner's network policy, which allows OpenRouter's two chat endpoints and nothing else, and logs every request. pi writes the **views** (CSV files) and its **memory**; the runner checks what it wrote, commits it to git, and writes the replies to the outbox.
 
 The two services share folders and never talk over the network. Nothing listens for connections from outside.
 
@@ -225,7 +225,7 @@ Send the bot what you want kept: a receipt photo, a screenshot of a run, a note 
 | `/help` | Lists the commands |
 | `/new` | Starts a fresh conversation with the agent for the rest of the day |
 
-**The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv`, `people.csv`, and `views/days/YYYY/MM/YYYY-MM-DD.md`, a page per day that links to the attachments. The folder is a git repository, with a commit for each batch. To copy the views out:
+**The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
 ```sh
 sudo cp -r /var/lib/scooter/agents/lifelog/views ~/scooter-views && sudo chown -R "$USER" ~/scooter-views   # natively
@@ -233,7 +233,7 @@ docker compose cp runner:/data/agents/lifelog/views ./scooter-views             
 sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog log --stat                                      # what changed when
 ```
 
-A day page links to attachments in the datastore by relative paths, so the links work when the views stay next to the datastore. A guess is marked ❓ at the start of a row's `note`, and the open questions are in `memory/needs-review.md`.
+A guess is marked ❓ at the start of a row's `note`, and the open questions are in `memory/needs-review.md`.
 
 **When a run fails** you get one notice ("⚠️ I couldn't process your last messages (…). I'll try again."), and nothing more until a run gets through. A message the agent couldn't handle after 4 attempts gets a notice too; send it again, or edit it, to bring it back. If OpenRouter refuses the key, has no credit, or has no endpoint that meets zero data retention, runs pause, and the notice says so: fix it, and the next try, every 30 minutes, or restarting the runner, goes on. Nothing is lost meanwhile: messages wait, and are handled once runs go again.
 
@@ -335,7 +335,7 @@ A backfill files the messages from before a skill was added, for that skill alon
 ```yaml
       - backfill: books-1           # an ID of your choosing, used once
         skill: books
-        writes: [views/books.csv]   # what it may change, besides the day pages
+        writes: [views/books.csv]   # what it may change
 ```
 
 It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `/status` shows how far it has got.

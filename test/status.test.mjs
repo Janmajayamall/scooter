@@ -52,7 +52,6 @@ const STATE = {
     { seq: 3, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
   ],
   session: null,
-  onceDone: [],
   backfill: { id: 'people-1', until: 3, cursor: 1, retry: [], skipped: [] },
   backfillDone: [],
   scheduled: {},

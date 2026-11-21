@@ -20,7 +20,6 @@ const EXAMPLE = {
   retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
   failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: 'unreadable PDF' }],
   session: { day: '2026-11-09', bump: 0 },
-  onceDone: ['poems'],
   backfill: { id: 'people-1', until: 1890, cursor: 812, retry: [], skipped: [1031] },
   backfillDone: [],
   scheduled: { '21:30': '2026-11-09' },
@@ -30,7 +29,7 @@ const EXAMPLE = {
 
 // An agent's config, with only what these functions read.
 function agentWith({ scheduled = [], backfill = [] } = {}) {
-  return { name: 'lifelog', run: { newMessages: true, scheduled, once: [], backfill } }
+  return { name: 'lifelog', run: { newMessages: true, scheduled, backfill } }
 }
 
 test('state: an example state, and the state of an agent that has never run, are well formed', () => {
@@ -42,7 +41,6 @@ test('state: an example state, and the state of an agent that has never run, are
     retry: [],
     failed: [],
     session: null,
-    onceDone: [],
     backfillDone: [],
     scheduled: {},
     lastRun: null,
@@ -64,7 +62,7 @@ test('state: each fault names its field', () => {
     [{ failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: '' }] }, "failed[0].reason must be a string that isn't empty"],
     [{ session: { day: '2026-02-30', bump: 0 } }, 'session.day must be a date such as 2026-11-09'],
     [{ session: { day: '2026-11-09', bump: -1 } }, 'session.bump must be a whole number, 0 or more'],
-    [{ onceDone: [''] }, "onceDone[0] must be a string that isn't empty"],
+    [{ backfillDone: [''] }, "backfillDone[0] must be a string that isn't empty"],
     [{ backfill: { ...EXAMPLE.backfill, skipped: [1031, 1031] } }, 'backfill.skipped holds a seq twice'],
     [{ backfill: { ...EXAMPLE.backfill, cursor: undefined } }, 'backfill.cursor is missing'],
     [{ scheduled: { '21:30': 'today' } }, 'scheduled.21:30 must be a date such as 2026-11-09'],

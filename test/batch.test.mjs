@@ -11,7 +11,7 @@ import { cutText, renderBatchPrompt } from '../src/runner/prompt.mjs'
 import { EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, fillerLines, indexOf, line } from './support/runner.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', run: { newMessages: true, scheduled: [], once: [], backfill: [] } }
+const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', run: { newMessages: true, scheduled: [], backfill: [] } }
 const HEADER = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
 Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).`
 

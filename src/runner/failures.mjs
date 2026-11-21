@@ -280,20 +280,16 @@ export function settleLane(lane, batch, outcome, { now }) {
   return { lane: { cursor: Math.max(lane.cursor, batch.covered), retry, failed }, givenUp }
 }
 
-// The state after a scheduled or `once` task (the plan's rule for milestone 4). `task` is
-// `{ kind: 'scheduled', at, date }` or `{ kind: 'once', id }`.
+// The state after a scheduled task (the plan's rule for milestone 4). `task` is
+// `{ kind: 'scheduled', at, date }`.
 //
 // - A task that fails on a setup error or an outage stays due, and is the next try.
-// - A scheduled task that ran, or failed for another reason, is done for its date: it runs again
-//   at its next time.
-// - A `once` task is recorded in `onceDone` only after it succeeds. One that fails for another
-//   reason runs again at the next start; the runner remembers until then that it tried.
+// - A task that ran, or failed for another reason, is done for its date: it runs again at its next
+//   time.
 export function settleTask(state, task, outcome, { now, startedAt, durationMs }) {
-  let next = afterRun(state, outcome, { now, startedAt, durationMs, seqs: [] })
+  const next = afterRun(state, outcome, { now, startedAt, durationMs, seqs: [] })
   const counts = outcome.ok || outcome.cause === 'other'
-  if (task.kind === 'scheduled' && counts) next = { ...next, scheduled: { ...next.scheduled, [task.at]: task.date } }
-  if (task.kind === 'once' && outcome.ok && !next.onceDone.includes(task.id)) next = { ...next, onceDone: [...next.onceDone, task.id] }
-  return next
+  return counts ? { ...next, scheduled: { ...next.scheduled, [task.at]: task.date } } : next
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -304,13 +300,11 @@ const minutes = ms => Math.round(ms / 60000)
 // The notice of the first failure in a row. `job` is `{ kind: 'messages' }`, or the task as for
 // `settleTask`; `failure` what `failureCause` returned.
 export function failureNotice(job, { cause, reason }) {
-  const what =
-    job.kind === 'scheduled' ? `run the scheduled task ${job.at}` : job.kind === 'once' ? `run the task ${job.id}` : 'process your last messages'
+  const what = job.kind === 'scheduled' ? `run the scheduled task ${job.at}` : 'process your last messages'
   let next
   if (cause === 'setup') next = `Runs are paused until this is fixed. I'll try again every ${minutes(limits.SETUP_RETRY_WAIT)} minutes.`
   else if (cause === 'outage' || job.kind === 'messages') next = "I'll try again."
-  else if (job.kind === 'scheduled') next = 'It runs again at its next time.'
-  else next = "I'll try it again when I next start."
+  else next = 'It runs again at its next time.'
   return { type: 'text', by: 'runner', text: `⚠️ I couldn't ${what} (${reason}). ${next}` }
 }
 

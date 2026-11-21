@@ -167,8 +167,8 @@ const values = {
   // The most files and folders `views/` and `memory/` may hold together after a run. pi can make
   // hundreds of thousands in a run, and some of git's work grows faster than their number, such as
   // taking them out of the index again, so a run that leaves more fails before git reads anything.
-  // A year of daily use makes about 380, a day page and a month's folder at a time, and git
-  // adds this many small files in about a tenth of a second on the plan's Linux machine.
+  // The default skills keep five CSV files, and the memory two more, which grow in rows, not in
+  // number; git adds this many small files in about a tenth of a second on the plan's Linux machine.
   AGENT_FILES_MAX_COUNT: 20000,
   // The largest session file copied back from a run. pi wrote it, and the whole session goes to
   // the model on every request, so a larger one couldn't be sent anyway.
