@@ -1,10 +1,10 @@
-# KVM for pi's VMs under rootless Docker (8.3 of DESIGN.md), added to compose.yaml. In a .env file
+# KVM for pi's VMs under rootless Docker, added to compose.yaml. In a .env file
 # beside compose.yaml:
 #
 #   COMPOSE_FILE=compose.yaml:compose.kvm-rootless.yaml
 #
-# The runner runs as scooter-runner here too (D217). Rootless Docker gives the container's users
-# uids of their own on the host, and the host's kvm group never reaches a container (13.4), so the
+# The runner runs as scooter-runner here too. Rootless Docker gives the container's users
+# uids of their own on the host, and the host's kvm group never reaches a container, so the
 # host uid that scooter-runner (10002) is given needs access of its own to /dev/kvm. Ubuntu's device
 # rules take a user's access to /dev/kvm away whenever a VM starts or stops, so a udev rule gives
 # it back each time:

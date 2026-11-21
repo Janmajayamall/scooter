@@ -1,4 +1,4 @@
-// The sandbox interface (6.6 of DESIGN.md; ARCHITECTURE.md 2.7): how the runner runs pi without
+// The sandbox interface: how the runner runs pi without
 // knowing what runs it. The real sandbox is a Gondolin VM (`gondolin.mjs`, milestone 7); the tests
 // use a fake that runs a stub of pi as a local process (`test/support/fake-sandbox.mjs`).
 //
@@ -26,7 +26,7 @@
 //   `writable`. `hide` lists paths inside a read-only mount, from its root, that the VM doesn't
 //   see at all and can't create, such as `sessions` in the agent's folder; a writable mount hides
 //   nothing. A mount inside another takes its place there. Nothing else of the host is visible.
-// - `policy`: the network policy for the run (6.13): the model OpenRouter may be asked for, whether
+// - `policy`: the network policy for the run: the model OpenRouter may be asked for, whether
 //   the agent's internet access is on, and whether to ask for zero data retention. `secrets` maps
 //   a variable's name to `{ hosts, value }`: the program gets the variable holding a placeholder,
 //   and the sandbox puts `value` in its place only on requests to `hosts`.
@@ -37,7 +37,7 @@
 // past what a run may write, or the VM was lost. It rejects only when the command couldn't be run
 // at all, such as when the VM doesn't start.
 //
-// Nothing pi does may stop the runner (`docs/DECISIONS.md`, 4.7), so a sandbox bounds what a run
+// Nothing pi does may stop the runner, so a sandbox bounds what a run
 // can take from it:
 // - **Output.** It keeps the start of stdout, pi's answer, and the end of stderr, where OpenRouter's
 //   error is, up to `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (`createOutput`).
@@ -102,10 +102,10 @@ export function createOutput() {
   }
 }
 
-// The one host pi's requests to the model go to, and the only one its key is sent to (6.13).
+// The one host pi's requests to the model go to, and the only one its key is sent to.
 export const OPENROUTER_HOST = 'openrouter.ai'
 
-// What the VM image has (6.12): pi's program, the `PATH` its tools need, and a home folder made
+// What the VM image has: pi's program, the `PATH` its tools need, and a home folder made
 // fresh at each boot.
 export const PI_PROGRAM = 'pi'
 export const GUEST_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'

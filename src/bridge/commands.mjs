@@ -1,12 +1,12 @@
-// The commands the bridge answers (5.4 of DESIGN.md): `/status`, `/help` and `/backup`. `/new` is
+// The commands the bridge answers: `/status`, `/help` and `/backup`. `/new` is
 // the runner's, and the bridge passes over it.
 //
 // Commands reach the bridge as command lines in the datastore, written by intake like any other
 // line. The bridge handles those newer than `commandSeq`, in its state, as the runner does with its
-// own (6.4): it writes the reply to its outbox, then records the command as handled. So a command
+// own: it writes the reply to its outbox, then records the command as handled. So a command
 // is answered once, also across a restart; a crash between the two can answer it twice, and never
 // leaves it unanswered. The reply is `by: "bridge"`, with `about` set to the command, so it goes
-// back where the command was sent (5.3).
+// back where the command was sent.
 //
 // It runs when intake has stored a command, and once at startup for any the bridge didn't get to.
 // A reply that can't be written, as on a full disk, is tried again after a wait that doubles,
@@ -16,7 +16,7 @@
 // over (`backup.mjs`), which may be minutes later, after a run has finished. Commands are answered
 // one at a time, so waiting for it here would hold back a `/status` sent after it. The command
 // counts as handled once the backup has started: a bridge that crashes during the backup doesn't
-// answer it (docs/DECISIONS.md, milestone 10).
+// answer it.
 
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
@@ -36,7 +36,7 @@ export const HELP_TEXT = [
 // Returns the commands' handler. Options:
 // - `store`: the open store, whose index holds the command lines.
 // - `state`: the bridge's state (`state.mjs`), which keeps `commandSeq`.
-// - `paths`, `ids`: for the bridge's own outbox (`writeOutboxEntry`, D205); `ids` is the bridge's
+// - `paths`, `ids`: for the bridge's own outbox (`writeOutboxEntry`); `ids` is the bridge's
 //   one generator.
 // - `status()`: the reply to `/status` (`status.mjs`).
 // - `backup(seq)`: what `/backup`, the command line `seq`, does (`createBackups().ask`): the reply

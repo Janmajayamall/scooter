@@ -1,4 +1,4 @@
-# Scooter's bridge, as root (8.5 of DESIGN.md). `sudo scooter setup` installs and enables this
+# Scooter's bridge, as root. `sudo scooter setup` installs and enables this
 # unit, and doesn't start it: fill in /etc/scooter/bridge.env first.
 #
 # - It runs as root, and starts wacli and the email reader as their own users.
@@ -7,7 +7,7 @@
 # - Stopping it stops every process of the unit, wacli and the email reader among them.
 # - It restarts on failure, after waits that grow from 5 seconds to 5 minutes, as the bridge's own
 #   restarts of wacli and the email reader do (RESTART_BACKOFF). systemd keeps counting the
-#   restarts until the unit is started by hand or the machine starts again (D207).
+#   restarts until the unit is started by hand or the machine starts again.
 
 [Unit]
 Description=Scooter bridge: WhatsApp, email, delivery and backups

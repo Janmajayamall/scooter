@@ -3,8 +3,8 @@
 // commands the reader's functions send, `n:*`, IDLE, a lost connection, a wrong password, and that
 // nothing changes the mailbox. And the reader on top of it, with imapflow for real.
 //
-// What only a real provider shows, TLS, an app password and the provider's own IDLE, is for gate
-// G4 (section 6 of the plan).
+// What only a real provider shows, TLS, an app password and the provider's own IDLE, is for the
+// first real run.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

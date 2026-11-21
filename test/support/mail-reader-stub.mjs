@@ -1,4 +1,4 @@
-// A stand-in for the email reader's program, for the bridge's tests (section 10 of DESIGN.md).
+// A stand-in for the email reader's program, for the bridge's tests.
 //
 // The email channel runs it as it runs `src/mail/reader.mjs`: through the wrapper that
 // `createMailReaderStub` in `mail-reader.mjs` writes, with `run` or `newest`. It runs the real

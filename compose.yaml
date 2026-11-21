@@ -1,4 +1,4 @@
-# Scooter in Docker Compose (8.3 of DESIGN.md): one image, two services, and no published port.
+# Scooter in Docker Compose: one image, two services, and no published port.
 #
 #   cp bridge.env.example bridge.env && cp runner.env.example runner.env    then fill them in
 #   docker compose build
@@ -9,23 +9,23 @@
 # Other commands run the same way: `docker compose run --rm bridge pair`, `… bridge backup-init`,
 # `… runner rebuild lifelog` with the runner stopped, `… bridge restore` with both stopped.
 #
-# - **The data.** One volume, `data`, holds the whole data folder, at /data in every container
-#   (D219). A new volume starts as a copy of the image's /data, whose folders have the owners and
-#   modes of 3.2, and those keep each user out of the others' folders, as natively: the runner, as
+# - **The data.** One volume, `data`, holds the whole data folder, at /data in every container.
+#   A new volume starts as a copy of the image's /data, whose folders have the same owners and modes
+#   as natively, and those keep each user out of the others' folders: the runner, as
 #   scooter-runner, reads the datastore and can't read the bridge's, wacli's or the email reader's
 #   folders. `build-image` builds beside runner/ in the same volume, and renames the image in.
 # - **The config** is the repository's ./config, read-only, which only the runner and build-image
-#   see (3.2). Its files must be readable by other users of the host, as git leaves them.
+#   see. Its files must be readable by other users of the host, as git leaves them.
 # - **The env files**, bridge.env and runner.env beside this file, each given to its own service
-#   alone (8.2).
+#   alone.
 # - **KVM.** This file runs pi's VMs under emulation, which works everywhere and is about ten
 #   times slower. To use KVM, add the file of your case, by naming both in COMPOSE_FILE in a .env
 #   file beside this one, which every `docker compose` command here then reads:
 #     compose.kvm.yaml            rootful Docker, the usual install: COMPOSE_FILE=compose.yaml:compose.kvm.yaml
 #     compose.kvm-rootless.yaml   rootless Docker, with the udev rule it describes
-#   `docker compose run --rm runner doctor` says which case applies (8.4).
+#   `docker compose run --rm runner doctor` says which case applies.
 # - **build-image** runs as root, with the privileges Gondolin's builder needs to make its chroot,
-#   in a container of its own that `docker compose up` doesn't start (D220).
+#   in a container of its own that `docker compose up` doesn't start.
 
 name: scooter
 
@@ -47,7 +47,7 @@ x-scooter: &scooter
 
 services:
   # Runs as root, as natively, and starts wacli and the email reader as their own users. Its
-  # hostname is the same from one container to the next, so restic knows a lock it left (5.5).
+  # hostname is the same from one container to the next, so restic knows a lock it left.
   bridge:
     <<: *scooter
     command: [bridge]
@@ -57,7 +57,7 @@ services:
       - data:/data
 
   # Runs as scooter-runner, with a read-only root file system: it writes only in the data volume,
-  # and in /tmp. It is the container's main process, so its VMs stop with it (6.6).
+  # and in /tmp. It is the container's main process, so its VMs stop with it.
   runner:
     <<: *scooter
     command: [runner]
@@ -71,9 +71,9 @@ services:
       - ./config:/config:ro
 
   # `docker compose run --rm build-image`, after installing and after each upgrade, with the
-  # runner stopped (6.12). As root, Gondolin's builder makes a chroot with /proc and /dev mounted
+  # runner stopped. As root, Gondolin's builder makes a chroot with /proc and /dev mounted
   # in it, which a container may do only when privileged: under rootful Docker that is root on the
-  # host, as a native build is (row 8).
+  # host, as a native build is.
   build-image:
     <<: *scooter
     profiles: [build-image]

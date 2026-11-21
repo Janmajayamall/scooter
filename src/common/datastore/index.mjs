@@ -1,4 +1,4 @@
-// The in-memory index of the datastore (4.3 of DESIGN.md): what the bridge and the runner each
+// The in-memory index of the datastore: what the bridge and the runner each
 // rebuild by reading every line at startup, and keep current as lines arrive.
 //
 // It answers three questions:
@@ -9,7 +9,7 @@
 import { DatastoreError } from './line.mjs'
 
 // The kinds of line that are known by their own channel ID. An `edit` carries the ID of the
-// message it changes (13.1), so it is never looked up by it, and neither is a `delete`.
+// message it changes, so it is never looked up by it, and neither is a `delete`.
 const KNOWN_BY_ID = ['message', 'command', 'reaction']
 
 const idKey = (source, sourceId) => `${source}\n${sourceId}`
@@ -77,7 +77,7 @@ export function createIndex() {
     },
 
     // The `seq` of every command line after `after`, in order. The runner handles commands as they
-    // come (6.4), and finds them here without reading every line again.
+    // come, and finds them here without reading every line again.
     commandsAfter(after) {
       let start = commands.length
       while (start > 0 && commands[start - 1] > after) start -= 1

@@ -1,11 +1,11 @@
-// How pi's VMs are accelerated: `AGENT_ACCEL` (6.6 of DESIGN.md; ARCHITECTURE.md decision 43).
+// How pi's VMs are accelerated: `AGENT_ACCEL`.
 //
 // - `auto`, the default, uses KVM when the runner can open `/dev/kvm` for reading and writing, and
 //   emulation otherwise. The runner says which at startup, `/status` shows it, and falling back to
 //   emulation tells the owner once (`src/runner/status.mjs`).
 // - `kvm` and `emulation` force one. A forced KVM that can't be used stops the runner with an error
 //   that says how to enable it, rather than quietly using emulation, about ten times slower.
-// - `hvf`, Apple's hypervisor, is a value kept for macOS (section 12). On Linux it stops the runner
+// - `hvf`, Apple's hypervisor, is a value kept for macOS. On Linux it stops the runner
 //   like any other forced accelerator that isn't there.
 //
 // Gondolin would pick by itself, and falls back to emulation without a word. So the sandbox always

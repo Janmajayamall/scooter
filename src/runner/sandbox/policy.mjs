@@ -1,9 +1,9 @@
-// The network policy (6.13 of DESIGN.md; ARCHITECTURE.md 2.8): what pi's VM may send, checked and
+// The network policy: what pi's VM may send, checked and
 // logged in the runner before anything goes out.
 //
 // pi's VM has no network of its own. Gondolin's host side, in the runner's process, answers its DNS
 // with made-up addresses, refuses UDP, raw TCP and private addresses, and hands each HTTP(S)
-// request to this policy's `onRequest` hook, after terminating the VM's TLS (13.4). The hook:
+// request to this policy's `onRequest` hook, after terminating the VM's TLS. The hook:
 //
 // - **Hosts.** Lets out only `openrouter.ai` over HTTPS, and, with `AGENT_INTERNET=on`, any other
 //   host over HTTPS but OpenRouter's others. Plain HTTP is refused. Gondolin then refuses a host
@@ -30,7 +30,7 @@
 // Refusals answer the VM with an error in OpenRouter's shape, so pi prints the policy's reason.
 //
 // The allowlists are what the pinned pi sends for any model in its catalog, on each route, as
-// milestone 0 captured them (`test/fixtures/pi-requests/`; `docs/DECISIONS.md`, 0.4, pi 6). A test
+// milestone 0 captured them (`test/fixtures/pi-requests/`). A test
 // compares them with the fixtures, which are captured again with every new pi.
 
 import { createIds } from '../../common/files.mjs'
@@ -40,7 +40,7 @@ import { isoSeconds } from '../../common/time.mjs'
 import { OPENROUTER_HOST } from './index.mjs'
 import { MARKER_HEADER, createNetworkLog, followRequests, hostForLog, methodForLog, pathForLog, quoteForLog, reasonForLog } from './netlog.mjs'
 
-// OpenRouter's two chat routes (13.2): the path, the query strings pi uses, and the header pi sends
+// OpenRouter's two chat routes: the path, the query strings pi uses, and the header pi sends
 // the key in, with how the key is written there.
 export const ROUTES = {
   messages: { path: '/api/v1/messages', queries: ['', '?beta=true'], keyHeader: 'x-api-key', keyValue: key => key },
@@ -61,7 +61,7 @@ export const PI_BETAS = {
 }
 
 // Where the policy asks for zero data retention when `OPENROUTER_ZDR=on`. OpenRouter's reference
-// shows a `provider` object on the messages route only with `allow_fallbacks` (14): if that route
+// shows a `provider` object on the messages route only with `allow_fallbacks`: if that route
 // turns out to refuse these fields, it is set false here, and the key's guardrail enforces ZDR on
 // that route alone (the plan's rule for milestone 8).
 export const ZDR_ROUTES = { messages: true, chat: true }
@@ -123,7 +123,7 @@ function checkContent(route, body) {
 }
 
 // What is wrong with a request's body on OpenRouter's `route`, for an agent whose model is `model`,
-// as a short reason, or null when it is shaped like the pinned pi's (6.13).
+// as a short reason, or null when it is shaped like the pinned pi's.
 export function checkModelRequest({ route, body, model }) {
   if (!isObject(body)) return "the body isn't a JSON object"
   if (body.model !== model) return "the model isn't the agent's"
@@ -182,7 +182,7 @@ async function readBody(request, max) {
   return Buffer.concat(chunks, size)
 }
 
-// The answer to a request the policy refuses, in OpenRouter's shape, which pi prints (0.4, pi 5).
+// The answer to a request the policy refuses, in OpenRouter's shape, which pi prints.
 function refusal(status, reason) {
   const body = { error: { message: `Scooter's network policy refused this request: ${reason}`, code: status } }
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -280,8 +280,7 @@ function runNetwork({ policy, placeholders, netlog, ids, clock, log }) {
 
     // The request is counted before its body is read, which waits on the VM, and given back if it
     // doesn't go out: counted after, requests read at the same time would each pass the check
-    // above, and a run could make up to as many more as Gondolin handles at once (the review of
-    // milestone 8, smaller point 2).
+    // above, and a run could make up to as many more as Gondolin handles at once.
     letOut += 1
     let sent = false
     try {

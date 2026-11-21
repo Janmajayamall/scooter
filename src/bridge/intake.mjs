@@ -1,4 +1,4 @@
-// Intake: records from the channels become datastore lines (5.2 step 6 of DESIGN.md).
+// Intake: records from the channels become datastore lines.
 //
 // This is the core's half of receiving, the same for every channel. A channel hands over a record
 // for each message from the owner; intake decides which kind of line it is, finds the lines it
@@ -16,18 +16,18 @@
 // - Each attachment is downloaded, with `MEDIA_DOWNLOAD_RETRIES` more tries if that fails, and
 //   handed to the store, which copies it into the day folder. An attachment that can't be stored
 //   leaves a `media` object on the line saying why: too large, not a file, a failed download, or a
-//   copy that failed. A channel that keeps a message until it is stored, as email's spool does
-//   (5.6), is the exception: when a copy fails on the bridge's side, such as on a full disk,
+//   copy that failed. A channel that keeps a message until it is stored, as email's spool does,
+//   is the exception: when a copy fails on the bridge's side, such as on a full disk,
 //   nothing of the message is stored, and the channel hands it over again later, files and all.
-// - Duplicates, which the webhook and catch-up both deliver (4.4), are the store's to skip. A
+// - Duplicates, which the webhook and catch-up both deliver, are the store's to skip. A
 //   message already stored is recognized before its attachments are downloaded again.
 // - A download that its channel's stop cut short, for a backup or a shutdown, leaves the message
 //   unstored, rather than stored as `download failed`, and every record of that channel after it
 //   too, until the channel starts again: the channel hands them over again when it starts, as
-//   WhatsApp's catch-up does, from where it had got to (D179). So they are stored in their order.
+//   WhatsApp's catch-up does, from where it had got to. So they are stored in their order.
 // - A record intake didn't store, and that its channel must hand over again, is said so with
 //   `again: true`: one a stop left, one that failed for a reason of the bridge's, such as a bug,
-//   and one the store stopped for. WhatsApp's catch-up never goes on past such a row (D179).
+//   and one the store stopped for. WhatsApp's catch-up never goes on past such a row.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -38,12 +38,12 @@ import { errorFields } from '../common/log.mjs'
 import { isoSeconds, systemClock } from '../common/time.mjs'
 import { checkRecord } from './channels/index.mjs'
 
-// What a line's `media` object says when an attachment couldn't be stored (4.2).
+// What a line's `media` object says when an attachment couldn't be stored.
 export const MEDIA_ERRORS = {
   tooLarge: 'too large, not downloaded',
   downloadFailed: 'download failed',
   notStored: 'could not be stored',
-  // An email the reader couldn't parse, stored with its `.eml` (5.6).
+  // An email the reader couldn't parse, stored with its `.eml`.
   notParsed: 'could not be parsed',
 }
 
@@ -52,7 +52,7 @@ export const MEDIA_ERRORS = {
 // - `channels`: a Map from each channel's name to the channel.
 // - `paths`: what `makePaths` returns. Attachments wait in `bridgeIncoming` between their channel
 //   and the store.
-// - `onFatal(error)`: called once if the store stops taking lines (D29). The bridge can't go on
+// - `onFatal(error)`: called once if the store stops taking lines. The bridge can't go on
 //   without a restart then.
 // - `onCommand(seq)`: called after a command line has been stored, for the bridge to answer it.
 export function createIntake({ store, channels, paths, log, clock = systemClock, onFatal = () => {}, onCommand = () => {} }) {
@@ -60,19 +60,19 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
   let queue = Promise.resolve()
   let failed = null
   // The channels whose stop cut a download short, leaving its message for them to hand over again,
-  // until they start again: nothing of theirs is stored meanwhile (D179).
+  // until they start again: nothing of theirs is stored meanwhile.
   const left = new Set()
 
   // The `at` of the newest incoming line from each channel, by `seq`. WhatsApp's catch-up starts
   // from it only for a bridge state an older bridge wrote, which doesn't say where catch-up had
-  // got to (D179).
+  // got to.
   const newestIn = new Map()
   for (const { line } of store.index.entries()) {
     if (line.dir === 'in') newestIn.set(line.source, line.at)
   }
 
   // The message, or command, a line from this channel refers to by its channel ID: its `seq`, or
-  // undefined. A reaction, an edit or a deletion can't be referred to (4.2).
+  // undefined. A reaction, an edit or a deletion can't be referred to.
   function targetOf(source, id) {
     const seq = store.index.seqOf(source, id)
     return seq !== undefined && store.index.current(seq) !== undefined ? seq : undefined
@@ -125,7 +125,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         if (error.code === 'EFBIG') return { error: MEDIA_ERRORS.tooLarge }
         // A copy that failed on the bridge's side, such as on a full disk, from a channel that
         // keeps the message until it is stored: nothing of it is stored now, and the channel hands
-        // it over again, with its files (5.6).
+        // it over again, with its files.
         if (error.bridgeSide && channel.keepsUntilStored) throw error
         // From such a channel any other failure is the message's own, such as a file missing from
         // the mail spool, which the reader wrote whole before it handed the folder over: another
@@ -165,7 +165,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         // The line has room for one `media` object: the first attachment that couldn't be stored.
         else media ??= mediaOf(attachment, result.error)
       }
-      // An email's files start with the whole message, `<seq>.eml` (5.6), which the agent's prompt
+      // An email's files start with the whole message, `<seq>.eml`, which the agent's prompt
       // names as the whole email. Without it the files would be numbered from its first part, so
       // none is kept, and `media` says why.
       if (record.source === 'email' && downloaded.length > 0 && downloaded[0].n !== 1) {
@@ -178,8 +178,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
       } catch (error) {
         if (error instanceof DatastoreError || files.length === 0) throw error
         // An attachment couldn't be copied into the day folder. The store wrote nothing and used
-        // up no `seq` (D29). A channel that keeps the message until it is stored hands it over
-        // again (5.6); otherwise the message is kept without its files.
+        // up no `seq`. A channel that keeps the message until it is stored hands it over
+        // again; otherwise the message is kept without its files.
         if (channel.keepsUntilStored) throw error
         log.warn('intake.attachment_not_stored', { source: record.source, ...errorFields(error) })
         return await append({ ...fields, media: media ?? mediaOf(downloaded[0].attachment, MEDIA_ERRORS.notStored) })
@@ -240,7 +240,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
         return { stored: false, reason: 'the store stopped', again: true }
       }
       // A bug, or the disk. The record is lost to this delivery: WhatsApp's catch-up lists it
-      // again within `CATCHUP_INTERVAL`, since it never goes on past a record left so (D179), and
+      // again within `CATCHUP_INTERVAL`, since it never goes on past a record left so, and
       // an email stays in the spool.
       log.error('intake.failed', { source: record?.source, ...errorFields(error) })
       return { stored: false, reason: 'failed', again: true }
@@ -263,7 +263,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     idle: () => queue,
 
     // Says that the channel `source` starts again: what it hands over from here on is stored again,
-    // after its stop left a message (D179). It takes its turn after the records taken before it,
+    // after its stop left a message. It takes its turn after the records taken before it,
     // which are still left. The bridge calls it before it starts a channel it stopped.
     started(source) {
       queue = queue.then(() => left.delete(source))

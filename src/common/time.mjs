@@ -1,5 +1,4 @@
-// Time: UTC for everything Scooter stores or compares, and the owner's time zone at the edges
-// (section 2 of DESIGN.md).
+// Time: UTC for everything Scooter stores or compares, and the owner's time zone at the edges.
 //
 // Instants are milliseconds since the epoch, as `Date.now()` gives them. Nothing here reads the
 // process's own time zone: UTC parts come from the `getUTC…` methods, and a local time is always
@@ -113,7 +112,7 @@ const ZONE_NAME = /^[A-Z][A-Za-z0-9_+-]*(?:\/[A-Z][A-Za-z0-9_+-]*)*$/
 // Node knows, such as `Asia/Kolkata`.
 //
 // Node also takes a name in any case, and an offset such as `+05:30`. pi doesn't get the zone from
-// Node: its `TZ` (6.6) is looked up as a file in the VM's tz database, where names are case
+// Node: its `TZ` is looked up as a file in the VM's tz database, where names are case
 // sensitive and offsets aren't names. There, `asia/kolkata` would quietly mean UTC.
 export function isTimeZone(timeZone) {
   if (typeof timeZone !== 'string' || !ZONE_NAME.test(timeZone)) return false
@@ -183,7 +182,7 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 // A time as the owner reads it in a short line, in their zone: `21:13` on the zone's date of `now`,
 // `Sun 8 Nov 20:02` on another date of the same year, and `Sat 8 Nov 2025 20:02` in another year.
-// The agent's prompt shows its items this way (6.5), and `/status` its times (5.4).
+// The agent's prompt shows its items this way, and `/status` its times.
 export function shortLocalTime(ms, now, timeZone) {
   const t = toLocal(ms, timeZone)
   const clock = `${pad(t.hour)}:${pad(t.minute)}`

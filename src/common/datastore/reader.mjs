@@ -1,4 +1,4 @@
-// Reading the datastore (4.1, 4.3 and 6.4 of DESIGN.md).
+// Reading the datastore.
 //
 // The datastore is one `log.jsonl` per day folder, `YYYY/MM/DD`, and reading the folders in date
 // order gives the lines in `seq` order. A reader follows it by polling: each `poll()` returns the

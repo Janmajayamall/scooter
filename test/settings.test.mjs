@@ -1,4 +1,4 @@
-// Settings (8.2 of DESIGN.md): one env file per service, the format the file has, and the checks
+// Settings: one env file per service, the format the file has, and the checks
 // on every variable. Errors name the variable.
 
 import assert from 'node:assert/strict'
@@ -278,7 +278,7 @@ test('settings: everything the bridge can be given', () => {
   })
   assert.deepEqual(b2.backup.env, { AWS_DEFAULT_REGION: 'eu', B2_ACCOUNT_ID: 'id', B2_ACCOUNT_KEY: 'key' })
   assert.deepEqual([b2.backup.keepDaily, b2.backup.keepWeekly, b2.backup.keepMonthly], [7, 4, 12])
-  // A check on Sundays only, and a restore back where each file was backed up from (5.5).
+  // A check on Sundays only, and a restore back where each file was backed up from.
   assert.deepEqual([b2.backup.forceCheck, b2.backup.restoreTarget], [false, '/'])
 })
 
@@ -405,7 +405,7 @@ test('settings: everything the runner can be given', () => {
     agentAccel: 'kvm',
   })
   // `hvf` is a known value, kept for macOS. Whether it can be used is decided when the runner
-  // picks its accelerator (6.6).
+  // picks its accelerator.
   for (const accel of ['auto', 'kvm', 'emulation', 'hvf']) {
     assert.equal(loadSettings('runner', { env: { ...RUNNER, AGENT_ACCEL: accel } }).agentAccel, accel)
   }
@@ -439,7 +439,7 @@ test('settings: every fault is reported at once', () => {
 })
 
 test('settings: a setting\'s range is a limit, and the message gives it', t => {
-  // A value becomes a setting only with a valid range (8.6), so a bad one can't, for example,
+  // A value becomes a setting only with a valid range, so a bad one can't, for example,
   // make the runner start a batch on every poll.
   assert.match(faults('runner', { ...RUNNER, BATCH_SECONDS: '0' }).BATCH_SECONDS, /BATCH_SECONDS must be a whole number from 1 to 600/)
   t.after(overrideLimits({ SETTING_RANGES: { BATCH_SECONDS: [0, 5], SESSION_ROLLOVER_HOUR: [0, 23] } }))
@@ -459,7 +459,7 @@ for (const side of ['bridge', 'runner']) {
     // Every variable of this side is there, set or commented out, and nothing else is.
     const named = [...text.matchAll(/^(?:# )?([A-Z][A-Z0-9_]*)=/gm)].map(match => match[1])
     assert.deepEqual([...named].sort(), [...variables].sort())
-    // The file says that a value with `$` needs single quotes (8.2).
+    // The file says that a value with `$` needs single quotes.
     assert.match(text, /\$.*single quotes/)
 
     // As it stands, the file is read without a format fault, and asks only for what's required.

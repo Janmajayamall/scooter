@@ -1,25 +1,24 @@
-// `scooter doctor`: checks what the runner needs, and changes nothing (8.4 of DESIGN.md).
+// `scooter doctor`: checks what the runner needs, and changes nothing.
 //
 // Natively it runs as the runner's user, `sudo -u scooter-runner scooter doctor`; in Docker, in the
 // runner's container. It reports, each with its fix when it isn't as it should be:
-// - which accelerator pi's VMs can use, and, without KVM, how to enable it in this setup (8.3, 8.5);
+// - which accelerator pi's VMs can use, and, without KVM, how to enable it in this setup;
 // - QEMU;
-// - the VM image, and the pi version it holds against the one the build file pins (6.12);
-// - that a VM boots from it, with that accelerator, and how long it took (D224);
-// - `agents.yaml`, which the runner checks at its start (6.1);
-// - the owners and modes of the data folder's folders (3.2), and of the two env files;
+// - the VM image, and the pi version it holds against the one the build file pins;
+// - that a VM boots from it, with that accelerator, and how long it took;
+// - `agents.yaml`, which the runner checks at its start;
+// - the owners and modes of the data folder's folders, and of the two env files;
 // - whether `openrouter.ai` can be reached from here;
-// - with ZDR on, which of the configured model's endpoints keep no data (6.13).
+// - with ZDR on, which of the configured model's endpoints keep no data.
 //
 // It sends OpenRouter no key and nothing of the owner's: it asks for OpenRouter's public list of
 // the endpoints that keep no data, which also says whether OpenRouter can be reached.
 //
 // It checks what the runner's user can reach, so it runs as that user, and refuses to run as another
-// where that user is there (the review of milestone 12, smaller point 2).
+// where that user is there.
 //
 // What it checks of the runner, the config, the image, the accelerator and the VM's boot is the
-// runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`
-// (ARCHITECTURE.md 4.2).
+// runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -30,14 +29,13 @@ import { createProc, findProgram, inDocker } from '../common/proc.mjs'
 import { DEFAULT_ENV_DIR, ENV_DIR_VARIABLE } from '../common/settings.mjs'
 import { USERS, dataFolders } from './setup.mjs'
 
-// OpenRouter's public list of the endpoints that keep no prompts or responses (13.3).
+// OpenRouter's public list of the endpoints that keep no prompts or responses.
 export const ZDR_ENDPOINTS_URL = 'https://openrouter.ai/api/v1/endpoints/zdr'
 
 const octal = mode => `0${(mode & 0o7777).toString(8)}`
 
 // How to make KVM usable, for an error code from `kvmProblem`, natively or in Docker, where the
-// runner runs as scooter-runner in every case, and compose.yaml's two KVM files give it the device
-// (8.3; D217, D222).
+// runner runs as scooter-runner in every case, and compose.yaml's two KVM files give it the device.
 export function kvmFix(problem, { docker = false, runnerUser = USERS.runner } = {}) {
   if (problem === 'ENOENT') {
     return docker
@@ -68,7 +66,7 @@ export function qemuCheck({ program, find = findProgram }) {
   return { name: 'QEMU', status: 'fail', text: `${missing.join(' and ')} ${missing.length === 1 ? "isn't" : "aren't"} on the PATH`, fix: `install QEMU, such as apt install ${packages}` }
 }
 
-// The checks of the data folder's folders against `dataFolders` (3.2), for the users' ids. The
+// The checks of the data folder's folders against `dataFolders`, for the users' ids. The
 // runner's user can look at each folder there, but into its own only. Each wrong one is a check.
 export function folderChecks(paths, ids, { docker = false } = {}) {
   const checks = []
@@ -94,7 +92,7 @@ function fixFolder(folder, owner, mode, docker) {
 }
 
 // The check that a VM boots, for what `bootCheck` returned, or the error it threw, and the
-// accelerator in use. Under nested virtualization `/dev/kvm` can open and a VM still not boot (D218).
+// accelerator in use. Under nested virtualization `/dev/kvm` can open and a VM still not boot.
 export function bootCheckResult({ booted = null, error = null, docker = false }) {
   const name = 'VM boot'
   if (error === null) return { name, status: 'ok', text: `a VM booted in ${booted.ms === null ? '?' : (booted.ms / 1000).toFixed(1)} seconds, with ${booted.accel === 'kvm' ? 'KVM' : 'emulation'}` }
@@ -107,7 +105,7 @@ export function bootCheckResult({ booted = null, error = null, docker = false })
   }
 }
 
-// The check of the env files (3.2, 8.2): the runner's own is the runner's, mode 0600, and it can't
+// The check of the env files: the runner's own is the runner's, mode 0600, and it can't
 // read the bridge's. In Docker each service gets its settings in its environment, and the files
 // aren't there.
 export function envFileCheck(envDir, { uid = process.getuid?.() } = {}) {
@@ -254,8 +252,8 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
 
   checks.push(envFileCheck(envDir))
 
-  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too (the review of
-  // milestone 14, smaller point 6): `runDoctor`'s handlers have taken the signals' own ending away.
+  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too:
+  // `runDoctor`'s handlers have taken the signals' own ending away.
   const zdr = await fetchZdrEndpoints({ fetch, stop: signal })
   if (signal?.aborted) return checks
   checks.push(...openRouterChecks(zdr, { model, zdrOn: settings.zdr }))
@@ -276,7 +274,7 @@ export function reportText(checks) {
 
 // Why `doctor` doesn't run as the user it runs as, or null: it checks what the runner's user can
 // reach, the accelerator, the folders and the env files, which another user, root above all, sees
-// otherwise (the review of milestone 12, smaller point 2). Where that user isn't there, as in
+// otherwise. Where that user isn't there, as in
 // development, it runs as whoever runs it.
 export async function wrongUser({ proc, uid = process.getuid?.(), docker = inDocker() }) {
   const runnerUser = await proc.findUser(USERS.runner)
@@ -297,8 +295,7 @@ export async function runDoctor({ settings, env = process.env, stdout = process.
   }
   const envDir = env[ENV_DIR_VARIABLE] || DEFAULT_ENV_DIR
   // Stopped, by a signal of the terminal's or a `kill`, it closes the VM its boot check started
-  // before it ends: nothing else stops a VM of Gondolin's whose starter was killed (6.6; the review
-  // of milestone 13, smaller point 2).
+  // before it ends: nothing else stops a VM of Gondolin's whose starter was killed.
   const stopping = new AbortController()
   let stoppedBy = null
   const handlers = ['SIGTERM', 'SIGINT', 'SIGHUP'].map(name => {

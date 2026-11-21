@@ -1,4 +1,4 @@
-// The batch (6.5 of DESIGN.md): which items the agent is given in one run, what it is shown for
+// The batch: which items the agent is given in one run, what it is shown for
 // context, and the prompt that says it.
 //
 // - **Items:** due retries first, then work items after the cursor, oldest first, at most
@@ -11,7 +11,7 @@
 // - **Context:** the out lines and reactions from the oldest item to the end of what the batch
 //   covers, plus the message each reply quotes, shown under it.
 // - **Covered:** the lines up to the first work item left for a later batch. When the run succeeds,
-//   the cursor moves there (6.8): the context, the commands and the lines of other sources in that
+//   the cursor moves there: the context, the commands and the lines of other sources in that
 //   stretch are dealt with too.
 //
 // When even one item makes the prompt too long, it is fitted, in this order: the oldest lines of
@@ -19,9 +19,9 @@
 // the whole of each is; and, last, the prompt is cut at the limit.
 //
 // A batch is drawn from a **lane**: `{ cursor, retry, failed }`, a cursor, the items waiting to be
-// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own
-// (6.3); a backfill from its own, with `skipped` as `failed` (6.11); and a rebuild from a state it
-// keeps in memory (6.10). `upTo` is the last line a lane's work reaches: the newest line for live
+// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own;
+// a backfill from its own, with `skipped` as `failed`; and a rebuild from a state it
+// keeps in memory. `upTo` is the last line a lane's work reaches: the newest line for live
 // runs, and the `seq` a replay stops at (`replay.mjs`).
 
 import { limits } from '../common/limits.mjs'
@@ -58,8 +58,7 @@ export function selectCandidates({ agent, lane, index, now, upTo = index.lastSeq
 //
 // `items` are in `seq` order, with those brought in by an edit or deletion (`origin` `retry` or
 // `failed`). `context` is in `seq` order. `covered` is where the lane's cursor goes once the run is
-// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`
-// (6.7).
+// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`.
 export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, candidates, fresh) {
   const items = new Map(candidates.map(candidate => [candidate.seq, candidate]))
   for (const candidate of candidates) {
@@ -93,7 +92,7 @@ export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, cand
 // grows with the cap, except where the cap reaches a text's whole length: the text is then shown
 // whole, without the note that follows a cut text, and the prompt is shorter than just below. So
 // the caps are searched a stretch at a time, between those lengths, from the highest down, and the
-// first stretch whose lowest cap fits holds the answer (the review of milestone 3, point 7).
+// first stretch whose lowest cap fits holds the answer.
 function largestCap(render, lengths) {
   const ok = cap => fits(render(cap))
   let high = limits.PROMPT_MAX_BYTES
@@ -157,7 +156,7 @@ export function fitBatch({ agent, lane, index, upTo = index.lastSeq, candidates,
 //
 // - `agent`, `state`, `index`: the config, the state and the datastore's index.
 // - `paths`: what `makePaths` returns; the prompt gives absolute paths, which are the same inside
-//   the VM (6.6).
+//   the VM.
 // - `now`, `timeZone`, `homeCurrency`, `internet`: what the prompt's first line says.
 export function buildBatch({ agent, state, index, paths, now, timeZone, homeCurrency, internet }) {
   const { candidates, fresh } = selectCandidates({ agent, lane: state, index, now })
@@ -166,7 +165,7 @@ export function buildBatch({ agent, state, index, paths, now, timeZone, homeCurr
   return fitBatch({ agent, lane: state, index, candidates, fresh, viewOf: () => view })
 }
 
-// The prompt of a scheduled or `once` task (6.5). No messages, and no context.
+// The prompt of a scheduled or `once` task. No messages, and no context.
 export function buildTaskPrompt({ agent, task, paths, now, timeZone, homeCurrency, internet }) {
   return renderTaskPrompt(task, { header: headerFor({ agent, paths, now, timeZone, homeCurrency, internet }) })
 }

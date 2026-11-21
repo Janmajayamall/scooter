@@ -1,7 +1,7 @@
 // What Gondolin and the VM image do, which the sandbox will rely on.
 //
 // These are the VM checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
-// docs/DECISIONS.md says what each one settled. They run the pinned Gondolin against an image
+// `docs/architecture/sandbox.md` gives the facts they found. They run the pinned Gondolin against an image
 // built from config/image/build.json, so they are also what to run again after upgrading either.
 
 import assert from 'node:assert/strict'
@@ -183,7 +183,7 @@ test('VM 1: sessions/ is hidden from the VM, which could read it otherwise', opt
   fs.writeFileSync(`${agent}/sessions/${name}`, '{"type":"session"}\n')
 
   // A read-only mount of the agent's folder shows all of it, the older sessions included. That is
-  // why the mounts of 6.6 hide the folder.
+  // why a run's mounts hide the folder.
   const unhidden = designMounts(data)
   unhidden[agent] = { host: agent }
   const open = await startVm(t, { mounts: unhidden })
@@ -192,7 +192,7 @@ test('VM 1: sessions/ is hidden from the VM, which could read it otherwise', opt
   assert.match((await sh(open, `echo x > ${agent}/sessions/lifelog-2026-11-10.jsonl`)).stderr, READ_ONLY)
   await open.close()
 
-  // With the mounts of 6.6 the folder is not there, at either of the two paths the mount has, and
+  // With a run's mounts the folder is not there, at either of the two paths the mount has, and
   // the rest is.
   const vm = await startVm(t, { mounts: designMounts(data) })
   assert.equal((await sh(vm, `ls ${agent}`)).stdout, 'memory\nrun\nstate.json\nviews\n')
@@ -429,7 +429,7 @@ const needsGit = { ...options, skip: options.skip || (onPath('git') ? false : 'g
 test('VM 5: git log works on the read-only agent folder', needsGit, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  // The agent's folder as the runner makes it (section 6.2).
+  // The agent's folder as the runner makes it.
   const identity = ['-c', 'user.name=Scooter', '-c', 'user.email=scooter@localhost']
   const git = (...args) => execFileSync('git', ['-C', data.agent, ...identity, ...args], { encoding: 'utf8' })
   fs.writeFileSync(path.join(data.agent, '.gitignore'), '/sessions/\n/run/\n/state.json\n')

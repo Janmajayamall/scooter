@@ -1,4 +1,4 @@
-// The bridge as a whole (section 5 of DESIGN.md): signed webhooks from wacli become datastore lines
+// The bridge as a whole: signed webhooks from wacli become datastore lines
 // and attachments, and unsigned ones don't; a message goes through the runner and comes back as a
 // quoted reply, logged as an `out` line; the commands are answered; the bridge's state; one bridge
 // per data folder; and `scooter bridge` as a real process.
@@ -168,7 +168,7 @@ async function startBoth(t, { fixtures = { paired: true, messages: [] }, email =
       return runner.runner.tick()
     },
     // Moves the clock on a second at a time while the bridge sends, in real time, until both
-    // outboxes are empty, the runner's and the bridge's own (D205), and the bridge keeps no record.
+    // outboxes are empty, the runner's and the bridge's own, and the bridge keeps no record.
     async deliver() {
       const { paths } = runner
       await waitFor(
@@ -285,7 +285,7 @@ test('bridge: /status reports the runner\'s state, /help lists the commands, /ba
   await both.post(webhookPayload({ ID: 'C4', Timestamp: '2026-11-09T15:51:03Z', Text: '/new' }))
   // The runner answers `/new`, and passes over the bridge's three. A millisecond later: the two
   // services' entries are in two outboxes, and two made in the same millisecond, here by one fake
-  // clock, go in no set order between them (D205).
+  // clock, go in no set order between them.
   await both.clock.advance(1)
   await both.runner.tick()
   await both.deliver()
@@ -330,7 +330,7 @@ test('bridge: a command is answered once, also across a restart, and one left un
     await waitFor(() => stub.callsOf('sync').length > 0, 'wacli sync to start')
     return bridge
   }
-  // The bridge writes its replies to its own outbox (D205).
+  // The bridge writes its replies to its own outbox.
   const entries = () => listHandOffs(paths.bridgeOutbox).length
   let bridge = await open()
   assert.equal(await stub.postWebhook(webhookPayload({ ID: 'H1', Text: '/help' })), 200)
@@ -354,7 +354,6 @@ test('bridge: a command is answered once, also across a restart, and one left un
 })
 
 test('bridge: a reply to a command that can\'t be written is tried again after waits that grow, without another command', async t => {
-  // The review of milestone 5, point 7.
   const root = makeTestDir(t)
   const paths = makePaths(bridgeSettings(root))
   const clock = createFakeClock('2026-11-09T15:45:00Z')

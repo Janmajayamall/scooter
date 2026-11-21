@@ -1,4 +1,4 @@
-// Settings: one env file per service, read and checked (8.2 of DESIGN.md).
+// Settings: one env file per service, read and checked.
 //
 // The bridge reads `bridge.env` and the runner `runner.env`, each with only what its service
 // needs, so neither holds the other's secrets. A variable already in the environment wins over
@@ -25,7 +25,7 @@ import { isTimeZone, parseLocalTime } from './time.mjs'
 export const DEFAULT_ENV_DIR = '/etc/scooter'
 export const ENV_DIR_VARIABLE = 'SCOOTER_ENV_DIR'
 
-// Every variable of each service (8.2). A variable in an env file that isn't in its service's
+// Every variable of each service. A variable in an env file that isn't in its service's
 // list is an error: a misspelled name would otherwise be ignored without a word, and a key in
 // the wrong file would sit where the other service can read it.
 const VARIABLES = {
@@ -242,10 +242,10 @@ export function loadSettings(side, { env = process.env } = {}) {
     }
     settings.ownerJids = commaList('OWNER_JIDS', JID, 'WhatsApp IDs such as 123456789@lid')
     // It must name a channel. Whether that channel can send, which in v2 only WhatsApp can, is
-    // checked by the bridge when it starts, where the channels are (5.3).
+    // checked by the bridge when it starts, where the channels are.
     settings.defaultChannel = oneOf('DEFAULT_CHANNEL', SOURCES, 'whatsapp')
 
-    // Email is on when EMAIL_IMAP_HOST is set (5.6). Off, the other mailbox settings aren't read.
+    // Email is on when EMAIL_IMAP_HOST is set. Off, the other mailbox settings aren't read.
     const host = get('EMAIL_IMAP_HOST')
     settings.email = null
     if (host !== undefined) {
@@ -253,7 +253,7 @@ export function loadSettings(side, { env = process.env } = {}) {
       const addresses = commaList('EMAIL_OWNER_ADDRESSES', EMAIL_ADDRESS, 'email addresses')
       if (addresses?.length === 0) fault('EMAIL_OWNER_ADDRESSES', `EMAIL_OWNER_ADDRESSES is required${forEmail}`)
       // The bridge needs it for its sender check, and refuses to start without it; `email-check`
-      // runs without it, since that is how the owner finds it (8.4).
+      // runs without it, since that is how the owner finds it.
       const authservId = get('EMAIL_AUTHSERV_ID')
       settings.email = {
         host: HOSTNAME.test(host) ? host : fault('EMAIL_IMAP_HOST', 'EMAIL_IMAP_HOST must be a host name, such as imap.gmail.com'),
@@ -269,7 +269,7 @@ export function loadSettings(side, { env = process.env } = {}) {
       }
     }
 
-    // `HH:MM` in the owner's time zone, or null for `off` (5.5).
+    // `HH:MM` in the owner's time zone, or null for `off`.
     const backupTime = get('BACKUP_TIME') ?? '03:30'
     const parsedTime = parseLocalTime(backupTime)
     settings.backupTime =
@@ -279,7 +279,7 @@ export function loadSettings(side, { env = process.env } = {}) {
           ? backupTime
           : fault('BACKUP_TIME', 'BACKUP_TIME must be a time as HH:MM, such as 03:30, or off')
 
-    // Backups are on when RESTIC_REPOSITORY is set (5.5). `env` is what restic is given besides
+    // Backups are on when RESTIC_REPOSITORY is set. `env` is what restic is given besides
     // the repository and the password. `forceCheck` checks the repository after every backup, not
     // only on Sundays; `restoreTarget` is the folder `restore` restores into, `/` putting every file
     // back at the path it was backed up from.
@@ -317,7 +317,7 @@ export function loadSettings(side, { env = process.env } = {}) {
     settings.sessionRolloverHour = integer('SESSION_ROLLOVER_HOUR', 4)
     settings.agentInternet = onOff('AGENT_INTERNET', 'off')
     // `hvf` is a known value, kept for macOS. On Linux the runner refuses it when it picks the
-    // accelerator, as it does any forced accelerator that isn't there (6.6).
+    // accelerator, as it does any forced accelerator that isn't there.
     settings.agentAccel = oneOf('AGENT_ACCEL', ['auto', 'kvm', 'emulation', 'hvf'], 'auto')
   }
 

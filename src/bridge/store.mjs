@@ -1,4 +1,4 @@
-// The datastore's single writer (4.3 and 4.4 of DESIGN.md).
+// The datastore's single writer.
 //
 // Every line, incoming and outgoing, is appended here, through one queue, so `seq` order is the
 // order of the lines in the files. This is the only module that writes to the datastore: nothing
@@ -21,11 +21,11 @@ import { dayOfDate } from '../common/paths.mjs'
 import { systemClock, utcDate } from '../common/time.mjs'
 
 // Folders 0750 and files 0640, owned by root with the runner's group, so only root and the runner
-// can read the datastore (3.2).
+// can read the datastore.
 const DIR_MODE = 0o750
 const FILE_MODE = 0o640
 
-// The extension for a MIME type, when the original file name gives none (4.4).
+// The extension for a MIME type, when the original file name gives none.
 const EXTENSIONS = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
@@ -63,11 +63,11 @@ const EXTENSIONS = {
 
 const UNKNOWN_MIME = 'application/octet-stream'
 
-// An attachment's stored name, `<seq>.<ext>` or `<seq>-<n>.<ext>` (4.1), with the `seq` it holds.
+// An attachment's stored name, `<seq>.<ext>` or `<seq>-<n>.<ext>`, with the `seq` it holds.
 const ATTACHMENT = /^(\d+)(?:-\d+)?\.[a-z0-9]+$/
 
 // The extension of an attachment's stored name: from the original file name if there is one,
-// else from the MIME type, else `bin` (4.4). Only letters and digits, in lower case, so the
+// else from the MIME type, else `bin`. Only letters and digits, in lower case, so the
 // stored name is always plain, whatever the original was called.
 function extensionOf({ name, mime }) {
   if (typeof name === 'string') {
@@ -85,7 +85,7 @@ function extensionOf({ name, mime }) {
 }
 
 // The stored name of a message's `n`th attachment, counting from 1: `<seq>.<ext>` for the first,
-// then `<seq>-2.<ext>`, `<seq>-3.<ext>` and so on (4.1).
+// then `<seq>-2.<ext>`, `<seq>-3.<ext>` and so on.
 export function attachmentName(seq, n, attachment) {
   return `${seq}${n === 1 ? '' : `-${n}`}.${extensionOf(attachment)}`
 }
@@ -154,7 +154,7 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
   let queue = Promise.resolve()
 
   // The day folder for a line written now: today's UTC date, or the newest folder if the clock
-  // reads earlier than that (4.1).
+  // reads earlier than that.
   function dayForNow() {
     const today = dayOfDate(utcDate(clock.now()))
     if (newestDay === null || today >= newestDay) return today
@@ -165,7 +165,7 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     return newestDay
   }
 
-  // Whether the datastore already holds this line (4.4).
+  // Whether the datastore already holds this line.
   function isDuplicate(line) {
     switch (line.kind) {
       case 'message':
@@ -218,8 +218,8 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     if (attachments.length > 0 && draft.kind !== 'message') {
       throw new DatastoreError('only a message has attachments')
     }
-    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too
-    // (4.2). Intake skips the ones whose target it doesn't know, so one that reaches the store
+    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too.
+    // Intake skips the ones whose target it doesn't know, so one that reaches the store
     // pointing anywhere else is a bug in its writer.
     if (['edit', 'delete', 'reaction'].includes(draft.kind) && index.current(draft.target) === undefined) {
       throw new DatastoreError(`a ${draft.kind} must point at a message or a command, and seq ${draft.target} is neither`)
@@ -283,7 +283,7 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     // store copies them and leaves the originals where they are.
     //
     // Resolves with `{ stored: true, seq, line, day }`, or with `{ stored: false, reason:
-    // 'duplicate' }` when the datastore already holds the line (4.4). Rejects, without using up a
+    // 'duplicate' }` when the datastore already holds the line. Rejects, without using up a
     // `seq`, when the line isn't well formed or an attachment can't be copied.
     append(fields, attachments = []) {
       const result = queue.then(() => write(fields, attachments))

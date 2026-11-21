@@ -1,6 +1,6 @@
-// The runner's own waits between its starts (D229; `src/runner/restarts.mjs`): where its service
+// The runner's own waits between its starts (`src/runner/restarts.mjs`): where its service
 // manager doesn't wait, as Docker's doesn't, a fault that stays after pi has run must not run pi
-// more often than the native unit's waits allow (D207). Docker is played here by starting the
+// more often than the native unit's waits allow. Docker is played here by starting the
 // runner again at once, each time it stops on its own.
 
 import assert from 'node:assert/strict'
@@ -92,7 +92,7 @@ function faulty(t) {
   return { ...prepared, ...control, control }
 }
 
-test('restarts: started again at once after each stop, a fault that stays runs pi 1 minute after the first stop, about 5½ after the second, then every 30, and the first wait tells the owner once (D229)', async t => {
+test('restarts: started again at once after each stop, a fault that stays runs pi 1 minute after the first stop, about 5½ after the second, then every 30, and the first wait tells the owner once', async t => {
   const context = faulty(t)
   const { clock, paths, control } = context
 
@@ -133,7 +133,7 @@ function shortTime(ms) {
   return `${String(local.getUTCHours()).padStart(2, '0')}:${String(local.getUTCMinutes()).padStart(2, '0')}`
 }
 
-test('restarts: a stop asked for ends the waiting, and a run recorded makes the next stop the first in a row again (D229)', async t => {
+test('restarts: a stop asked for ends the waiting, and a run recorded makes the next stop the first in a row again', async t => {
   const context = faulty(t)
   const { clock, paths, control } = context
   let runner = await control.start()
@@ -152,7 +152,7 @@ test('restarts: a stop asked for ends the waiting, and a run recorded makes the 
   assert.equal(control.record().stops, 0)
   assert.equal(control.piRuns.length, 2)
   // Stopped, it no longer waits, so `/status` doesn't say it does, as `docker compose stop runner`
-  // would leave it (the review of milestone 14, smaller point 8); the rest of status.json stays.
+  // would leave it; the rest of status.json stays.
   const status = readRunnerStatus(paths.runnerStatus)
   assert.equal(status.restart, null)
   assert.equal(status.startedAt, startedAt)
@@ -182,7 +182,7 @@ test('restarts: a stop asked for ends the waiting, and a run recorded makes the 
   assert.equal(control.notices.length, 1)
 })
 
-test('restarts: where systemd keeps the waits, the runner keeps none and writes nothing; and one that can\'t record its start runs nothing (D229)', async t => {
+test('restarts: where systemd keeps the waits, the runner keeps none and writes nothing; and one that can\'t record its start runs nothing', async t => {
   const context = faulty(t)
   const { paths, control } = context
   let runner = await control.start({ restartWaits: false })

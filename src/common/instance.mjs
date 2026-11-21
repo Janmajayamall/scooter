@@ -1,23 +1,23 @@
 // One service per data folder.
 //
-// Two bridges on one datastore would each give out the same `seq` (D29 and D48 of
-// `docs/DECISIONS.md`). Two runners would run the same batch twice, write `state.json` against
-// each other, and each remove the other's `run.lock` when it starts (6.4). So each service listens
+// Two bridges on one datastore would each give out the same `seq`.
+// Two runners would run the same batch twice, write `state.json` against
+// each other, and each remove the other's `run.lock` when it starts. So each service listens
 // on a Unix socket in its own folder while it runs.
 
 import fs from 'node:fs'
 import net from 'node:net'
 
 // What holds the runner's socket, `runner/runner.sock`, so that only one of them works on a data
-// folder at a time: the runner, a rebuild (6.10) and `build-image` (6.12). A runner started during
-// a rebuild would remove the rebuild's `run.lock` and throw its work away (D89).
+// folder at a time: the runner, a rebuild and `build-image`. A runner started during
+// a rebuild would remove the rebuild's `run.lock` and throw its work away.
 export const RUNNER_SOCKET_HOLDERS = 'runner, rebuild or build-image'
 
 // Whether something listens on the Unix socket `file`. A connection is made into the socket's
 // queue by the system, so a holder whose own work keeps it from taking connections still answers,
 // while the queue has room: Node makes it 511 long, and each check leaves a connection in it until
 // the holder takes it. So a holder that takes none for 512 checks, which the bridge makes once a
-// second while a run is past its time, is taken for gone (D183).
+// second while a run is past its time, is taken for gone.
 function connects(file) {
   return new Promise(resolve => {
     const socket = net.connect(file)
@@ -60,7 +60,7 @@ export async function holdInstance(file, name = 'bridge') {
 
 // Whether a service holds the socket `file`, as `holdInstance` holds it, without taking it: the
 // bridge asks it of `runner/runner.sock` to tell a runner still at work after its run's time from
-// one that is gone (5.5), and `restore` of both sockets before it writes over the data folder.
+// one that is gone, and `restore` of both sockets before it writes over the data folder.
 // Only a socket counts, not a link to one: the runner's user controls the runner's folder.
 export async function instanceAnswers(file) {
   let stat

@@ -1,4 +1,4 @@
-// Routing (5.3 of DESIGN.md; section 10, "Routing"): which channel each outbox entry goes to, and
+// Routing: which channel each outbox entry goes to, and
 // what is quoted. `replyTo` and `about` follow their line's channel; a reply about an email reaches
 // `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices,
 // scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that
@@ -92,8 +92,8 @@ test('routing: a reaction to an email becomes a ✅ Email: text on DEFAULT_CHANN
 })
 
 test('routing: the ✅ Email: text is cut as an entry\'s text is, whatever subject the datastore holds', () => {
-  // The review of milestone 5, point 6: made after the entry was written, from a subject the
-  // datastore bounds only since milestone 6.
+  // The text was once made after the entry was written, from a subject the datastore bounds only
+  // since milestone 6.
   const lines = [...LINES, line.email(10, AT, `a\0${'s'.repeat(60000)}`, 'long', { sourceId: 'mail-3@example.com' })]
   const [channel, quote, text] = route(react(10), { lines })
   assert.deepEqual([channel, quote], ['whatsapp', null])

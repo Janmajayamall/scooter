@@ -2,8 +2,8 @@
 //
 //   {"at":"2026-11-09T15:43:02Z","level":"info","component":"bridge","event":"store.appended","seq":1042,"bytes":187}
 //
-// Logs carry IDs, kinds, sizes and timings, never message text or file contents (section 9 of
-// DESIGN.md). The caller chooses the fields, so that rule is the caller's to keep. Two things
+// Logs carry IDs, kinds, sizes and timings, never message text or file contents.
+// The caller chooses the fields, so that rule is the caller's to keep. Two things
 // here help it:
 // - a field named after one of the datastore's content fields is written as "[withheld]", so
 //   passing a whole datastore line by mistake leaks nothing;
@@ -12,7 +12,7 @@
 
 import { isoSeconds, systemClock } from './time.mjs'
 
-// The fields of a datastore line that hold what was written (4.2). Its other content, `files` and
+// The fields of a datastore line that hold what was written. Its other content, `files` and
 // `media`, is nested, and nothing nested is logged.
 const CONTENT_FIELDS = new Set(['text', 'subject', 'quoted'])
 const RESERVED_FIELDS = new Set(['at', 'level', 'component', 'event'])

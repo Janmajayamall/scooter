@@ -1,14 +1,14 @@
-// One run (6.6 to 6.9 of DESIGN.md): from `run.lock` to the state update.
+// One run: from `run.lock` to the state update.
 //
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
-//    If a backup holds it, let go of `run.lock` and wait (6.4; row 7).
+//    If a backup holds it, let go of `run.lock` and wait.
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, and a copy of the
-//    current session (6.5, 6.6).
-// 3. **Run** pi in the sandbox, with the command, mounts, environment and network policy of 6.6.
-// 4. **After a successful run,** in this order (6.8): check the files pi left, staging them as the
+//    current session.
+// 3. **Run** pi in the sandbox, with its command, mounts, environment and network policy.
+// 4. **After a successful run,** in this order: check the files pi left, staging them as the
 //    check's last step; commit; copy its session back; write the outbox entries; update the state.
 //    A crash part-way through only means the batch runs again.
-// 5. **After a failed run** (6.9): throw away its session and its changes, read why it failed from
+// 5. **After a failed run**: throw away its session and its changes, read why it failed from
 //    the network log, and update the state, with a notice for the first failure in a row.
 // 6. **Release** the lock.
 //
@@ -19,7 +19,7 @@
 // are cleaned up after it, so nothing pi left takes room the clean-up or the state needs: pi may
 // have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
 //
-// A replayed batch, of a rebuild or a backfill (6.10, 6.11; `replay.mjs`), is a run like the
+// A replayed batch, of a rebuild or a backfill (`replay.mjs`), is a run like the
 // others, with its own session, skills and commit message, and three differences: it sends
 // nothing, neither texts, reactions nor notices; a backfill's batch fails if it changed anything
 // but what the backfill may change; and each settles its own lane of the state.
@@ -38,11 +38,11 @@ import { currentSession, saveState, sessionId } from './state.mjs'
 
 const MINUTE = 60 * 1000
 
-// pi's tools (6.6): read, bash, edit and write are on by default; grep, find and ls aren't.
+// pi's tools: read, bash, edit and write are on by default; grep, find and ls aren't.
 export const PI_TOOLS = 'read,bash,edit,write,grep,find,ls'
 
 // ---------------------------------------------------------------------------------------------
-// What the sandbox is given (6.6)
+// What the sandbox is given
 
 // The mounts, at the host's own paths: the agent's folder read-only, with `sessions/` hidden and
 // `views/`, `memory/` and `run/session/` writable; and the datastore read-only.
@@ -70,7 +70,7 @@ export function piEnv({ timeZone }) {
   }
 }
 
-// The network policy of a run of `agent` (6.13): its model, the internet switch, ZDR, and the key,
+// The network policy of a run of `agent`: its model, the internet switch, ZDR, and the key,
 // which pi sees only as a placeholder in `OPENROUTER_API_KEY`.
 export function piPolicy({ agent, settings }) {
   return {
@@ -81,7 +81,7 @@ export function piPolicy({ agent, settings }) {
   }
 }
 
-// pi's command (6.6), with what milestone 0 found: every kind of discovery off, MCP included; the
+// pi's command, with what milestone 0 found: every kind of discovery off, MCP included; the
 // session by its ID in `run/session/`, or none; the system prompt and the skills from `run/`; and
 // the prompt as one argument after `--`, so nothing in it can pass for a flag.
 export function piArgs({ agent, prepared, sessionId: id, prompt }) {
@@ -123,11 +123,11 @@ export function runSpec({ agent, settings, paths, prepared, sessionId: id, promp
 }
 
 // ---------------------------------------------------------------------------------------------
-// The lock (6.4; row 7)
+// The lock
 
 // Takes `run.lock` for a run that must be over by `deadline`, then looks for `backup.lock`. Returns
 // `taken`; `backup` when a backup holds its lock, and `run.lock` has been let go of again; or `busy`
-// when `run.lock` was already there, as a `rebuild` holds it (6.10). Taking its own lock before
+// when `run.lock` was already there, as a `rebuild` holds it. Taking its own lock before
 // looking for the other's is what keeps a run and a backup from starting at the same instant: when
 // the two appear together, the runner gives way.
 export function acquireRunLock({ paths, deadline, clock }) {
@@ -143,13 +143,13 @@ export function acquireRunLock({ paths, deadline, clock }) {
 // ---------------------------------------------------------------------------------------------
 // A run
 
-// Whether a job is a replayed batch, of a rebuild or a backfill (6.10, 6.11).
+// Whether a job is a replayed batch, of a rebuild or a backfill.
 export const isReplay = job => job.kind === 'rebuild' || job.kind === 'backfill'
 
-// The commit message (6.8): `lifelog: #1050 #1051 #1053` for a batch, `lifelog: scheduled task
+// The commit message: `lifelog: #1050 #1051 #1053` for a batch, `lifelog: scheduled task
 // 21:30` or `lifelog: once task poems` for a task; for a replayed batch, the range of its items,
-// `lifelog: backfill people-1 #812-#831` (6.11), or `lifelog: rebuild #812-#831`, which the
-// finished rebuild folds into one commit, `lifelog: rebuild` (6.10).
+// `lifelog: backfill people-1 #812-#831`, or `lifelog: rebuild #812-#831`, which the
+// finished rebuild folds into one commit, `lifelog: rebuild`.
 export function commitMessage(agentName, job) {
   if (job.kind === 'scheduled') return `${agentName}: scheduled task ${job.at}`
   if (job.kind === 'once') return `${agentName}: once task ${job.id}`
@@ -162,7 +162,7 @@ export function commitMessage(agentName, job) {
   return `${agentName}: ${seqs.map(seq => `#${seq}`).join(' ')}`
 }
 
-// What a run of `job` does to the state, for each kind (6.8, 6.9): live batches and a rebuild's
+// What a run of `job` does to the state, for each kind: live batches and a rebuild's
 // settle the live lane of the state they are given, a backfill's batches the backfill's, and tasks
 // their dates. Returns `{ state, givenUp }`.
 function settleJob(job, state, outcome, timing) {
@@ -233,10 +233,10 @@ export async function performRun(context) {
   }
 }
 
-// 6.8, steps 1 and 2, after pi exited with 0: anything git wouldn't record fails the run, then what
+// After pi exited with 0: anything git wouldn't record fails the run, then what
 // was staged is committed. Staging is the check's last step, because only git knows every name it
 // refuses. A backfill's batch also fails when it changed a file it may not change, which only the
-// staged changes say (6.11). Returns `{ committed }`, whether there was a commit; `{ unexpected }`,
+// staged changes say. Returns `{ committed }`, whether there was a commit; `{ unexpected }`,
 // the path the check found; `{ outside }`, the first file a backfill may not change that it
 // changed; or `{ error }`, when a step failed. Everything here reads what pi left, so any error is
 // the run's, and fails it as an unexpected file would.
@@ -255,7 +255,7 @@ async function commitFiles({ agent, git, log, job }) {
   }
 }
 
-// 6.8, after the commit: the session, the outbox, the state; then, outside what the run depends
+// After the commit: the session, the outbox, the state; then, outside what the run depends
 // on, the repository is packed if it needs it.
 async function afterSuccess(context, { result, sessionId: id, seqs, timing, committed }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
@@ -273,14 +273,14 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
   if (job.batch) {
     reports = reportsOf(answer, seqs)
     if (reports.unknown.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reports.unknown })
-    // A replay is silent: its texts, `REPLY_TO` and `NO_REPLY` are ignored (6.10, 6.11).
+    // A replay is silent: its texts, `REPLY_TO` and `NO_REPLY` are ignored.
     entries = isReplay(job) ? [] : answerEntries({ answer, agent, index, about: job.batch.newest, done: reports.done })
     const settled = settleJob(job, state, { ok: true, done: reports.done, failed: reports.failed }, timing)
     next = settled.state
     if (settled.givenUp.length > 0 && !isReplay(job)) entries.push(givenUpNotice(index, settled.givenUp))
   } else {
     const reported = [...new Set([...answer.done, ...answer.failed.map(entry => entry.seq)])].sort((a, b) => a - b)
-    // A task has no items to report on (6.7).
+    // A task has no items to report on.
     if (reported.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reported })
     entries = answerEntries({ answer, agent, index })
     next = settleJob(job, state, { ok: true }, timing).state
@@ -311,7 +311,7 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
   return { state: next, outcome: { ok: true, cause: null } }
 }
 
-// 6.9: throw the run away, find why it failed, and count it. `files` is what `commitFiles` found,
+// After a failed run: throw it away, find why it failed, and count it. `files` is what `commitFiles` found,
 // or null when pi itself failed. `run/session/` is emptied first: it frees room, which the clean-up
 // needs to make the folders again if pi filled the disk.
 async function afterFailure(context, { result, files, seqs, timing }) {
@@ -346,7 +346,7 @@ async function afterFailure(context, { result, files, seqs, timing }) {
   const settled = settleJob(job, state, outcome, timing)
   const next = settled.state
   const entries = []
-  // A replay's failures send no notice (6.10, 6.11), and its batches don't count in the live runs'
+  // A replay's failures send no notice, and its batches don't count in the live runs'
   // row of failures, which `lastRun` keeps.
   if (!isReplay(job)) {
     if (isFirstFailure(state)) entries.push(failureNotice(job, failure))
@@ -354,7 +354,7 @@ async function afterFailure(context, { result, files, seqs, timing }) {
   }
   for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
   if (stateFile !== null) saveState(stateFile, next)
-  // The run is recorded, and its attempt counted; a start cleans up again (D89).
+  // The run is recorded, and its attempt counted; a start cleans up again.
   if (cleanup !== null) throw cleanup
   return { state: next, outcome: { ok: false, cause: failure.cause } }
 }

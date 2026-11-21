@@ -1,4 +1,4 @@
-// An agent's state (6.3 of DESIGN.md): its format, reading and writing it, and the changes that
+// An agent's state: its format, reading and writing it, and the changes that
 // planning makes to it: sessions, commands and startup.
 
 import assert from 'node:assert/strict'
@@ -13,7 +13,7 @@ import { makeTestDir } from './support/tmp.mjs'
 const at = Date.parse
 const modeOf = file => fs.statSync(file).mode & 0o7777
 
-// The example of 6.3, with a pause.
+// An example state, with a pause.
 const EXAMPLE = {
   cursor: 1049,
   commandSeq: 1038,
@@ -33,7 +33,7 @@ function agentWith({ scheduled = [], backfill = [] } = {}) {
   return { name: 'lifelog', run: { newMessages: true, scheduled, once: [], backfill } }
 }
 
-test('state: the example of 6.3, and the state of an agent that has never run, are well formed', () => {
+test('state: an example state, and the state of an agent that has never run, are well formed', () => {
   assert.deepEqual(checkAgentState(EXAMPLE), [])
   assert.deepEqual(checkAgentState(initialAgentState()), [])
   assert.deepEqual(initialAgentState(), {

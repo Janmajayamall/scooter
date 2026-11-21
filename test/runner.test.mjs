@@ -1,4 +1,4 @@
-// The runner as a whole (6.3, 6.4, 6.6, 6.9 of DESIGN.md; section 10, "Runner"), with the fake
+// The runner as a whole, with the fake
 // sandbox: failures and their notices, pauses and outages, the locks, scheduled and `once` tasks,
 // `/new`, `status.json` and the emulation notice, startup, and the loop.
 

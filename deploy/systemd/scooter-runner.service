@@ -1,20 +1,20 @@
-# Scooter's runner, as scooter-runner (8.5 of DESIGN.md). `sudo scooter setup` installs and enables
+# Scooter's runner, as scooter-runner. `sudo scooter setup` installs and enables
 # this unit, and doesn't start it: fill in /etc/scooter/runner.env, and build the VM image with
 # `sudo scooter build-image`, first.
 #
 # - It reaches /dev/kvm through the kvm group.
 # - Its home and temporary folder are under the data folder's runner/: the runner sets both itself
-#   when it opens the sandbox (6.6), from DATA_DIR, so this unit doesn't.
+#   when it opens the sandbox, from DATA_DIR, so this unit doesn't.
 # - Stopping it, or its dying, stops every process of the unit, the QEMU of a run among them:
-#   Gondolin leaves a VM running when only the process that started it is killed (6.6).
+#   Gondolin leaves a VM running when only the process that started it is killed.
 # - It restarts on failure, after 1 minute, then about 5, then 30, and every 30 minutes after:
-#   OpenRouter's outage waits (6.9). A fault that stays after pi has run, such as a disk too full
+#   OpenRouter's outage waits. A fault that stays after pi has run, such as a disk too full
 #   to record the run, runs pi again at every start, and each start waits out the quiet period, so
-#   systemd's start limit never stops it; these waits bound what such a fault spends (D207).
+#   systemd's start limit never stops it; these waits bound what such a fault spends.
 #   systemd keeps counting the restarts until the unit is started by hand or the machine starts
 #   again. SCOOTER_RESTART_WAITS=systemd tells the runner that systemd keeps these waits, so it
-#   keeps none of its own, which it does where its service manager doesn't wait, as in Docker
-#   (D229): a start by hand brings it back at once.
+#   keeps none of its own, which it does where its service manager doesn't wait, as in
+#   Docker: a start by hand brings it back at once.
 
 [Unit]
 Description=Scooter runner: the agent's runs, in VMs

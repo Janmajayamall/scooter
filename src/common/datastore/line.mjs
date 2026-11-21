@@ -1,4 +1,4 @@
-// The format of a datastore line (4.2 of DESIGN.md).
+// The format of a datastore line.
 //
 // One JSON object per line of `log.jsonl`. The bridge writes them, and the runner and pi read
 // them. `checkLine` is the format in code: what each field holds and when it's there.
@@ -10,7 +10,7 @@ export const DIRECTIONS = ['in', 'out']
 export const SOURCES = ['whatsapp', 'email']
 export const TRUSTS = ['owner', 'external']
 
-// The commands (5.4). A `command` line's text is one of them, exactly. The bridge answers the
+// The commands. A `command` line's text is one of them, exactly. The bridge answers the
 // first three and the runner `/new`.
 export const COMMANDS = ['/status', '/backup', '/help', '/new']
 

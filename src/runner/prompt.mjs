@@ -1,4 +1,4 @@
-// What the agent is told (6.5 of DESIGN.md): the prompt, which is pi's user message, and
+// What the agent is told: the prompt, which is pi's user message, and
 // `run/system.md`, which is appended to pi's system prompt.
 //
 // The prompt shows each item as it is now, with times in the owner's time zone:
@@ -19,7 +19,7 @@
 //   #1048 21:04 the owner reacted 👍 to #1046
 //
 // Every text the owner or the agent wrote is shown as a JSON string, so a line break or a quote in
-// it can't pass for the prompt's own structure. The prompt is one command-line argument (6.6), so
+// it can't pass for the prompt's own structure. The prompt is one command-line argument, so
 // `batch.mjs` keeps it within `PROMPT_MAX_BYTES`, and a text too long for that is shown cut,
 // followed by where the whole of it is.
 
@@ -174,8 +174,8 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
     return { head: `${head}${edited}`, extra }
   }
 
-  // The line under a reply: what it quotes, and who sent that (6.5). A command is never shown
-  // (5.4), so a reply to one says only that. A reply to a line the index can't show as a message,
+  // The line under a reply: what it quotes, and who sent that. A command is never shown,
+  // so a reply to one says only that. A reply to a line the index can't show as a message,
   // which only a damaged datastore gives, shows the channel's preview if there is one.
   function replyLine(line) {
     const preview = () => quote(line.quoted, cap, `the whole text is ${lineRef(line.seq)}`)
@@ -226,7 +226,7 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
 // ---------------------------------------------------------------------------------------------
 // The prompts
 
-// The prompt of a batch (6.5). `batch` is what `assembleBatch` returns. `view` is `{ index, paths,
+// The prompt of a batch. `batch` is what `assembleBatch` returns. `view` is `{ index, paths,
 // agentName, header, now, timeZone }`, with `header` from `promptHeader`. Options, which
 // `batch.mjs` uses to fit the prompt within its limit:
 // - `itemCap`: the most bytes of each text an item shows, whole by default;
@@ -242,7 +242,7 @@ export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep
     const lines = retrying.map(item => describe.item(item.seq, ` (attempt ${item.attempt} of ${limits.MAX_ATTEMPTS})`))
     sections.push([SECTIONS.retrying, ...lines].join('\n'))
   }
-  // Newest first, as 6.5 shows them. When the prompt is too long, the oldest are left out first.
+  // Newest first. When the prompt is too long, the oldest are left out first.
   const newestFirst = [...batch.context].reverse()
   const shown = newestFirst.slice(0, contextKeep)
   if (newestFirst.length > 0) {
@@ -254,7 +254,7 @@ export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep
   return sections.join('\n\n')
 }
 
-// The prompt of a scheduled or `once` task: the task instead of messages (6.5).
+// The prompt of a scheduled or `once` task: the task instead of messages.
 export function renderTaskPrompt(task, { header }) {
   return fitToLimit(`${header}\n\n${SECTIONS.task}\n${task.trim()}`)
 }
@@ -262,7 +262,7 @@ export function renderTaskPrompt(task, { header }) {
 // ---------------------------------------------------------------------------------------------
 // The system prompt, `run/system.md`
 
-// The protocol (7.1), which ships with the runner because the runner parses what it describes.
+// The protocol, which ships with the runner because the runner parses what it describes.
 export function loadProtocol() {
   return fs.readFileSync(new URL('./protocol.md', import.meta.url), 'utf8')
 }
@@ -271,7 +271,7 @@ export function loadProtocol() {
 // `{ text, cut }`, with at most `MEMORY_MAX_BYTES` of it.
 //
 // pi writes the memory folder. A run that leaves a link or anything but a file there fails, and is
-// cleaned up (6.8), but a runner stopped before the clean-up would find it at its next run. So the
+// cleaned up, but a runner stopped before the clean-up would find it at its next run. So the
 // file is opened without following a link, and must be a regular file: otherwise a link to the
 // runner's env file would put the OpenRouter key into the prompt.
 export function readMemoryFile(file) {
@@ -303,7 +303,7 @@ export function readMemoryFile(file) {
   }
 }
 
-// `run/system.md` (6.5): the protocol, then the agent's prompt, then a `# Your memory` section with
+// `run/system.md`: the protocol, then the agent's prompt, then a `# Your memory` section with
 // the current contents of `memory/preferences.md` and `memory/needs-review.md`, or "(empty)".
 // `preferences` and `needsReview` are what `readMemoryFile` returns.
 export function renderSystemPrompt({ protocol, prompt, preferences, needsReview }) {

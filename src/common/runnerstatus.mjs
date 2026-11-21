@@ -1,6 +1,6 @@
-// The runner's `status.json` (6.3 of DESIGN.md; row 6): what `/status` needs to know about the
+// The runner's `status.json`: what `/status` needs to know about the
 // runner's settings, which the bridge can't read for itself, since it reads neither `config/` nor
-// `runner.env` (5.4).
+// `runner.env`.
 //
 //   {
 //     "startedAt": "2026-11-09T15:00:02Z",
@@ -15,12 +15,12 @@
 //   }
 //
 // - `startedAt`: when the runner that wrote it started.
-// - `accel`: how pi's VMs run, `kvm` or `emulation` (6.6).
+// - `accel`: how pi's VMs run, `kvm` or `emulation`.
 // - `zdr`, `internet`: whether `OPENROUTER_ZDR` and `AGENT_INTERNET` are on.
-// - `imageBuiltAt`: when the VM image was built (6.12), or null when that isn't known.
+// - `imageBuiltAt`: when the VM image was built, or null when that isn't known.
 // - `agents`: each agent's model, `timeout_minutes` and `reads`.
 // - `restart`: when the runner started after stopping on an error, and waits before it goes on,
-//   where its service manager doesn't wait (D229): how many stops in a row, until when, and the
+//   where its service manager doesn't wait: how many stops in a row, until when, and the
 //   error's code or name, or null when it couldn't record one. Null otherwise; a status an older
 //   runner wrote has none.
 //
@@ -41,7 +41,7 @@ const AGENT_FIELDS = ['model', 'timeoutMinutes', 'reads']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isTime = value => parseIsoSeconds(value) !== null
-// An agent's name, as `agents.yaml` allows it (6.1). The bridge makes paths of it, for `/status`.
+// An agent's name, as `agents.yaml` allows it. The bridge makes paths of it, for `/status`.
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 
 // What is wrong with a status, as a list of statements that name fields. An empty list means it is
@@ -116,7 +116,7 @@ export class RunnerStatusError extends Error {
 // Reads a `status.json`. Returns null when there is none, which is so until the runner first
 // starts, and throws a `RunnerStatusError` that names the file when it isn't a status. With
 // `maxBytes`, it is read as a file another user controls (`readUntrustedFile`): so the bridge, as
-// root, reads it for `/status` (5.4).
+// root, reads it for `/status`.
 export function readRunnerStatus(file, { maxBytes = null } = {}) {
   let status
   try {

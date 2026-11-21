@@ -1,4 +1,4 @@
-// Rebuilding an agent's views (6.10 of DESIGN.md; section 10, "Runner"), with the fake sandbox: a
+// Rebuilding an agent's views, with the fake sandbox: a
 // rebuild stops at the `seq` that was newest when it started, so later messages get normal
 // replies; `Now:` is each batch's own time, and batches don't cross the owner's days; the state it
 // leaves; that nothing else of the runner's runs beside it; and its failures, pauses and stops.
@@ -252,12 +252,12 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   const { done, said } = startRebuild(prepared)
   const result = await drive(prepared, done)
   assert.deepEqual(result, { stopped: false, tag: TAG, until: 3, cursor: 3, batches: 6, failed: [2] })
-  // An item tried again is waited for: the next day waits until it is done with (D182).
+  // An item tried again is waited for: the next day waits until it is done with.
   assert.deepEqual(
     sandbox.seen().map(call => call.items),
     [[1, 2], [1, 2], [2], [2], [2], [3]],
   )
-  // A backup held its lock when the rebuild started: it changed nothing before it was over (D181).
+  // A backup held its lock when the rebuild started: it changed nothing before it was over.
   assert.deepEqual(said, [
     'Waiting for a backup to finish.',
     `Rebuilding lifelog from the datastore, up to #3. The last commit before the rebuild is tagged ${TAG}.`,
@@ -280,7 +280,7 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   assert.deepEqual(outboxOf(paths), [])
 })
 
-test('rebuild: its own steps take run.lock and give way to a backup, as its batches do, so a backup never reads views or .git while it changes them (D181)', async t => {
+test('rebuild: its own steps take run.lock and give way to a backup, as its batches do, so a backup never reads views or .git while it changes them', async t => {
   const prepared = await prepare(t)
   const { paths, sandbox, clock } = prepared
   const head = gitOf(paths, 'rev-parse', 'HEAD')
@@ -323,7 +323,7 @@ test('rebuild: its own steps take run.lock and give way to a backup, as its batc
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild\n')
 })
 
-test('rebuild: an item not reported is tried again before the days after it, which are never its context (the review of milestone 9, point 2)', async t => {
+test('rebuild: an item not reported is tried again before the days after it, which are never its context', async t => {
   const lines = [
     line.text(1, '2026-11-07T07:00:00Z', 'from now on, tea is a drink IGNORE'), // Sat 7 Nov, 12:30
     line.sent(2, '2026-11-07T07:01:00Z', 'Noted.'),

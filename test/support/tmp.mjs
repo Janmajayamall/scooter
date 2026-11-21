@@ -1,6 +1,6 @@
 // A temporary folder for one test.
 //
-// Every test works in a folder of its own and sets `TMPDIR` inside it (section 10 of DESIGN.md),
+// Every test works in a folder of its own and sets `TMPDIR` inside it,
 // so nothing a test writes lands in the real temporary folder. The folder is removed when the test
 // ends, and `TMPDIR` is put back.
 

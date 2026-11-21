@@ -1,5 +1,5 @@
-// The runner's `status.json` (6.3 of DESIGN.md; row 6), and the notice about emulation (6.6;
-// row 15). The format, and its reader for the bridge, are in `src/common/runnerstatus.mjs`.
+// The runner's `status.json`, and the notice about emulation.
+// The format, and its reader for the bridge, are in `src/common/runnerstatus.mjs`.
 //
 // At startup the runner writes what `/status` needs to know about its settings: how its VMs run,
 // whether ZDR and the agent's internet access are on, when the VM image was built, and each agent's
@@ -12,7 +12,7 @@ import { isoSeconds } from '../common/time.mjs'
 
 // What `status.json` says about this start. `sandbox` is the one the runner opened; `agents` the
 // config's; `restarts`, what `openRestarts` returns, when the runner keeps its own waits between
-// starts, which says whether this start waits before it goes on (D229).
+// starts, which says whether this start waits before it goes on.
 export function runnerStatus({ settings, agents, sandbox, now, restarts = null }) {
   const waits = restarts !== null && restarts.until !== null && restarts.until > now
   const status = {
@@ -39,8 +39,8 @@ export const EMULATION_NOTICE =
   "⚠️ My VMs run under emulation now, because KVM isn't available, so each batch takes much longer. Run `scooter doctor` on the runner to see how to enable KVM."
 
 // The notice to send when `AGENT_ACCEL=auto` has fallen back to emulation and the runner's last
-// start didn't run that way, or null. A runner that keeps restarting under emulation sends it once
-// (row 15). One told to use emulation (`AGENT_ACCEL=emulation`) hasn't fallen back, and sends none.
+// start didn't run that way, or null. A runner that keeps restarting under emulation sends it once.
+// One told to use emulation (`AGENT_ACCEL=emulation`) hasn't fallen back, and sends none.
 // `previous` is the `status.json` of the last start, or null.
 export function emulationNotice({ previous, status, accelSetting }) {
   if (accelSetting !== 'auto' || status.accel !== 'emulation' || previous?.accel === 'emulation') return null

@@ -1,4 +1,4 @@
-// The restic stub, for the backup coordination tests (section 10 of DESIGN.md).
+// The restic stub, for the backup coordination tests.
 //
 // `createResticStub` puts a wrapper named `restic` first on `PATH`, which runs `restic-stub.mjs`.
 // The wrapper is a Node file with this Node's own path in its `#!` line, as wacli's is

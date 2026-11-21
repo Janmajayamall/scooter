@@ -1,4 +1,4 @@
-// Outbox entries (5.3 of DESIGN.md): their format, and writing one as a folder handed over whole.
+// Outbox entries: their format, and writing one as a folder handed over whole.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -11,7 +11,7 @@ import { makePaths } from '../src/common/paths.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
-// The four examples of 5.3.
+// Four example entries.
 const EXAMPLES = [
   { type: 'text', by: 'lifelog', text: 'Blue Tokai, ₹450 at 12:40: work or personal?', replyTo: 1042 },
   { type: 'text', by: 'lifelog', text: 'Logged the run and the coffee.', about: 1061 },
@@ -21,7 +21,7 @@ const EXAMPLES = [
 
 const modeOf = file => fs.statSync(file).mode & 0o7777
 
-test('outbox: the examples of 5.3 are entries', () => {
+test('outbox: the four examples are entries', () => {
   for (const entry of EXAMPLES) assert.deepEqual(checkOutboxEntry(entry), [], JSON.stringify(entry))
 })
 
@@ -101,7 +101,7 @@ test('outbox: sending.json holds the entry and how many of its messages have gon
 
 test('outbox: a text or an emoji with U+0000 in it is no entry, and a text is written with U+FFFD in its place', async t => {
   // No program takes a command-line argument with U+0000 in it, so such a text could never be
-  // sent (the review of milestone 5, point 2).
+  // sent.
   assert.deepEqual(checkOutboxEntry({ type: 'text', by: 'lifelog', text: 'a\0b' }), ["text can't hold U+0000"])
   assert.deepEqual(checkOutboxEntry({ type: 'react', by: 'lifelog', target: 1, emoji: '✅\0' }), ["emoji can't hold U+0000"])
   assert.equal(cutText('a\0b\0'), 'a�b�')

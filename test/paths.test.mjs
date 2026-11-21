@@ -1,10 +1,10 @@
-// Every path under the data folder and the config folder (3.2, 4.1 and 6.2 of DESIGN.md).
+// Every path under the data folder and the config folder.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { dayOfDate, makePaths } from '../src/common/paths.mjs'
 
-test('paths: the folders of 3.2, as they are in Docker', () => {
+test('paths: the data folder\'s folders, as they are in Docker', () => {
   const paths = makePaths({ dataDir: '/data', configDir: '/config' })
   const lifelog = Object.fromEntries(
     Object.entries(paths).map(([name, value]) => [name, typeof value === 'function' ? value(name.startsWith('agent') ? 'lifelog' : name === 'networkLog' ? '2026-11-09' : '2026/11/09') : value]),
@@ -65,7 +65,7 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
 })
 
 test('paths: everything follows DATA_DIR and CONFIG_DIR', () => {
-  // Natively the data is in /var/lib/scooter and the config in /etc/scooter/config (8.5).
+  // Natively the data is in /var/lib/scooter and the config in /etc/scooter/config.
   const paths = makePaths({ dataDir: '/var/lib/scooter', configDir: '/etc/scooter/config' })
   for (const [name, value] of Object.entries(paths)) {
     const resolved = typeof value === 'function' ? value('x') : value

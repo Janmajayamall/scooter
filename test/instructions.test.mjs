@@ -40,7 +40,7 @@ function fencedBlocks(text) {
   return [...text.matchAll(/^```([a-z]*)\n([\s\S]*?)^```$/gm)].map(match => ({ info: match[1], body: match[2] }))
 }
 
-// 7.3's table: for each skill, its view and what the row says of it.
+// The table of skills in the agent's document: for each skill, its view and what the row says of it.
 function designSkills() {
   const rows = [...designSection('## Skills', AGENT).matchAll(/^\| `([a-z-]+)` \| `([^`]+)` \| (.*) \|$/gm)]
   return rows.map(([, name, view, contents]) => ({ name, view, contents, header: /^Header `([^`]+)`/.exec(contents)?.[1] ?? null }))
@@ -49,7 +49,7 @@ function designSkills() {
 // The skills folder's own skills.
 const skillFolders = () => fs.readdirSync(path.join(CONFIG, 'skills')).sort()
 
-test('instructions: the default config validates, and is the example of 6.1', t => {
+test('instructions: the default config validates, and is the tests\' example', t => {
   const root = makeTestDir(t)
   const { agents } = loadConfig({ paths: makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG }) })
   assert.equal(agents.length, 1)
@@ -60,7 +60,7 @@ test('instructions: the default config validates, and is the example of 6.1', t 
     SKILLS.map(name => [name, `skills/${name}`, fs.realpathSync(path.join(CONFIG, 'skills', name))]),
   )
 
-  // The example of 6.1, read the same way, gives the same agent but for where its files are.
+  // The tests' example, read the same way, gives the same agent but for where its files are.
   const example = parseConfig(exampleYaml(), { configDir: writeConfig(path.join(root, 'example')) }).agents[0]
   const withoutFiles = ({ prompt, skills, ...rest }) => ({ ...rest, prompt: prompt.path, skills: skills.map(skill => skill.path) })
   assert.deepEqual(withoutFiles(agent), withoutFiles(example))
@@ -86,15 +86,15 @@ test('instructions: every skill folder has a SKILL.md with its name and a descri
     // Nothing else is in a skill's folder: the runner copies all of it into every run.
     assert.deepEqual(fs.readdirSync(path.join(CONFIG, 'skills', name)), ['SKILL.md'], name)
   }
-  // The skills of 7.3, no more and no fewer.
+  // The skills of the agent's document, no more and no fewer.
   assert.deepEqual(designSkills().map(skill => skill.name), SKILLS)
   assert.ok(SKILLS.includes(DAY_PAGES_SKILL))
 })
 
-test('instructions: each view in the prompt names a skill that exists, as 7.2 lists them', () => {
+test('instructions: each view in the prompt names a skill that exists, as the agent\'s document lists them', () => {
   const prompt = read('prompts', 'lifelog.md')
   const block = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.body.startsWith('Views (all under views/):')).body
-  // The list is in the prompt as 7.2 gives it, line for line.
+  // The list is in the prompt as the agent's document gives it, line for line.
   assert.ok(prompt.includes(block), block)
 
   const views = linesOf(block.trimEnd()).slice(1).map(text => /^- ([^:]+): (.*) \(skill: ([a-z-]+)\)$/.exec(text))
@@ -102,14 +102,14 @@ test('instructions: each view in the prompt names a skill that exists, as 7.2 li
   assert.deepEqual(views.map(match => match[3]), SKILLS)
   for (const [, file, , skill] of views) {
     assert.ok(skillFolders().includes(skill), skill)
-    // The skill keeps that view: 7.3 says so, and so does the skill's own heading.
+    // The skill keeps that view: the agent's document says so, and so does the skill's own heading.
     const design = designSkills().find(entry => entry.name === skill)
     assert.equal(design.view, `views/${file}`)
     assert.match(read('skills', skill, 'SKILL.md'), new RegExp(`^# .*: \`views/${file.replace(/[.]/g, '\\.')}\`$`, 'm'), skill)
   }
 })
 
-test('instructions: each CSV header is the one 7.3 gives, and the expenses skill has its categories', () => {
+test('instructions: each CSV header is the one the agent\'s document gives, and the expenses skill has its categories', () => {
   const csvSkills = designSkills().filter(skill => skill.header !== null)
   assert.deepEqual(
     csvSkills.map(skill => skill.name),
@@ -131,7 +131,7 @@ test('instructions: each CSV header is the one 7.3 gives, and the expenses skill
   assert.deepEqual([...listed.matchAll(/`([^`]+)`/g)].map(match => match[1]), categories)
 })
 
-test("instructions: the day-pages skill has 7.3's template, and its links lead from a page to the datastore", () => {
+test("instructions: the day-pages skill has the template of the agent's document, and its links lead from a page to the datastore", () => {
   const skill = read('skills', DAY_PAGES_SKILL, 'SKILL.md')
   const template = fencedBlocks(designSection("### The day page's template", AGENT)).find(block => block.info === 'markdown').body
   assert.deepEqual(fencedBlocks(skill).filter(block => block.info === 'markdown').map(block => block.body), [template])

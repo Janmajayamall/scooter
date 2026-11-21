@@ -1,4 +1,4 @@
-// `scooter doctor` (8.4 of DESIGN.md; section 10, "Config"): what it checks, and that it reports
+// `scooter doctor`: what it checks, and that it reports
 // each missing piece with its fix: no accelerator, no QEMU, no image, wrong folder modes, and the
 // rest. It changes nothing, and asks OpenRouter only for its public list of the endpoints that keep
 // no data, which these tests answer themselves.
@@ -43,7 +43,7 @@ function fakeFetch({ answer = ZDR_LIST, status = 200, fail = null } = {}) {
 }
 
 // A runner's install, as `setup` and `build-image` leave it, in the test's folder: the config, the
-// image, the folders of 3.2 with their owners and modes, and the runner's env file. The users are
+// image, the data folder's folders with their owners and modes, and the runner's env file. The users are
 // all the test's own user, which owns every folder, since a test can't give a folder away.
 function install(t, { accel = 'auto', zdr = true } = {}) {
   const root = makeTestDir(t)
@@ -160,7 +160,7 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
 })
 
 test('doctor: stopped during the boot check, it hands the boot check its signal, which closes the VM, and makes no check after it', async t => {
-  // The review of milestone 13, smaller point 2: `bootCheck` closes its VM on the signal (sandbox.test.mjs).
+  // `bootCheck` closes its VM on the signal (sandbox.test.mjs).
   const { check, runner } = install(t)
   const stopping = new AbortController()
   const given = []
@@ -175,7 +175,7 @@ test('doctor: stopped during the boot check, it hands the boot check its signal,
 })
 
 test("doctor: stopped while it waits for OpenRouter's answer, it stops waiting, and makes no check of OpenRouter", async t => {
-  // The review of milestone 14, smaller point 6: its handlers took Ctrl-C's own ending away, and the
+  // Its handlers once took Ctrl-C's own ending away, and the
   // wait went on for up to DOCTOR_TIMEOUT.
   const { check } = install(t)
   const stopping = new AbortController()
@@ -200,7 +200,7 @@ test("doctor: a VM boots from the image with the runner's accelerator, in its ow
   const { check, runner, paths, booted } = install(t)
   await check()
   assert.deepEqual(booted, [paths.dataDir])
-  // KVM that opens and doesn't boot a VM, as under nested virtualization (D218).
+  // KVM that opens and doesn't boot a VM, as under nested virtualization.
   const checks = await check({ runner: { ...runner, bootCheck: async () => Promise.reject(new Error("the VM couldn't start: timeout")) } })
   const [boot] = byName(checks, 'VM boot')
   assert.equal(boot.status, 'fail')
@@ -238,7 +238,7 @@ test('doctor: a folder with the wrong mode or owner, or no users, each with its 
   checks = await check({ docker: true })
   assert.match(byName(checks, 'folders')[0].fix, /^docker compose run --rm --entrypoint sh bridge -c 'chown \d+:\d+ \S+\/datastore && chmod 0750 \S+\/datastore'$/)
 
-  // A data folder another user could write would let them steer build-image, as root (D151).
+  // A data folder another user could write would let them steer build-image, as root.
   fs.chmodSync(paths.agents, 0o700)
   fs.chmodSync(paths.datastore, 0o750)
   fs.chmodSync(paths.dataDir, 0o777)

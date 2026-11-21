@@ -1,8 +1,8 @@
-// The wacli stub, for the tests (section 10 of DESIGN.md), and wacli's two formats, as samples.
+// The wacli stub, for the tests, and wacli's two formats, as samples.
 //
 // `createWacliStub` puts a wrapper named `wacli` first on `PATH`, which runs `wacli-stub.mjs`. The
 // wrapper is a Node file with this Node's own path in its `#!` line, not a shell script: wacli's
-// environment has no `PATH` to find `node` on (5.1), and a shell would add `PWD` to the
+// environment has no `PATH` to find `node` on, and a shell would add `PWD` to the
 // environment that the stub records.
 
 import fs from 'node:fs'
@@ -98,7 +98,7 @@ function commandOf(args) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Samples of wacli's two formats, shaped as its source at v0.26.0 writes them (13.1)
+// Samples of wacli's two formats, shaped as its source at v0.26.0 writes them
 
 export const OWNER_NUMBER = '919812345678'
 export const OWNER = `${OWNER_NUMBER}@s.whatsapp.net`

@@ -1,10 +1,10 @@
-// The VM image (6.12 of DESIGN.md; row 8): the build file and its pin of pi, what `build-image`
-// records about an image and how it builds one, and the runner's check at startup (section 10,
-// "Sandbox": a missing image, or one built for another pi version, stops the runner).
+// The VM image: the build file and its pin of pi, what `build-image`
+// records about an image and how it builds one, and the runner's check at startup:
+// a missing image, or one built for another pi version, stops the runner.
 //
 // The builds here are made by a fake builder, which writes a small image of the shape Gondolin
 // writes, and Alpine's index comes from a fake `fetch`. The real build needs the network, Docker
-// and minutes; `docs/DECISIONS.md` says when it was run.
+// and minutes.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -78,15 +78,14 @@ test('image: the build file pins pi, installed without its scripts, and says not
   assert.throws(() => pin(['pnpm add --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), /must install pi with npm install --ignore-scripts/)
   // npm takes the last word about scripts: one that turns them back on is refused. So is any word
   // but pi and the switches the build file uses: npm takes a word after a switch as its value, and
-  // a switch by the start of its name (the second review of milestone 7, smaller point 1).
+  // a switch by the start of its name.
   for (const again of ['--ignore-scripts=false', '--no-ignore-scripts', '--ignore-scripts false', '--no-ignore-s', '--ignore-s=false', '--foreground-scripts', '--prefix=/tmp', 'other-package']) {
     assert.throws(() => pin([`${install('1.5.2')} ${again}`]), /must install pi with npm install --ignore-scripts.*no other word than pi and --global, -g, --ignore-scripts, --omit=dev, --no-audit, --no-fund/, again)
   }
   assert.throws(() => pin(['npm install --global --ignore-scripts false @earendil-works/pi-coding-agent@1.5.2']), /no other word/)
   assert.equal(pin(['npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), '1.5.2')
 
-  // pi named again, with or without a version, as by a second install (the review of milestone 7,
-  // smaller point 4), or in a path.
+  // pi named again, with or without a version, as by a second install, or in a path.
   assert.throws(() => pin([install('1.5.2'), 'npm install --global @earendil-works/pi-coding-agent']), /named more than once/)
   assert.throws(() => pin([install('1.5.2'), 'ls /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/']), /named more than once/)
   assert.throws(() => pin(['npm install --global --ignore-scripts @earendil-works/pi-coding-agent']), /must pin pi to an exact version/)
@@ -223,7 +222,7 @@ test('image: build-image builds natively as root, in Docker or Podman otherwise,
   assert.deepEqual(buildMethod({ isRoot: false, find: finder(['docker', 'podman']) }), { native: false, runtime: 'docker' })
   assert.deepEqual(buildMethod({ isRoot: false, find: finder(['podman']) }), { native: false, runtime: 'podman' })
   assert.throws(() => buildMethod({ isRoot: false, find: finder([]), docker: false }), /^ImageError: build-image needs root, to build natively, or Docker or Podman, to build in a container/)
-  // In the runner's container, which has neither, it says which container builds (D220).
+  // In the runner's container, which has neither, it says which container builds.
   assert.throws(() => buildMethod({ isRoot: false, find: finder([]), docker: true }), /^ImageError: in Docker, build-image runs in a container of its own, .*: docker compose run --rm build-image$/)
 })
 
@@ -313,7 +312,7 @@ test('image: build-image refuses while a runner runs, and a build of another pi 
 test("image: a user who can't write the data folder, or the runner's, is told who builds the image, with exit code 2", { skip: isRoot ? 'root writes anyway' : false }, async t => {
   const { paths, build, fetch, log, proc } = prepareBuild(t)
   fs.mkdirSync(paths.runner, { recursive: true })
-  // As `scooter-runner` on a native install, whose data folder is root's (D151).
+  // As `scooter-runner` on a native install, whose data folder is root's.
   fs.chmodSync(paths.dataDir, 0o555)
   atEnd(t, () => fs.chmodSync(paths.dataDir, 0o755))
   const refused = error => error instanceof ImageError && error.setup

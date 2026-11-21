@@ -1,4 +1,4 @@
-// What a run's outcome does (6.8, 6.9 of DESIGN.md; section 10, "Runner"): the cause, read from
+// What a run's outcome does: the cause, read from
 // the network log; pauses and their schedule; cursor, retry and failed transitions with an injected
 // clock; and the notices. Pure functions, and the log's format and reader.
 
@@ -41,7 +41,7 @@ const ID2 = '20261109T155013502-0001'
 // ---------------------------------------------------------------------------------------------
 // The network log
 
-test('network log: the lines of 6.13, checked and written in order', () => {
+test('network log: its lines, checked and written in order', () => {
   const lines = [
     request(ID1),
     response(ID1, 200),
@@ -118,7 +118,7 @@ test('failures: a network log that can\'t be read counts as no answer from OpenR
   const log = { warn: (event, fields) => warnings.push({ event, ...fields }), info() {}, error() {} }
   const failure = readFailureCause({ paths, result: { code: 1, stderr: '', timedOut: false }, startedAt: TIMING.startedAt, endedAt: NOW, log })
   assert.deepEqual(failure, { cause: 'other', reason: 'pi exited with code 1', status: null })
-  // A folder isn't a regular file, and isn't read (the review of milestone 5, point 3).
+  // A folder isn't a regular file, and isn't read.
   assert.deepEqual(warnings, [{ event: 'runner.netlog_unreadable', error: 'Error', code: 'EUNTRUSTED' }])
 })
 
@@ -187,7 +187,7 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
     [failed(null, { timedOut: true }), { answer: 'none' }, { cause: 'outage', reason: "OpenRouter didn't answer", status: null }],
     // OpenRouter answering normally, or not asked at all: pi's own failure.
     [failed(3), { status: 200 }, { cause: 'other', reason: 'pi exited with code 3', status: 200 }],
-    // OpenRouter refusing a request for another reason: its error, as for the others (6.9).
+    // OpenRouter refusing a request for another reason: its error, as for the others.
     [failed(1), { status: 400 }, { cause: 'other', reason: 'OpenRouter answered 400', status: 400 }],
     [failed(null, { timedOut: true }), { status: 413 }, { cause: 'other', reason: 'OpenRouter answered 413', status: 413 }],
     [failed(127), null, { cause: 'other', reason: 'pi exited with code 127', status: null }],
@@ -225,7 +225,7 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
   // A sandbox that couldn't run pi at all.
   assert.deepEqual(failureCause({ result: { error: new Error('no QEMU') } }), { cause: 'setup', reason: "the VM couldn't start", status: null })
   // A run the sandbox stopped for writing too much, whatever OpenRouter said last: the VM was
-  // closed in the middle of whatever pi was doing (6.6).
+  // closed in the middle of whatever pi was doing.
   assert.deepEqual(failureCause({ result: failed(null, { wroteTooMuch: true }), answer: { answer: 'none' } }), {
     cause: 'other',
     reason: 'pi wrote more than a run may',

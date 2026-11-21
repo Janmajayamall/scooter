@@ -1,15 +1,14 @@
-// The channels: what the bridge's core asks of each one, and the record each one hands it (5 of
-// DESIGN.md; ARCHITECTURE.md 2.1).
+// The channels: what the bridge's core asks of each one, and the record each one hands it.
 //
 // A channel is one module in this folder, and only that module deals with its service: only
 // `whatsapp.mjs` runs wacli, and only `email.mjs` runs the email reader. The core (the store,
 // intake, delivery, commands and backups) calls every channel through the same object:
 //
 //   name              `whatsapp` or `email`: the `source` of the lines its records become
-//   takesCommands     whether a text from it can be a command (5.4). WhatsApp's can; an email never
+//   takesCommands     whether a text from it can be a command. WhatsApp's can; an email never
 //   keepsUntilStored  whether a message stays with the channel until intake has stored it, so that
 //                     one the bridge can't store now, for a reason of its own such as a full disk,
-//                     is handed over again later. An email stays in the spool (5.6); WhatsApp's
+//                     is handed over again later. An email stays in the spool; WhatsApp's
 //                     messages don't, and are stored without the files that couldn't be copied
 //   start(onRecord)   starts receiving, and calls `onRecord(record)` for each message from the
 //                     owner, awaiting what it returns. The channel drops everything else itself.
@@ -23,7 +22,7 @@
 //                     they are stored stores nothing of the message now.
 //   status()          one line for `/status`
 //
-// And for delivery (5.3):
+// And for delivery:
 //
 //   canSend           whether it can send text. WhatsApp can; email can't, since Scooter never
 //                     sends email
@@ -39,12 +38,12 @@
 //                     resolves with the reaction's channel ID, or null, as `sendText` does
 //
 // A record is the message as the channel received it, in a form that is the same for every
-// channel: the normalized message of 5.2 step 3, without what only the channel needs (for
+// channel: the normalized message, without what only the channel needs (for
 // WhatsApp, the chat, the sender and whether the bot sent it), plus `subject` for email.
 //
 //   source           the channel's name
 //   id               the channel's own ID for it, which becomes `sourceId`. For an edit or a
-//                    deletion it is the ID of the message changed (13.1)
+//                    deletion it is the ID of the message changed
 //   at               when it was sent, as a UTC time to the second, or null if the channel doesn't
 //                    know, in which case it arrived now
 //   text             its text, or a media caption: "" if none
@@ -82,7 +81,7 @@ function checkAttachment(attachment) {
   )
 }
 
-// Why the channel named `name` can't be `DEFAULT_CHANNEL` (5.3), or null when it can: it must be
+// Why the channel named `name` can't be `DEFAULT_CHANNEL`, or null when it can: it must be
 // one of `channels`, and one that can send. In v2 that leaves only `whatsapp`, and the bridge
 // refuses to start with anything else.
 export function defaultChannelProblem(channels, name) {

@@ -1,4 +1,4 @@
-// pi's answer (6.7 of DESIGN.md): what the runner reads in pi's final answer, and what it sends.
+// pi's answer: what the runner reads in pi's final answer, and what it sends.
 //
 // The answer is pi's stdout, read line by line. These lines, after trimming, are instructions:
 //
@@ -96,7 +96,7 @@ export function parseAnswer(stdout) {
 
 // What an answer does to the items of a batch: `{ done, failed, unknown }`. `done` is the set of
 // items reported `DONE`, `failed` maps items reported `FAILED` to their reason, and `unknown` lists
-// the numbers reported that weren't in the batch, which are ignored (6.7). An item reported both
+// the numbers reported that weren't in the batch, which are ignored. An item reported both
 // ways counts as failed: the agent said it couldn't handle it.
 export function reportsOf(answer, batchSeqs) {
   const inBatch = new Set(batchSeqs)
@@ -116,7 +116,7 @@ export function reportsOf(answer, batchSeqs) {
 
 // The message a `REPLY_TO` quotes: the line `seq` names when it is a message; the message an edit
 // or a deletion changes; and null for anything else, or a `seq` that doesn't exist, which is then
-// sent without a quote (6.7).
+// sent without a quote.
 export function replyTarget(index, seq) {
   const entry = index.get(seq)
   if (!entry) return null
@@ -126,13 +126,13 @@ export function replyTarget(index, seq) {
   return null
 }
 
-// The outbox entries an answer asks for (6.8 step 4), in order: its texts, then, in quiet mode, a
+// The outbox entries an answer asks for, in order: its texts, then, in quiet mode, a
 // reaction for each message reported `DONE` that no `REPLY_TO` answered.
 //
 // - `agent`: its `name`, `canMessage`, `replyMode` and `ackReaction`. With `can_message: false`
 //   nothing is sent.
 // - `about`: what a plain text answers: the batch's newest item, or null for a scheduled task,
-//   whose text Scooter says on its own (5.3).
+//   whose text Scooter says on its own.
 // - `done`: the items reported `DONE`, from `reportsOf`; none for a task.
 //
 // A `REPLY_TO` whose message doesn't exist is sent as plain text. A reaction goes only to a message

@@ -1,4 +1,4 @@
-// The network policy (section 10 of DESIGN.md, "Network policy"; 6.13): its hook, given requests
+// The network policy: its hook, given requests
 // shaped like the pinned pi's from the fixtures of milestone 0, with Gondolin's own handling of the
 // key around it, and a fake upstream on this machine in OpenRouter's place. And the network log it
 // writes, following each request it lets out to its answer. No VM, and no network.
@@ -85,7 +85,7 @@ test("policy: the allowlists are what the pinned pi sends, for every model of it
     assert.deepEqual([...PI_BETAS[route]].sort(), [...new Set(shapes.flatMap(shape => shape.beta))].sort(), route)
     for (const shape of shapes) assert.ok(queries.includes(shape.query), `${route} ${shape.query}`)
   }
-  // Both routes ask for zero data retention, until OpenRouter says one can't (14).
+  // Both routes ask for zero data retention, until OpenRouter says one can't.
   assert.deepEqual(ZDR_ROUTES, { messages: true, chat: true })
 })
 
@@ -286,7 +286,7 @@ test('policy: the request line is written before the request goes out, and a str
       response.end('event: message_stop\ndata: {}\n\n')
     },
   })
-  // No response hook: in Gondolin 0.14.0 one would hold back the whole answer (13.4).
+  // No response hook: in Gondolin 0.14.0 one would hold back the whole answer.
   assert.equal(policy.options.onResponse, undefined)
 
   const out = await policy.send(piRequest('messages'))
@@ -369,7 +369,7 @@ test('policy: what one run adds to the log is bounded: requests past RUN_REQUEST
   assert.deepEqual(policy.lines().at(-1), { at: '2026-11-09T15:50:00Z', event: 'unlogged', refused: 3 })
 })
 
-test('policy: requests read at the same time count against RUN_REQUESTS_MAX as they come, and one refused gives its place back (the review of milestone 8, smaller point 2)', async t => {
+test('policy: requests read at the same time count against RUN_REQUESTS_MAX as they come, and one refused gives its place back', async t => {
   atEnd(t, overrideLimits({ RUN_REQUESTS_MAX: 2 }))
   const policy = await openPolicy(t)
   // A request the policy refuses for its body takes no place.
@@ -388,7 +388,7 @@ test('policy: requests read at the same time count against RUN_REQUESTS_MAX as t
   )
 })
 
-test("policy: once the hook lets a request out, Gondolin connects only to a public address for it, whatever the name resolves to (the review of milestone 8, smaller point 5)", async t => {
+test("policy: once the hook lets a request out, Gondolin connects only to a public address for it, whatever the name resolves to", async t => {
   const at = (hostname, ip) => ({ hostname, ip, family: ip.includes(':') ? 6 : 4, port: 443, protocol: 'https' })
   const PRIVATE = ['127.0.0.1', '10.0.0.5', '192.168.1.20', '172.16.0.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', 'fe80::1']
   const on = await openPolicy(t, { internet: true })

@@ -1,4 +1,4 @@
-// The email channel (5.6 of DESIGN.md; ARCHITECTURE.md 2.3).
+// The email channel.
 //
 // This is the only module that runs the email reader, `src/mail/reader.mjs`, a program of its own
 // that reads the mailbox as `scooter-mail` and hands each email over as a folder in its spool. The
@@ -18,13 +18,13 @@
 // - hands the email to the core as a record, which intake writes as the datastore line, with the
 //   whole message as `<seq>.eml` first and the attachments after it; or logs the skip, with the
 //   sender, the reason and the UID, never the subject or what it says, and counts it for `/status`;
-// - runs `scooter email-check` (8.4).
+// - runs `scooter email-check`.
 //
 // Email only comes in: the channel can't send or react, and replies about an email go to
-// `DEFAULT_CHANNEL` (5.3). An email is never a command, an edit, a deletion or a reaction.
+// `DEFAULT_CHANNEL`. An email is never a command, an edit, a deletion or a reaction.
 //
-// The spool's format is `src/mail/spool.mjs`'s, which this module can't import (ARCHITECTURE.md
-// 4.2): its names are repeated here, and a test hands over through the real reader.
+// The spool's format is `src/mail/spool.mjs`'s, which this module can't import:
+// its names are repeated here, and a test hands over through the real reader.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -41,7 +41,7 @@ import { MEDIA_ERRORS } from '../intake.mjs'
 // answers SIGUSR1 by opening its debugger on 127.0.0.1:9229, where any local user could run code
 // as `scooter-mail`, which holds the mailbox's password. The signal is the bridge's, to back up
 // now, and a signal to the whole service, as `systemctl kill` sends by default, reaches the
-// reader too (D196). With the flag, Node ignores it from the moment it starts.
+// reader too. With the flag, Node ignores it from the moment it starts.
 const READER = fileURLToPath(new URL('../../mail/reader.mjs', import.meta.url))
 export const DEFAULT_READER = { program: process.execPath, args: ['--disable-sigusr1', READER] }
 
@@ -53,7 +53,7 @@ const PART_PREFIX = 'part-'
 const isSpoolFile = name => name === MESSAGE_FILE || name === PARSED_FILE || /^part-[1-9][0-9]*$/.test(name)
 
 // What a too-long email's text ends with, after its first `EMAIL_TEXT_MAX_CHARS` characters, and a
-// too-long subject after its first `EMAIL_SUBJECT_MAX_CHARS` (5.6).
+// too-long subject after its first `EMAIL_SUBJECT_MAX_CHARS`.
 export const TEXT_CUT_NOTE = '\n\n[The rest of this email was too long to keep here. The whole email is in its .eml file.]'
 export const SUBJECT_CUT_NOTE = ' […]'
 
@@ -82,7 +82,7 @@ function firstChars(text, max) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The reader's environment (5.6)
+// The reader's environment
 
 // Everything the reader is given: its home, UTC, a plain `PATH` and `LANG`, and the mailbox's
 // settings. Nothing else of the bridge's: not its other secrets, nor `EMAIL_AUTHSERV_ID`, which
@@ -236,7 +236,7 @@ export function readAuthResults(value) {
   return { authserv, results }
 }
 
-// The sender check (5.6). `lines` is what `readHeaderBlock` gives. Returns `{ ok, reason, sender,
+// The sender check. `lines` is what `readHeaderBlock` gives. Returns `{ ok, reason, sender,
 // authserv }`: whether the email is kept, and if not why, the address in `From` when there is one,
 // and the server named in the topmost `Authentication-Results` when there is one.
 //
@@ -366,7 +366,7 @@ function kindOf(mime) {
   return ['image', 'audio', 'video'].includes(type) ? type : 'document'
 }
 
-// The record of an email that passed the sender check (5.6), from its `parsed.json`, its header
+// The record of an email that passed the sender check, from its `parsed.json`, its header
 // block, and the size of its `message.eml`. Its first attachment is the whole message, which the
 // store names `<seq>.eml`; then come its attachments, as `part-1`, `part-2`… in the spool.
 // - `id` is the `Message-ID` without its angle brackets, or `imap-<UIDVALIDITY>-<UID>`.
@@ -406,7 +406,7 @@ export function emailRecord({ parsed, lines, size }) {
 // - `settings`: the bridge's settings; `settings.email` is used here, and `timeZone` for `/status`.
 // - `paths`: what `makePaths` returns. `paths.mail` is the reader's home, and its spool is in it.
 // - `proc`: what `createProc` returns. The reader runs through it.
-// - `user`: `{ uid, gid }` of `scooter-mail`, or null when the bridge isn't root (section 10).
+// - `user`: `{ uid, gid }` of `scooter-mail`, or null when the bridge isn't root.
 // - `reader`: the program, and the arguments before `run`, that are the reader. Tests give a stub.
 export function createEmail({ settings, paths, proc, log, clock = systemClock, user = null, reader = DEFAULT_READER }) {
   const config = settings.email
@@ -504,7 +504,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     const result = await onRecord(record)
     if (result?.reason === 'the store stopped') return 'stop'
     // Intake stored nothing of it, for a reason of the bridge's own, such as a full disk: the
-    // folder stays, whole, and is tried again (5.6).
+    // folder stays, whole, and is tried again.
     if (result?.reason === 'failed') return 'retry'
     if (result?.stored) {
       count(stored)
@@ -579,7 +579,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
   return {
     name: 'email',
     takesCommands: false,
-    // An email stays in the spool until it is stored, with its files, or skipped (5.6).
+    // An email stays in the spool until it is stored, with its files, or skipped.
     keepsUntilStored: true,
     canSend: false,
     canReact: false,
@@ -587,7 +587,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     // Starts the reader, and the spool's consumer.
     async start(onRecord) {
       if (running) throw new Error('the email channel is already started')
-      // The reader reads and writes only its own folder (3.2). A native install makes it in
+      // The reader reads and writes only its own folder. A native install makes it in
       // `setup`; here it is made if it's missing, as in development.
       for (const dir of [paths.mail, paths.mailSpool]) ensureDir(dir, { mode: 0o700, owner: user })
       const supervisor = proc.supervise(reader.program, [...reader.args, 'run'], {
@@ -627,7 +627,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     // parts, copied out of the spool with care, since the reader owns it. A file in the spool that
     // is missing (`ENOENT` on it), isn't one to copy, or is too large is the email's own; any other
     // failure is on the bridge's side, such as a full disk or a bridge out of file descriptors, and
-    // says so (`bridgeSide`): the email then stays in the spool, and is tried again (5.6).
+    // says so (`bridgeSide`): the email then stays in the spool, and is tried again.
     async download(record, n, target) {
       const dir = folders.get(record)
       if (dir === undefined || !Number.isSafeInteger(n) || n < 1 || n > record.attachments.length) throw new Error('no such attachment')
@@ -644,7 +644,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     // Resolves when the look at the spool in progress is over. For tests.
     idle: () => round,
 
-    // Email never sends (5.6).
+    // Email never sends.
     ready: () => false,
     sendText: async () => {
       throw new Error('the email channel sends nothing')
@@ -676,7 +676,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
 }
 
 // ---------------------------------------------------------------------------------------------
-// `scooter email-check` (8.4)
+// `scooter email-check`
 
 // Prints a value from a header as it is, or quoted when it holds a space or a control character.
 const shown = value => (/^[^\s\p{C}"]+$/u.test(value) ? value : JSON.stringify(value))

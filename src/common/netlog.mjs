@@ -1,4 +1,4 @@
-// The network log (6.13 of DESIGN.md): every request pi's VM makes, as the runner's network policy
+// The network log: every request pi's VM makes, as the runner's network policy
 // handles it, in `runner/log/YYYY-MM-DD.jsonl` by UTC date.
 //
 //   {"id":"20261109T155012041-0001","at":"2026-11-09T15:50:12Z","event":"request","host":"openrouter.ai","method":"POST","path":"/api/v1/messages"}
@@ -11,8 +11,8 @@
 // - `request`: the policy let a request out. Written before it goes out, so nothing leaves without
 //   a line, even if the runner crashes.
 // - `response`: the status of the request with the same `id`, written when it arrives, before the
-//   answer's body: a run that ends while the model is still streaming has its status in the log
-//   (6.9; `docs/DECISIONS.md`, D82). `ms` is the time from the request line to the status.
+//   answer's body: a run that ends while the model is still streaming has its status in the log.
+//   `ms` is the time from the request line to the status.
 // - `end`: the answer's body is over. `sent` and `received` are the bytes of the request and the
 //   answer, head and body, each way; `ms` the time from the request line. `reason` says why the
 //   answer was cut short, when it was.
@@ -27,7 +27,7 @@
 // Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never
 // headers, bodies or query strings. A path is cut at `NETLOG_PATH_MAX_CHARS`, so every line fits
 // within `NETLOG_LINE_MAX_BYTES`. The runner writes the log (`src/runner/sandbox/netlog.mjs`), and
-// reads it to learn why a run failed (6.9). The bridge reads it for `/status`, which is why its
+// reads it to learn why a run failed. The bridge reads it for `/status`, which is why its
 // format is here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
 
 import fs from 'node:fs'
@@ -141,7 +141,7 @@ export function scanNetworkLog(paths, { from, to }, each) {
     let fd
     try {
       // Without following a link, and without waiting on a FIFO: the bridge, as root, reads the
-      // runner's log for `/status` (5.4).
+      // runner's log for `/status`.
       fd = fs.openSync(paths.networkLog(utcDate(day)), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
     } catch (error) {
       if (error.code === 'ENOENT') continue

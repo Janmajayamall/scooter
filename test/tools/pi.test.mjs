@@ -1,8 +1,8 @@
 // What the pinned pi does, which the runner will rely on.
 //
 // These are the pi checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
-// docs/DECISIONS.md says what each one settled. They run the real pi in a VM, with the command
-// line and the environment of section 6.6 of DESIGN.md, against the scripted fake model. Run them
+// `docs/architecture/agent.md` and `network-policy.md` give the facts they found. They run the real
+// pi in a VM, with the runner's command line and environment, against the scripted fake model. Run them
 // again after changing pi's version in config/image/build.json.
 
 import assert from 'node:assert/strict'
@@ -88,7 +88,7 @@ test('pi: it refuses a flag it does not know, and --no-context-files keeps AGENT
     return { result, requests }
   }
 
-  // A flag pi doesn't know stops it before any request. So every run with the command of 6.6 also
+  // A flag pi doesn't know stops it before any request. So every run with the runner's command also
   // shows that pi still has each of its flags.
   const designed = piArgs({ prompt: 'hello' })
   const unknown = await run(['--no-such-flag', ...designed])
@@ -96,7 +96,7 @@ test('pi: it refuses a flag it does not know, and --no-context-files keeps AGENT
   assert.equal(unknown.result.stderr, 'Error: Unknown option: --no-such-flag\n')
   assert.equal(unknown.requests.length, 0)
 
-  // The command of 6.6 keeps the context file out of the system prompt. Without
+  // The runner's command keeps the context file out of the system prompt. Without
   // --no-context-files it is in.
   const kept = await run(designed)
   assert.equal(kept.result.exitCode, 0, kept.result.stderr)
@@ -128,7 +128,7 @@ test('pi 1: skills given with --skill load when --no-skills is set', options, as
     return { skills: skillsIn(systemPromptOf(first)), prompt: systemPromptOf(first), read: toolResults(second.body)[0] }
   }
 
-  // The command of 6.6: only the skill named on the command line is offered to the model, with
+  // The runner's command: only the skill named on the command line is offered to the model, with
   // the path it can be read at, and reading it works.
   const designed = await skillsSeen([])
   assert.deepEqual(designed.skills, ['expenses'])
@@ -261,7 +261,7 @@ test('pi 4: --no-mcp works together with -p', options, async t => {
     return { result, started, tools }
   }
 
-  // The command of 6.6 runs to the end, and the server is never started.
+  // The runner's command runs to the end, and the server is never started.
   const designed = await run([])
   assert.equal(designed.result.exitCode, 0, designed.result.stderr)
   assert.equal(designed.result.stdout, 'DONE: 1050\n')
@@ -323,7 +323,7 @@ test('pi 5: stdout holds the last answer and nothing else, and a refusal ends wi
     stderr: '401: {"message":"User not found.","code":401}\n',
     requests: 1,
   })
-  // The other statuses that mean a setup error (section 6.9) end the same way.
+  // The other statuses that mean a setup error end the same way.
   for (const status of [402, 403, 404]) {
     const other = await run(MESSAGES_MODEL, [{ status, message: 'refused' }])
     assert.match(other.stderr, new RegExp(`^${status} `))
@@ -421,7 +421,7 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     { tool: 'read', args: { path: `${day}/1051.png` } },
     { tool: 'write', args: { path: `${agent}/views/expenses.csv`, content: 'date,amount\n2026-11-09,150\n' } },
     { tool: 'edit', args: { path: preferences, edits: [{ oldText: 'coffee', newText: 'coffee and tea' }] } },
-    // The two commands the agent's prompt tells it to use on attachments (section 7.2).
+    // The two commands the agent's prompt tells it to use on attachments.
     { tool: 'bash', args: { command: `pdftotext -layout ${day}/1052.pdf -` } },
     { tool: 'bash', args: { command: `heif-enc -o "$HOME/in.heic" ${day}/1051.png && ${toJpeg}` } },
     { tool: 'read', args: { path: '/root/out.jpg' } },

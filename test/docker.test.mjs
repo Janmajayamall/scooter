@@ -1,8 +1,8 @@
-// Docker (8.3 of DESIGN.md; the plan's milestone 13): the Dockerfile and the Compose files, read as
-// text and as YAML, against what DESIGN.md and the native install say: the users and their uids,
-// the data folder's owners and modes, restic's checksum, the two services and their settings, the
-// one data volume, the container that builds the VM image, and the KVM files. Where Docker is
-// installed, `docker compose config` also reads each combination of the files.
+// Docker (the plan's milestone 13): the Dockerfile and the Compose files, read as
+// text and as YAML, and checked: the users and their uids, the data folder's owners and modes,
+// restic's checksum, the two services and their settings, the one data volume, the container that
+// builds the VM image, and the KVM files. Where Docker is installed, `docker compose config` also
+// reads each combination of the files.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,10 +22,10 @@ const compose = name => parse(read(name), { merge: true })
 // The Dockerfile's shell lines, with their continuations joined.
 const DOCKERFILE = read('Dockerfile').replace(/\\\n\s*/g, ' ')
 
-// The uids of 3.2 for Scooter's users in the image.
+// The uids of Scooter's users in the image.
 const UIDS = { wacli: 10001, runner: 10002, mail: 10003 }
 
-test("docker: the image defines Scooter's users at the uids of 3.2, as setup names them", () => {
+test("docker: the image defines Scooter's users at their uids, as setup names them", () => {
   const listed = /for user in ([^;]+); do/.exec(DOCKERFILE)[1].trim().split(/\s+/)
   assert.deepEqual(listed, Object.entries(UIDS).map(([part, uid]) => `${USERS[part]}:${uid}`))
   assert.match(DOCKERFILE, /useradd --system --uid "\$id" --gid "\$id" --no-create-home --home-dir \/nonexistent --shell \/usr\/sbin\/nologin/)
@@ -47,7 +47,7 @@ test("docker: the image's data folder has the folders, owners and modes setup gi
   assert.deepEqual(made.get('/config'), { owner: { uid: 0, gid: 0 }, mode: 0o755 })
 })
 
-test('docker: the image is built as 8.3 says: its two stages, restic checked against its release, the app without install scripts, and tini', () => {
+test('docker: the image\'s build: its two stages, restic checked against its release, the app without install scripts, and tini', () => {
   assert.match(DOCKERFILE, /^FROM golang:1\.27-trixie AS wacli$/m)
   assert.match(DOCKERFILE, /go install -tags sqlite_fts5 -trimpath -ldflags="-s -w" "github\.com\/openclaw\/wacli\/cmd\/wacli@v\$\{WACLI_VERSION\}"/)
   assert.match(DOCKERFILE, /^ARG WACLI_VERSION=0\.26\.0$/m)
@@ -66,7 +66,7 @@ test('docker: the image is built as 8.3 says: its two stages, restic checked aga
   assert.match(DOCKERFILE, /sha256sum -c -/)
   assert.match(DOCKERFILE, /^RUN npm ci --omit=dev --ignore-scripts /m)
   // The app is readable by every user, writable by root alone, whatever the checkout's modes, and
-  // after everything is copied in (the review of milestone 13, smaller point 4).
+  // after everything is copied in.
   const lines = DOCKERFILE.split('\n')
   const chmod = lines.indexOf('RUN chmod -R a+rX,go-w /app')
   assert.ok(chmod > lines.indexOf('COPY src ./src') && lines.indexOf('COPY src ./src') > 0)
@@ -76,7 +76,7 @@ test('docker: the image is built as 8.3 says: its two stages, restic checked aga
   assert.deepEqual(read('.dockerignore').split('\n').filter(entry => entry && !entry.startsWith('#')), ['*', '!package.json', '!package-lock.json', '!src/'])
 })
 
-test('docker: compose.yaml has the two services of 8.3, one data volume, and no published port', () => {
+test('docker: compose.yaml has the two services, one data volume, and no published port', () => {
   const file = compose('compose.yaml')
   assert.deepEqual(Object.keys(file.services).sort(), ['bridge', 'build-image', 'runner'])
   assert.deepEqual(Object.keys(file.volumes), ['data'])
@@ -90,17 +90,17 @@ test('docker: compose.yaml has the two services of 8.3, one data volume, and no 
     assert.deepEqual(service.logging, { driver: 'json-file', options: { 'max-size': '10m', 'max-file': '3' } }, name)
     assert.deepEqual(service.environment, { DATA_DIR: '/data', CONFIG_DIR: '/config' }, name)
     assert.equal(service.env_file, `${name}.env`)
-    // Neither needs added capabilities, privileges or seccomp changes, nor publishes a port (13.4).
+    // Neither needs added capabilities, privileges or seccomp changes, nor publishes a port.
     for (const key of ['ports', 'privileged', 'cap_add', 'devices', 'group_add', 'network_mode']) assert.equal(service[key], undefined, `${name}.${key}`)
     assert.equal(service.build, '.')
     assert.equal(service.image, 'scooter:local')
   }
-  // The bridge: root, the same hostname from one container to the next (5.5), the data volume.
+  // The bridge: root, the same hostname from one container to the next, the data volume.
   const { bridge, runner } = file.services
   assert.equal(bridge.user, undefined)
   assert.equal(bridge.hostname, 'scooter')
   assert.deepEqual(bridge.volumes, ['data:/data'])
-  // The runner: scooter-runner in every variant (D217), a read-only root file system with /tmp in
+  // The runner: scooter-runner in every variant, a read-only root file system with /tmp in
   // memory, and the config read-only.
   assert.equal(runner.user, USERS.runner)
   assert.equal(runner.read_only, true)
@@ -108,7 +108,7 @@ test('docker: compose.yaml has the two services of 8.3, one data volume, and no 
   assert.deepEqual(runner.volumes, ['data:/data', './config:/config:ro'])
 })
 
-test('docker: build-image runs in a container of its own, as root and privileged, which `up` leaves alone (D220)', () => {
+test('docker: build-image runs in a container of its own, as root and privileged, which `up` leaves alone', () => {
   const service = compose('compose.yaml').services['build-image']
   assert.deepEqual(service.profiles, ['build-image'])
   assert.deepEqual(service.command, ['build-image'])

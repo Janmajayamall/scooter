@@ -1,4 +1,4 @@
-// The agents' configuration (6.1 of DESIGN.md; section 10, "Config"): the example of 6.1 is read
+// The agents' configuration: the example config is read
 // as it stands, and each validation error names the field, and its line.
 
 import assert from 'node:assert/strict'
@@ -31,7 +31,7 @@ function setup(t, options) {
 // The example's text with one setting's line changed: `key: old value` becomes `key: value`.
 const change = (text, key, value) => text.replace(new RegExp(`^(\\s*)${key}:.*$`, 'm'), `$1${key}: ${value}`)
 
-test('config: the example of 6.1 is read as it stands', t => {
+test('config: the example config is read as it stands', t => {
   const { configDir, parse } = setup(t)
   const { agents } = parse(exampleYaml({ backfill: true }))
   assert.equal(agents.length, 1)
@@ -259,7 +259,7 @@ test('config: a skill holds only files and folders, and everything is inside the
   assert.equal(agents[0].skills[1].dir, fs.realpathSync(path.join(configDir, 'library', 'running')))
 })
 
-test("config: a skill's SKILL.md gives the folder's name and a description, as pi takes them (D197)", t => {
+test("config: a skill's SKILL.md gives the folder's name and a description, as pi takes them", t => {
   const { configDir, faults, parse } = setup(t)
   const base = exampleYaml()
   const skillFile = path.join(configDir, 'skills', 'runs', 'SKILL.md')
@@ -278,7 +278,7 @@ test("config: a skill's SKILL.md gives the folder's name and a description, as p
     ['---\nname: runs\ndescription: "  "\n---\n', /has no description/],
     ['---\nname: runs\ndescription: 42\n---\n', /has no description/],
     [`---\nname: runs\ndescription: ${'x'.repeat(1025)}\n---\n`, /has a description of 1025 characters, where the Agent Skills format allows 1024, and pi warns of more/],
-    // pi leaves it out of what it offers the model (the review of milestone 11, point 3).
+    // pi leaves it out of what it offers the model.
     ['---\nname: runs\ndescription: Runs.\ndisable-model-invocation: true\n---\n', /says disable-model-invocation: true, so pi wouldn't offer it to the model/],
     ['---\nname: 42\ndescription: Runs.\n---\n', /gives the name "42": it must be runs/],
   ]
@@ -319,7 +319,7 @@ test("config: a skill's SKILL.md gives the folder's name and a description, as p
 })
 
 test("config: a SKILL.md the runner can't read is a fault that names the field, listed with the others", { skip: skipIfRoot }, t => {
-  // The review of milestone 11, point 4: it stopped the runner with EACCES and exit code 1.
+  // Such a file once stopped the runner with EACCES and exit code 1.
   const { configDir, faults } = setup(t)
   const skillFile = path.join(configDir, 'skills', 'meals', 'SKILL.md')
   fs.chmodSync(skillFile, 0o000)

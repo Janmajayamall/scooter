@@ -1,4 +1,4 @@
-// The email channel (5.6 of DESIGN.md; section 10, "Email" and "Least privilege"): the sender
+// The email channel: the sender
 // check, the spool as the bridge takes it, the datastore line, the reader's environment and
 // supervision, `/status`, and `email-check`.
 //
@@ -394,7 +394,7 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   // A file where a folder should be.
   fs.writeFileSync(path.join(context.paths.mailSpool, '20261109T161500000-0900'), 'x')
   // A link where a folder should be, to a folder laid out as a spool folder outside the spool: the
-  // bridge, as root, reads and removes nothing it leads to (section 10).
+  // bridge, as root, reads and removes nothing it leads to.
   const elsewhere = path.join(context.root, 'elsewhere')
   fs.mkdirSync(elsewhere)
   for (const [file, content] of [['message.eml', gmailPlain()], ['parsed.json', '{}'], ['part-1', 'x']]) fs.writeFileSync(path.join(elsewhere, file), content)
@@ -423,7 +423,7 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   )
   const [line] = context.lines()
   // The stored names are the bridge's: `<seq>-<n>.<ext>`, the extension from the original name
-  // when it is one, else from the MIME type (4.4).
+  // when it is one, else from the MIME type.
   assert.deepEqual(
     line.files.map(file => [file.path, file.name]),
     [
@@ -577,7 +577,7 @@ test('email: an email whose files the bridge can\'t copy, as on a full disk, sta
   await context.take()
   const id = spoolMemo(context)
   // The copy into `bridge/incoming/` fails, as on a full disk, while the datastore can still take
-  // a line (the review of milestone 6, must-fix 2).
+  // a line.
   const open = fs.promises.open
   let full = true
   fs.promises.open = (target, flags, ...rest) =>
@@ -608,7 +608,7 @@ test('email: a spool file the bridge can\'t open for a reason of its own, such a
   await context.take()
   const id = spoolMemo(context)
   // Opening the spool's file fails with EMFILE, an error with the file's path that isn't about
-  // the file (the second review of milestone 6, smaller point 1).
+  // the file.
   const open = fs.promises.open
   let out = true
   fs.promises.open = (target, flags, ...rest) =>
@@ -678,8 +678,8 @@ test('email: a folder the bridge is done with is removed by the names the reader
 test('email: a spool the reader made a link is not looked into, and nothing the link leads to is removed', async t => {
   const context = await setup(t)
   await waitFor(() => context.channel.status().startsWith('Email: connected'), 'the reader to connect')
-  // As the reader could make the spool lead to the data folder (the review of milestone 6,
-  // must-fix 1): folders as the data folder holds them, and one named as a spool folder is.
+  // As the reader could make the spool lead to the data folder: folders as the data folder holds
+  // them, and one named as a spool folder is.
   const elsewhere = path.join(context.root, 'elsewhere')
   for (const name of ['agents', 'datastore', '20261109T161500000-0001']) {
     fs.mkdirSync(path.join(elsewhere, name), { recursive: true })
@@ -716,7 +716,7 @@ test('email: the reader runs with the mailbox\'s settings and nothing else of th
   assert.deepEqual(DEFAULT_READER, { program: process.execPath, args: ['--disable-sigusr1', fileURLToPath(new URL('../src/mail/reader.mjs', import.meta.url))] })
 })
 
-test('email: the reader\'s Node ignores SIGUSR1, the bridge\'s signal to back up, rather than open its debugger to local users (D196)', async t => {
+test('email: the reader\'s Node ignores SIGUSR1, the bridge\'s signal to back up, rather than open its debugger to local users', async t => {
   // The reader's own Node options, before its file, with a program that waits in its place.
   const options = DEFAULT_READER.args.slice(0, -1)
   const child = spawn(DEFAULT_READER.program, [...options, '-e', 'process.stdout.write("ready\\n"); setTimeout(() => {}, 1000)'], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -786,8 +786,7 @@ test('email: as root, the reader runs as its own user, its folders are its own, 
   assert.deepEqual([state.uid, state.mode & 0o777], [4545, 0o600])
 
   // A folder that isn't the reader's, and one whose parsed.json isn't, are refused. The first is
-  // left as it is: the bridge removes nothing the reader couldn't (the review of milestone 6,
-  // must-fix 1).
+  // left as it is: the bridge removes nothing the reader couldn't.
   const rootsFolder = spool(context)
   const rootsFile = spool(context)
   fs.chownSync(path.join(context.paths.mailSpool, rootsFile), 4545, 4545)

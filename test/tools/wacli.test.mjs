@@ -1,7 +1,7 @@
 // What the pinned wacli does, which the WhatsApp module will rely on.
 //
 // These are the wacli checks of milestone 0 in docs/plans/completed/v2-linux-implementation/v2-linux-implementation.md, and
-// docs/DECISIONS.md says what each one settled. They run the real wacli against an empty store,
+// `docs/architecture/whatsapp.md` gives the facts they found. They run the real wacli against an empty store,
 // which needs no pairing and no network, and skip themselves when wacli isn't installed.
 
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { makeTestDir } from '../support/tmp.mjs'
 
-// Section 2 of DESIGN.md pins this version.
+// The version Scooter pins.
 const WACLI_VERSION = '0.26.0'
 
 function findOnPath(program) {
@@ -30,7 +30,7 @@ function findOnPath(program) {
 const WACLI = findOnPath('wacli')
 const options = { skip: WACLI ? false : 'wacli is not installed' }
 
-// Runs wacli the way section 5.1 says: its own folders, UTC, and nothing else in its environment.
+// Runs wacli as the bridge does: its own folders, UTC, and nothing else in its environment.
 function wacli(dir, args, extraEnv = {}) {
   const home = path.join(dir, 'wacli')
   const env = {
@@ -106,7 +106,7 @@ test('wacli 2: auth status when not paired', options, async t => {
   assert.deepEqual(sync, { exitCode: 1, stdout: '', stderr: refusal })
 })
 
-test('wacli 3: the commands and flags of section 13.1 exist as written', options, async t => {
+test('wacli 3: the commands and flags Scooter uses exist as written', options, async t => {
   const dir = makeTestDir(t)
 
   const top = await wacli(dir, ['--help'])
@@ -131,13 +131,13 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
     for (const flag of wanted) assert.ok(flags.includes(flag), `wacli ${command.join(' ')} should have --${flag}`)
   }
 
-  // The defaults section 13.1 gives.
+  // The defaults the WhatsApp channel relies on.
   const sync = await flagsOf(dir, ['sync'])
   assert.match(sync.help, /--max-reconnect duration .*\(default 5m0s\)/)
   assert.match(sync.help, /--webhook-events string .*message, receipt, chat_presence \(default "message"\)/)
 
   // Unless told otherwise, `send text` fetches the first URL in the text to build a link preview.
-  // The bridge passes this flag with every text, so that it never does (section 5.3).
+  // The bridge passes this flag with every text, so that it never does.
   const text = await flagsOf(dir, ['send', 'text'])
   assert.match(text.help, /--no-preview\s+disable automatic link previews for the first URL in text/)
 
@@ -156,7 +156,7 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
   assert.equal(answer.data.messages, null)
   assert.deepEqual(answer.data.page, { has_more: false, next_cursor: null })
 
-  // The send commands of section 5.3, as the bridge will run them. Unpaired, each one gets as far
+  // The send commands, as the bridge runs them. Unpaired, each one gets as far
   // as the check for a session, so wacli took every flag. A flag it doesn't know stops it before
   // that, and a text that looks like a flag is taken as the text.
   const chat = '911234567890@s.whatsapp.net'

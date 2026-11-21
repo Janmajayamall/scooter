@@ -1,4 +1,4 @@
-// The agent's folder (6.2 of DESIGN.md) and `run/`, built before each run (6.5, 6.6): git, the
+// The agent's folder and `run/`, built before each run: git, the
 // `.gitignore` and the first commit; the copy of the config; the session copied in; and
 // `run/system.md`, with the memory read without following links.
 

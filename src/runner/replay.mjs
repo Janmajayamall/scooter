@@ -1,13 +1,13 @@
-// Replayed batches (6.10, 6.11 of DESIGN.md): how a rebuild and a backfill give the agent the
+// Replayed batches: how a rebuild and a backfill give the agent the
 // datastore's history again. Both share what is here.
 //
 // - **One of the owner's days per batch.** A replayed batch is drawn from its lane as a live one
-//   is (6.5, `batch.mjs`): due retries first, then work items after the lane's cursor, up to the
+//   is (`batch.mjs`): due retries first, then work items after the lane's cursor, up to the
 //   `seq` the replay stops at, at most `BATCH_MAX_ITEMS` and within `PROMPT_MAX_BYTES`. And every
 //   item it takes was sent on one day of the owner's: the local date, in `SCOOTER_TZ`, of the
 //   first item's `at`. It stops at the first item sent on another. A message that an edit or a
 //   deletion in it brings in, from the lane's retries or from what it gave up on, joins whatever
-//   its day, as it may take a batch past 20 (6.5): otherwise the edit would be handled before the
+//   its day, as it may take a batch past 20: otherwise the edit would be handled before the
 //   message it changes. It is shown with its date, which says when it was sent.
 // - **`Now:`** in the prompt is the time of the batch's newest item, not the clock's, so "today"
 //   and "yesterday" in old messages mean what they meant then. Every item but one brought in is of
@@ -17,7 +17,7 @@
 //   With `session: none`, none, as for live runs. A replay's sessions serve only it, and go once it
 //   is over (`removeReplaySessions`).
 // - **The locks:** each batch is a run (`performRun` in `run.mjs`), which takes `run.lock` and gives
-//   way to `backup.lock`, as a live run does (6.4), so a backup never sees half a batch.
+//   way to `backup.lock`, as a live run does, so a backup never sees half a batch.
 //
 // A replay is silent: nothing it runs sends anything, and its failures send no notice.
 
@@ -57,7 +57,7 @@ export function batchTime(batch, index) {
 // - `lane`: `{ cursor, retry, failed }` (`batch.mjs`); `until`: the `seq` the replay stops at.
 // - `now`: the clock's time, which says which retries are due.
 // - `paths`, `timeZone`, `homeCurrency`, `internet`: as for a live batch.
-// - `intro`: a line the prompt starts with, or null: a backfill's (6.11).
+// - `intro`: a line the prompt starts with, or null: a backfill's.
 export function buildReplayBatch({ agent, lane, until, index, paths, now, timeZone, homeCurrency, internet, intro = null }) {
   const upTo = Math.min(until, index.lastSeq)
   const { candidates, fresh, day } = replayCandidates({ agent, lane, index, now, upTo, timeZone })

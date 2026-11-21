@@ -1,4 +1,4 @@
-// A live check (the plan's milestone 13; row 14): the mounts of a run, with the data folder where
+// A live check (the plan's milestone 13): the mounts of a run, with the data folder where
 // Docker has it, at /data, which is also where Gondolin 0.14.0 puts its own file system unless told
 // otherwise. It is run by hand, in the runner's container, with the runner stopped, from a checkout
 // of this repository mounted at /app/test:
@@ -9,12 +9,11 @@
 // `--entrypoint node` makes Node the container's first process in place of tini, the image's entry
 // point, which is fine for this check: it closes its one VM itself. Something that kills a QEMU
 // and waits for it to go, as the sandbox tests' check of a stopped process group does, needs tini
-// first, to reap it: `--entrypoint tini`, with `node …` as the command (the review of milestone
-// 13, smaller point 5).
+// first, to reap it: `--entrypoint tini`, with `node …` as the command.
 //
 // It holds runner/runner.sock, as the runner does, so it refuses while a runner runs. It opens the
 // sandbox as the runner does, on the runner's own settings and data folder, and runs a shell in a
-// VM with the mounts of a run of `lifelog` (`piMounts`). What the VM sees is checked against 6.6:
+// VM with the mounts of a run of `lifelog` (`piMounts`). What the VM sees is checked:
 // the agent's folder and the datastore at their paths under /data, read-only but for views/,
 // memory/ and run/session/; sessions/ not there; and nothing else of the data folder or the config.
 // It writes one file, in run/session/, which every run empties, and removes it. It prints what it

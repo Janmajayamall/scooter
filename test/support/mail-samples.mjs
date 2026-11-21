@@ -1,6 +1,5 @@
 // Sample emails, shaped as Gmail, Apple Mail and Outlook send them, as Scooter's mailbox receives
-// them: with the headers the mail goes through, the provider's `Authentication-Results` on top
-// (section 10 of DESIGN.md, "Email").
+// them: with the headers the mail goes through, the provider's `Authentication-Results` on top.
 //
 // Scooter's mailbox is at Gmail here, so the provider's server name is `mx.google.com`. The owner
 // writes from three addresses, one for each mail app. No address here is a real one: the domains

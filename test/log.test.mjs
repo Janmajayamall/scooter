@@ -1,4 +1,4 @@
-// Logging: one JSON line per event, and no message text or file contents (section 9 of DESIGN.md).
+// Logging: one JSON line per event, and no message text or file contents.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'

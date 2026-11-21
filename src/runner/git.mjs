@@ -1,4 +1,4 @@
-// Git, as the runner uses it on an agent's folder (6.2, 6.8, 6.9 of DESIGN.md).
+// Git, as the runner uses it on an agent's folder.
 //
 // The runner is the only committer. Every git command runs through `proc.mjs`, from an argument
 // list, with an environment of its own:
@@ -11,7 +11,7 @@
 //   command returned, outside `run.lock`. The runner packs the repository itself (`pack`).
 //
 // After each run the runner checks what pi left in `views/` and `memory/`, commits it, or throws
-// it away. Those are the only folders pi can write, apart from its session copy (6.6).
+// it away. Those are the only folders pi can write, apart from its session copy.
 //
 // pi chose every name, mode, size and depth, and the number of files there. So the check walks the
 // folders by the bytes of their names, without following links, and counts and weighs what they
@@ -29,7 +29,7 @@ import { systemClock } from '../common/time.mjs'
 
 export const AUTHOR = { name: 'Scooter', email: 'scooter@localhost' }
 
-// The folders of the agent's that pi writes and git keeps (6.2).
+// The folders of the agent's that pi writes and git keeps.
 export const AGENT_FOLDERS = ['views', 'memory']
 
 // Settings given on every command line, ahead of the command. `maintenance.auto=false` keeps
@@ -114,7 +114,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     },
 
     // The first thing in `folders` that git wouldn't record, as a path from the agent's folder, or
-    // null when there is none (6.8): anything that isn't a regular file or a folder, such as a
+    // null when there is none: anything that isn't a regular file or a folder, such as a
     // link or a FIFO; any name starting with `.`, such as a `.gitignore` or a nested `.git`; a
     // file the runner can't read, or a folder it can't read and search, or a path longer than the
     // system takes, which git would pass over or fail on; a file with more than one name, which
@@ -132,7 +132,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
 
     // Stages everything in `folders` (`git add -A`), and returns null, or the first path git
     // wouldn't add: a name it refuses, such as `git~1`. Such a path is something git wouldn't
-    // record, so this is the last step of the check in 6.8, after `unexpectedFile`, which must
+    // record, so this is the last step of the check of the files pi left, after `unexpectedFile`, which must
     // have passed. git goes on past it (`--ignore-errors`) and leaves it unstaged, which is how it
     // is found. A failure that leaves nothing unstaged isn't a name's, and throws.
     //
@@ -168,7 +168,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
 
     // The paths in `folders` whose staged contents differ from the last commit's: each file added,
     // changed or removed, as a path from the agent's folder, in git's order. A file moved is its
-    // two paths. For a backfill's batch, which may change only some of them (6.11).
+    // two paths. For a backfill's batch, which may change only some of them.
     async stagedChanges(folders = AGENT_FOLDERS) {
       const { stdout } = await run(['diff', '--cached', '--name-only', '--no-renames', '-z', 'HEAD', '--', ...folders])
       return stdout.split('\0').filter(Boolean)
@@ -179,7 +179,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
       return (await run(['rev-parse', '--verify', 'HEAD'])).stdout.trim()
     },
 
-    // Tags the last commit `name`, as a rebuild does first (6.10). A name already taken fails.
+    // Tags the last commit `name`, as a rebuild does first. A name already taken fails.
     async tag(name) {
       await run(['tag', name, 'HEAD'])
     },
@@ -201,7 +201,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     },
 
     // Throws away every change in `folders` since the last commit, so the next run starts from the
-    // last good state (6.9). Nothing pi left can slow this down or stop it, and it frees what pi
+    // last good state. Nothing pi left can slow this down or stop it, and it frees what pi
     // wrote before it makes anything new, because pi may have filled the disk, and on a full disk
     // a new folder has no room:
     // 1. The folders are set aside, renamed into `discardDir`, which a start made and which is
@@ -263,7 +263,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     // `git add`, `git commit` or `git restore`, and then refuses to change the index or the branch
     // until someone removes it. These are `index.lock` and the others at the top of `.git`, and
     // those of the refs, such as `refs/heads/main.lock`. Only for startup: the runner holds
-    // `runner/runner.sock` (D90), so no git of its own can be running.
+    // `runner/runner.sock`, so no git of its own can be running.
     removeLeftoverLocks() {
       const removed = []
       const visit = (folder, relative, deeper) => {

@@ -1,10 +1,10 @@
-// The email reader's folder (5.6 of DESIGN.md): the spool it hands emails over through, and its
+// The email reader's folder: the spool it hands emails over through, and its
 // position in the mailbox.
 //
-// The folder is the reader's home, `/data/mail`, which only `scooter-mail` and root can read
-// (3.2). The bridge takes the spool's folders in order, and reads `state.json` for `/status`. The
-// names here are a contract with `src/bridge/channels/email.mjs`, which can't import this module
-// (ARCHITECTURE.md 4.2): the bridge treats what is here as untrusted, and checks it.
+// The folder is the reader's home, `/data/mail`, which only `scooter-mail` and root can read.
+// The bridge takes the spool's folders in order, and reads `state.json` for `/status`. The
+// names here are a contract with `src/bridge/channels/email.mjs`, which can't import this module:
+// the bridge treats what is here as untrusted, and checks it.
 //
 // A spool folder, `spool/<id>/`, written as `spool/.tmp-<id>/` and renamed once complete, with IDs
 // that sort in the order the emails were handed over (`handOff` in `src/common/files.mjs`):
@@ -76,7 +76,7 @@ const isObject = value => typeof value === 'object' && value !== null && !Array.
 // The position: `{ position, damaged }`. `position` is null when there is none yet, the first time
 // email is on, and also when the file isn't a position, which only something other than the reader
 // can make, since it is written atomically; `damaged` says which. Either way the reader starts from
-// the mailbox's `UIDNEXT` (5.6).
+// the mailbox's `UIDNEXT`.
 export function readPosition(home) {
   let value
   try {

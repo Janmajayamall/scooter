@@ -1,4 +1,4 @@
-// Parsing an email, in the email reader's process (5.6 of DESIGN.md).
+// Parsing an email, in the email reader's process.
 //
 // `postal-mime` does the parsing: the MIME tree, transfer encodings, character sets and encoded
 // words. This module turns what it gives into what the spool holds: the subject, the body as text,
@@ -6,7 +6,7 @@
 // (`htmlToText`), since postal-mime gives an HTML-only email no text of its own.
 //
 // It runs only in the reader, which runs as `scooter-mail`: no library that parses mail runs in the
-// bridge's process (section 2). The bridge checks what the reader hands over, and reads the headers
+// bridge's process. The bridge checks what the reader hands over, and reads the headers
 // it decides on (the sender check, the `Message-ID` and the `Date`) itself.
 
 import PostalMime from 'postal-mime'
@@ -89,7 +89,7 @@ const PARAGRAPHS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr'])
 const CELLS = new Set(['td', 'th'])
 
 // An HTML body as text: tags dropped, character references decoded, and line breaks kept where
-// block elements, `<br>` and table rows put them (5.6). Comments, scripts, styles and the head are
+// block elements, `<br>` and table rows put them. Comments, scripts, styles and the head are
 // dropped with what they hold. Spaces run together as a browser shows them, a paragraph or a
 // heading is set off by a blank line, a list item starts with "- ", and table cells are kept apart
 // by a space.
@@ -199,7 +199,7 @@ export async function parseEmail(raw) {
     subject: typeof email.subject === 'string' ? email.subject : '',
     text: text.replace(/\r\n?/g, '\n').trim(),
     attachments: email.attachments.map(attachment => ({
-      // A longer name is cut; the bridge names the stored file itself (4.1), so the name is only
+      // A longer name is cut; the bridge names the stored file itself, so the name is only
       // what the owner called it.
       name: typeof attachment.filename === 'string' && attachment.filename !== '' ? firstChars(attachment.filename, limits.ATTACHMENT_NAME_MAX_CHARS) : null,
       mime: mimeTypeOf(attachment.mimeType),
@@ -234,7 +234,7 @@ function headerLines(header) {
 }
 
 // Whether any `From` header of a header block mentions one of `addresses`, which are in lower case.
-// It decides whether the reader fetches the whole message (5.6), and is looser than the bridge's
+// It decides whether the reader fetches the whole message, and is looser than the bridge's
 // sender check on purpose: every message that check could keep is fetched, and the check decides.
 export function mentionsOwner(header, addresses) {
   return headerLines(header).some(({ name, value }) => name === 'from' && addresses.some(address => value.toLowerCase().includes(address)))

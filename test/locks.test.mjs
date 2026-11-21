@@ -1,4 +1,4 @@
-// Lock files (5.5 and 6.4 of DESIGN.md): created exclusively, holding the pid, the start time and
+// Lock files: created exclusively, holding the pid, the start time and
 // a deadline. How the runner and the bridge use the two locks together is tested with them.
 
 import assert from 'node:assert/strict'
@@ -20,7 +20,7 @@ test('locks: a lock records who took it, when, and when its work must be over', 
   assert.equal(lockExists(file), false)
   assert.equal(readLock(file), null)
 
-  // A run's deadline is its start plus the agent's timeout (6.4).
+  // A run's deadline is its start plus the agent's timeout.
   assert.equal(takeLock(file, { clock, deadline: clock.now() + 10 * 60 * 1000 }), true)
   assert.equal(lockExists(file), true)
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {

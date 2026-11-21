@@ -1,4 +1,4 @@
-// The import rules of section 4.2 of ARCHITECTURE.md, checked over everything under `src/`.
+// The import rules between the code's layers, checked over everything under `src/`.
 //
 // The first test is the check itself. The others give the checker small made-up trees, to show
 // that each rule is one it would catch.

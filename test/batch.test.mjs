@@ -1,4 +1,4 @@
-// The batch and its prompt (6.5 of DESIGN.md; section 10, "Runner"): the example of 6.5, the two
+// The batch and its prompt: the example prompt, the two
 // limits, context lines and reply labels, emails, and an edit or deletion bringing in its message.
 
 import assert from 'node:assert/strict'
@@ -24,7 +24,7 @@ const body = prompt => prompt.split('\n').slice(3).join('\n')
 const bytes = text => Buffer.byteLength(text)
 const seqsOf = batch => batch.items.map(item => item.seq)
 
-test('batch: the example of 6.5, exactly as the design shows it', () => {
+test('batch: the example prompt, exactly as the runner\'s document shows it', () => {
   const { batch, prompt } = build({ lines: exampleLines(), state: exampleState() })
   assert.equal(prompt, EXAMPLE_PROMPT)
   assert.deepEqual(batch, {
@@ -200,7 +200,7 @@ test('batch: whatever the texts, the prompt keeps within its limit and has an it
   }
 })
 
-test('batch: an item too long on its own is cut as little as will do, also where a text fits whole (the review of milestone 3, point 7)', () => {
+test('batch: an item too long on its own is cut as little as will do, also where a text fits whole', () => {
   const max = 800
   const restore = overrideLimits({ PROMPT_MAX_BYTES: max })
   try {
@@ -291,7 +291,7 @@ For context only (no action, no DONE):
 test('batch: emails, media and attachments in the prompt', () => {
   const lines = [
     ...fillerLines(2),
-    // The email of 4.2, as 6.5 shows it.
+    // The example email of `docs/architecture/datastore.md`, as `runner.md` shows it in a prompt.
     line.email(3, '2026-11-09T16:12:40Z', 'Call with Sam', "Recording from today's call.", {
       files: [
         { path: '3.eml', mime: 'message/rfc822', bytes: 19262388 },

@@ -1,4 +1,4 @@
-// `scooter setup`: a native install on Linux (8.4 and 8.5 of DESIGN.md; ARCHITECTURE.md 6).
+// `scooter setup`: a native install on Linux.
 //
 // Run as root, from the code's own folder, with the Node the services will run:
 //
@@ -8,11 +8,11 @@
 // In order, each step safe to repeat:
 // 1. **Check**, before anything is made: root; systemd, unless `--no-services`; a Node ≥ 22.19
 //    that every service user can run, and the code in a folder they can read, both changed by root
-//    alone (row 16); and env files, if they are there already, that name the data and config
+//    alone; and env files, if they are there already, that name the data and config
 //    folders setup makes.
 // 2. **Users:** `scooter-wacli`, `scooter-runner` and `scooter-mail`, system users without a login
-//    shell or a home; `scooter-runner` in the `kvm` group (row 4).
-// 3. **Folders:** the data folder and its folders, with the owners and modes of 3.2, and the
+//    shell or a home; `scooter-runner` in the `kvm` group.
+// 3. **Folders:** the data folder and its folders, with their owners and modes (`dataFolders`), and the
 //    config folder, copied from the code's `config/` if it isn't there.
 // 4. **Env files:** `bridge.env` and `runner.env`, from the examples, with `DATA_DIR` and
 //    `CONFIG_DIR` filled in, if they aren't there. Never written over.
@@ -22,7 +22,7 @@
 //    where systemd isn't running.
 //
 // As root, in folders other users own, setup makes only what is missing, and sets owners and
-// modes through a descriptor that follows no link (`settleFolder`, D206); what is already there
+// modes through a descriptor that follows no link (`settleFolder`); what is already there
 // inside them is theirs, and left alone.
 
 import fs from 'node:fs'
@@ -34,7 +34,7 @@ import { makePaths } from '../common/paths.mjs'
 import { createProc, findProgram } from '../common/proc.mjs'
 import { parseEnvFile } from '../common/settings.mjs'
 
-// Where a native install keeps everything (8.5).
+// Where a native install keeps everything.
 export const NATIVE = {
   dataDir: '/var/lib/scooter',
   envDir: '/etc/scooter',
@@ -43,7 +43,7 @@ export const NATIVE = {
   unitDir: '/etc/systemd/system',
 }
 
-// Scooter's users, by their part (3.2; row 4). Tests give names of their own, so they never touch
+// Scooter's users, by their part. Tests give names of their own, so they never touch
 // an install's.
 export const USERS = { wacli: 'scooter-wacli', runner: 'scooter-runner', mail: 'scooter-mail' }
 export const KVM_GROUP = 'kvm'
@@ -51,7 +51,7 @@ export const KVM_GROUP = 'kvm'
 // The units of `deploy/systemd/`, which run `<binDir>/scooter`.
 export const UNITS = ['scooter-bridge.service', 'scooter-runner.service']
 
-// The oldest Node Scooter runs on (8.5; `package.json`).
+// The oldest Node Scooter runs on, as `package.json` says.
 export const NODE_MIN = [22, 19]
 
 // The code's own folder: the one that holds `src/`.
@@ -106,7 +106,7 @@ function writerProblems(file, stat, owner, { sticky = false } = {}) {
   return []
 }
 
-// What is wrong with the Node at `node` for the services (row 16): it must be a version Scooter
+// What is wrong with the Node at `node` for the services: it must be a version Scooter
 // runs on, at a path every user can reach, and changed by root alone, since the bridge runs it as
 // root. Returns statements.
 export function nodeProblems(node, { version = process.versions.node, owner = 0 } = {}) {
@@ -124,7 +124,7 @@ export function nodeProblems(node, { version = process.versions.node, owner = 0 
 // The most problems the check of the code lists; the rest are counted.
 const LISTED_MAX = 10
 
-// What is wrong with the code in `dir` for the services (row 16): every service user must be able
+// What is wrong with the code in `dir` for the services: every service user must be able
 // to read it, and only root change it, since the bridge runs it as root. Every folder above it and
 // in it is checked, and every file in it but under `.git`; a link is taken as it is. Its
 // dependencies must be installed. Returns statements.
@@ -191,7 +191,7 @@ export function envFileProblems(file, { dataDir, configDir }) {
 // ---------------------------------------------------------------------------------------------
 // The decisions
 
-// The folders of 3.2 in the data folder, each `{ path, owner, mode }`, in the order they are made,
+// Scooter's folders in the data folder, each `{ path, owner, mode }`, in the order they are made,
 // for the users' `{ uid, gid }`, `ids.wacli`, `ids.runner` and `ids.mail`, and root's, `ids.root`,
 // which tests give as their own. `inside` marks a folder in a folder another user owns: setup makes
 // it if it is missing, and leaves it alone otherwise. `doctor` checks the same folders.
@@ -200,32 +200,32 @@ export function dataFolders(paths, ids) {
   const of = (folder, owner, mode, inside = false) => ({ path: folder, owner, mode, inside })
   return [
     // Every service user passes through it to its own; only root writes it, which `build-image`
-    // checks (D151).
+    // checks.
     of(paths.dataDir, root, 0o755),
     // Root's, with the runner's group, so the runner reads it and only the bridge writes it.
     of(paths.datastore, { uid: root.uid, gid: runner.gid }, 0o750),
     of(paths.agents, runner, 0o700),
     of(paths.exchange, runner, 0o700),
-    // The runner's, so that neither the runner nor the bridge finds one the other made (D108, D184).
+    // The runner's, so that neither the runner nor the bridge finds one the other made.
     of(paths.outbox, runner, 0o700, true),
     of(paths.locks, runner, 0o700, true),
     of(paths.runner, runner, 0o700),
     of(paths.bridge, root, 0o700),
     of(paths.wacli, wacli, 0o700),
-    // wacli's home, store, staging and XDG folders (5.1), which the bridge otherwise makes.
+    // wacli's home, store, staging and XDG folders, which the bridge otherwise makes.
     ...[paths.wacliStore, paths.wacliStaging, paths.wacliConfig, paths.wacliState, paths.wacliCache].map(folder => of(folder, wacli, 0o700, true)),
     of(paths.mail, mail, 0o700),
     of(paths.mailSpool, mail, 0o700, true),
   ]
 }
 
-// The owner and modes of the copy of `config/`: root's, readable by the runner alone (3.2).
+// The owner and modes of the copy of `config/`: root's, readable by the runner alone.
 export function configOwner(ids) {
   return { owner: { uid: 0, gid: ids.runner.gid }, folderMode: 0o750, fileMode: 0o640 }
 }
 
 // The env files, each `{ side, file, owner }`: `bridge.env` root's, `runner.env` the runner's,
-// both 0600 (8.2).
+// both 0600.
 export function envFiles(envDir, ids) {
   return [
     { side: 'bridge', file: path.join(envDir, 'bridge.env'), owner: ROOT },
@@ -262,7 +262,7 @@ function shellWord(word) {
 }
 
 // The text of `<binDir>/scooter`: it runs the code's `src/cli.mjs` with `node`. It `exec`s Node,
-// so that Node is the bridge's main process, and a signal for the bridge reaches it (D196).
+// so that Node is the bridge's main process, and a signal for the bridge reaches it.
 export function wrapperText({ node, cli }) {
   return [
     '#!/bin/sh',
@@ -373,10 +373,10 @@ function settleFile(file, { mode, owner }) {
 // only root's `PATH` has.
 const SBIN_PATH = `${process.env.PATH ?? ''}${path.delimiter}/usr/sbin${path.delimiter}/sbin${path.delimiter}/usr/bin${path.delimiter}/bin`
 
-// Puts the runner's user, `runner`, in the group `kvmGroup` (row 4), and returns what it did, for
+// Puts the runner's user, `runner`, in the group `kvmGroup`, and returns what it did, for
 // the report. With services, a machine without the group gets one, a system group: the runner's
 // unit names it in `SupplementaryGroups`, and systemd refuses to start a unit whose group isn't
-// there (the review of milestone 12, smaller point 1; D225). Without services none is made, and
+// there. Without services none is made, and
 // pi's VMs run under emulation until there is one. `findGroup(name)` is `proc.findGroup`, and
 // `run(program, args)` runs a program, throwing when it fails.
 export async function kvmMembership({ runner, kvmGroup, services, findGroup, run }) {
@@ -511,8 +511,9 @@ export async function setup({ locations = NATIVE, codeDir = CODE_DIR, node = pro
   return { done, next }
 }
 
-// `scooter setup [--no-services]`: sets Scooter up natively (8.4). Exits with 2 when a check fails
-// or it was called wrongly, and with 1 when a step fails.
+// `scooter setup [--no-services]`: sets Scooter up natively. Exits with 2 when a check fails,
+// when a step refuses what it finds, or when it was called wrongly, and with 1 when a step fails
+// otherwise.
 export async function runSetup({ args = [], stdout = process.stdout, stderr = process.stderr }) {
   const services = !args.includes('--no-services')
   const unknown = args.filter(arg => arg !== '--no-services')

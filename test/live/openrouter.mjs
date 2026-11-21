@@ -1,4 +1,4 @@
-// A live check (the plan's section 3, "Kinds of check"; milestone 8's "done when"): pi in a VM,
+// A live check (milestone 8's "done when"): pi in a VM,
 // through the runner and its network policy, against the real OpenRouter, with a dummy key. It is
 // run by hand, since it needs the network, and isn't part of `npm test`. It needs QEMU, a built
 // image and `debugfs`, as the sandbox tests do:

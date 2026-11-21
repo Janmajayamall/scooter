@@ -1,10 +1,10 @@
-// Writing the network log (6.13 of DESIGN.md), whose format is in `src/common/netlog.mjs`, and
+// Writing the network log, whose format is in `src/common/netlog.mjs`, and
 // following each request the policy lets out to its answer.
 //
 // The policy (`policy.mjs`) writes a `request` line before it lets a request out, and a `refused`
 // line for one it refuses. What comes of a request it let out is the HTTP client's: Gondolin 0.14.0
 // makes the request itself, with undici, in the runner's process. An `onResponse` hook would make
-// Gondolin hold back the whole answer until its end (13.4), which a streamed answer can't wait
+// Gondolin hold back the whole answer until its end, which a streamed answer can't wait
 // for, so the rest of the log comes from undici's diagnostics channels, which hold nothing back:
 //
 //   undici:request:create       the client made the request: which of the policy's it is
@@ -21,7 +21,7 @@
 // the runner ever sees it, and a request's lines are its own, however many requests are in flight.
 //
 // A request the policy let out that never reached the client, as when Gondolin couldn't resolve its
-// host, or found it private (6.13), and one still waiting for its answer when its run ends, are
+// host, or found it private, and one still waiting for its answer when its run ends, are
 // written as `error` lines when the run's network closes: every `request` line then has what came
 // of it, unless the runner was killed.
 

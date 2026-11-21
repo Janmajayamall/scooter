@@ -1,9 +1,9 @@
-// What a run's outcome does (6.8, 6.9 of DESIGN.md): why a run failed, read from the network log;
+// What a run's outcome does: why a run failed, read from the network log;
 // pauses and when they are tried again; the attempts each item has used; and the notices the owner
 // gets.
 //
 // When pi fails, or leaves a file git wouldn't record, the cause decides what happens next. The
-// runner reads it from OpenRouter's last answer during the run, in its own network log (6.13):
+// runner reads it from OpenRouter's last answer during the run, in its own network log:
 //
 // | Cause   | Sign                                            | What happens                        |
 // |---------|-------------------------------------------------|-------------------------------------|
@@ -48,7 +48,7 @@ const isOutageStatus = status => status === 408 || status === 429 || status >= 5
 //
 // A refusal that comes before any request has gone out is pi's own request: nothing the agent
 // does can run before the model's first answer, which pi asks for itself. pi asks the same way all
-// run long (0.4, pi 6), so the policy refusing it there means the policy and the pinned pi don't
+// run long, so the policy refusing it there means the policy and the pinned pi don't
 // agree, which no try of the batch can mend. A later refusal may be the agent's, from a command it
 // ran, and reads as pi's own failure, so that a message that misled the agent uses its attempts
 // rather than hold runs back for good (the plan's rules for milestone 8).
@@ -89,8 +89,8 @@ function openRouterAnswers() {
 }
 
 // What OpenRouter said, in its own words, from the last line pi printed on stderr: `401 {…}` on
-// the messages route and `401: {…}` on the chat route, each with the error's message in it
-// (`docs/DECISIONS.md`, 0.4, pi 5). Returns null when that line isn't one for `status`. The words
+// the messages route and `401: {…}` on the chat route, each with the error's message in it.
+// Returns null when that line isn't one for `status`. The words
 // come from outside: they go into the owner's notice and the state, never into Scooter's logs.
 export function openRouterMessage(stderr, status) {
   const last = stderr
@@ -112,7 +112,7 @@ export function openRouterMessage(stderr, status) {
 
 // Why a run failed. `result` is what the sandbox returned, or `{ error }` when it couldn't run
 // the command; `unexpected` the file a successful pi left that git wouldn't record, or null;
-// `outside` the file a backfill's batch changed that it may not change (6.11), or null;
+// `outside` the file a backfill's batch changed that it may not change, or null;
 // `filesError` the error that checking or committing what a successful pi left met, or null;
 // `answer` what `lastOpenRouterAnswer` found. Returns `{ cause, reason, status }`: `cause` is
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
@@ -121,7 +121,7 @@ export function openRouterMessage(stderr, status) {
 // An unexpected file, a change a backfill may not make, or an error in checking or committing the
 // files, is pi's own failure, whatever the log says: it is what pi left that failed the run.
 //
-// The reason is OpenRouter's error whenever its last answer was one (6.9), in its own words when pi
+// The reason is OpenRouter's error whenever its last answer was one, in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
 // 413 for a prompt or an image too large, which is pi's own failure. When the network policy
 // refused the last request to OpenRouter, it is the policy's reason, from the log.
@@ -132,7 +132,7 @@ export function failureCause({ result, unexpected = null, outside = null, filesE
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
   // What pi did, whatever OpenRouter answered: its VM was closed for writing too much, or its
-  // answer was longer than the sandbox keeps (6.6).
+  // answer was longer than the sandbox keeps.
   if (result.wroteTooMuch) return { cause: 'other', reason: 'pi wrote more than a run may', status }
   if (result.code === 0 && result.stdoutCut) return { cause: 'other', reason: "pi's answer was too long", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
@@ -177,7 +177,7 @@ export function readFailureCause({ paths, result, unexpected = null, outside = n
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pauses (6.9)
+// Pauses
 
 // The pause after a failed try with a setup error or an outage. A try that fails for the same cause
 // as the pause it was made in continues it: one more try, and the wait that comes with it. The
@@ -218,12 +218,12 @@ function afterRun(state, outcome, { now, startedAt, durationMs, seqs }) {
 }
 
 // Whether a failed run is the first of a row: the run before it got through, or there was none.
-// The first sends the owner a notice, and later ones don't (6.9; the plan's rule for milestone 4).
+// The first sends the owner a notice, and later ones don't (the plan's rule for milestone 4).
 export function isFirstFailure(state) {
   return state.lastRun === null || state.lastRun.ok
 }
 
-// The state after a batch of messages (6.8 step 5, 6.9). `batch` is what `buildBatch` gave. Returns
+// The state after a batch of messages. `batch` is what `buildBatch` gave. Returns
 // `{ state, givenUp }`, with the items that ran out of attempts, in order.
 //
 // - **Done:** gone from `retry`.
@@ -232,9 +232,9 @@ export function isFirstFailure(state) {
 //   `RETRY_WAIT` later. After `MAX_ATTEMPTS`, into `failed` and given up.
 // - **A setup error or an outage:** every item waits in `retry` for the next try, its attempts as
 //   they were. It is due at once: the pause holds every run back until the next try, which comes
-//   sooner when the runner restarts (6.9).
+//   sooner when the runner restarts.
 //
-// An item brought in from `failed` leaves it and starts again at attempt 1 (6.5). `failed` keeps
+// An item brought in from `failed` leaves it and starts again at attempt 1. `failed` keeps
 // its newest `FAILED_KEEP`. The cursor moves past the batch in every case: what the batch didn't
 // handle waits in `retry`, which comes first in the next batch.
 export function settleBatch(state, batch, outcome, { now, startedAt, durationMs }) {
@@ -247,7 +247,7 @@ export function settleBatch(state, batch, outcome, { now, startedAt, durationMs 
 // What a batch's outcome does to its lane's items, as `settleBatch` describes it: a lane is
 // `{ cursor, retry, failed }` (`batch.mjs`), with `failed` as `[{ seq, at, reason }]`. Returns
 // `{ lane, givenUp }`, the lane afterwards and the items that ran out of attempts, in order.
-// Live runs and a backfill's batches settle their own lanes so (6.8, 6.9, 6.11).
+// Live runs and a backfill's batches settle their own lanes so.
 export function settleLane(lane, batch, outcome, { now }) {
   const at = isoSeconds(now)
   const inBatch = new Set(batch.items.map(item => item.seq))
@@ -287,7 +287,7 @@ export function settleLane(lane, batch, outcome, { now }) {
 // - A scheduled task that ran, or failed for another reason, is done for its date: it runs again
 //   at its next time.
 // - A `once` task is recorded in `onceDone` only after it succeeds. One that fails for another
-//   reason runs again at the next start; the runner remembers until then that it tried (D68).
+//   reason runs again at the next start; the runner remembers until then that it tried.
 export function settleTask(state, task, outcome, { now, startedAt, durationMs }) {
   let next = afterRun(state, outcome, { now, startedAt, durationMs, seqs: [] })
   const counts = outcome.ok || outcome.cause === 'other'
@@ -297,7 +297,7 @@ export function settleTask(state, task, outcome, { now, startedAt, durationMs })
 }
 
 // ---------------------------------------------------------------------------------------------
-// Notices (6.9). They are the runner's own, sent to `DEFAULT_CHANNEL` (5.3).
+// Notices. They are the runner's own, sent to `DEFAULT_CHANNEL`.
 
 const minutes = ms => Math.round(ms / 60000)
 

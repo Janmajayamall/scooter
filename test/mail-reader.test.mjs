@@ -1,4 +1,4 @@
-// The email reader (5.6 of DESIGN.md; section 10, "Email"): against a fake mailbox, headers first
+// The email reader: against a fake mailbox, headers first
 // and whole messages only from the owner's addresses, the `n:*` quirk, IDLE with the periodic look,
 // errors, the position across restarts, nothing imported the first time, a `UIDVALIDITY` change,
 // and the spool folders it writes.
@@ -372,7 +372,7 @@ test('reader: an email it parsed but couldn\'t hand over, as on a full disk, is 
   const context = setup(t)
   const first = context.start()
   await context.looked(1)
-  // The spool can't take a folder, once (the review of milestone 6, smaller point 2).
+  // The spool can't take a folder, once.
   const mkdir = fs.mkdirSync
   let refuse = true
   fs.mkdirSync = (target, ...rest) => {
