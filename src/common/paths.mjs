@@ -68,14 +68,16 @@ export function makePaths({ dataDir, configDir }) {
     // system, and natively in a folder only root can write, not in the runner's own.
     imageStaging: data('.image-build'),
 
-    // The bridge's own folder: its state; the socket that keeps a second bridge from
-    // starting on the same data; where attachments wait between their channel and the store; the
-    // cache of the backup program, which marks itself as a cache, so backups leave it out;
-    // and delivery's two folders: the bridge's own outbox entries, and its record of how much
-    // of each runner's entry it has sent, `<entry ID>.json`. Both are here, in a folder only root
-    // can write, rather than in the runner's outbox, so the bridge writes nothing there.
+    // The bridge's own folder: its state; its status, which `scooter status` reads; the socket that
+    // keeps a second bridge from starting on the same data; where attachments wait between their
+    // channel and the store; the cache of the backup program, which marks itself as a cache, so
+    // backups leave it out; and delivery's two folders: the bridge's own outbox entries, and its
+    // record of how much of each runner's entry it has sent, `<entry ID>.json`. Both are here, in a
+    // folder only root can write, rather than in the runner's outbox, so the bridge writes nothing
+    // there.
     bridge: data('bridge'),
     bridgeState: data('bridge', 'state.json'),
+    bridgeStatus: data('bridge', 'status.json'),
     bridgeSocket: data('bridge', 'bridge.sock'),
     bridgeIncoming: data('bridge', 'incoming'),
     backupCache: data('bridge', 'backup-cache'),

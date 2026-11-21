@@ -19,8 +19,8 @@
 //
 // The bridge keeps that record in its own folder, never in the runner's outbox, which the runner's
 // user controls: `bridge/sending/<id>.json` for an entry of the runner's. The bridge's own entries,
-// such as its replies to commands, are written to `bridge/outbox/` in the same form, and their
-// record is `sending.json` in the entry's folder there.
+// its backup notices, are written to `bridge/outbox/` in the same form, and their record is
+// `sending.json` in the entry's folder there.
 //
 // A text is at most `TEXT_MAX_CHARS` long. `writeOutboxEntry` cuts a longer one, with a line that
 // says so, rather than refuse it: what the agent wrote is its own to make as long as it likes, and

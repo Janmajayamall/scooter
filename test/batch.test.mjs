@@ -54,16 +54,17 @@ test('batch: nothing to give the agent is no batch', () => {
 })
 
 test('batch: at most 20 items, retries first, and the cursor stops before the first one left', () => {
-  // 3 due retries, then 25 new messages with a reply and a reaction among them.
+  // 3 due retries, then 25 new messages with a reply, a reaction and an email the agent doesn't
+  // read among them.
   const lines = [...fillerLines(10)]
   for (let seq = 11; seq <= 40; seq++) {
     if (seq === 25) lines.push(line.sent(seq, '2026-11-09T15:00:00Z', 'Noted.'))
     else if (seq === 26) lines.push(line.reaction(seq, '2026-11-09T15:00:00Z', 24, '👍'))
-    else if (seq === 27) lines.push(line.command(seq, '2026-11-09T15:00:00Z', '/status'))
+    else if (seq === 27) lines.push(line.email(seq, '2026-11-09T15:00:00Z', 'Hi', 'not read'))
     else lines.push(line.text(seq, '2026-11-09T15:00:00Z', `item ${seq}`))
   }
   const retry = [3, 1, 2].map(seq => ({ seq, attempts: 2, due: '2026-11-09T15:00:00Z', reason: 'not reported' }))
-  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry } })
+  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, reads: ['whatsapp'] } })
   assert.equal(batch.items.length, limits.BATCH_MAX_ITEMS)
   assert.deepEqual(seqsOf(batch).slice(0, 3), [1, 2, 3])
   assert.deepEqual(batch.items.slice(0, 3).map(item => [item.origin, item.attempt]), [['retry', 3], ['retry', 3], ['retry', 3]])
@@ -71,9 +72,9 @@ test('batch: at most 20 items, retries first, and the cursor stops before the fi
   assert.deepEqual(seqsOf(batch).slice(3), [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 28, 29, 30])
   assert.equal(batch.covered, 30)
   assert.equal(batch.newest, 30)
-  // The context is the sent message and the reaction; the command is passed over.
+  // The context is the sent message and the reaction; the email is passed over.
   assert.deepEqual(batch.context, [25, 26])
-  assert.ok(!prompt.includes('/status'))
+  assert.ok(!prompt.includes('not read'))
   assert.equal(prompt.split('\n').filter(text => text.startsWith('#')).length, 22)
 })
 
@@ -248,16 +249,17 @@ test('batch: context lines and reply labels', () => {
     line.reaction(15, '2026-11-09T15:07:00Z', 3, ''),
     { ...line.reaction(16, '2026-11-09T15:08:00Z', 8, '✅'), dir: 'out', trust: undefined, by: 'lifelog' },
     line.sent(17, '2026-11-09T15:09:00Z', 'Noted:\n"two lines"', { replyTo: 13 }),
-    line.command(18, '2026-11-09T15:10:00Z', '/new'),
-    line.text(19, '2026-11-09T15:11:00Z', 'after the command'),
-    // A command is never shown, not even as what a reply quotes. A reply to a line that isn't a
-    // message, which only a damaged datastore has, shows the channel's preview if it has one.
+    // A text such as /new is a message like any other, and so is what a reply quotes of it.
+    line.text(18, '2026-11-09T15:10:00Z', '/new'),
+    line.text(19, '2026-11-09T15:11:00Z', 'after it'),
     line.text(20, '2026-11-09T15:12:00Z', 'that one', { replyTo: 18, quoted: '/new' }),
+    // A reply to a line that isn't a message, which only a damaged datastore has, shows the
+    // channel's preview if it has one.
     line.text(21, '2026-11-09T15:13:00Z', 'odd', { replyTo: 14, quoted: 'a heart' }),
     line.text(22, '2026-11-09T15:14:00Z', 'odder', { replyTo: 15 }),
   ].map(entry => JSON.parse(JSON.stringify(entry)))
   const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 7 } })
-  assert.deepEqual(seqsOf(batch), [8, 9, 10, 11, 12, 13, 19, 20, 21, 22])
+  assert.deepEqual(seqsOf(batch), [8, 9, 10, 11, 12, 13, 18, 19, 20, 21, 22])
   assert.equal(
     body(prompt),
     `New messages:
@@ -272,9 +274,10 @@ test('batch: context lines and reply labels', () => {
 #12 20:34 text: "about my old message"
       ↳ reply to an earlier message: "from before Scooter"
 #13 20:35 forwarded text: "read this"
-#19 20:41 text: "after the command"
+#18 20:40 text: "/new"
+#19 20:41 text: "after it"
 #20 20:42 text: "that one"
-      ↳ reply to a command
+      ↳ reply to #18, which the owner sent: "/new"
 #21 20:43 text: "odd"
       ↳ reply to #14: "a heart"
 #22 20:44 text: "odder"

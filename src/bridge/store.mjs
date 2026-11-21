@@ -169,9 +169,8 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
   function isDuplicate(line) {
     switch (line.kind) {
       case 'message':
-      case 'command':
       case 'reaction':
-        // The webhook and catch-up can both deliver the same message, command or reaction.
+        // The webhook and catch-up can both deliver the same message or reaction.
         return line.sourceId !== undefined && index.seqOf(line.source, line.sourceId) !== undefined
       case 'edit':
         // An edit carries its message's ID, so it's told apart by what it changes.
@@ -218,11 +217,10 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     if (attachments.length > 0 && draft.kind !== 'message') {
       throw new DatastoreError('only a message has attachments')
     }
-    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too.
-    // Intake skips the ones whose target it doesn't know, so one that reaches the store
-    // pointing anywhere else is a bug in its writer.
+    // An edit, a deletion or a reaction refers to a message. Intake skips the ones whose target it
+    // doesn't know, so one that reaches the store pointing anywhere else is a bug in its writer.
     if (['edit', 'delete', 'reaction'].includes(draft.kind) && index.current(draft.target) === undefined) {
-      throw new DatastoreError(`a ${draft.kind} must point at a message or a command, and seq ${draft.target} is neither`)
+      throw new DatastoreError(`a ${draft.kind} must point at a message, and seq ${draft.target} isn't one`)
     }
     if (isDuplicate(draft)) return { stored: false, reason: 'duplicate' }
 
@@ -304,7 +302,6 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
       get: seq => index.get(seq),
       seqOf: (source, sourceId) => index.seqOf(source, sourceId),
       current: seq => index.current(seq),
-      commandsAfter: seq => index.commandsAfter(seq),
       entries: () => index.entries(),
       get lastSeq() {
         return index.lastSeq

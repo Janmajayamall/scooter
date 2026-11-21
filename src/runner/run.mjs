@@ -34,7 +34,7 @@ import { answerEntries, droppedTexts, parseAnswer, reportsOf, shortReason } from
 import { mayChange, settleBackfill } from './backfill.mjs'
 import { failureNotice, givenUpNotice, isFirstFailure, readFailureCause, settleBatch, settleTask } from './failures.mjs'
 import { GUEST_HOME, GUEST_PATH, OPENROUTER_HOST, PI_PROGRAM } from './sandbox/index.mjs'
-import { currentSession, saveState, sessionId } from './state.mjs'
+import { saveState, sessionId } from './state.mjs'
 
 const MINUTE = 60 * 1000
 
@@ -197,7 +197,7 @@ export async function performRun(context) {
     const id = isReplay(job)
       ? job.sessionId
       : agent.session === 'daily'
-        ? sessionId(agent.name, currentSession(state, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour }))
+        ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
     const prepared = prepareRun({ paths, agent, protocol, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt })

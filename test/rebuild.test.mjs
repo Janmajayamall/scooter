@@ -44,12 +44,12 @@ function rebuildYaml() {
 const HISTORY = [
   line.text(1, '2026-11-07T16:00:00Z', 'ran 5k'), // Sat 7 Nov, 21:30
   line.sent(2, '2026-11-07T16:01:00Z', 'Logged.'),
-  line.command(3, '2026-11-07T16:05:00Z', '/new'),
+  line.sent(3, '2026-11-07T16:05:00Z', 'Noted.'),
   line.text(4, '2026-11-08T04:00:00Z', 'start tracking coffee MEMORY'), // Sun 8 Nov, 09:30
   line.reaction(5, '2026-11-08T04:01:00Z', 4, '👍'),
   line.text(6, '2026-11-08T05:00:00Z', 'coffee 120'), // Sun 8 Nov, 10:30
 ]
-const HANDLED = { cursor: 6, commandSeq: 3, retry: [], failed: [], session: { day: '2026-11-07', bump: 1 }, backfillDone: [], scheduled: {}, lastRun: { at: '2026-11-08T05:00:30Z', ok: true, seqs: [6], durationMs: 1000 } }
+const HANDLED = { cursor: 6, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: { at: '2026-11-08T05:00:30Z', ok: true, seqs: [6], durationMs: 1000 } }
 
 function commitByHand(paths, message) {
   gitOf(paths, 'add', '-A', '--', 'views', 'memory')
@@ -130,7 +130,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.deepEqual(result, { stopped: false, tag: TAG, until: 6, cursor: 6, batches: 2, failed: [] })
 
   // One batch for each of the owner's days, each with its own time and session, and nothing after
-  // #6. The command is never shown, and the old rule is gone: rules are learned again as they come.
+  // #6. The old rule is gone: rules are learned again as they come.
   const seen = sandbox.seen()
   assert.deepEqual(
     seen.map(call => call.items),
@@ -147,7 +147,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
     seen.map(call => call.argv[call.argv.indexOf('--session-id') + 1]),
     ['lifelog-rebuild-2026-11-07', 'lifelog-rebuild-2026-11-08'],
   )
-  assert.ok(seen.every(call => !call.prompt.includes('/new') && !call.prompt.includes('#7')))
+  assert.ok(seen.every(call => !call.prompt.includes('#7')))
   assert.match(seen[0].systemPrompt, /## memory\/preferences\.md\n\n\(empty\)/)
   // Every skill.
   assert.equal(seen[0].skills.length, 3)
@@ -166,13 +166,11 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   // Its sessions served it alone, and the old one is gone.
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
-  // The state: `cursor` and `commandSeq` at #6, and every backfill done.
+  // The state: `cursor` at #6, and every backfill done.
   assert.deepEqual(state(paths), {
     cursor: 6,
-    commandSeq: 6,
     retry: [],
     failed: [],
-    session: null,
     backfillDone: ['people-1', 'runs-1'],
     scheduled: {},
     lastRun: null,
@@ -187,7 +185,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
     'Rebuilt lifelog up to #6, in 2 batches, committed as "lifelog: rebuild".',
   ])
 
-  // The runner, started again, answers #7, which came after, with a reply; and no old command.
+  // The runner, started again, answers #7, which came after, with a reply.
   const { runner, clock, outbox } = await startTestRunner(t, prepared)
   await runner.tick()
   await clock.advance(8 * SECOND)
@@ -240,7 +238,7 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
     line.text(2, '2026-11-08T05:00:00Z', 'tea IGNORE'),
     line.text(3, '2026-11-09T05:00:00Z', 'lunch 300'), // Mon 9 Nov, 10:30
   ]
-  const prepared = await prepare(t, { lines, state: { ...HANDLED, cursor: 3, commandSeq: 0 } })
+  const prepared = await prepare(t, { lines, state: { ...HANDLED, cursor: 3 } })
   const { paths, sandbox, clock } = prepared
   // A backup holds its lock when the rebuild starts; OpenRouter is down for its first try.
   takeLock(paths.backupLock, { clock })
@@ -329,7 +327,7 @@ test('rebuild: an item not reported is tried again before the days after it, whi
     line.text(5, '2026-11-09T04:00:00Z', 'tea 45'), // Mon 9 Nov, 09:30
     line.sent(6, '2026-11-09T04:01:00Z', 'Logged tea.'),
   ]
-  const prepared = await prepare(t, { lines, state: { ...HANDLED, cursor: 6, commandSeq: 0 } })
+  const prepared = await prepare(t, { lines, state: { ...HANDLED, cursor: 6 } })
   const { sandbox } = prepared
   const result = await drive(prepared, startRebuild(prepared).done)
   assert.deepEqual(result.failed, [1])
@@ -388,7 +386,7 @@ test('rebuild: stopped, it throws the batch in progress away, and leaves a state
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild #1\n')
   assert.equal(gitOf(paths, 'status', '--porcelain'), '')
   assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
-  assert.deepEqual([state(paths).cursor, state(paths).commandSeq], [6, 6])
+  assert.equal(state(paths).cursor, 6)
   assert.equal(lockExists(paths.runLock), false)
 
   // Run again, it starts from the beginning, with a tag of its own.

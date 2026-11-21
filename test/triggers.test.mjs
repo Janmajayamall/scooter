@@ -1,13 +1,13 @@
-// What the agent does next: commands first,
-// nothing while paused, new messages after the quiet period, scheduled tasks at the right local
-// time, and a backfill batch only when nothing live is waiting.
+// What the agent does next: nothing while
+// paused, new messages after the quiet period, scheduled tasks at the right local time, and a
+// backfill batch only when nothing live is waiting.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { parseLocalTime } from '../src/common/time.mjs'
 import { startupState } from '../src/runner/state.mjs'
-import { dueScheduled, isWorkItem, nextAction, pendingCommands } from '../src/runner/triggers.mjs'
+import { dueScheduled, isWorkItem, nextAction } from '../src/runner/triggers.mjs'
 import { indexOf, line } from './support/runner.mjs'
 
 const at = Date.parse
@@ -51,7 +51,8 @@ test('triggers: what is a work item', () => {
   // Context, or skipped.
   assert.equal(isWorkItem(line.sent(4, '2026-11-09T15:00:00Z', 'x'), reads), false)
   assert.equal(isWorkItem(line.reaction(5, '2026-11-09T15:00:00Z', 1, '👍'), reads), false)
-  assert.equal(isWorkItem(line.command(6, '2026-11-09T15:00:00Z', '/new'), reads), false)
+  // A text such as /new is a message like any other.
+  assert.equal(isWorkItem(line.text(6, '2026-11-09T15:00:00Z', '/new'), reads), true)
   // A source the agent doesn't read.
   assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), reads), false)
   assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), ['email']), true)
@@ -65,7 +66,7 @@ test('triggers: new messages wait until the owner has been quiet for BATCH_SECON
   assert.deepEqual(ask({ state: HANDLED, lines, seenAgo: null }), { kind: 'messages' })
   // Only the cursor's side counts: everything here is dealt with.
   assert.deepEqual(ask({ state: { ...HANDLED, cursor: 4 }, lines }), { kind: 'idle', reason: 'nothing' })
-  // Lines that aren't work don't start a batch: context, commands handled, and sources not read.
+  // Lines that aren't work don't start a batch: context, and sources not read.
   const other = [...EARLIER, line.sent(4, '2026-11-09T15:50:00Z', 'Noted.'), line.reaction(5, '2026-11-09T15:50:00Z', 3, '👍'), line.email(6, '2026-11-09T15:50:00Z', 'Hi', 'x')]
   assert.deepEqual(ask({ agent: agentWith({ reads: ['whatsapp'] }), state: HANDLED, lines: other }), { kind: 'idle', reason: 'nothing' })
   assert.deepEqual(ask({ agent: agentWith({ reads: ['email'] }), state: HANDLED, lines: other }), { kind: 'messages' })
@@ -84,16 +85,12 @@ test('triggers: retries start a batch when they are due', () => {
   assert.deepEqual(ask({ state: { ...HANDLED, retry: stale }, lines: EARLIER }), { kind: 'idle', reason: 'nothing' })
 })
 
-test('triggers: commands come first, also while paused, and are found by commandSeq', () => {
-  const lines = [...EARLIER, line.command(4, '2026-11-09T15:50:00Z', '/status'), line.text(5, '2026-11-09T15:50:01Z', 'lunch'), line.command(6, '2026-11-09T15:50:02Z', '/new')]
+test('triggers: a pause holds everything back until its next try, a text such as /status among the messages', () => {
+  const lines = [...EARLIER, line.text(4, '2026-11-09T15:50:00Z', '/status'), line.text(5, '2026-11-09T15:50:01Z', 'lunch')]
   const paused = { since: '2026-11-09T15:40:00Z', cause: 'setup', reason: 'OpenRouter answered 401', next: '2026-11-09T16:10:00Z', tries: 1 }
-  const action = ask({ state: { ...HANDLED, paused }, lines })
-  assert.equal(action.kind, 'commands')
-  assert.deepEqual(action.lines.map(command => command.seq), [4, 6])
-  assert.deepEqual(pendingCommands({ ...HANDLED, commandSeq: 4 }, indexOf(lines)).map(command => command.seq), [6])
-  // Once handled, the pause holds everything else back until its next try.
-  assert.deepEqual(ask({ state: { ...HANDLED, commandSeq: 6, paused }, lines }), { kind: 'idle', reason: 'paused' })
-  assert.deepEqual(ask({ state: { ...HANDLED, commandSeq: 6, paused }, lines, now: '2026-11-09T16:10:00Z' }), { kind: 'messages' })
+  assert.deepEqual(ask({ state: { ...HANDLED, paused }, lines }), { kind: 'idle', reason: 'paused' })
+  assert.deepEqual(ask({ state: { ...HANDLED, paused }, lines, now: '2026-11-09T16:09:59Z' }), { kind: 'idle', reason: 'paused' })
+  assert.deepEqual(ask({ state: { ...HANDLED, paused }, lines, now: '2026-11-09T16:10:00Z' }), { kind: 'messages' })
 })
 
 test('triggers: a scheduled task runs at its time, once, and waits for messages and pauses', () => {

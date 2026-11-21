@@ -19,8 +19,8 @@
 //   none: the owner's restart, `docker compose stop` or `up`, Docker's own restart, and the
 //   machine's shutdown all end the waiting, as a start by hand or the machine's start does for
 //   systemd.
-// - The first wait in a row tells the owner, once, why and until when; `/status` says so while it
-//   lasts, from `status.json`. The reason is the error's code or name, never its message.
+// - The first wait in a row tells the owner, once, why and until when; `scooter status` says so
+//   while it lasts, from `status.json`. The reason is the error's code or name, never its message.
 //
 // The native unit says, with `SCOOTER_RESTART_WAITS=systemd`, that systemd keeps these waits, and
 // the runner then keeps none of its own: a start by hand must bring it back at once.

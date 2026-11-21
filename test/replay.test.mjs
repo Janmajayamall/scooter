@@ -25,7 +25,7 @@ const LINES = [
   line.sent(2, '2026-11-07T16:01:00Z', 'Logged.'),
   line.text(3, '2026-11-07T18:20:00Z', 'late coffee'), // Sat 7 Nov, 23:50
   line.text(4, '2026-11-07T18:40:00Z', 'midnight snack'), // Sun 8 Nov, 00:10
-  line.command(5, '2026-11-08T03:00:00Z', '/new'),
+  line.reaction(5, '2026-11-08T03:00:00Z', 4, '👍'),
   line.text(6, '2026-11-08T03:30:00Z', 'breakfast'), // Sun 8 Nov, 09:00
   line.text(7, '2026-11-09T15:00:00Z', 'today was long'), // Mon 9 Nov, 20:30
 ]

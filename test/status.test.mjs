@@ -1,25 +1,29 @@
-// `/status`: what the bridge says about each
-// channel, the newest message, the runner and its agent, the network log and the backups, from the
-// files it can read, with times in `SCOOTER_TZ`; and what it says when the runner hasn't written
-// them yet, or they can't be read.
+// `scooter status`: what it says about the bridge, each channel, the newest message, the runner
+// and its agent, the network log and the backups, from the files it can read, with times in
+// `SCOOTER_TZ`; what it says when they aren't there yet, or can't be read; that it changes nothing;
+// and the bridge's `status.json`, which the bridge writes for it.
 
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { statusText } from '../src/bridge/status.mjs'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { checkBridgeStatus, createStatusFile, readBridgeStatus, readIndex, runStatus, statusText, writeBridgeStatus } from '../src/bridge/status.mjs'
 import { writeFileAtomic } from '../src/common/files.mjs'
+import { holdInstance } from '../src/common/instance.mjs'
 import { limits } from '../src/common/limits.mjs'
+import { takeLock } from '../src/common/locks.mjs'
 import { formatNetworkLogLine } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { createFakeChannel } from './support/fake-channel.mjs'
-import { indexOf, line } from './support/runner.mjs'
-import { makeTestDir } from './support/tmp.mjs'
+import { createFakeClock } from './support/clock.mjs'
+import { createTestLog } from './support/log.mjs'
+import { indexOf, line, writeDatastore } from './support/runner.mjs'
+import { atEnd, makeTestDir } from './support/tmp.mjs'
 
-// The line about backups, which `createBackups().statusLine` makes (test/backup.test.mjs), and the
-// reply only passes on.
-const BACKUPS = 'Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.'
+const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url))
+const SECOND = 1000
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026; 10:50 in New York.
 const NOW = Date.parse('2026-11-09T15:50:30Z')
@@ -31,8 +35,17 @@ const LINES = [
   line.text(4, '2026-11-09T15:40:00Z', 'coffee 150'),
   line.email(5, '2026-11-09T15:45:00Z', 'Booking', 'Your train.'),
   line.edit(6, '2026-11-09T15:46:00Z', 4, 'coffee 120'),
-  line.command(7, '2026-11-09T15:50:00Z', '/status'),
+  line.reaction(7, '2026-11-09T15:50:00Z', 4, '👍'),
 ]
+
+// The bridge's part, as a running bridge writes it.
+const BRIDGE = {
+  startedAt: '2026-11-09T06:00:00Z',
+  writtenAt: '2026-11-09T15:50:12Z',
+  stoppedAt: null,
+  channels: { whatsapp: 'WhatsApp: linked', email: 'Email: connected, last checked 21:20; 2 stored and 1 skipped in the last 24 hours.' },
+  backups: 'Backups: last 03:30, snapshot 1a2b3c4d. Next Tue 10 Nov 03:30.',
+}
 
 const STATUS = {
   startedAt: '2026-11-09T06:00:00Z',
@@ -45,13 +58,11 @@ const STATUS = {
 
 const STATE = {
   cursor: 3,
-  commandSeq: 0,
   retry: [{ seq: 2, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
   failed: [
     { seq: 1, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
     { seq: 3, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
   ],
-  session: null,
   backfill: { id: 'people-1', until: 3, cursor: 1, retry: [], skipped: [] },
   backfillDone: [],
   scheduled: {},
@@ -62,9 +73,7 @@ const STATE = {
 function setup(t) {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
-  const channels = new Map([['whatsapp', { ...createFakeChannel({ name: 'whatsapp' }), status: () => 'WhatsApp: linked' }]])
-  const status = ({ timeZone = 'Asia/Kolkata', lines = LINES } = {}) =>
-    statusText({ now: NOW, settings: { timeZone }, paths, channels, index: indexOf(lines), backups: BACKUPS })
+  const status = ({ timeZone = 'Asia/Kolkata', lines = LINES, now = NOW } = {}) => statusText({ now, settings: { timeZone }, paths, index: indexOf(lines) })
   const write = (file, value) => {
     fs.mkdirSync(path.dirname(file), { recursive: true })
     writeFileAtomic(file, typeof value === 'string' ? value : JSON.stringify(value))
@@ -78,27 +87,26 @@ function setup(t) {
 
 const request = (id, at, host = 'openrouter.ai') => ({ id, at, event: 'request', host, method: 'POST', path: '/api/v1/messages' })
 
-test('status: before the runner has ever started, it says so', t => {
+test('status: before the bridge and the runner have ever started, it says so', t => {
   const { status } = setup(t)
   assert.equal(
     status(),
     [
       'Scooter, Mon 9 Nov 21:20 (Asia/Kolkata)',
       '',
-      'WhatsApp: linked',
+      "Bridge: it hasn't written its status yet, so there is nothing to say about the channels or the backups.",
       'Newest message: #5, 21:15, on email',
       '',
       "Runner: it hasn't started yet, so there is nothing to say about the agent or its VMs.",
       'Network, last 24 hours: 0 requests to 0 hosts.',
-      '',
-      BACKUPS,
     ].join('\n'),
   )
   assert.match(status({ lines: [] }), /^Newest message: none yet$/m)
 })
 
-test('status: the runner\'s settings, the agent\'s runs, its counts and the network log, in the owner\'s time zone', t => {
+test('status: the bridge\'s part as it last wrote it, the runner\'s settings, the agent\'s runs, its counts and the network log, in the owner\'s time zone', t => {
   const { status, write, netlog, paths } = setup(t)
+  write(paths.bridgeStatus, BRIDGE)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
   // Within the last 24 hours: three requests to two hosts, with what came of them, and one refused
@@ -117,7 +125,9 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
     [
       'Scooter, Mon 9 Nov 21:20 (Asia/Kolkata)',
       '',
+      'Bridge: started 11:30; it last wrote its status 21:20.',
       'WhatsApp: linked',
+      'Email: connected, last checked 21:20; 2 stored and 1 skipped in the last 24 hours.',
       'Newest message: #5, 21:15, on email',
       '',
       'Runner: started 11:30. VMs run with KVM; their image was built Sun 8 Nov 18:01.',
@@ -127,13 +137,24 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
       'lifelog: last run 21:18, failed, 1 message, 48 s.',
       'Runs are paused since 21:18: OpenRouter: No endpoints found matching your data policy. Next try 21:48.',
       // #4 and its edit #6 are after the cursor and from WhatsApp; the email isn't read; the
-      // command isn't work.
+      // reaction isn't work.
       'Messages: 2 pending, 1 retrying, 2 failed.',
       'Backfill people-1: at #1 of #3.',
       '',
-      BACKUPS,
+      BRIDGE.backups,
     ].join('\n'),
   )
+})
+
+test('status: a bridge that stopped says when, and its lines are from then; one that wrote long ago says when', t => {
+  const { status, write, paths } = setup(t)
+  write(paths.bridgeStatus, { ...BRIDGE, writtenAt: '2026-11-08T17:00:00Z', stoppedAt: '2026-11-08T17:00:00Z', channels: { whatsapp: 'WhatsApp: stopped' } })
+  const text = status()
+  assert.match(text, /^Bridge: stopped Sun 8 Nov 22:30, when it last wrote its status\.\nWhatsApp: stopped\nNewest message: #5, 21:15, on email$/m)
+  assert.ok(text.endsWith(`\n\n${BRIDGE.backups}`))
+  // A bridge that stopped without saying so, as after a crash, leaves the time it last wrote.
+  write(paths.bridgeStatus, { ...BRIDGE, writtenAt: '2026-11-08T17:00:00Z' })
+  assert.match(status(), /^Bridge: started 11:30; it last wrote its status Sun 8 Nov 22:30\.$/m)
 })
 
 test('status: a runner that waits before it goes on, after stopping on an error, says until when and why, and nothing once the wait is over', t => {
@@ -155,6 +176,7 @@ test('status: a runner that waits before it goes on, after stopping on an error,
 
 test('status: the same files in another time zone', t => {
   const { status, write, paths } = setup(t)
+  write(paths.bridgeStatus, { ...BRIDGE, channels: { whatsapp: 'WhatsApp: linked' } })
   write(paths.runnerStatus, { ...STATUS, accel: 'emulation', zdr: false, internet: true, imageBuiltAt: null })
   const { paused: _, backfill: __, ...running } = STATE
   write(paths.agentState('lifelog'), { ...running, lastRun: { at: '2026-11-09T15:48:00Z', ok: true, seqs: [], durationMs: 185_000 } })
@@ -163,6 +185,7 @@ test('status: the same files in another time zone', t => {
     [
       'Scooter, Mon 9 Nov 10:50 (America/New_York)',
       '',
+      'Bridge: started 01:00; it last wrote its status 10:50.',
       'WhatsApp: linked',
       'Newest message: #5, 10:45, on email',
       '',
@@ -174,7 +197,7 @@ test('status: the same files in another time zone', t => {
       "Runs aren't paused.",
       'Messages: 2 pending, 1 retrying, 2 failed.',
       '',
-      BACKUPS,
+      BRIDGE.backups,
     ].join('\n'),
   )
 })
@@ -184,6 +207,9 @@ test('status: an agent that hasn\'t run, and files that can\'t be read, are said
   write(paths.runnerStatus, STATUS)
   assert.match(status(), /^lifelog: it hasn't run yet\.$/m)
   write(paths.agentState('lifelog'), '{"cursor":')
+  assert.match(status(), /^lifelog: its state\.json can't be read \(not a state\)\.$/m)
+  // A state of before this version, with the fields of the commands and of `/new`, isn't one.
+  write(paths.agentState('lifelog'), { ...STATE, commandSeq: 0, session: null })
   assert.match(status(), /^lifelog: its state\.json can't be read \(not a state\)\.$/m)
   // A folder where a day of the network log should be.
   fs.mkdirSync(paths.networkLog('2026-11-09'), { recursive: true })
@@ -196,9 +222,20 @@ test('status: an agent that hasn\'t run, and files that can\'t be read, are said
   // An agent's name that isn't one is no path to read.
   write(paths.runnerStatus, { ...STATUS, agents: { '../../etc': STATUS.agents.lifelog } })
   assert.match(status(), /^Runner: its status\.json can't be read \(not a status\)\.$/m)
+
+  // The bridge's: not JSON, not a status, too large; and nothing is said of the channels or the
+  // backups then.
+  const unreadable = why => new RegExp(`^Bridge: its status\\.json can't be read \\(${why}\\), so there is nothing to say about the channels or the backups\\.\\nNewest message: `, 'm')
+  write(paths.bridgeStatus, '{"startedAt":')
+  assert.match(status(), unreadable('not a status'))
+  write(paths.bridgeStatus, { ...BRIDGE, channels: { telegram: 'Telegram: linked' } })
+  assert.match(status(), unreadable('not a status'))
+  write(paths.bridgeStatus, ' '.repeat(limits.STATUS_FILE_MAX_BYTES + 1))
+  assert.match(status(), unreadable('EFBIG'))
+  assert.ok(!status().includes('Backups'))
 })
 
-test('status: the runner\'s files are read without following a link or waiting on a FIFO, as files another user controls', t => {
+test('status: the runner\'s files, and the folders they are in, are read without following a link or waiting on a FIFO, as files another user controls', t => {
   const { status, write, paths, root } = setup(t)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), '{}')
@@ -207,7 +244,7 @@ test('status: the runner\'s files are read without following a link or waiting o
   fs.rmSync(paths.runnerStatus)
   execFileSync('mkfifo', [paths.runnerStatus])
   const secret = path.join(root, 'secret.json')
-  fs.writeFileSync(secret, JSON.stringify({ cursor: 0 }))
+  fs.writeFileSync(secret, JSON.stringify(STATE))
   fs.rmSync(paths.agentState('lifelog'))
   fs.symlinkSync(secret, paths.agentState('lifelog'))
   fs.mkdirSync(paths.networkLogDir, { recursive: true })
@@ -225,4 +262,199 @@ test('status: the runner\'s files are read without following a link or waiting o
   fs.rmSync(paths.agentState('lifelog'))
   write(paths.agentState('lifelog'), ' '.repeat(limits.STATUS_FILE_MAX_BYTES + 1))
   assert.match(status(), /^lifelog: its state\.json can't be read \(EFBIG\)\.$/m)
+
+  // A link in place of the agent's folder, or of the network log's, to folders whose files would
+  // be read as the runner's: neither is followed.
+  const elsewhere = path.join(root, 'elsewhere')
+  fs.mkdirSync(elsewhere)
+  fs.writeFileSync(path.join(elsewhere, 'state.json'), JSON.stringify(STATE))
+  fs.writeFileSync(path.join(elsewhere, '2026-11-09.jsonl'), formatNetworkLogLine(request('20261109T120000000-0001', '2026-11-09T12:00:00Z')))
+  fs.rmSync(paths.agentDir('lifelog'), { recursive: true })
+  fs.symlinkSync(elsewhere, paths.agentDir('lifelog'))
+  fs.rmSync(paths.networkLogDir, { recursive: true })
+  fs.symlinkSync(elsewhere, paths.networkLogDir)
+  const linked = status()
+  assert.match(linked, /^lifelog: its state\.json can't be read \(EUNTRUSTED\)\.$/m)
+  assert.match(linked, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
+})
+
+test('status: a control character in what another user wrote, such as a reason, is printed as U+FFFD, and can\'t start a line of its own', t => {
+  const { status, write, paths } = setup(t)
+  const escape = '\u001b]2;owned\u0007\u001b[2J'
+  write(paths.bridgeStatus, { ...BRIDGE, backups: `Backups: the last, 03:30, failed (restic backup: ${escape}).` })
+  write(paths.runnerStatus, { ...STATUS, restart: { stops: 1, until: '2026-11-09T16:20:00Z', reason: `E${escape}` } })
+  write(paths.agentState('lifelog'), { ...STATE, paused: { ...STATE.paused, reason: `fine\nlifelog: last run 21:19, ok, 9 messages, 1 s.\r${escape}` }, backfill: { ...STATE.backfill, id: `x${escape}` } })
+  const text = status()
+  assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/)
+  assert.equal(text.split('\n').filter(text => text.startsWith('lifelog:')).length, 1)
+  const shown = '\uFFFD]2;owned\uFFFD\uFFFD[2J'
+  assert.match(text, new RegExp(`^The runner waits until 21:50 before it goes on: it stopped on an error \\(E${shown.replace(/[[\]]/g, '\\$&')}\\)\\. Restarting it ends the wait\\.$`, 'm'))
+  assert.ok(text.includes(`Runs are paused since 21:18: fine\uFFFDlifelog: last run 21:19, ok, 9 messages, 1 s.\uFFFD${shown}. Next try 21:48.`))
+  assert.ok(text.includes(`Backfill x${shown}: at #1 of #3.`))
+  assert.ok(text.endsWith(`Backups: the last, 03:30, failed (restic backup: ${shown}).`))
+})
+
+test('status: the datastore is read without changing it, part of a line a crash left included, and a damaged one is said to be so', t => {
+  const { paths, write } = setup(t)
+  writeDatastore(paths, LINES)
+  // Part of a line, as a crash, or the bridge writing, leaves it.
+  fs.appendFileSync(paths.dayLog('2026/11/09'), '{"seq":8,"kind":"mess')
+  const before = fs.readFileSync(paths.dayLog('2026/11/09'))
+  const index = readIndex(paths)
+  assert.equal(index.lastSeq, 7)
+  assert.deepEqual(fs.readFileSync(paths.dayLog('2026/11/09')), before)
+  const settings = { timeZone: 'Asia/Kolkata' }
+  assert.match(statusText({ now: NOW, settings, paths, index }), /^Newest message: #5, 21:15, on email$/m)
+
+  // A line that isn't one: the report says where, and goes on without the datastore.
+  fs.writeFileSync(paths.dayLog('2026/11/09'), `${before.toString('utf8').split('\n').slice(0, 1).join('\n')}\n{"seq":3,"kind":"command","text":"/status"}\n`)
+  const broken = readIndex(paths)
+  assert.ok(broken instanceof Error)
+  const log = paths.dayLog('2026/11/09')
+  write(paths.runnerStatus, STATUS)
+  write(paths.agentState('lifelog'), STATE)
+  const text = statusText({ now: NOW, settings, paths, index: broken })
+  assert.ok(text.includes(`Newest message: the datastore can't be read (${log}, line 2: kind must be one of message, edit, delete, reaction; `), text)
+  assert.match(text, /^Messages: 1 retrying, 2 failed; those pending can't be counted without the datastore\.$/m)
+  assert.ok(!text.includes('/status'))
+})
+
+// Every file and folder under `dir`, with what a change would show: its type, size, mode, owner,
+// times and contents.
+function snapshot(dir) {
+  const out = {}
+  const walk = folder => {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      const full = path.join(folder, entry.name)
+      const stat = fs.lstatSync(full)
+      out[path.relative(dir, full)] = [stat.mode, stat.uid, stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino, entry.isFile() ? fs.readFileSync(full, 'base64') : null]
+      if (entry.isDirectory()) walk(full)
+    }
+  }
+  walk(dir)
+  return out
+}
+
+test('status: scooter status prints the report and changes nothing: no file, no lock and no socket, with the bridge running, a backup under way and a second copy beside it', async t => {
+  const { root, paths, write } = setup(t)
+  writeDatastore(paths, LINES)
+  write(paths.bridgeStatus, BRIDGE)
+  write(paths.runnerStatus, STATUS)
+  write(paths.agentState('lifelog'), STATE)
+  // A bridge holds its socket, and a backup its lock.
+  fs.mkdirSync(paths.locks, { recursive: true })
+  const bridge = await holdInstance(paths.bridgeSocket, 'bridge')
+  atEnd(t, () => bridge.close())
+  takeLock(paths.backupLock, { clock: createFakeClock(NOW) })
+  const before = snapshot(paths.dataDir)
+
+  // In the process, with the given clock.
+  const settings = { timeZone: 'Asia/Kolkata', dataDir: paths.dataDir, configDir: paths.configDir }
+  let out = ''
+  const code = await runStatus({ settings, stdout: { write: text => (out += text) }, stderr: { write: text => assert.fail(text) }, clock: createFakeClock(NOW) })
+  assert.equal(code, 0)
+  assert.equal(out, `${statusText({ now: NOW, settings, paths, index: readIndex(paths) })}\n`)
+  // It takes no arguments.
+  let err = ''
+  assert.equal(await runStatus({ args: ['--now'], settings, stdout: { write: text => assert.fail(text) }, stderr: { write: text => (err += text) } }), 2)
+  assert.equal(err, 'scooter status: it takes no arguments\n')
+
+  // As a program, the bridge's side, two copies at once.
+  const envDir = path.join(root, 'env')
+  fs.mkdirSync(envDir)
+  fs.writeFileSync(path.join(envDir, 'bridge.env'), `OWNER_NUMBER=+919812345678\nDATA_DIR=${paths.dataDir}\nCONFIG_DIR=${paths.configDir}\n`)
+  const exec = promisify(execFile)
+  const env = { PATH: process.env.PATH, SCOOTER_ENV_DIR: envDir, TMPDIR: process.env.TMPDIR }
+  const both = await Promise.all([exec(process.execPath, [CLI, 'status'], { env }), exec(process.execPath, [CLI, 'status'], { env })])
+  for (const { stdout, stderr } of both) {
+    assert.equal(stderr, '')
+    assert.match(stdout, /^Scooter, \w{3} \d+ \w{3} \d\d:\d\d \(Asia\/Kolkata\)\n\nBridge: started /)
+    assert.match(stdout, /^Messages: 2 pending, 1 retrying, 2 failed\.$/m)
+  }
+  assert.deepEqual(snapshot(paths.dataDir), before)
+})
+
+// ---------------------------------------------------------------------------------------------
+// The bridge's status.json
+
+test('status: the bridge\'s status.json is checked when written and when read, and each fault names its field', t => {
+  assert.deepEqual(checkBridgeStatus(BRIDGE), [])
+  assert.deepEqual(checkBridgeStatus({ ...BRIDGE, stoppedAt: '2026-11-09T16:00:00Z' }), [])
+  const cases = [
+    [{ startedAt: 'today' }, 'startedAt must be a UTC time to the second'],
+    [{ writtenAt: undefined }, 'writtenAt is missing'],
+    [{ stoppedAt: 'later' }, 'stoppedAt must be a UTC time to the second, or null'],
+    [{ channels: { whatsapp: '' } }, 'channels must give a line for each channel, named whatsapp or email'],
+    [{ channels: { telegram: 'Telegram: linked' } }, 'channels must give a line for each channel, named whatsapp or email'],
+    [{ channels: ['WhatsApp: linked'] }, 'channels must give a line for each channel, named whatsapp or email'],
+    [{ backups: null }, 'backups must be a line'],
+    [{ commands: [] }, 'commands is not a field of the status'],
+  ]
+  for (const [changes, problem] of cases) {
+    const status = JSON.parse(JSON.stringify({ ...BRIDGE, ...changes }))
+    assert.ok(checkBridgeStatus(status).includes(problem), `${problem}: ${JSON.stringify(checkBridgeStatus(status))}`)
+  }
+  assert.deepEqual(checkBridgeStatus([]), ['the status must be an object'])
+})
+
+test('status: the bridge writes status.json at its start, whenever what it says changes, and once more when it stops; a write that fails is tried at the next look', async t => {
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: root, configDir: path.join(root, 'config') })
+  fs.mkdirSync(paths.bridge)
+  const clock = createFakeClock(NOW)
+  const { log, entries } = createTestLog({ clock })
+  let part = { channels: { whatsapp: 'WhatsApp: starting' }, backups: 'Backups: none yet. Next Tue 10 Nov 03:30.' }
+  const renders = []
+  const file = createStatusFile({
+    paths,
+    clock,
+    log,
+    render: now => {
+      renders.push(now)
+      return part
+    },
+  })
+  atEnd(t, () => file.stop())
+  file.start()
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:30Z', stoppedAt: null, ...part })
+  assert.equal(fs.statSync(paths.bridgeStatus).mode & 0o777, 0o600)
+  const ino = () => fs.statSync(paths.bridgeStatus).ino
+
+  // A look every second; nothing changed, nothing written.
+  const first = ino()
+  await clock.advance(3 * SECOND)
+  assert.equal(renders.length, 4)
+  assert.equal(ino(), first)
+  // A change is written at the next look.
+  part = { ...part, channels: { whatsapp: 'WhatsApp: linked' } }
+  await clock.advance(SECOND)
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:34Z', stoppedAt: null, ...part })
+
+  // A write that fails, as on a full disk: logged once, and the file stays as it was.
+  fs.rmSync(paths.bridge, { recursive: true })
+  fs.writeFileSync(paths.bridge, 'not a folder')
+  part = { ...part, channels: { whatsapp: 'WhatsApp: wacli stopped, and starts again shortly' } }
+  await clock.advance(3 * SECOND)
+  assert.deepEqual(entries.filter(entry => entry.event === 'bridge.status_not_written').map(entry => entry.code), ['ENOTDIR'])
+  // Once it works again, the next look writes it, and says so.
+  fs.rmSync(paths.bridge)
+  fs.mkdirSync(paths.bridge)
+  await clock.advance(SECOND)
+  assert.deepEqual(readBridgeStatus(paths).channels, part.channels)
+  assert.ok(entries.some(entry => entry.event === 'bridge.status_written'))
+
+  // A render that throws is logged, and the file kept.
+  part = null
+  await clock.advance(SECOND)
+  assert.ok(entries.some(entry => entry.event === 'bridge.status_not_rendered'))
+  part = { channels: { whatsapp: 'WhatsApp: stopped' }, backups: 'Backups: none yet. Next Tue 10 Nov 03:30.' }
+
+  // Stopped: no more looks, and once more, with when.
+  await clock.advance(SECOND)
+  await file.stop()
+  assert.deepEqual(clock.sleeping(), [])
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:40Z', stoppedAt: '2026-11-09T15:50:40Z', ...part })
+  // What isn't a status is never written.
+  assert.throws(() => writeBridgeStatus(paths, { ...BRIDGE, backups: '' }), /not a bridge status: backups must be a line/)
+  assert.deepEqual(fs.readdirSync(paths.bridge), ['status.json'])
 })

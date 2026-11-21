@@ -2,10 +2,9 @@
 //
 // A channel is one module in this folder, and only that module deals with its service: only
 // `whatsapp.mjs` runs wacli, and only `email.mjs` runs the email reader. The core (the store,
-// intake, delivery, commands and backups) calls every channel through the same object:
+// intake, delivery and backups) calls every channel through the same object:
 //
 //   name              `whatsapp` or `email`: the `source` of the lines its records become
-//   takesCommands     whether a text from it can be a command. WhatsApp's can; an email never
 //   keepsUntilStored  whether a message stays with the channel until intake has stored it, so that
 //                     one the bridge can't store now, for a reason of its own such as a full disk,
 //                     is handed over again later. An email stays in the spool; WhatsApp's
@@ -20,7 +19,7 @@
 //                     and one with `bridgeSide: true` that the copy failed on the bridge's side,
 //                     such as on a full disk, which from a channel that keeps its messages until
 //                     they are stored stores nothing of the message now.
-//   status()          one line for `/status`
+//   status()          one line for `scooter status`, which the bridge writes to `bridge/status.json`
 //
 // And for delivery:
 //

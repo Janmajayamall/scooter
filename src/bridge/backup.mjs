@@ -14,9 +14,9 @@
 // - `restore [snapshot] [--force]`: a snapshot back into `RESTORE_TARGET`, `/` by default, which
 //   puts every file back at the path it was backed up from.
 //
-// The bridge's side (`createBackups`): the schedule, `/backup` and `SIGUSR1`; the consistency steps
-// that keep a backup from seeing half a run or half a message; the result in the bridge's
-// state; and the reply, or the notice when a backup the owner didn't ask for by message fails.
+// The bridge's side (`createBackups`): the schedule and `SIGUSR1`; the consistency steps that keep
+// a backup from seeing half a run or half a message; the result in the bridge's state; and the
+// notice when a backup fails.
 
 import fs from 'node:fs'
 import os from 'node:os'
@@ -43,14 +43,15 @@ const TAG = 'scooter'
 // folders for good, and `backup` would find no parent, and read every file again.
 const GROUP = ['--group-by', 'host,tags']
 
-// What a backup holds, and what it leaves out: wacli's cache, and what the runner's clean-up
-// set aside and is removing. The cache restic keeps in the bridge's folder marks itself as
+// What a backup holds, and what it leaves out: wacli's cache; what the runner's clean-up set aside
+// and is removing; and the bridge's `status.json`, which says how the bridge that wrote it is
+// doing, and is written while a backup runs. The cache restic keeps in the bridge's folder marks itself as
 // one, and `--exclude-caches` leaves it out. `exchange/locks/` isn't held: a lock restored would
 // keep the runner, or the backups, waiting for a run or a backup that isn't there.
 export function backupSources(paths) {
   return {
     include: [paths.datastore, paths.agents, paths.wacli, paths.bridge, paths.mail, paths.networkLogDir, paths.outbox],
-    exclude: [paths.wacliCache, paths.agentsDiscarded],
+    exclude: [paths.wacliCache, paths.agentsDiscarded, paths.bridgeStatus],
   }
 }
 
@@ -65,7 +66,7 @@ const RESTIC_CODES = {
   12: "RESTIC_PASSWORD doesn't open the backup repository",
 }
 
-// What `/backup` and `/status` say while backups are off.
+// What the status and the CLI commands say while backups are off.
 export const BACKUPS_OFF = "RESTIC_REPOSITORY isn't set in bridge.env"
 
 const cut = text => {
@@ -74,7 +75,7 @@ const cut = text => {
 }
 
 // A step of restic that failed. `reason` is for the owner: restic's own words when it gave any, in
-// the reply or the notice and the bridge's state, and never in the log, which has the step and the
+// the notice and the bridge's state, and never in the log, which has the step and the
 // exit code, as the runner does with OpenRouter's. `snapshot` is the one saved before it failed.
 export class ResticError extends Error {
   constructor(step, result, { snapshot = null, reason = null } = {}) {
@@ -307,11 +308,7 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
 // ---------------------------------------------------------------------------------------------
 // The bridge's backups: schedule, requests, consistency, results
 
-// The reply to `/backup` while backups are off.
-export const OFF_REPLY = `Backups are off, because ${BACKUPS_OFF}.`
-const STOPPED_REPLY = 'The backup was stopped, because the bridge was stopping. Send /backup to try again.'
-
-// The wait after the `n`th failure in a row to write a reply, as for a command's.
+// The wait after the `n`th failure in a row to write a notice.
 function backoff(n) {
   const { first, factor, max } = limits.SEND_RETRY_BACKOFF
   return Math.min(first * factor ** Math.max(0, n - 1), max)
@@ -327,18 +324,16 @@ function backoff(n) {
 //   what intake was storing. `resume()` starts them again. A `resume()` that fails is fatal.
 // - `onFatal(error)`: the bridge can't go on.
 //
-// `start()` starts the schedule. `request(trigger, { about })` starts a backup, or joins the one in
-// progress, and resolves with its result once the replies are written; `trigger` is `command` for
-// `/backup`, whose reply is `about` its line, `scheduled` or `signal`. `ask(seq)` is what `/backup`
-// does: it returns the reply to give at once, or null when the reply comes once the backup ends.
-// `stop()` stops the schedule and any backup in progress, and waits for their replies to be
-// written. `statusLine(now)` is the line of `/status`.
+// `start()` starts the schedule. `request(trigger)` starts a backup, or joins the one in progress,
+// and resolves with its result once its notice, if any, is written; `trigger` is `scheduled` or
+// `signal`. `stop()` stops the schedule and any backup in progress, and waits for their notices to
+// be written. `statusLine(now)` is the line of `scooter status`.
 export function createBackups({ settings, paths, proc, log, clock = systemClock, ids, state, runnerUser = null, quiesce, resume, onFatal = () => {} }) {
   const stopping = new AbortController()
   // The backup in progress, which a request joins, if any.
   let current = null
   // Every backup not yet told: the one in progress, and those whose result is being kept and
-  // whose replies are being written, which a request no longer joins.
+  // whose notice is being written, which a request no longer joins.
   const jobs = new Set()
   let loop = null
 
@@ -423,8 +418,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
       locked = true
       // 2.
       if (!(await waitForRun(job))) return { stopped: true }
-      // 3. Nothing writes what the backup holds meanwhile, but the runner's commands, whose files
-      // are written whole and renamed into place.
+      // 3. Nothing writes what the backup holds meanwhile.
       quiet = true
       await quiesce()
       log.info('backup.writers_stopped')
@@ -454,12 +448,12 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
   }
 
   // Writes an outbox entry of the bridge's, into its own outbox, trying again after a wait
-  // that doubles when it can't, as a command's reply is, until the bridge stops.
+  // that doubles when it can't, until the bridge stops.
   async function send(entry) {
     for (let failures = 1; ; failures++) {
       try {
         const id = await writeOutboxEntry({ paths, ids, entry, outbox: paths.bridgeOutbox })
-        log.info('backup.told', { entry: id, about: entry.about ?? null })
+        log.info('backup.told', { entry: id })
         return
       } catch (error) {
         log.error('backup.not_told', { failures, ...errorFields(error) })
@@ -477,11 +471,12 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     return nextLocalTime(parseLocalTime(settings.backupTime), settings.timeZone, now)
   }
 
-  function resultText(result) {
-    if (result.stopped) return STOPPED_REPLY
-    if (result.ok) return `Backed up: snapshot ${result.snapshot}.${result.checked ? ' The repository was checked too: no errors.' : ''}`
+  // The notice of a backup that failed, which says when the next one is.
+  function noticeText(result) {
     const failed = result.snapshot === null ? '⚠️ The backup failed' : `⚠️ The backup saved snapshot ${result.snapshot}, but didn't finish`
-    return `${failed}: ${result.reason}.`
+    const next = nextTime(clock.now())
+    const when = next === null ? ' None is scheduled: BACKUP_TIME is off.' : ` The next one is at ${shortLocalTime(next, clock.now(), settings.timeZone)}.`
+    return `${failed}: ${result.reason}.${when}`
   }
 
   async function settle(job, result) {
@@ -496,23 +491,13 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     } else {
       log.info('backup.stopped', { trigger: job.trigger })
     }
-    for (const about of job.replies) await send({ type: 'text', by: 'bridge', text: resultText(result), about })
-    // A backup the owner didn't ask for by message says something only when it fails, and only
-    // when no `/backup` that joined it got the reply.
-    if (job.notify && job.replies.length === 0 && result.ok === false) {
-      const next = nextTime(clock.now())
-      const when = next === null ? '' : ` The next one is at ${shortLocalTime(next, clock.now(), settings.timeZone)}.`
-      await send({ type: 'text', by: 'bridge', text: `${resultText(result)}${when} Send /backup to try again now.` })
-    }
+    // A backup says something only when it fails.
+    if (result.ok === false) await send({ type: 'text', by: 'bridge', text: noticeText(result) })
   }
 
-  function request(trigger, { about = null } = {}) {
-    if (current) {
-      if (about !== null) current.replies.push(about)
-      if (trigger !== 'command') current.notify = true
-      return current.done
-    }
-    const job = { trigger, since: clock.now(), replies: about === null ? [] : [about], notify: trigger !== 'command', waiting: false }
+  function request(trigger) {
+    if (current) return current.done
+    const job = { trigger, since: clock.now(), waiting: false }
     current = job
     log.info('backup.started', { trigger })
     job.done = (async () => {
@@ -563,22 +548,15 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
       loop = schedule()
     },
 
-    request(trigger, options) {
+    request(trigger) {
       if (!settings.backup) {
         log.warn('backup.off', { reason: BACKUPS_OFF, trigger })
         return Promise.resolve({ off: true })
       }
-      return request(trigger, options)
+      return request(trigger)
     },
 
-    // `/backup`, the command `seq`.
-    ask(seq) {
-      if (!settings.backup) return OFF_REPLY
-      request('command', { about: seq })
-      return null
-    },
-
-    // A backup that ended as the stop came is told too: its reply is written before this resolves.
+    // A backup that ended as the stop came is told too: its notice is written before this resolves.
     async stop() {
       stopping.abort()
       await loop

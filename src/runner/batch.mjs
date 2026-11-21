@@ -11,8 +11,8 @@
 // - **Context:** the out lines and reactions from the oldest item to the end of what the batch
 //   covers, plus the message each reply quotes, shown under it.
 // - **Covered:** the lines up to the first work item left for a later batch. When the run succeeds,
-//   the cursor moves there: the context, the commands and the lines of other sources in that
-//   stretch are dealt with too.
+//   the cursor moves there: the context and the lines of other sources in that stretch are dealt
+//   with too.
 //
 // When even one item makes the prompt too long, it is fitted, in this order: the oldest lines of
 // context are left out; if the item is too long on its own, its texts are cut, followed by where

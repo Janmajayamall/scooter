@@ -17,11 +17,11 @@
 //   names the mailbox's provider and says `dmarc=pass`. Anything ambiguous is skipped;
 // - hands the email to the core as a record, which intake writes as the datastore line, with the
 //   whole message as `<seq>.eml` first and the attachments after it; or logs the skip, with the
-//   sender, the reason and the UID, never the subject or what it says, and counts it for `/status`;
+//   sender, the reason and the UID, never the subject or what it says, and counts it for its status;
 // - runs `scooter email-check`.
 //
 // Email only comes in: the channel can't send or react, and replies about an email go to
-// `DEFAULT_CHANNEL`. An email is never a command, an edit, a deletion or a reaction.
+// `DEFAULT_CHANNEL`. An email is never an edit, a deletion or a reaction.
 //
 // The spool's format is `src/mail/spool.mjs`'s, which this module can't import:
 // its names are repeated here, and a test hands over through the real reader.
@@ -403,7 +403,7 @@ export function emailRecord({ parsed, lines, size }) {
 // The channel
 
 // Returns the email channel. Options:
-// - `settings`: the bridge's settings; `settings.email` is used here, and `timeZone` for `/status`.
+// - `settings`: the bridge's settings; `settings.email` is used here, and `timeZone` for its status.
 // - `paths`: what `makePaths` returns. `paths.mail` is the reader's home, and its spool is in it.
 // - `proc`: what `createProc` returns. The reader runs through it.
 // - `user`: `{ uid, gid }` of `scooter-mail`, or null when the bridge isn't root.
@@ -413,7 +413,7 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
   const env = readerEnv(settings, paths)
   // The spool folder of each record handed over, for its downloads.
   const folders = new WeakMap()
-  // When each email stored and skipped was taken, over the last `STATUS_WINDOW`, for `/status`.
+  // When each email stored and skipped was taken, over the last `STATUS_WINDOW`, for its status.
   const stored = []
   const skipped = []
   const startedAt = clock.now()
@@ -431,8 +431,8 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
     const from = clock.now() - limits.STATUS_WINDOW
     while (list.length > 0 && list[0] < from) list.shift()
   }
-  // Counts an email for `/status`. Those past the window go then too, so a mailbox strangers write
-  // to keeps a day of times at most, whether `/status` is asked or not.
+  // Counts an email for its status. Those past the window go then too, so a mailbox strangers write
+  // to keeps a day of times at most, whatever reads the status.
   const count = list => {
     list.push(clock.now())
     prune(list)
@@ -578,7 +578,6 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
 
   return {
     name: 'email',
-    takesCommands: false,
     // An email stays in the spool until it is stored, with its files, or skipped.
     keepsUntilStored: true,
     canSend: false,
@@ -653,8 +652,8 @@ export function createEmail({ settings, paths, proc, log, clock = systemClock, u
       throw new Error('the email channel sends nothing')
     },
 
-    // One line for `/status`: whether the reader is connected, and the emails stored and skipped
-    // in the last 24 hours, or since the bridge started when that is later.
+    // One line for `scooter status`: whether the reader is connected, and the emails stored and
+    // skipped in the last 24 hours, or since the bridge started when that is later.
     status() {
       const now = clock.now()
       prune(stored)

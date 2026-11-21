@@ -16,7 +16,7 @@ import { MINUTE, SECOND, outboxOf, prepareTestRunner } from './support/test-runn
 import { atEnd } from './support/tmp.mjs'
 
 const START = '2026-11-09T15:50:30Z'
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null }
 
 test('restarts: the waits are the native unit\'s, from the stop, and the reason is the error\'s code or name', () => {
   assert.deepEqual([0, 1, 2, 3, 4, 50].map(restartWait), [0, MINUTE, limits.RUNNER_RESTART_WAITS[1], 30 * MINUTE, 30 * MINUTE, 30 * MINUTE])
@@ -110,7 +110,7 @@ test('restarts: started again at once after each stop, a fault that stays runs p
     [4, 30 * MINUTE],
   ]) {
     runner = await control.start()
-    // It says so in status.json, for `/status`, and waits before anything can run pi.
+    // It says so in status.json, for `scooter status`, and waits before anything can run pi.
     const until = stoppedAt + wait
     assert.deepEqual(readRunnerStatus(paths.runnerStatus).restart, { stops: n, until: isoSeconds(until), reason: 'ENOTDIR' })
     await clock.whenSleeping()
@@ -151,8 +151,8 @@ test('restarts: a stop asked for ends the waiting, and a run recorded makes the 
   await runner.stop()
   assert.equal(control.record().stops, 0)
   assert.equal(control.piRuns.length, 2)
-  // Stopped, it no longer waits, so `/status` doesn't say it does, as `docker compose stop runner`
-  // would leave it; the rest of status.json stays.
+  // Stopped, it no longer waits, so `scooter status` doesn't say it does, as `docker compose stop
+  // runner` would leave it; the rest of status.json stays.
   const status = readRunnerStatus(paths.runnerStatus)
   assert.equal(status.restart, null)
   assert.equal(status.startedAt, startedAt)

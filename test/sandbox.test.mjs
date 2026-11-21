@@ -684,7 +684,7 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
   assert.ok(!fs.existsSync(paths.outbox) || fs.readdirSync(paths.outbox).length === 0)
   const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
-  assert.deepEqual([state.cursor, state.commandSeq, state.lastRun], [1, 1, null])
+  assert.deepEqual([state.cursor, state.lastRun], [1, null])
   assert.equal(said.at(-1), 'Rebuilt lifelog up to #1, in 1 batch, committed as "lifelog: rebuild".')
 })
 

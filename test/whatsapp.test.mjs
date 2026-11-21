@@ -532,8 +532,8 @@ test('whatsapp: what came after a message a stop left is left too, until the cha
   assert.equal(await stub.postWebhook(webhookPayload({ ID: 'P1', Timestamp: photoAt, Media: photo })), 200)
   await waitFor(() => stub.callsOf('media download').length === 1, 'the download to start')
   assert.equal(await stub.postWebhook(webhookPayload({ ID: 'T1', Timestamp: textAt, Text: 'coffee 150' })), 200)
-  // A command after it is left too, and answered once catch-up brings it back.
-  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'C1', Timestamp: textAt, Text: '/help' })), 200)
+  // Another after it is left too, and stored once catch-up brings it back.
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'T2', Timestamp: textAt, Text: 'lunch 300' })), 200)
   await new Promise(resolve => setTimeout(resolve, 20))
   await whatsapp.stop()
   await bridge.intake.idle()
@@ -542,7 +542,7 @@ test('whatsapp: what came after a message a stop left is left too, until the cha
   const rows = [
     listRow({ MsgID: 'P1', Timestamp: photoAt, MediaType: 'image', MimeType: 'image/jpeg' }),
     listRow({ MsgID: 'T1', Timestamp: textAt, Text: 'coffee 150' }),
-    listRow({ MsgID: 'C1', Timestamp: textAt, Text: '/help' }),
+    listRow({ MsgID: 'T2', Timestamp: textAt, Text: 'lunch 300' }),
   ]
   stub.fixtures({ media: { P1: { content: 'the photo' } }, messages: rows })
   bridge.intake.started('whatsapp')
@@ -553,7 +553,7 @@ test('whatsapp: what came after a message a stop left is left too, until the cha
     [
       [1, 'message', 'P1', photoAt],
       [2, 'message', 'T1', textAt],
-      [3, 'command', 'C1', textAt],
+      [3, 'message', 'T2', textAt],
     ],
   )
   assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])

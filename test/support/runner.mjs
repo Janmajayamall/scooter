@@ -50,7 +50,6 @@ export const line = {
   edit: (seq, at, target, text) => ({ seq, kind: 'edit', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target, text }),
   delete: (seq, at, target) => ({ seq, kind: 'delete', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target }),
   reaction: (seq, at, target, emoji, extra = {}) => ({ seq, kind: 'reaction', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target, emoji, ...extra }),
-  command: (seq, at, text) => ({ seq, kind: 'command', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', text }),
   email: (seq, at, subject, text, extra = {}) => ({ seq, kind: 'message', dir: 'in', at, source: 'email', sourceId: `${sourceId()}@mail.example`, trust: 'owner', subject, text, ...extra }),
 }
 
@@ -130,10 +129,8 @@ export function exampleLines() {
 export function exampleState() {
   return {
     cursor: 1049,
-    commandSeq: 0,
     retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T14:33:30Z', reason: 'not reported' }],
     failed: [],
-    session: null,
     backfillDone: [],
     scheduled: { '21:30': '2026-11-08' },
     lastRun: { at: '2026-11-09T14:32:30Z', ok: true, seqs: [1047], durationMs: 41000 },

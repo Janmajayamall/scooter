@@ -5,14 +5,10 @@
 
 import { parseIsoSeconds } from '../time.mjs'
 
-export const KINDS = ['message', 'edit', 'delete', 'reaction', 'command']
+export const KINDS = ['message', 'edit', 'delete', 'reaction']
 export const DIRECTIONS = ['in', 'out']
 export const SOURCES = ['whatsapp', 'email']
 export const TRUSTS = ['owner', 'external']
-
-// The commands. A `command` line's text is one of them, exactly. The bridge answers the
-// first three and the runner `/new`.
-export const COMMANDS = ['/status', '/backup', '/help', '/new']
 
 // The fields, in the order a line is written.
 const FIELDS = [
@@ -105,8 +101,7 @@ export function checkLine(line) {
   if (dir === 'out') need('by', value => isString(value) && value !== '', 'a string that isn\'t empty')
   else allow('by', false)
 
-  if (kind === 'command') need('text', value => COMMANDS.includes(value), `one of ${COMMANDS.join(', ')}`)
-  else if (['message', 'edit'].includes(kind)) need('text', isString, 'a string')
+  if (['message', 'edit'].includes(kind)) need('text', isString, 'a string')
   else allow('text', false)
 
   if (pointsAtAnother) need('target', isSeq, 'a seq')

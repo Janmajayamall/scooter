@@ -16,7 +16,7 @@ const LINES = [
   line.text(5, '2026-11-09T15:03:00Z', 'gone soon'),
   line.delete(6, '2026-11-09T15:04:00Z', 5),
   line.reaction(7, '2026-11-09T15:05:00Z', 2, '👍'),
-  line.command(8, '2026-11-09T15:06:00Z', '/status'),
+  line.reaction(8, '2026-11-09T15:06:00Z', 1, '❤️'),
   line.text(9, '2026-11-09T15:07:00Z', 'lunch 300'),
 ]
 const index = indexOf(LINES)
@@ -129,7 +129,7 @@ test('answer: what a REPLY_TO quotes', () => {
   // An edit or a deletion: the message it changes.
   assert.equal(replyTarget(index, 4), 1)
   assert.equal(replyTarget(index, 6), 5)
-  // A reaction, a command, or a number that doesn't exist: nothing.
+  // A reaction, or a number that doesn't exist: nothing.
   assert.equal(replyTarget(index, 7), null)
   assert.equal(replyTarget(index, 8), null)
   assert.equal(replyTarget(index, 99), null)

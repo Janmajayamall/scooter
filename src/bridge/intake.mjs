@@ -9,10 +9,8 @@
 // - A deletion becomes a `delete`, an edit an `edit`, and a reaction a `reaction`, each with the
 //   `seq` of the message it refers to as `target`. One whose message isn't in the datastore is
 //   skipped: there is nothing for it to change.
-// - A text that is one of the four commands, from a channel that takes commands, becomes a
-//   `command`, trimmed. An email is never a command.
-// - Anything else becomes a `message`. A reply gets `replyTo`, the `seq` of the message it quotes
-//   when that is in the datastore, and `quoted`, the channel's preview of it.
+// - Anything else becomes a `message`, whatever its text. A reply gets `replyTo`, the `seq` of the
+//   message it quotes when that is in the datastore, and `quoted`, the channel's preview of it.
 // - Each attachment is downloaded, with `MEDIA_DOWNLOAD_RETRIES` more tries if that fails, and
 //   handed to the store, which copies it into the day folder. An attachment that can't be stored
 //   leaves a `media` object on the line saying why: too large, not a file, a failed download, or a
@@ -31,7 +29,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { COMMANDS, DatastoreError } from '../common/datastore/line.mjs'
+import { DatastoreError } from '../common/datastore/line.mjs'
 import { createIds, ensureDir } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
@@ -54,8 +52,7 @@ export const MEDIA_ERRORS = {
 //   and the store.
 // - `onFatal(error)`: called once if the store stops taking lines. The bridge can't go on
 //   without a restart then.
-// - `onCommand(seq)`: called after a command line has been stored, for the bridge to answer it.
-export function createIntake({ store, channels, paths, log, clock = systemClock, onFatal = () => {}, onCommand = () => {} }) {
+export function createIntake({ store, channels, paths, log, clock = systemClock, onFatal = () => {} }) {
   const ids = createIds(clock)
   let queue = Promise.resolve()
   let failed = null
@@ -71,8 +68,8 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     if (line.dir === 'in') newestIn.set(line.source, line.at)
   }
 
-  // The message, or command, a line from this channel refers to by its channel ID: its `seq`, or
-  // undefined. A reaction, an edit or a deletion can't be referred to.
+  // The message a line from this channel refers to by its channel ID: its `seq`, or undefined. A
+  // reaction, an edit or a deletion can't be referred to.
   function targetOf(source, id) {
     const seq = store.index.seqOf(source, id)
     return seq !== undefined && store.index.current(seq) !== undefined ? seq : undefined
@@ -83,7 +80,6 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     if (result.stored) {
       newestIn.set(fields.source, fields.at)
       log.info('intake.stored', { source: fields.source, kind: fields.kind, seq: result.seq })
-      if (fields.kind === 'command') onCommand(result.seq)
     } else {
       log.info('intake.skipped', { source: fields.source, kind: fields.kind, reason: result.reason })
     }
@@ -218,10 +214,6 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
       const target = targetOf(record.source, record.id)
       if (target === undefined) return skip(record, 'edit', 'unknown target')
       return append({ ...base, kind: 'edit', sourceId: record.id, target, text: record.text })
-    }
-    const command = record.text.trim()
-    if (channel.takesCommands && record.attachments.length === 0 && COMMANDS.includes(command)) {
-      return append({ ...base, kind: 'command', sourceId: record.id, text: command })
     }
     return message(record, base)
   }

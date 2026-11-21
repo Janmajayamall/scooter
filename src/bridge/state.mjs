@@ -1,6 +1,6 @@
 // The bridge's own state, `bridge/state.json`.
 //
-//   {"firstStart":"2026-11-09T15:43:02Z","ownerChat":{"jid":"919812345678@s.whatsapp.net","at":"2026-11-09T15:50:11Z"},"lastBackup":null,"commandSeq":1038}
+//   {"firstStart":"2026-11-09T15:43:02Z","ownerChat":{"jid":"919812345678@s.whatsapp.net","at":"2026-11-09T15:50:11Z"},"lastBackup":null}
 //
 // - `firstStart`: when the bridge first started. WhatsApp's catch-up never reaches back before it,
 //   so the chat's earlier history is never imported.
@@ -9,9 +9,6 @@
 // - `lastBackup`: the last backup that ran to its end: `{ at, ok, snapshot, reason }`, when it
 //   started, whether it worked, the snapshot it saved or null, and, when it failed, why, in words
 //   for the owner, restic's among them, which no log holds. Null before the first.
-// - `commandSeq`: the `seq` of the newest command line the bridge has handled, as the runner
-//   keeps its own in `state.json`. A state written before the bridge handled commands has
-//   none, and gets the newest line's, so commands sent before that are never answered.
 // - `catchUp`: where WhatsApp's catch-up has got to in each of the owner's chats:
 //   `{ "<chat JID>": "<UTC time>" }`, the time of the newest of the owner's rows it has
 //   listed there with every row before it handled. The next catch-up of that chat starts
@@ -49,7 +46,6 @@ function problemsOf(state) {
   ) {
     return 'lastBackup must be null or { at, ok, snapshot, reason }'
   }
-  if (!Number.isSafeInteger(state.commandSeq) || state.commandSeq < 0) return 'commandSeq must be a whole number, 0 or more'
   const points = state.catchUp
   if (points !== undefined && !(isObject(points) && Object.entries(points).every(([chat, at]) => chat !== '' && parseIsoSeconds(at) !== null))) {
     return 'catchUp must be { "<chat>": "<UTC time>" }'
@@ -58,9 +54,8 @@ function problemsOf(state) {
 }
 
 // Opens the state, creating it on the very first start. Throws if the file is there and isn't a
-// state: it is written atomically, so that is not something a crash leaves. `newestSeq` is the
-// datastore's newest `seq`, which a state without `commandSeq` starts from.
-export function openBridgeState({ paths, clock = systemClock, log, newestSeq = 0 }) {
+// state: it is written atomically, so that is not something a crash leaves.
+export function openBridgeState({ paths, clock = systemClock, log }) {
   const file = paths.bridgeState
   let state
   try {
@@ -70,12 +65,9 @@ export function openBridgeState({ paths, clock = systemClock, log, newestSeq = 0
     throw new Error(`${file} is not JSON`)
   }
   if (state === undefined) {
-    state = { firstStart: isoSeconds(clock.now()), ownerChat: null, lastBackup: null, commandSeq: newestSeq }
+    state = { firstStart: isoSeconds(clock.now()), ownerChat: null, lastBackup: null }
     writeFileAtomic(file, `${JSON.stringify(state)}\n`, { mode: 0o600 })
     log.info('bridge.first_start', { firstStart: state.firstStart })
-  } else if (isObject(state) && state.commandSeq === undefined) {
-    state = { ...state, commandSeq: newestSeq }
-    if (problemsOf(state) === null) writeFileAtomic(file, `${JSON.stringify(state)}\n`, { mode: 0o600 })
   }
   const problem = problemsOf(state)
   if (problem) throw new Error(`${file}: ${problem}`)

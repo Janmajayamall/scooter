@@ -40,7 +40,7 @@ function gist(line) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Messages, replies and commands
+// Messages and replies
 
 test('intake: a message becomes a message line, with its time and its ID', async t => {
   const { whatsapp, lines } = setup(t)
@@ -76,39 +76,27 @@ test('intake: a reply gets the seq of what it quotes when that is known, and the
   ])
 })
 
-test('intake: a text that is one of the four commands is a command line, trimmed', async t => {
-  const { whatsapp, lines } = setup(t)
+test('intake: a text such as /status is a message, as it was sent, from any channel', async t => {
+  const whatsapp = createFakeChannel()
+  const email = createFakeChannel({ name: 'email', canSend: false, canReact: false })
+  const { lines } = setup(t, { channels: [whatsapp, email] })
   for (const text of ['/status', '  /backup\n', '/help', '/new']) await whatsapp.deliver(makeRecord({ text }))
-  // Close is not enough.
-  for (const text of ['/STATUS', '/status please', '/ new', 'status', '/new.']) await whatsapp.deliver(makeRecord({ text }))
-  // A reply that is a command is a command, and quotes nothing.
-  await whatsapp.deliver(makeRecord({ text: '/status', replyToId: 'X', replyToPreview: 'what?' }))
-  // A caption is not a text.
-  await whatsapp.deliver(makeRecord({ text: '/status', attachments: [makeAttachment({ error: 'not a file, so not stored', type: 'location' })] }))
+  // A reply keeps what it quotes.
+  await whatsapp.deliver(makeRecord({ id: 'R1', text: '/status', replyToId: 'X', replyToPreview: 'what?' }))
+  await email.deliver(makeRecord({ source: 'email', id: 'abc@mail.example', subject: 'note', text: '/status' }))
   assert.deepEqual(
     lines().map(line => [line.kind, line.text]),
     [
-      ['command', '/status'],
-      ['command', '/backup'],
-      ['command', '/help'],
-      ['command', '/new'],
-      ['message', '/STATUS'],
-      ['message', '/status please'],
-      ['message', '/ new'],
-      ['message', 'status'],
-      ['message', '/new.'],
-      ['command', '/status'],
+      ['message', '/status'],
+      ['message', '  /backup\n'],
+      ['message', '/help'],
+      ['message', '/new'],
+      ['message', '/status'],
       ['message', '/status'],
     ],
   )
-  assert.equal(lines()[9].replyTo, undefined)
-})
-
-test('intake: an email is never a command', async t => {
-  const email = createFakeChannel({ name: 'email', takesCommands: false })
-  const { lines } = setup(t, { channels: [createFakeChannel(), email] })
-  await email.deliver(makeRecord({ source: 'email', id: 'abc@mail.example', subject: 'note', text: '/status' }))
-  assert.deepEqual(gist(lines()[0]), { seq: 1, kind: 'message', sourceId: 'abc@mail.example', subject: 'note', text: '/status' })
+  assert.deepEqual(gist(lines()[4]), { seq: 5, kind: 'message', sourceId: 'R1', quoted: 'what?', text: '/status' })
+  assert.deepEqual(gist(lines()[5]), { seq: 6, kind: 'message', sourceId: 'abc@mail.example', subject: 'note', text: '/status' })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -229,14 +217,14 @@ test('intake: a failed download is tried twice more, 10 seconds apart, and then 
 })
 
 test('intake: a download its channel\'s stop cut short leaves the message unstored, and its channel\'s later ones, for the channel to hand over again once it starts', async t => {
-  const email = createFakeChannel({ name: 'email', takesCommands: false, canSend: false, canReact: false })
+  const email = createFakeChannel({ name: 'email', canSend: false, canReact: false })
   const whatsapp = createFakeChannel()
   const { intake, lines, clock, entries, paths } = setup(t, { channels: [whatsapp, email] })
   const record = makeRecord({ id: 'S1', text: 'receipt', attachments: [makeAttachment()] })
   whatsapp.willDownload(record, 1, 'never', { failures: 1, code: 'ESTOPPED' })
   const later = makeRecord({ id: 'S2', text: 'coffee 150', at: '2026-11-09T15:51:00Z' })
   // Taken while the download runs, as a webhook's record is.
-  const results = await Promise.all([intake.take(record), intake.take(later), intake.take(makeRecord({ id: 'S3', text: '/status' }))])
+  const results = await Promise.all([intake.take(record), intake.take(later), intake.take(makeRecord({ id: 'S3', text: 'lunch 300' }))])
   assert.deepEqual(results, [
     { stored: false, reason: 'its channel stopped during a download', again: true },
     { stored: false, reason: 'its channel stopped during a download before it', again: true },

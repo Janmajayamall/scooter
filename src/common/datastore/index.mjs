@@ -10,7 +10,7 @@ import { DatastoreError } from './line.mjs'
 
 // The kinds of line that are known by their own channel ID. An `edit` carries the ID of the
 // message it changes, so it is never looked up by it, and neither is a `delete`.
-const KNOWN_BY_ID = ['message', 'command', 'reaction']
+const KNOWN_BY_ID = ['message', 'reaction']
 
 const idKey = (source, sourceId) => `${source}\n${sourceId}`
 
@@ -18,7 +18,6 @@ export function createIndex() {
   const entries = new Map() // seq -> { line, day, number }
   const ids = new Map() // (source, sourceId) -> seq
   const states = new Map() // seq -> { text, editedIn, deletedIn }
-  const commands = [] // the seq of every command line, in order
   let lastSeq = 0
   let newestDay = null
   let lineNumber = 0
@@ -45,10 +44,8 @@ export function createIndex() {
         if (!ids.has(key)) ids.set(key, line.seq)
       }
 
-      if (line.kind === 'command') commands.push(line.seq)
-
-      // What a line says now. Messages have a text that edits replace; a command has one too.
-      if (line.kind === 'message' || line.kind === 'command') {
+      // What a line says now. Messages have a text that edits replace.
+      if (line.kind === 'message') {
         states.set(line.seq, { text: line.text, editedIn: null, deletedIn: null })
       }
       const state = states.get(line.target)
@@ -65,23 +62,15 @@ export function createIndex() {
     // number in its day's `log.jsonl`, counting from 1.
     get: seq => entries.get(seq),
 
-    // The `seq` of the message, command or reaction that has this channel ID, or undefined.
+    // The `seq` of the message or reaction that has this channel ID, or undefined.
     seqOf: (source, sourceId) => ids.get(idKey(source, sourceId)),
 
     // How a message stands now: `{ text, editedIn, deletedIn }`. `text` is its latest text,
     // `editedIn` the `seq` of its latest edit, and `deletedIn` the `seq` of its deletion; the last
-    // two are null when there was none. Undefined for a `seq` that isn't a message or a command.
+    // two are null when there was none. Undefined for a `seq` that isn't a message.
     current(seq) {
       const state = states.get(seq)
       return state ? { ...state } : undefined
-    },
-
-    // The `seq` of every command line after `after`, in order. The runner handles commands as they
-    // come, and finds them here without reading every line again.
-    commandsAfter(after) {
-      let start = commands.length
-      while (start > 0 && commands[start - 1] > after) start -= 1
-      return commands.slice(start)
     },
 
     // The highest `seq` there is, or 0 when the datastore is empty.

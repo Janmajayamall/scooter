@@ -1,7 +1,8 @@
 // The bridge as a whole: signed webhooks from wacli become datastore lines
 // and attachments, and unsigned ones don't; a message goes through the runner and comes back as a
-// quoted reply, logged as an `out` line; the commands are answered; the bridge's state; one bridge
-// per data folder; and `scooter bridge` as a real process.
+// quoted reply, logged as an `out` line; a text such as `/status` is a message, and `scooter
+// status` says what the bridge and the runner are doing; the bridge's state; one bridge per data
+// folder; and `scooter bridge` as a real process.
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -10,13 +11,11 @@ import net from 'node:net'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { OFF_REPLY } from '../src/bridge/backup.mjs'
-import { HELP_TEXT, createCommands } from '../src/bridge/commands.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
+import { readBridgeStatus, readIndex, runStatus, statusText } from '../src/bridge/status.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
-import { openStore } from '../src/bridge/store.mjs'
-import { createIds, listHandOffs } from '../src/common/files.mjs'
+import { listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
@@ -26,7 +25,6 @@ import { createMailReaderStub } from './support/mail-reader.mjs'
 import { AUTHSERV, OWNER_ADDRESSES, appleMailAudio, gmailPlain } from './support/mail-samples.mjs'
 import { createResticStub } from './support/restic.mjs'
 import { isRoot } from './support/root.mjs'
-import { line, writeDatastore } from './support/runner.mjs'
 import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
@@ -93,7 +91,8 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
     await send(webhookPayload({ ID: 'REA1', Timestamp: at(34), ReactionToID: 'TXT1', ReactionEmoji: '👍' })),
     await send(webhookPayload({ ID: 'TXT1', Timestamp: at(35), Text: 'coffee 120', Edited: true })),
     await send(webhookPayload({ ID: 'REP1', Timestamp: at(36), Revoked: true })),
-    await send(webhookPayload({ ID: 'CMD1', Timestamp: at(37), Text: '/status' })),
+    // A text such as /status is a message like any other.
+    await send(webhookPayload({ ID: 'TXT2', Timestamp: at(37), Text: '/status' })),
     // The same edit, delivered again.
     await send(webhookPayload({ ID: 'TXT1', Timestamp: at(35), Text: 'coffee 120', Edited: true })),
     // Unsigned, and signed with a wrong secret.
@@ -115,7 +114,7 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
       { seq: 5, kind: 'reaction', ...base, at: at(34), sourceId: 'REA1', target: 2, emoji: '👍' },
       { seq: 6, kind: 'edit', ...base, at: at(35), sourceId: 'TXT1', target: 2, text: 'coffee 120' },
       { seq: 7, kind: 'delete', ...base, at: at(36), sourceId: 'REP1', target: 4 },
-      { seq: 8, kind: 'command', ...base, at: at(37), sourceId: 'CMD1', text: '/status' },
+      { seq: 8, kind: 'message', ...base, at: at(37), sourceId: 'TXT2', text: '/status' },
     ].map(line => {
       // The fields in the order the datastore writes them.
       const { seq, kind, dir, at: time, source, sourceId, trust, ...rest } = line
@@ -154,12 +153,11 @@ async function startBoth(t, { fixtures = { paired: true, messages: [] }, email =
     reader,
     bridge,
     bridgeEvents: events,
-    // Has wacli post a payload, and waits until the bridge has stored it and answered any command.
+    // Has wacli post a payload, and waits until the bridge has stored it.
     async post(payload) {
       assert.equal(await stub.postWebhook(payload), 200)
       await new Promise(resolve => setTimeout(resolve, 20))
       await bridge.intake.idle()
-      await bridge.commands.idle()
     },
     // Lets the runner see what was stored, waits out the quiet period, and runs what comes next.
     async runNext() {
@@ -271,7 +269,7 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   assert.match(email.status(), /; 2 stored and 0 skipped since the bridge started, /)
 })
 
-test('bridge: /status reports the runner\'s state, /help lists the commands, /backup says backups are off without a repository, and /new is the runner\'s', async t => {
+test('bridge: a text such as /status is filed as any message, and nothing answers it; scooter status says how the bridge and the runner are doing', async t => {
   const both = await startBoth(t)
   await both.post(webhookPayload({ ID: 'M1', Timestamp: '2026-11-09T15:50:00Z', Text: 'coffee 150' }))
   await both.runNext()
@@ -279,112 +277,85 @@ test('bridge: /status reports the runner\'s state, /help lists the commands, /ba
   // The runner filed it, and the bridge sent its ✅.
   assert.equal(both.stub.callsOf('send react').length, 1)
 
-  await both.post(webhookPayload({ ID: 'C1', Timestamp: '2026-11-09T15:51:00Z', Text: '/status' }))
-  await both.post(webhookPayload({ ID: 'C2', Timestamp: '2026-11-09T15:51:01Z', Text: ' /help ' }))
-  await both.post(webhookPayload({ ID: 'C3', Timestamp: '2026-11-09T15:51:02Z', Text: '/backup' }))
-  await both.post(webhookPayload({ ID: 'C4', Timestamp: '2026-11-09T15:51:03Z', Text: '/new' }))
-  // The runner answers `/new`, and passes over the bridge's three. A millisecond later: the two
-  // services' entries are in two outboxes, and two made in the same millisecond, here by one fake
-  // clock, go in no set order between them.
-  await both.clock.advance(1)
-  await both.runner.tick()
+  const texts = ['/status', ' /help ', '/backup', '/new']
+  for (const [n, text] of texts.entries()) await both.post(webhookPayload({ ID: `T${n + 1}`, Timestamp: `2026-11-09T15:51:0${n}Z`, Text: text }))
+  assert.deepEqual(
+    both.lines().slice(-4).map(line => [line.kind, line.text]),
+    texts.map(text => ['message', text]),
+  )
+  // The runner gives them to the agent, which files each, and the bridge sends a ✅ for each:
+  // nothing else is sent, and nothing is written to the bridge's own outbox.
+  assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
+  assert.deepEqual(both.state().lastRun.seqs, [3, 4, 5, 6])
   await both.deliver()
+  assert.equal(both.stub.callsOf('send react').length, 5)
+  assert.deepEqual(both.sent(), [])
+  assert.ok(both.lines().every(line => line.dir === 'in' || line.kind === 'reaction'))
 
-  const texts = both.sent().map(messageOf)
-  assert.equal(texts.length, 4)
-  const [status, help, backup, fresh] = texts
+  // `scooter status`, while both run.
+  const { paths } = both
+  const settings = bridgeSettings(both.root)
+  const status = statusText({ now: both.clock.now(), settings, paths, index: readIndex(paths) })
   assert.match(status, /^Scooter, Mon 9 Nov 21:2\d \(Asia\/Kolkata\)$/m)
+  assert.match(status, /^Bridge: started 21:20; it last wrote its status 21:2\d\.$/m)
   assert.match(status, /^WhatsApp: linked$/m)
-  assert.match(status, /^Newest message: #1, 21:20, on WhatsApp$/m)
+  assert.match(status, /^Newest message: #6, 21:21, on WhatsApp$/m)
   assert.match(status, /^Runner: started 21:20\. VMs run with KVM; their image was built 15:30\.$/m)
   assert.match(status, /^Zero data retention: on\. The agent's internet access: off\.$/m)
-  assert.match(status, /^Network, last 24 hours: 1 request to 1 host\.$/m)
-  assert.match(status, /^lifelog: last run 21:20, ok, 1 message, 0 s\.$/m)
+  assert.match(status, /^Network, last 24 hours: 2 requests to 1 host\.$/m)
+  assert.match(status, /^lifelog: last run 21:2\d, ok, 4 messages, 0 s\.$/m)
   assert.match(status, /^Runs aren't paused\.$/m)
   assert.match(status, /^Messages: 0 pending, 0 retrying, 0 failed\.$/m)
-  assert.equal(help, HELP_TEXT)
-  assert.equal(backup, OFF_REPLY)
   assert.match(status, /^Backups: off, because RESTIC_REPOSITORY isn't set in bridge\.env\.$/m)
-  assert.equal(fresh, 'Started a fresh conversation.')
-  // Each reply goes back where its command was sent, unquoted, and is logged with who sent it.
-  const replies = both.lines().filter(line => line.dir === 'out' && line.kind === 'message')
-  assert.deepEqual(replies.map(line => [line.by, line.replyTo]), [
-    ['bridge', undefined],
-    ['bridge', undefined],
-    ['bridge', undefined],
-    ['runner', undefined],
-  ])
-  assert.ok(both.sent().every(args => !args.includes('--reply-to')))
-  assert.equal(both.bridge.state.get().commandSeq, 6)
+
+  // Stopped, the bridge says so, and the report still comes, from its files.
+  await both.bridge.stop()
+  assert.notEqual(readBridgeStatus(paths).stoppedAt, null)
+  const out = []
+  const code = await runStatus({ settings, stdout: { write: text => out.push(text) }, stderr: { write: text => assert.fail(text) }, clock: both.clock })
+  assert.equal(code, 0)
+  assert.match(out.join(''), /^Bridge: stopped 21:2\d, when it last wrote its status\.\nWhatsApp: stopped\nNewest message: #6, 21:21, on WhatsApp\n/m)
+  assert.match(out.join(''), /^Messages: 0 pending, 0 retrying, 0 failed\.$/m)
 })
 
-test('bridge: a command is answered once, also across a restart, and one left unanswered is answered at the start', async t => {
+test('bridge: it writes bridge/status.json at its start, whenever a channel\'s line or the backups\' changes, and at its stop', async t => {
   const root = makeTestDir(t)
   const stub = createWacliStub(t, root)
-  stub.fixtures({ paired: true, messages: [] })
+  stub.fixtures({ paired: false, messages: [] })
   atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * 3600_000 }))
   const clock = createFakeClock('2026-11-09T15:45:00Z')
   const paths = makePaths(bridgeSettings(root))
-  const open = async () => {
-    const { bridge } = await start(t, root, { clock })
-    await waitFor(() => stub.callsOf('sync').length > 0, 'wacli sync to start')
-    return bridge
+  const { bridge } = await start(t, root, { clock })
+  // Each look is a second of the clock's.
+  const look = async () => {
+    await clock.advance(SECOND)
+    return readBridgeStatus(paths)
   }
-  // The bridge writes its replies to its own outbox.
-  const entries = () => listHandOffs(paths.bridgeOutbox).length
-  let bridge = await open()
-  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'H1', Text: '/help' })), 200)
-  await waitFor(() => entries() === 1, 'the reply')
-  assert.equal(bridge.state.get().commandSeq, 1)
+  await waitFor(async () => (await look())?.channels.whatsapp === 'WhatsApp: not linked; run `scooter pair`', 'the bridge to find wacli unpaired')
+  const first = readBridgeStatus(paths)
+  assert.deepEqual(first, {
+    startedAt: '2026-11-09T15:45:00Z',
+    writtenAt: first.writtenAt,
+    stoppedAt: null,
+    channels: { whatsapp: 'WhatsApp: not linked; run `scooter pair`' },
+    backups: 'Backups: off, because RESTIC_REPOSITORY isn\'t set in bridge.env.',
+  })
+  assert.equal(fs.statSync(paths.bridgeStatus).mode & 0o777, 0o600)
+  // Nothing changes: nothing is written.
+  const before = fs.statSync(paths.bridgeStatus).ino
+  for (let n = 0; n < 5; n++) await look()
+  assert.equal(fs.statSync(paths.bridgeStatus).ino, before)
+  assert.equal(readBridgeStatus(paths).writtenAt, first.writtenAt)
+  // wacli is paired: the channel's next check finds it, within a minute, and the file says so.
+  stub.fixtures({ paired: true, messages: [] })
+  await waitFor(async () => (await look()).channels.whatsapp === 'WhatsApp: linked', 'the link to show', 30_000)
+  assert.ok(Date.parse(readBridgeStatus(paths).writtenAt) > Date.parse(first.writtenAt))
+  // Stopped: once more, with the channel stopped and when.
   await bridge.stop()
-
-  // Started again, it answers nothing again: the reply waits in the outbox, once.
-  bridge = await open()
-  await bridge.commands.idle()
-  assert.equal(entries(), 1)
-  await bridge.stop()
-
-  // As after a crash between the reply and the state: the command is answered at the start.
-  const state = openBridgeState({ paths, clock, log: createTestLog().log })
-  state.update({ commandSeq: 0 })
-  bridge = await open()
-  await bridge.commands.idle()
-  assert.equal(entries(), 2)
-  assert.equal(bridge.state.get().commandSeq, 1)
-})
-
-test('bridge: a reply to a command that can\'t be written is tried again after waits that grow, without another command', async t => {
-  const root = makeTestDir(t)
-  const paths = makePaths(bridgeSettings(root))
-  const clock = createFakeClock('2026-11-09T15:45:00Z')
-  const { log, entries } = createTestLog({ clock })
-  writeDatastore(paths, [line.command(1, '2026-11-09T15:44:00Z', '/help')])
-  fs.mkdirSync(paths.bridge, { recursive: true })
-  const store = openStore({ paths, clock, log })
-  const state = openBridgeState({ paths, clock, log })
-  const commands = createCommands({ store, state, paths, ids: createIds(clock), log, clock, status: async () => 'status' })
-  atEnd(t, () => commands.stop())
-  // The bridge's outbox can't be written, as on a full disk: a file where its folder should be.
-  fs.writeFileSync(paths.bridgeOutbox, 'not a folder')
-  await commands.handle()
-  const failures = () => entries.filter(entry => entry.event === 'bridge.command_failed').map(entry => entry.failures)
-  assert.deepEqual(failures(), [1])
-  await clock.advance(5 * SECOND)
-  await commands.idle()
-  assert.deepEqual(failures(), [1, 2])
-  assert.equal(state.get().commandSeq, 0)
-  // The disk is back: the next try, 10 seconds later, writes the reply.
-  fs.rmSync(paths.bridgeOutbox)
-  await clock.advance(9 * SECOND)
-  assert.deepEqual(listHandOffs(paths.bridgeOutbox), [])
-  await clock.advance(SECOND)
-  await commands.idle()
-  assert.equal(listHandOffs(paths.bridgeOutbox).length, 1)
-  assert.equal(fs.existsSync(paths.outbox), false)
-  assert.equal(state.get().commandSeq, 1)
-  // Stopped, it tries nothing more.
-  await commands.stop()
-  assert.deepEqual(clock.sleeping(), [])
+  const last = readBridgeStatus(paths)
+  assert.deepEqual([last.channels, last.stoppedAt, last.writtenAt], [{ whatsapp: 'WhatsApp: stopped' }, last.writtenAt, last.writtenAt])
+  assert.notEqual(last.stoppedAt, null)
+  assert.deepEqual(fs.readdirSync(paths.bridge).filter(name => name.startsWith('.')), [])
 })
 
 test('bridge: the state records the first start, and keeps it', async t => {
@@ -393,23 +364,17 @@ test('bridge: the state records the first start, and keeps it', async t => {
   fs.mkdirSync(paths.bridge, { recursive: true })
   const clock = createFakeClock('2026-11-09T15:45:00Z')
   const { log } = createTestLog({ clock })
-  // On the very first start, commands already in the datastore count as handled.
-  const state = openBridgeState({ paths, clock, log, newestSeq: 12 })
-  assert.deepEqual(state.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: null, lastBackup: null, commandSeq: 12 })
+  const state = openBridgeState({ paths, clock, log })
+  assert.deepEqual(state.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: null, lastBackup: null })
   assert.equal(fs.statSync(paths.bridgeState).mode & 0o777, 0o600)
-  state.update({ ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, commandSeq: 14 })
+  state.update({ ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' } })
 
   clock.set('2026-11-12T08:00:00Z')
-  const again = openBridgeState({ paths, clock, log, newestSeq: 20 })
-  assert.deepEqual(again.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, lastBackup: null, commandSeq: 14 })
+  const again = openBridgeState({ paths, clock, log })
+  assert.deepEqual(again.get(), { firstStart: '2026-11-09T15:45:00Z', ownerChat: { jid: OWNER, at: '2026-11-09T15:46:00Z' }, lastBackup: null })
   // What it holds is checked, when read and when changed.
   assert.throws(() => again.update({ ownerChat: { jid: '' } }), /ownerChat must be null or/)
   assert.throws(() => again.update({ firstStart: 'yesterday' }), /firstStart must be a UTC time/)
-  assert.throws(() => again.update({ commandSeq: -1 }), /commandSeq must be a whole number/)
-  // A state written before the bridge answered commands starts from the newest line, and keeps it.
-  fs.writeFileSync(paths.bridgeState, '{"firstStart":"2026-11-09T15:45:00Z","ownerChat":null,"lastBackup":null}')
-  assert.equal(openBridgeState({ paths, clock, log, newestSeq: 20 }).get().commandSeq, 20)
-  assert.equal(JSON.parse(fs.readFileSync(paths.bridgeState, 'utf8')).commandSeq, 20)
   // A file that isn't a state stops the bridge, and the message says which.
   fs.writeFileSync(paths.bridgeState, '{"firstStart":')
   assert.throws(() => openBridgeState({ paths, clock, log }), new RegExp(`${paths.bridgeState} is not JSON`))

@@ -174,14 +174,13 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
     return { head: `${head}${edited}`, extra }
   }
 
-  // The line under a reply: what it quotes, and who sent that. A command is never shown,
-  // so a reply to one says only that. A reply to a line the index can't show as a message,
-  // which only a damaged datastore gives, shows the channel's preview if there is one.
+  // The line under a reply: what it quotes, and who sent that. A reply to a line the index can't
+  // show as a message, which only a damaged datastore gives, shows the channel's preview if there
+  // is one.
   function replyLine(line) {
     const preview = () => quote(line.quoted, cap, `the whole text is ${lineRef(line.seq)}`)
     if (line.replyTo !== undefined) {
       const target = index.get(line.replyTo)
-      if (target?.line.kind === 'command') return '↳ reply to a command'
       if (!target || index.current(line.replyTo) === undefined) {
         return line.quoted === undefined ? `↳ reply to #${line.replyTo}` : `↳ reply to #${line.replyTo}: ${preview()}`
       }

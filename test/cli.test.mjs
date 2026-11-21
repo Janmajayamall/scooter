@@ -35,6 +35,7 @@ test('cli: the CLI\'s commands, each with its side', () => {
     'build-image': 'host',
     pair: 'bridge',
     'email-check': 'bridge',
+    status: 'bridge',
     'backup-init': 'bridge',
     snapshots: 'bridge',
     check: 'bridge',

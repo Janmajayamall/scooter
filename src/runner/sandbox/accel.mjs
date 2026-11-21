@@ -1,8 +1,8 @@
 // How pi's VMs are accelerated: `AGENT_ACCEL`.
 //
 // - `auto`, the default, uses KVM when the runner can open `/dev/kvm` for reading and writing, and
-//   emulation otherwise. The runner says which at startup, `/status` shows it, and falling back to
-//   emulation tells the owner once (`src/runner/status.mjs`).
+//   emulation otherwise. The runner says which at startup, `scooter status` shows it, and falling
+//   back to emulation tells the owner once (`src/runner/status.mjs`).
 // - `kvm` and `emulation` force one. A forced KVM that can't be used stops the runner with an error
 //   that says how to enable it, rather than quietly using emulation, about ten times slower.
 // - `hvf`, Apple's hypervisor, is a value kept for macOS. On Linux it stops the runner

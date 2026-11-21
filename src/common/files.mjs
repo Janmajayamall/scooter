@@ -174,7 +174,8 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
 // `status.json` are written so. It is opened again, once. On tmpfs that nearly always finds the new
 // file; on ext4 the name can still lead to the old one, with no name left, for the moment the
 // rename takes, and the second look is refused as well. The window is microseconds, about
-// once a minute for the reader's file, only `/status` reads then, and a refusal is the safe side.
+// once a minute for the reader's file, only a status reads then, and a refusal is the safe side:
+// the bridge looks again a second later, and `scooter status` when it is run again.
 function openUntrusted(file, owner, again = true) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
   const refuse = why => Object.assign(new Error(`not read: ${why}`), { code: 'EUNTRUSTED' })

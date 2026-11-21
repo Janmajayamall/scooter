@@ -1,6 +1,6 @@
 // The email channel: the sender
 // check, the spool as the bridge takes it, the datastore line, the reader's environment and
-// supervision, `/status`, and `email-check`.
+// supervision, its status, and `email-check`.
 //
 // The tests from "The spool" on run the bridge with the email reader's stub (`support/mail-reader`),
 // which runs the real reader against a fake mailbox, and the wacli stub, not paired. Most of them
@@ -476,12 +476,11 @@ test('email: one too large to fetch, from the owner, is stored without its body,
   )
 })
 
-test('email: an email is never a command', async t => {
+test('email: an email is a message, whatever its text', async t => {
   const context = await setup(t)
   spool(context, { parsed: { text: '/status' } })
   await context.take()
   assert.deepEqual(context.lines().map(line => [line.kind, line.text]), [['message', '/status']])
-  assert.equal(context.bridge.state.get().commandSeq, 0)
 })
 
 test('email: mail that fails the sender check isn\'t stored; it is logged with its sender, reason and UID, and counted', async t => {
@@ -507,7 +506,7 @@ test('email: mail that fails the sender check isn\'t stored; it is logged with i
   assert.deepEqual(fs.readdirSync(context.paths.mailSpool), [])
 })
 
-test('email: /status says whether the reader is connected, when it last looked, and what was stored and skipped', async t => {
+test('email: its status says whether the reader is connected, when it last looked, and what was stored and skipped', async t => {
   const context = await setup(t)
   let line
   await waitFor(() => (line = context.channel.status()).startsWith('Email: connected, last checked'), 'the reader to connect')
@@ -524,10 +523,10 @@ test('email: /status says whether the reader is connected, when it last looked, 
 
   await context.bridge.stop()
   assert.equal(context.channel.status(), 'Email: stopped; 0 stored and 0 skipped in the last 24 hours.')
-  // In the reply to `/status` itself, beside WhatsApp's line.
-  const { statusText } = await import('../src/bridge/status.mjs')
-  const text = statusText({ now: context.clock.now(), settings: context.settings, paths: context.paths, channels: context.bridge.channels, index: context.bridge.store.index, backups: '' })
-  assert.match(text, /^WhatsApp: stopped\nEmail: stopped; /m)
+  // In what `scooter status` prints, beside WhatsApp's line, from the bridge's status.json.
+  const { readIndex, statusText } = await import('../src/bridge/status.mjs')
+  const text = statusText({ now: context.clock.now(), settings: context.settings, paths: context.paths, index: readIndex(context.paths) })
+  assert.match(text, /^WhatsApp: stopped\nEmail: stopped; 0 stored and 0 skipped in the last 24 hours\.$/m)
 })
 
 test('email: a folder the store can\'t take now stays, and is tried again after waits that grow', async t => {
@@ -739,7 +738,7 @@ test('email: every wacli call is still without the mailbox\'s password, with ema
   assert.ok(!wacliCalls.includes('EMAIL_'))
 })
 
-test('email: the reader is started again with backoff when it exits, and /status says so meanwhile', async t => {
+test('email: the reader is started again with backoff when it exits, and its status says so meanwhile', async t => {
   const context = await setup(t, { prepare: ({ reader }) => reader.set({ connectFails: true }) })
   await waitFor(() => context.events().includes('proc.exited'), 'the reader to exit')
   assert.equal(context.channel.status(), 'Email: the reader stopped, and starts again shortly; 0 stored and 0 skipped since the bridge started, 21:45.')

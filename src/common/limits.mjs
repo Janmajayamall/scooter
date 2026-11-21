@@ -51,9 +51,8 @@ const values = {
   // After `SEND_ATTEMPTS` failed tries of the same message, made while its channel was linked, the
   // entry no longer holds back the ones after it, and is given up on once one of theirs goes and
   // it fails again. Entries are sent in order, so one that can never go out would otherwise hold
-  // back every one after it, the replies to `/status` among them. The same waits space out
-  // the tries of a look at the outbox that failed, and of a reply to a command that couldn't be
-  // written.
+  // back every one after it. The same waits space out the tries of a look at the outbox that
+  // failed, and of a backup notice that couldn't be written.
   SEND_RETRY_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
   SEND_ATTEMPTS: 8,
   // Where wacli posts its webhooks, on loopback.
@@ -112,9 +111,9 @@ const values = {
   EMAIL_CHECK_COUNT: 5,
   EMAIL_CHECK_TIMEOUT: 2 * MINUTE,
   // The largest `state.json` or `status.json` of the runner's, or `state.json` of the email
-  // reader's, that the bridge reads for `/status`, and the largest `run.lock` it reads before
-  // a backup. They are a few kilobytes at most, written by another user, and the bridge reads
-  // them as root, as files that user controls.
+  // reader's, that the bridge or `scooter status` reads, and the largest `run.lock` the bridge
+  // reads before a backup. They are a few kilobytes at most, written by another user, and read as
+  // root, as files that user controls. The bridge's own `status.json` is read with the same bound.
   STATUS_FILE_MAX_BYTES: 4 * MB,
   // The largest model request the network policy reads.
   MODEL_REQUEST_MAX_BYTES: 50 * MB,
@@ -134,7 +133,7 @@ const values = {
   // as a backup lasts, so a restic that hung would stop Scooter for good. A first backup of years
   // of photos over a slow uplink can take hours; what it uploaded is used again by the next one.
   RESTIC_TIMEOUT: 6 * HOUR,
-  // The period `/status` counts over.
+  // The period `scooter status` counts over.
   STATUS_WINDOW: 24 * HOUR,
   // The longest line of the network log that a reader takes. A longer one is skipped and counted,
   // as a line that isn't one is. The policy writes lines of a few hundred bytes; the bound is what
@@ -149,7 +148,7 @@ const values = {
   // two more after, so the requests past the first are refused; refusals past the second are
   // counted, and the count written once, when the run ends. A run of pi makes a request a turn, a
   // few hundred at most in the longest run `agents.yaml` allows; a misled one could make tens of
-  // thousands, each a line the runner and `/status` read.
+  // thousands, each a line the runner and `scooter status` read.
   RUN_REQUESTS_MAX: 1000,
   RUN_REFUSALS_LOGGED_MAX: 100,
   // The most of each memory file, `preferences.md` and `needs-review.md`, that goes into the
