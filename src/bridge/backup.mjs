@@ -44,14 +44,16 @@ const TAG = 'scooter'
 const GROUP = ['--group-by', 'host,tags']
 
 // What a backup holds, and what it leaves out: wacli's cache; what the runner's clean-up set aside
-// and is removing; and the bridge's `status.json`, which says how the bridge that wrote it is
-// doing, and is written while a backup runs. The cache restic keeps in the bridge's folder marks itself as
-// one, and `--exclude-caches` leaves it out. `exchange/locks/` isn't held: a lock restored would
-// keep the runner, or the backups, waiting for a run or a backup that isn't there.
+// and is removing; and the bridge's status, which says how the bridge that wrote it is doing, and
+// is written while a backup runs. The status is left out as its folder, `bridge/status/`, so that
+// the temporary file each write makes beside it is left out too. The cache restic keeps in the
+// bridge's folder marks itself as one, and `--exclude-caches` leaves it out. `exchange/locks/`
+// isn't held: a lock restored would keep the runner, or the backups, waiting for a run or a backup
+// that isn't there.
 export function backupSources(paths) {
   return {
     include: [paths.datastore, paths.agents, paths.wacli, paths.bridge, paths.mail, paths.networkLogDir, paths.outbox],
-    exclude: [paths.wacliCache, paths.agentsDiscarded, paths.bridgeStatus],
+    exclude: [paths.wacliCache, paths.agentsDiscarded, paths.bridgeStatusDir],
   }
 }
 
@@ -74,9 +76,10 @@ const cut = text => {
   return chars.length <= limits.REASON_MAX_CHARS ? chars.join('') : `${chars.slice(0, limits.REASON_MAX_CHARS - 1).join('')}…`
 }
 
-// A step of restic that failed. `reason` is for the owner: restic's own words when it gave any, in
-// the notice and the bridge's state, and never in the log, which has the step and the
-// exit code, as the runner does with OpenRouter's. `snapshot` is the one saved before it failed.
+// A step of restic that failed. `reason` is for the owner: restic's own words when it gave any,
+// with the secrets hidden (`createRestic`), in the notice and the bridge's state, and never in the
+// log, which has the step and the exit code, as the runner does with OpenRouter's. `snapshot` is
+// the one saved before it failed. `result` is what the `restic` of `createRestic` resolved with.
 export class ResticError extends Error {
   constructor(step, result, { snapshot = null, reason = null } = {}) {
     super(`restic ${step} failed`)
@@ -103,22 +106,27 @@ function duration(ms) {
 function reasonOf(step, result) {
   if (result.timedOut) return `restic ${step} took longer than ${duration(limits.RESTIC_TIMEOUT)}, and was stopped`
   if (Object.hasOwn(RESTIC_CODES, result.code)) return RESTIC_CODES[result.code]
-  const said = lastLine(result.stderr)
+  const said = lastLine(result.hide(result.stderr))
   return said === '' ? `restic ${step} exited with code ${result.code}` : `restic ${step}: ${said}`
 }
 
 // Returns `restic(args, options)`, which runs restic with the backup settings, `{ repository,
-// password, env }`, and resolves with what `proc.run` does. Options: `cache`, true to keep restic's
-// cache in the bridge's folder, as the nightly backup does, and false for none, as the commands
-// run at a terminal do; `timeZone`, restic's `TZ`, UTC but where the owner reads the times; and
-// `timeout` and `signal`, as for `proc.run`.
+// password, env }`, and resolves with what `proc.run` does, and `hide` beside it. Options: `cache`,
+// true to keep restic's cache in the bridge's folder, as the nightly backup does, and false for
+// none, as the commands run at a terminal do; `timeZone`, restic's `TZ`, UTC but where the owner
+// reads the times; and `timeout` and `signal`, as for `proc.run`.
 //
 // restic needs a cache folder or none: without a home, it fails before it does anything.
 //
-// What restic prints, on stdout and stderr, comes back with every secret of the backup settings in
-// it, the password and the bucket's keys, replaced by `…` (`SECRET_SETTINGS`). That is all of
-// restic's that is kept or shown: the reason a backup failed, in the bridge's state, its
-// `status.json` and the notice, and what the CLI commands print.
+// `stdout` and `stderr` are as restic printed them, since the code reads them: the snapshot's ID
+// in what `backup` prints, and the list `snapshots --json` gives. `hide(text)` returns `text` with
+// every secret of the backup settings in it, the password and the bucket's keys
+// (`SECRET_SETTINGS`), replaced by `…`, and is used on all of restic's words that are kept or
+// shown: the reason a step failed (`ResticError`), which the bridge's state, its status and the
+// notice hold, and what the CLI commands print. *Why not hide them before anything reads them:* a
+// secret can be part of what restic ordinarily prints, such as a password that is a word of the
+// data folder's path or a few digits of a snapshot's ID, and the code would then act on what was
+// cut: a backup would fail for want of its ID, and a restore go to another folder.
 export function createRestic({ backup, paths, proc }) {
   const secrets = [backup.password, ...SECRET_SETTINGS.map(name => backup.env[name])].filter(value => typeof value === 'string' && value !== '')
   // The longest first, so that one secret inside another is hidden whole.
@@ -128,7 +136,7 @@ export function createRestic({ backup, paths, proc }) {
     const env = { RESTIC_REPOSITORY: backup.repository, RESTIC_PASSWORD: backup.password, ...backup.env, TMPDIR: os.tmpdir(), TZ: timeZone }
     const where = cache ? ['--cache-dir', paths.backupCache] : ['--no-cache']
     const result = await proc.run(RESTIC, [...where, ...args], { env, timeout, signal })
-    return { ...result, stdout: hide(result.stdout), stderr: hide(result.stderr) }
+    return { ...result, hide }
   }
 }
 
@@ -140,8 +148,8 @@ const SECRET_SETTINGS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'B2_ACCOU
 // The operations
 
 // `init`: makes the repository, unless it is there. Resolves with `{ created, said }`, `said` being
-// what `restic init` printed, and throws a `ResticError` when restic fails. `restic cat config`
-// answers 10 for a repository that isn't there.
+// what `restic init` printed, with the secrets hidden, and throws a `ResticError` when restic
+// fails. `restic cat config` answers 10 for a repository that isn't there.
 export async function initRepository({ backup, paths, proc }) {
   const restic = createRestic({ backup, paths, proc })
   const config = await restic(['cat', 'config'])
@@ -149,7 +157,7 @@ export async function initRepository({ backup, paths, proc }) {
   if (config.code !== 10) throw new ResticError('cat config', config)
   const made = await restic(['init'])
   if (made.code !== 0) throw new ResticError('init', made)
-  return { created: true, said: made.stdout }
+  return { created: true, said: made.hide(made.stdout) }
 }
 
 // `run`, restic's part of the nightly backup: `restic backup` of the folders of `backupSources` that exist,
@@ -250,7 +258,8 @@ const USERS = ['scooter-wacli', 'scooter-runner', 'scooter-mail']
 // from, limited to the folders it holds, so the folders between, `runner/` and `exchange/`, get the
 // owners and modes they had then too: a restore of each folder on its own would make each new one
 // root's, 0700, which the runner can't enter. Resolves with `{ id, time, root, said }`, `root` being
-// where the data folder's folders went.
+// where the data folder's folders went, and `said` what `restic restore` printed, with the secrets
+// hidden.
 export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest', force = false }) {
   // restic gives a file whose owner's name isn't a user here to root, and says nothing: the runner
   // couldn't then read the agent's folder, nor wacli its own. That is a restore before `setup` on
@@ -316,7 +325,7 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
   if (restored.code !== 0) throw new ResticError('restore', restored)
   // restic writes the time with nanoseconds and the zone it ran in.
   const time = Date.parse(shot.time)
-  return { id: shot.id.slice(0, 8), time: Number.isFinite(time) ? time : null, root, said: restored.stdout }
+  return { id: shot.id.slice(0, 8), time: Number.isFinite(time) ? time : null, root, said: restored.hide(restored.stdout) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -350,6 +359,10 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
   // whose notice is being written, which a request no longer joins.
   const jobs = new Set()
   let loop = null
+  // While a backup has the writers stopped, a promise that resolves once they start again, or the
+  // backup ends without starting them; null otherwise. A notice of an earlier backup, being tried
+  // again, waits for it, so that nothing is written in `bridge/outbox/` while restic reads.
+  let quietPeriod = null
 
   // `exchange/locks/` is the runner's, and the bridge writes its lock there as root, so it
   // uses the folder only while it is the runner's and not a link.
@@ -426,6 +439,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
   async function perform(job) {
     let locked = false
     let quiet = false
+    let endQuiet = () => {}
     try {
       // 1. Its own lock first, then the other's.
       takeBackupLock()
@@ -434,6 +448,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
       if (!(await waitForRun(job))) return { stopped: true }
       // 3. Nothing writes what the backup holds meanwhile.
       quiet = true
+      quietPeriod = new Promise(resolve => (endQuiet = resolve))
       await quiesce()
       log.info('backup.writers_stopped')
       // 4.
@@ -457,14 +472,18 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
           onFatal(error)
         }
       }
+      quietPeriod = null
+      endQuiet()
       if (locked) releaseBackupLock()
     }
   }
 
   // Writes an outbox entry of the bridge's, into its own outbox, trying again after a wait
-  // that doubles when it can't, until the bridge stops.
+  // that doubles when it can't, until the bridge stops. A try waits while a later backup has the
+  // writers stopped.
   async function send(entry) {
     for (let failures = 1; ; failures++) {
+      while (quietPeriod !== null) await quietPeriod
       try {
         const id = await writeOutboxEntry({ paths, ids, entry, outbox: paths.bridgeOutbox })
         log.info('backup.told', { entry: id })
@@ -651,8 +670,8 @@ export async function runSnapshots({ args = [], settings, stdout, stderr, clock 
   if (stop !== null) return stop
   const { paths, proc: run } = commandContext({ settings, clock, log, proc })
   const result = await createRestic({ backup: settings.backup, paths, proc: run })(['snapshots', '--host', HOST, '--tag', TAG], { timeZone: settings.timeZone })
-  stdout.write(result.stdout)
-  stderr.write(result.stderr)
+  stdout.write(result.hide(result.stdout))
+  stderr.write(result.hide(result.stderr))
   return result.code === 0 ? 0 : failed('snapshots', new ResticError('snapshots', result), stderr)
 }
 
@@ -662,8 +681,8 @@ export async function runCheck({ args = [], settings, stdout, stderr, clock = sy
   if (stop !== null) return stop
   const { paths, proc: run } = commandContext({ settings, clock, log, proc })
   const result = await createRestic({ backup: settings.backup, paths, proc: run })(['check'])
-  stdout.write(result.stdout)
-  stderr.write(result.stderr)
+  stdout.write(result.hide(result.stdout))
+  stderr.write(result.hide(result.stderr))
   return result.code === 0 ? 0 : failed('check', new ResticError('check', result), stderr)
 }
 

@@ -19,7 +19,8 @@
 //                     and one with `bridgeSide: true` that the copy failed on the bridge's side,
 //                     such as on a full disk, which from a channel that keeps its messages until
 //                     they are stored stores nothing of the message now.
-//   status()          one line for `scooter status`, which the bridge writes to `bridge/status.json`
+//   status()          one line for `scooter status`, which the bridge writes to
+//                     `bridge/status/status.json`
 //
 // And for delivery:
 //

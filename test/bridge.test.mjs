@@ -318,7 +318,7 @@ test('bridge: a text such as /status is filed as any message, and nothing answer
   assert.match(out.join(''), /^Messages: 0 pending, 0 retrying, 0 failed\.$/m)
 })
 
-test('bridge: it writes bridge/status.json at its start, whenever a channel\'s line or the backups\' changes, and at its stop', async t => {
+test('bridge: it writes bridge/status/status.json at its start, whenever a channel\'s line or the backups\' changes, and at its stop', async t => {
   const root = makeTestDir(t)
   const stub = createWacliStub(t, root)
   stub.fixtures({ paired: false, messages: [] })
@@ -341,6 +341,8 @@ test('bridge: it writes bridge/status.json at its start, whenever a channel\'s l
     backups: 'Backups: off, because RESTIC_REPOSITORY isn\'t set in bridge.env.',
   })
   assert.equal(fs.statSync(paths.bridgeStatus).mode & 0o777, 0o600)
+  // In a folder of its own, which backups leave out whole.
+  assert.equal(fs.statSync(paths.bridgeStatusDir).mode & 0o777, 0o700)
   // Nothing changes: nothing is written.
   const before = fs.statSync(paths.bridgeStatus).ino
   for (let n = 0; n < 5; n++) await look()
@@ -356,6 +358,7 @@ test('bridge: it writes bridge/status.json at its start, whenever a channel\'s l
   assert.deepEqual([last.channels, last.stoppedAt, last.writtenAt], [{ whatsapp: 'WhatsApp: stopped' }, last.writtenAt, last.writtenAt])
   assert.notEqual(last.stoppedAt, null)
   assert.deepEqual(fs.readdirSync(paths.bridge).filter(name => name.startsWith('.')), [])
+  assert.deepEqual(fs.readdirSync(paths.bridgeStatusDir), ['status.json'])
 })
 
 test('bridge: the state records the first start, and keeps it', async t => {

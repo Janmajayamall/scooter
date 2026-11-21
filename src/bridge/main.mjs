@@ -15,8 +15,8 @@
 //    `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp.
 // 6. It starts the channels.
 // 7. It starts delivery, which first sends what was left in the outbox, from where a crash cut it
-//    short, the backups' schedule, and the writing of `bridge/status.json`, which `scooter status`
-//    reads (`status.mjs`).
+//    short, the backups' schedule, and the writing of `bridge/status/status.json`, which
+//    `scooter status` reads (`status.mjs`).
 
 import fs from 'node:fs'
 import { checkOwnFolder, createIds, ensureDir } from '../common/files.mjs'

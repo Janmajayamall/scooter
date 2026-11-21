@@ -278,7 +278,7 @@ test('status: the runner\'s files, and the folders they are in, are read without
   assert.match(linked, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
 })
 
-test('status: a control character in what another user wrote, such as a reason, is printed as U+FFFD, and can\'t start a line of its own', t => {
+test('status: a control or format character, or a line separator, in what another user wrote, such as a reason, is printed as U+FFFD, and can\'t start a line of its own', t => {
   const { status, write, paths } = setup(t)
   const escape = '\u001b]2;owned\u0007\u001b[2J'
   write(paths.bridgeStatus, { ...BRIDGE, backups: `Backups: the last, 03:30, failed (restic backup: ${escape}).` })
@@ -292,6 +292,10 @@ test('status: a control character in what another user wrote, such as a reason, 
   assert.ok(text.includes(`Runs are paused since 21:18: fine\uFFFDlifelog: last run 21:19, ok, 9 messages, 1 s.\uFFFD${shown}. Next try 21:48.`))
   assert.ok(text.includes(`Backfill x${shown}: at #1 of #3.`))
   assert.ok(text.endsWith(`Backups: the last, 03:30, failed (restic backup: ${shown}).`))
+  // A format character, such as the one that shows the rest of a line right to left, and the line
+  // and paragraph separators.
+  write(paths.agentState('lifelog'), { ...STATE, paused: { ...STATE.paused, reason: 'a\u202Eb\u2066c\u200Fd\u2028e\u2029f\uFEFFg' } })
+  assert.ok(status().includes('Runs are paused since 21:18: a\uFFFDb\uFFFDc\uFFFDd\uFFFDe\uFFFDf\uFFFDg. Next try 21:48.'))
 })
 
 test('status: the datastore is read without changing it, part of a line a crash left included, and a damaged one is said to be so', t => {
@@ -443,18 +447,46 @@ test('status: the bridge writes status.json at its start, whenever what it says 
   assert.deepEqual(readBridgeStatus(paths).channels, part.channels)
   assert.ok(entries.some(entry => entry.event === 'bridge.status_written'))
 
-  // A render that throws is logged, and the file kept.
+  // A render that throws is logged once, and the file kept; once it works again, that is logged,
+  // and its lines written.
+  const kept = readBridgeStatus(paths)
   part = null
-  await clock.advance(SECOND)
-  assert.ok(entries.some(entry => entry.event === 'bridge.status_not_rendered'))
+  await clock.advance(3 * SECOND)
+  assert.equal(entries.filter(entry => entry.event === 'bridge.status_not_rendered').length, 1)
+  assert.deepEqual(readBridgeStatus(paths), kept)
   part = { channels: { whatsapp: 'WhatsApp: stopped' }, backups: 'Backups: none yet. Next Tue 10 Nov 03:30.' }
+  await clock.advance(SECOND)
+  assert.ok(entries.some(entry => entry.event === 'bridge.status_rendered'))
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:42Z', stoppedAt: null, ...part })
 
   // Stopped: no more looks, and once more, with when.
   await clock.advance(SECOND)
   await file.stop()
   assert.deepEqual(clock.sleeping(), [])
-  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:40Z', stoppedAt: '2026-11-09T15:50:40Z', ...part })
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:30Z', writtenAt: '2026-11-09T15:50:43Z', stoppedAt: '2026-11-09T15:50:43Z', ...part })
+
+  // A render that throws when the bridge stops: the lines it last rendered, saying it stopped.
+  let broken = false
+  const again = createStatusFile({
+    paths,
+    clock,
+    log,
+    render: () => {
+      if (broken) throw new Error('no lines')
+      return part
+    },
+  })
+  again.start()
+  await clock.advance(SECOND)
+  broken = true
+  await again.stop()
+  assert.deepEqual(readBridgeStatus(paths), { startedAt: '2026-11-09T15:50:43Z', writtenAt: '2026-11-09T15:50:44Z', stoppedAt: '2026-11-09T15:50:44Z', ...part })
+
   // What isn't a status is never written.
   assert.throws(() => writeBridgeStatus(paths, { ...BRIDGE, backups: '' }), /not a bridge status: backups must be a line/)
-  assert.deepEqual(fs.readdirSync(paths.bridge), ['status.json'])
+  // The file, and the temporary file of each write, are in a folder of their own, which backups
+  // leave out whole.
+  assert.deepEqual(fs.readdirSync(paths.bridge), ['status'])
+  assert.deepEqual(fs.readdirSync(paths.bridgeStatusDir), ['status.json'])
+  assert.equal(fs.statSync(paths.bridgeStatusDir).mode & 0o777, 0o700)
 })

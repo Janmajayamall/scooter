@@ -5,7 +5,7 @@
 // stopped, and it changes nothing: it takes no lock and no socket, and writes no file.
 //
 // - **The bridge's part**, each channel's line and the backups' line, comes from
-//   `bridge/status.json`, which the running bridge writes (`createStatusFile`):
+//   `bridge/status/status.json`, which the running bridge writes (`createStatusFile`):
 //
 //     {
 //       "startedAt": "2026-11-09T06:00:00Z",
@@ -32,8 +32,9 @@
 // without following a link, without waiting on a FIFO, and only if it is a regular file of a
 // bounded size (`readUntrustedFile`), and only in a folder that is one, not a link to one
 // (`checkOwnFolder`): what isn't is said to be unreadable, and the rest is reported. Every control
-// character in the report is printed as U+FFFD, so that nothing the runner's user wrote, such as a
-// reason, can act on the terminal of the root who reads it.
+// character in the report, every format character and the line and paragraph separators, are
+// printed as U+FFFD, so that nothing the runner's user wrote, such as a reason, can act on the
+// terminal of the root who reads it, or change how it shows the rest of a line.
 //
 // Times are in `SCOOTER_TZ`. The report is a function of the files and the clock, so a test can
 // give it both.
@@ -42,7 +43,7 @@ import { AgentStateError, readAgentState } from '../common/agentstate.mjs'
 import { createIndex } from '../common/datastore/index.mjs'
 import { DatastoreError, SOURCES } from '../common/datastore/line.mjs'
 import { createReader } from '../common/datastore/reader.mjs'
-import { checkOwnFolder, readUntrustedFile, writeFileAtomic } from '../common/files.mjs'
+import { checkOwnFolder, ensureDir, readUntrustedFile, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { scanNetworkLog } from '../common/netlog.mjs'
@@ -62,9 +63,10 @@ const isLine = value => typeof value === 'string' && value !== ''
 const isTime = value => parseIsoSeconds(value) !== null
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const pad = number => String(number).padStart(2, '0')
-// A line of the report as it is printed: every control character, a line break among them, as
-// U+FFFD.
-const shown = text => text.replace(/\p{Cc}/gu, '�')
+// A line of the report as it is printed: every control character, a line break among them, every
+// format character, such as the marks that turn text right to left, and the line and paragraph
+// separators, as U+FFFD.
+const shown = text => text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '�')
 
 // ---------------------------------------------------------------------------------------------
 // The bridge's `status.json`
@@ -121,11 +123,14 @@ export function readBridgeStatus(paths) {
   return status
 }
 
-// Writes the bridge's `status.json`, atomically, mode 0600, in the bridge's own folder. Throws if
-// the status isn't well formed, before anything is written.
+// Writes the bridge's `status.json`, atomically, mode 0600, in `bridge/status/`, a folder of its
+// own in the bridge's, which it makes, 0700, if it is missing. The temporary file of the write is
+// made there too, so backups, which leave that folder out, never meet it. Throws if the status
+// isn't well formed, before anything is written.
 export function writeBridgeStatus(paths, status) {
   const problems = checkBridgeStatus(status)
   if (problems.length > 0) throw new Error(`not a bridge status: ${problems.join('; ')}`)
+  ensureDir(paths.bridgeStatusDir, { mode: 0o700 })
   writeFileAtomic(paths.bridgeStatus, `${JSON.stringify(status)}\n`, { mode: 0o600 })
 }
 
@@ -136,27 +141,35 @@ export function writeBridgeStatus(paths, status) {
 // `start()` writes the file, then looks every `POLL_INTERVAL`, and writes it whenever what `render`
 // returns differs from what it last wrote. `stop()` stops looking, and writes the file once more,
 // with `stoppedAt`. A write that fails, as on a full disk, is logged once, and tried again at the
-// next look: the file stays as it was meanwhile, and says when it was written.
+// next look: the file stays as it was meanwhile, and says when it was written. A `render` that
+// throws is logged once too, and nothing is written until it works again, but at the stop, which
+// writes the lines it last rendered, with `stoppedAt`.
 export function createStatusFile({ paths, clock = systemClock, log, render }) {
   const startedAt = isoSeconds(clock.now())
   const stopping = new AbortController()
   // What was last written, but for `writtenAt`, as JSON.
   let written = null
   let failing = false
+  // What `render` last returned, and whether it throws.
+  let rendered = null
+  let unrendered = false
   let loop = null
   let stopped = null
 
   // Never throws: what goes wrong is logged, and the next look tries again.
   function write(stoppedAt = null) {
     const now = clock.now()
-    let status
     try {
       const { channels, backups } = render(now)
-      status = { startedAt, writtenAt: isoSeconds(now), stoppedAt, channels, backups }
+      rendered = { channels, backups }
+      if (unrendered) log.info('bridge.status_rendered')
+      unrendered = false
     } catch (error) {
-      log.error('bridge.status_not_rendered', errorFields(error))
-      return
+      if (!unrendered) log.error('bridge.status_not_rendered', errorFields(error))
+      unrendered = true
+      if (stoppedAt === null || rendered === null) return
     }
+    const status = { startedAt, writtenAt: isoSeconds(now), stoppedAt, ...rendered }
     const same = JSON.stringify({ ...status, writtenAt: null })
     if (same === written) return
     try {
