@@ -1,4 +1,4 @@
-// Intake (5.2 step 6 of DESIGN.md; section 10, "Intake"): records from a channel become datastore
+// Intake: records from a channel become datastore
 // lines, with their attachments. The core is driven here with a fake channel; the WhatsApp module's
 // own steps are in whatsapp.test.mjs.
 
@@ -361,7 +361,7 @@ test('intake: logs say what was stored, never what it said', async t => {
   assert.ok(!text.includes('Sam'), text)
 })
 
-test('intake: a record that fails for a reason of the bridge\'s, such as a bug, is for its channel to hand over again, and the next one is stored (D179)', async t => {
+test('intake: a record that fails for a reason of the bridge\'s, such as a bug, is for its channel to hand over again, and the next one is stored', async t => {
   const { whatsapp, store, lines, entries, fatal } = setup(t)
   const append = store.append
   const mock = t.mock.method(store, 'append', async () => {

@@ -7,8 +7,8 @@
 # - QEMU and the tools build-image needs: cpio, lz4 and e2fsprogs.
 # - Scooter's three users, at fixed uids, so that the files of the data volume are theirs in every
 #   container.
-# - The data folder, /data, with the owners and modes of 3.2: a new volume mounted there starts as
-#   a copy of it.
+# - The data folder, /data, with its folders' owners and modes: a new volume mounted there starts
+#   as a copy of it.
 # - The app, with its dependencies installed without their install scripts. pi isn't here: it is in
 #   the VM image, which build-image builds into the data volume.
 
@@ -25,7 +25,7 @@ ARG RESTIC_VERSION=0.19.1
 ARG RESTIC_SHA256_AMD64=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
 ARG RESTIC_SHA256_ARM64=a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
 
-# The packages of 8.3, QEMU for this architecture, and qemu-utils, whose qemu-img Gondolin runs.
+# The runtime's packages, QEMU for this architecture, and qemu-utils, whose qemu-img Gondolin runs.
 RUN set -eu; \
     case "$TARGETARCH" in \
       amd64) qemu=qemu-system-x86 ;; \
@@ -52,8 +52,8 @@ RUN set -eu; \
 
 COPY --from=wacli /go/bin/wacli /usr/local/bin/wacli
 
-# Scooter's users, without a login shell or a home, as `setup` makes them natively, at the
-# uids of 3.2.
+# Scooter's users, without a login shell or a home, as `setup` makes them natively, at their
+# fixed uids.
 RUN set -eu; \
     for user in scooter-wacli:10001 scooter-runner:10002 scooter-mail:10003; do \
       name="${user%%:*}"; id="${user##*:}"; \
@@ -61,7 +61,7 @@ RUN set -eu; \
       useradd --system --uid "$id" --gid "$id" --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --comment Scooter "$name"; \
     done
 
-# The data folder, with the owners and modes of 3.2, as `setup` makes it natively (`dataFolders`
+# The data folder, with its folders' owners and modes, as `setup` makes it natively (`dataFolders`
 # in src/ops/setup.mjs, which a test holds this list to), and the config folder's mount point.
 RUN set -eu; \
     install -d -o root -g root -m 0755 /data; \

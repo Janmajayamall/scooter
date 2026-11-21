@@ -1,10 +1,10 @@
 // The VM image: the build file and its pin of pi, what `build-image`
-// records about an image and how it builds one, and the runner's check at startup (section 10,
-// "Sandbox": a missing image, or one built for another pi version, stops the runner).
+// records about an image and how it builds one, and the runner's check at startup:
+// a missing image, or one built for another pi version, stops the runner.
 //
 // The builds here are made by a fake builder, which writes a small image of the shape Gondolin
 // writes, and Alpine's index comes from a fake `fetch`. The real build needs the network, Docker
-// and minutes; `docs/DECISIONS.md` says when it was run.
+// and minutes.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -85,8 +85,7 @@ test('image: the build file pins pi, installed without its scripts, and says not
   assert.throws(() => pin(['npm install --global --ignore-scripts false @earendil-works/pi-coding-agent@1.5.2']), /no other word/)
   assert.equal(pin(['npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.5.2']), '1.5.2')
 
-  // pi named again, with or without a version, as by a second install (the review of milestone 7,
-  // smaller point 4), or in a path.
+  // pi named again, with or without a version, as by a second install, or in a path.
   assert.throws(() => pin([install('1.5.2'), 'npm install --global @earendil-works/pi-coding-agent']), /named more than once/)
   assert.throws(() => pin([install('1.5.2'), 'ls /usr/local/lib/node_modules/@earendil-works/pi-coding-agent/']), /named more than once/)
   assert.throws(() => pin(['npm install --global --ignore-scripts @earendil-works/pi-coding-agent']), /must pin pi to an exact version/)

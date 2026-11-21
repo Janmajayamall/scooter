@@ -19,7 +19,7 @@ import {
   startVm,
 } from './vm.mjs'
 
-// The sessions run with the paths of a Docker install, so the fixtures show the design's own
+// The sessions run with the paths of a Docker install, so the fixtures show Scooter's own
 // paths and don't change from one machine to the next.
 const GUEST = { agent: '/data/agents/lifelog', datastore: '/data/datastore' }
 const DAY = `${GUEST.datastore}/2026/11/09`

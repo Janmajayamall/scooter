@@ -1,4 +1,4 @@
-// `AGENT_ACCEL` (6.6 of DESIGN.md; section 10, "Sandbox"): `auto` picks the fastest accelerator
+// `AGENT_ACCEL`: `auto` picks the fastest accelerator
 // there is and says which; a forced one that isn't there stops the runner with an error that says
 // how to enable it. The device is given to `pickAccelerator`, so the cases run without KVM.
 

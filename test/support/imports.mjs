@@ -1,4 +1,4 @@
-// The import rules of section 4.2 of ARCHITECTURE.md, as a check over source text.
+// The import rules between the code's layers, as a check over source text.
 //
 // `checkImportRules` takes the files under `src/` and returns every broken rule as a sentence.
 // `test/imports.test.mjs` runs it over the real tree, and over small made-up trees to show that it
@@ -189,7 +189,7 @@ const RUNNER_CONFIG = 'src/runner/config.mjs'
 // What `src/mail` may import from `src/common` (rule 3).
 const MAIL_COMMON = ['src/common/files.mjs', 'src/common/limits.mjs', 'src/common/log.mjs']
 
-// Which folders of `src/` each folder may import from, itself included (the diagram of 4.2).
+// Which folders of `src/` each folder may import from, itself included.
 const MAY_IMPORT = {
   common: ['common'],
   bridge: ['bridge', 'common'],

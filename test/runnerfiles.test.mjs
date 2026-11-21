@@ -1,5 +1,5 @@
-// The formats the runner shares, and the sandbox interface (6.6;
-// ARCHITECTURE.md 2.7): `status.json` and its reader for `/status`, and the spec a sandbox takes.
+// The formats the runner shares, and the sandbox interface:
+// `status.json` and its reader for `/status`, and the spec a sandbox takes.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

@@ -1,4 +1,4 @@
-// The real sandbox (section 10 of DESIGN.md, "Sandbox"; 6.6, 6.12): a Gondolin VM for each run,
+// The real sandbox: a Gondolin VM for each run,
 // booted from the built image, with the mounts, the environment, the network and the limits of
 // `src/runner/sandbox/gondolin.mjs`. And the milestone's end to end: one batch through the real
 // sandbox, with the scripted fake model in place of OpenRouter.
@@ -71,7 +71,7 @@ function prepare(t, settings = {}) {
   return { root, paths, settings: config, log, entries, clock: systemClock }
 }
 
-// A spec for a command, with the mounts of 6.6 and the environment of `env`.
+// A spec for a command, with a run's mounts and the environment of `env`.
 function specOf(paths, argv, { env = {}, timeoutMs = 120_000, cwd = paths.agentDir('lifelog'), mounts = piMounts(paths, 'lifelog') } = {}) {
   return {
     argv,
@@ -136,7 +136,6 @@ test("sandbox: doctor's boot check boots a VM with the runner's accelerator, in 
 })
 
 test("sandbox: doctor's boot check, stopped during the boot, closes its VM and removes its folder; with a TMPDIR too long for Gondolin's sockets it boots in /tmp", options, async t => {
-  // The review of milestone 13, smaller points 2 and 3.
   const prepared = prepare(t)
   await linkTestImage(prepared.paths)
   keepEnvironment(t)

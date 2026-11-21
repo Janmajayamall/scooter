@@ -11,7 +11,7 @@ import { makePaths } from '../src/common/paths.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
-// The four examples of 5.3.
+// Four example entries.
 const EXAMPLES = [
   { type: 'text', by: 'lifelog', text: 'Blue Tokai, ₹450 at 12:40: work or personal?', replyTo: 1042 },
   { type: 'text', by: 'lifelog', text: 'Logged the run and the coffee.', about: 1061 },
@@ -21,7 +21,7 @@ const EXAMPLES = [
 
 const modeOf = file => fs.statSync(file).mode & 0o7777
 
-test('outbox: the examples of 5.3 are entries', () => {
+test('outbox: the four examples are entries', () => {
   for (const entry of EXAMPLES) assert.deepEqual(checkOutboxEntry(entry), [], JSON.stringify(entry))
 })
 

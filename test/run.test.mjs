@@ -1,4 +1,4 @@
-// One run, from the lock to the state (6.6 to 6.8 of DESIGN.md; section 10, "Runner"), through the
+// One run, from the lock to the state, through the
 // fake sandbox and the pi stub: what pi is given, what it leaves, what is committed and sent, and
 // what the state says afterwards.
 
@@ -69,7 +69,7 @@ async function runNext(runner, clock) {
   return runner.tick()
 }
 
-test('run: the sandbox gets pi\'s command, the mounts of 6.6 with sessions/ hidden, its environment and the network policy', async t => {
+test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its environment and the network policy', async t => {
   const { runner, clock, sandbox, paths } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
   fs.writeFileSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
   await runNext(runner, clock)
@@ -115,7 +115,7 @@ test('run: the sandbox gets pi\'s command, the mounts of 6.6 with sessions/ hidd
   ])
   assert.match(spec.argv.at(-1), /^\[scooter\] Now: Monday 9 November 2026, 21:20 \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
 
-  // The environment of 6.6 and nothing else, with a placeholder where the key would be.
+  // pi's environment and nothing else, with a placeholder where the key would be.
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
   assert.deepEqual({ ...env, OPENROUTER_API_KEY: undefined }, {
     PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',

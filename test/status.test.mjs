@@ -1,4 +1,4 @@
-// `/status` (5.4 of DESIGN.md; section 10, "Time" for `/status`): what the bridge says about each
+// `/status`: what the bridge says about each
 // channel, the newest message, the runner and its agent, the network log and the backups, from the
 // files it can read, with times in `SCOOTER_TZ`; and what it says when the runner hasn't written
 // them yet, or they can't be read.
@@ -137,7 +137,7 @@ test('status: the runner\'s settings, the agent\'s runs, its counts and the netw
   )
 })
 
-test('status: a runner that waits before it goes on, after stopping on an error, says until when and why, and nothing once the wait is over (D229)', t => {
+test('status: a runner that waits before it goes on, after stopping on an error, says until when and why, and nothing once the wait is over', t => {
   const { status, write, paths } = setup(t)
   const runnerLines = () => status().split('\n').filter(text => text.startsWith('Runner') || text.startsWith('The runner'))
   write(paths.runnerStatus, { ...STATUS, startedAt: '2026-11-09T15:50:00Z', restart: { stops: 3, until: '2026-11-09T16:20:00Z', reason: 'ENOSPC' } })

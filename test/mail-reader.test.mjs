@@ -1,4 +1,4 @@
-// The email reader (5.6 of DESIGN.md; section 10, "Email"): against a fake mailbox, headers first
+// The email reader: against a fake mailbox, headers first
 // and whole messages only from the owner's addresses, the `n:*` quirk, IDLE with the periodic look,
 // errors, the position across restarts, nothing imported the first time, a `UIDVALIDITY` change,
 // and the spool folders it writes.

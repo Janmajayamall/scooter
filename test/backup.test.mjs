@@ -1,4 +1,4 @@
-// Backups (5.5 of DESIGN.md; section 10, "Backups"): the lock coordination with a restic stub, a
+// Backups: the lock coordination with a restic stub, a
 // backup that waits for a run to finish and goes ahead once `run.lock` is 2 minutes past its time,
 // and a leftover `backup.lock` removed at startup; restic's arguments and environment; the
 // schedule; the replies, the notices and `/status`; the commands; and, when restic is installed, a
@@ -267,7 +267,7 @@ test('backups: a leftover backup.lock is removed when the bridge starts, and a b
 // ---------------------------------------------------------------------------------------------
 // restic's command lines and environment
 
-test('backups: restic backs up the folders of 5.5, leaves out the caches and what is being removed, forgets by the retention, and gets only the backup settings', async t => {
+test('backups: restic backs up the folders a backup holds, leaves out the caches and what is being removed, forgets by the retention, and gets only the backup settings', async t => {
   const h = harness(t, { extra: { backup: { keepDaily: 14, keepWeekly: 0, keepMonthly: 24 } } })
   // Email is off, so there is no mail folder, and it isn't asked for.
   fs.rmSync(h.paths.mail, { recursive: true })
@@ -329,7 +329,7 @@ test('backups: restic check runs on Sundays in SCOOTER_TZ, and after every backu
 })
 
 // ---------------------------------------------------------------------------------------------
-// Results: the state, the replies and the notices (5.5, "Results")
+// Results: the state, the replies and the notices
 
 test('backups: /backup always replies, with the snapshot or the error; the result is kept for /status', async t => {
   const h = harness(t)
@@ -489,7 +489,7 @@ test('backups: exchange/locks is used only while it is the runner\'s folder and 
 })
 
 // ---------------------------------------------------------------------------------------------
-// The schedule (5.5, "Schedule")
+// The schedule
 
 // Moves the clock to `time`, and waits for a backup that starts there to be told.
 async function until(h, time) {
@@ -628,7 +628,7 @@ test('backups: in the bridge, with email on, the email reader stops before resti
   assert.ok(events().lastIndexOf('email.started') > events().indexOf('backup.step'))
 })
 
-test('backups: in the bridge, a download the backup cut short, and the messages after it, are stored after it, in order (D179)', async t => {
+test('backups: in the bridge, a download the backup cut short, and the messages after it, are stored after it, in order', async t => {
   const root = makeTestDir(t)
   const wacli = createWacliStub(t, root)
   wacli.fixtures({ paired: true, messages: [], media: { P1: { as: 'hang' } } })
@@ -839,7 +839,7 @@ test('backups: restore refuses a target that isn\'t empty without --force, and t
   void root
 })
 
-test('backups: restore refuses when runner/ or exchange/ is a link, which restic would follow, or isn\'t a folder, and asks restic for no restore (D198)', async t => {
+test('backups: restore refuses when runner/ or exchange/ is a link, which restic would follow, or isn\'t a folder, and asks restic for no restore', async t => {
   const { root, stub, run } = cli(t)
   const target = path.join(root, 'restored')
   const data = `${target}/var/lib/scooter`
@@ -980,7 +980,7 @@ test('backups: a real round trip with restic: init, back up, no plaintext, the w
   assert.equal(fs.readFileSync(path.join(back.runnerImage, 'rootfs.ext4'), 'utf8'), 'an image of its own')
 })
 
-test('backups: with restic, Scooter\'s snapshots are one group whatever folders they hold, so forget keeps to the retention when a folder appears (D195)', withRestic, async t => {
+test('backups: with restic, Scooter\'s snapshots are one group whatever folders they hold, so forget keeps to the retention when a folder appears', withRestic, async t => {
   const root = makeTestDir(t)
   const clock = createFakeClock('2026-11-10T22:00:00Z')
   const { log } = createTestLog({ clock })

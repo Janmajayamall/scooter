@@ -354,7 +354,6 @@ test('bridge: a command is answered once, also across a restart, and one left un
 })
 
 test('bridge: a reply to a command that can\'t be written is tried again after waits that grow, without another command', async t => {
-  // The review of milestone 5, point 7.
   const root = makeTestDir(t)
   const paths = makePaths(bridgeSettings(root))
   const clock = createFakeClock('2026-11-09T15:45:00Z')

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { dayOfDate, makePaths } from '../src/common/paths.mjs'
 
-test('paths: the folders of 3.2, as they are in Docker', () => {
+test('paths: the data folder\'s folders, as they are in Docker', () => {
   const paths = makePaths({ dataDir: '/data', configDir: '/config' })
   const lifelog = Object.fromEntries(
     Object.entries(paths).map(([name, value]) => [name, typeof value === 'function' ? value(name.startsWith('agent') ? 'lifelog' : name === 'networkLog' ? '2026-11-09' : '2026/11/09') : value]),

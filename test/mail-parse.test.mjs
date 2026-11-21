@@ -1,4 +1,4 @@
-// Parsing emails in the reader (5.6 of DESIGN.md; section 10, "Email"): sample emails as Gmail,
+// Parsing emails in the reader: sample emails as Gmail,
 // Apple Mail and Outlook send them, HTML-only mail included, a forwarded booking and an audio
 // attachment; HTML turned into text; and the reader's loose check of `From`.
 
@@ -78,7 +78,7 @@ test('html: a comment, tag or script that never ends drops the rest, and nothing
 })
 
 test('html: a letter that lower case makes two characters doesn\'t move where a hidden element ends', () => {
-  // The review of milestone 6, smaller point 3: `İ` lowered is two characters, and the total after
+  // `İ` lowered is two characters, and the total after
   // the style was dropped.
   const html = '<p>İİİİİİİİİİİİ Istanbul</p><style>p { color: red }</style><p>Total: 850 TL</p><p>Thanks</p>'
   assert.equal(htmlToText(html), 'İİİİİİİİİİİİ Istanbul\n\nTotal: 850 TL\n\nThanks')

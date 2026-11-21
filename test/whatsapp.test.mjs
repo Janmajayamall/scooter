@@ -1,4 +1,4 @@
-// The WhatsApp channel (5.1 and 5.2 of DESIGN.md; section 10, "Intake" and "Least privilege"):
+// The WhatsApp channel:
 // wacli's two formats, the filters and owner matching, the webhook and its signature, pairing,
 // supervision, catch-up, media downloads, and what wacli is given.
 //
@@ -393,7 +393,7 @@ test('whatsapp: an attachment is downloaded into wacli\'s staging folder and cop
   assert.deepEqual([line.text, line.files], ['lunch with sam', [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }]])
   assert.equal(fs.readFileSync(path.join(paths.datastore, '2026/11/09/1.jpg'), 'utf8'), 'the photo')
 
-  // The command of 5.2 step 6, into a name of the bridge's choosing, and nothing left behind.
+  // The download command, into a name of the bridge's choosing, and nothing left behind.
   const [download] = stub.callsOf('media download')
   const output = download.args[download.args.indexOf('--output') + 1]
   assert.deepEqual(download.args, ['--json', 'media', 'download', '--chat', OWNER, '--id', 'P1', '--output', output])
@@ -496,7 +496,7 @@ test('whatsapp: a wacli call that hangs is stopped after WACLI_CALL_TIMEOUT', as
   assert.deepEqual(lines()[0].media, { type: 'image', mime: 'image/jpeg', error: 'download failed' })
 })
 
-test('whatsapp: a stop stops a download in progress, its message is left for catch-up, and stored with its file once the channel starts again (D179)', async t => {
+test('whatsapp: a stop stops a download in progress, its message is left for catch-up, and stored with its file once the channel starts again', async t => {
   const at = '2026-11-09T15:46:00Z'
   const context = await setup(t, { fixtures: { paired: true, messages: [], media: { H1: { as: 'hang' } } } })
   const { stub, lines, synced, bridge, whatsapp, events } = context
@@ -519,7 +519,7 @@ test('whatsapp: a stop stops a download in progress, its message is left for cat
   assert.deepEqual(lines()[0].files, [{ path: '1.jpg', mime: 'image/jpeg', bytes: 9 }])
 })
 
-test('whatsapp: what came after a message a stop left is left too, until the channel starts again, so catch-up brings them all back, in order (D179)', async t => {
+test('whatsapp: what came after a message a stop left is left too, until the channel starts again, so catch-up brings them all back, in order', async t => {
   // The review's probe: a photo whose download hangs, and a text sent five minutes later while it
   // does, past CATCHUP_OVERLAP. Had the text been stored, catch-up would start after the photo.
   const photoAt = '2026-11-09T15:46:00Z'
@@ -805,8 +805,8 @@ const lastAfter = (stub, chat = OWNER) => {
   return list.args[list.args.indexOf('--after') + 1]
 }
 
-test('whatsapp: a catch-up a stop cut short between its rows lists them again when the channel starts, whatever the webhook stored meanwhile (D179)', async t => {
-  // The second review of milestone 10, smaller point 3: a stop between catch-up's rows, just after
+test('whatsapp: a catch-up a stop cut short between its rows lists them again when the channel starts, whatever the webhook stored meanwhile', async t => {
+  // A stop between catch-up's rows, just after
   // the webhook stored a message more than CATCHUP_OVERLAP newer than the rows not listed yet.
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo(), start: '2026-11-09T16:00:00Z' })
   const { stub, lines, bridge, whatsapp, caughtUp } = context
@@ -835,7 +835,7 @@ test('whatsapp: a catch-up a stop cut short between its rows lists them again wh
   assert.deepEqual(stopped, { [OWNER]: '2026-11-09T15:41:00Z' })
 })
 
-test('whatsapp: after a crash between catch-up\'s rows, the next start lists them from where catch-up had last saved it got to (D179)', async t => {
+test('whatsapp: after a crash between catch-up\'s rows, the next start lists them from where catch-up had last saved it got to', async t => {
   // The review's case by a crash: the bridge dies while catch-up hands over R2, after the webhook
   // stored N1. A crash leaves nothing in memory: the next start reads the state as it was on disk.
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo(), start: '2026-11-09T16:00:00Z' })
@@ -867,7 +867,7 @@ test('whatsapp: after a crash between catch-up\'s rows, the next start lists the
   assert.deepEqual([...again.store.index.entries()].map(entry => entry.line.sourceId), ['W0', 'R1', 'R2', 'N1', 'R3'])
 })
 
-test('whatsapp: a message whose webhook never came is listed by the next catch-up, though a newer one was stored meanwhile (D179)', async t => {
+test('whatsapp: a message whose webhook never came is listed by the next catch-up, though a newer one was stored meanwhile', async t => {
   // wacli waits 5 seconds for the webhook, and never tries again.
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo() })
   const { stub, lines, clock, caughtUp, synced } = context
@@ -882,7 +882,7 @@ test('whatsapp: a message whose webhook never came is listed by the next catch-u
   assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:53:00Z' })
 })
 
-test('whatsapp: the bot\'s own rows don\'t move catch-up on, so the owner\'s messages wacli receives after a reply, with older times, are still listed (D179)', async t => {
+test('whatsapp: the bot\'s own rows don\'t move catch-up on, so the owner\'s messages wacli receives after a reply, with older times, are still listed', async t => {
   // After downtime, a reply waiting in the outbox can go out before wacli has received the owner's
   // messages from while it was down; wacli stores the reply with the time it was sent.
   const bot = listRow({ MsgID: 'BOT', Timestamp: '2026-11-09T15:50:00Z', Text: 'a reply', FromMe: true, SenderJID: '15550100000@s.whatsapp.net' })
@@ -898,7 +898,7 @@ test('whatsapp: the bot\'s own rows don\'t move catch-up on, so the owner\'s mes
   assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:40:00Z' })
 })
 
-test('whatsapp: catch-up lists every chat the owner has written from, each from where it got to there (D179)', async t => {
+test('whatsapp: catch-up lists every chat the owner has written from, each from where it got to there', async t => {
   // A message in the first chat the webhook missed, then one the webhook delivered from an `@lid`
   // chat, which becomes the chat replies go to.
   const seed = seedLines([incoming('2026-11-09T15:30:00Z', 'W0', 'before')], { catchUp: { [OWNER]: '2026-11-09T15:30:00Z' }, ownerChat: { jid: OWNER, at: '2026-11-09T15:30:00Z' } })
@@ -922,7 +922,7 @@ test('whatsapp: catch-up lists every chat the owner has written from, each from 
   assert.deepEqual(context.bridge.state.get().catchUp, { [OWNER]: '2026-11-09T15:50:00Z', [LID]: '2026-11-09T15:55:00Z' })
 })
 
-test('whatsapp: catch-up doesn\'t go on past a row intake must be handed again, and lists it at the next one (D179)', async t => {
+test('whatsapp: catch-up doesn\'t go on past a row intake must be handed again, and lists it at the next one', async t => {
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo() })
   const { stub, lines, bridge, whatsapp, caughtUp, entries } = context
   await caughtUp()

@@ -300,7 +300,7 @@ test('files: a small file replaced by a rename as it is opened is opened again, 
   const file = path.join(dir, 'state.json')
   fs.writeFileSync(file, '{"connected":false}')
   // The writer renames a new file into place between the open and the look at what was opened, as
-  // an atomic write can (the review of milestone 6, must-fix 3).
+  // an atomic write can.
   const fstat = fs.fstatSync
   let replaces = 0
   fs.fstatSync = (fd, ...rest) => {

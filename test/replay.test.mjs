@@ -1,5 +1,5 @@
-// Replayed batches, which a rebuild and a backfill share (6.10, 6.11 of DESIGN.md; section 10,
-// "Runner"): one of the owner's days per batch, `Now:` each batch's own time, a session for each
+// Replayed batches, which a rebuild and a backfill share:
+// one of the owner's days per batch, `Now:` each batch's own time, a session for each
 // day, and where a replay stops.
 
 import assert from 'node:assert/strict'

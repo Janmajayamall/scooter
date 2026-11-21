@@ -1,5 +1,5 @@
 // Fixtures for the runner's planning: a datastore written from lines, a config folder with
-// `agents.yaml`, its prompt and skills, and the 6.5 example of DESIGN.md as data.
+// `agents.yaml`, its prompt and skills, and the example prompt of the runner's document as data.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -57,7 +57,7 @@ export const line = {
 // The skills of the default config.
 export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages']
 
-// The `agents.yaml` of 6.1, with the backfill entry when `backfill` is true.
+// The example `agents.yaml`, with the backfill entry when `backfill` is true.
 export function exampleYaml({ backfill = false } = {}) {
   return `agents:
   lifelog:
@@ -102,12 +102,12 @@ export function writeConfig(configDir, { yaml = exampleYaml(), skills = SKILLS, 
 }
 
 // ---------------------------------------------------------------------------------------------
-// The example of 6.5
+// The example prompt
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 export const EXAMPLE_NOW = '2026-11-09T15:50:30Z'
 
-// The lines behind the prompt of 6.5, after 1,041 lines of filler. The owner's times are in
+// The lines behind the example prompt, after 1,041 lines of filler. The owner's times are in
 // Asia/Kolkata, UTC+5:30.
 export function exampleLines() {
   return [
@@ -128,7 +128,7 @@ export function exampleLines() {
   ].map(fixture => JSON.parse(JSON.stringify(fixture)))
 }
 
-// The state behind the prompt of 6.5: everything up to #1049 dealt with, and #1047 to be tried a
+// The state behind the example prompt: everything up to #1049 dealt with, and #1047 to be tried a
 // second time.
 export function exampleState() {
   return {
@@ -144,7 +144,7 @@ export function exampleState() {
   }
 }
 
-// The prompt of 6.5, exactly as DESIGN.md shows it.
+// The example prompt, exactly as `docs/architecture/runner.md` shows it.
 export const EXAMPLE_PROMPT = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
 Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).
 

@@ -1,4 +1,4 @@
-// What the agent does next (6.4 of DESIGN.md; section 10, "Runner" and "Time"): commands first,
+// What the agent does next: commands first,
 // nothing while paused, `once` tasks, new messages after the quiet period, scheduled tasks at the
 // right local time, and a backfill batch only when nothing live is waiting.
 

@@ -1,4 +1,4 @@
-// pi's answer (6.7 of DESIGN.md; section 10, "Answer parsing"): every instruction line, text
+// pi's answer: every instruction line, text
 // segments, unknown `seq` numbers, and what is sent.
 
 import assert from 'node:assert/strict'

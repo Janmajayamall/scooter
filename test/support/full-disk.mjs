@@ -1,4 +1,4 @@
-// A full disk, for the runner's tests (6.9 of DESIGN.md; the fourth review of milestone 4).
+// A full disk, for the runner's tests (the fourth review of milestone 4).
 //
 // While `isFull()` says so, this process can make nothing new, neither a folder nor a file, as on
 // ext4, where a new folder needs a block of its own and a full disk has none. Removing, renaming,

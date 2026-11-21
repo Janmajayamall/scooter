@@ -16,8 +16,8 @@
 //   there, then reads the fixtures again and answers. SIGTERM ends it with 130, as restic's own
 //   handling of the signal does, and it writes `stopped-<command>`.
 //
-// Its output follows restic's as the plan's Linux machine showed it (docs/DECISIONS.md, milestone
-// 10): `snapshot 1a2b3c4d saved` at the end of a backup, and `Fatal: …` on stderr.
+// Its output follows restic's as the plan's Linux machine showed it in milestone 10:
+// `snapshot 1a2b3c4d saved` at the end of a backup, and `Fatal: …` on stderr.
 
 import fs from 'node:fs'
 import path from 'node:path'

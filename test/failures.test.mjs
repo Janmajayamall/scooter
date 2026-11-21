@@ -1,4 +1,4 @@
-// What a run's outcome does (6.8, 6.9 of DESIGN.md; section 10, "Runner"): the cause, read from
+// What a run's outcome does: the cause, read from
 // the network log; pauses and their schedule; cursor, retry and failed transitions with an injected
 // clock; and the notices. Pure functions, and the log's format and reader.
 
@@ -41,7 +41,7 @@ const ID2 = '20261109T155013502-0001'
 // ---------------------------------------------------------------------------------------------
 // The network log
 
-test('network log: the lines of 6.13, checked and written in order', () => {
+test('network log: its lines, checked and written in order', () => {
   const lines = [
     request(ID1),
     response(ID1, 200),

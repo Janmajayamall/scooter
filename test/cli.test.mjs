@@ -1,4 +1,4 @@
-// The command table of 8.4 of DESIGN.md, and that each command loads one side only.
+// The CLI's table of commands, and that each command loads one side only.
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -25,7 +25,7 @@ async function run(argv, options = {}) {
   return { code, out, err }
 }
 
-test('cli: the commands of 8.4, each with its side', () => {
+test('cli: the CLI\'s commands, each with its side', () => {
   const sides = Object.fromEntries(Object.entries(COMMANDS).map(([name, command]) => [name, command.side]))
   assert.deepEqual(sides, {
     bridge: 'bridge',

@@ -1,5 +1,5 @@
-# The agent Scooter runs, and when. The runner reads this file when it
-# starts, and refuses to start on any fault, naming the field. Restart the runner after a change.
+# The agent Scooter runs, and when. The runner reads this file when it starts, and refuses to
+# start on any fault, naming the field. Restart the runner after a change.
 agents:
   lifelog:
     model: anthropic/claude-sonnet-5.5   # OpenRouter model ID; it must accept images

@@ -1,4 +1,4 @@
-// Delivery (5.3 of DESIGN.md; section 10, "Delivery"): the outbox processor with fake channels and
+// Delivery: the outbox processor with fake channels and
 // a real store. Order, pacing, chunking, quoting, reactions, `out` lines with the channel's IDs,
 // recovery from the bridge's record of an entry, which it keeps in its own folder, waiting,
 // failed sends, entries that aren't entries, pausing, and how long a text may be. Routing has its own tests (`routing.test.mjs`), and the WhatsApp module's
@@ -275,7 +275,7 @@ test('delivery: the bridge\'s own entries go out from its own outbox, in order w
 test('delivery: an entry the runner\'s user swaps for a link once the bridge has taken it leads the bridge to write nothing there', async t => {
   const context = setup(t)
   const { write, whatsapp, clock, paths, root } = context
-  // As root, the bridge would otherwise write where the link leads (D136's cost, settled by D205):
+  // As root, the bridge would otherwise write where the link leads:
   // a folder of root's, which the runner's user can't write itself.
   const elsewhere = path.join(root, 'elsewhere')
   fs.mkdirSync(elsewhere, { mode: 0o700 })
@@ -389,8 +389,8 @@ async function betweenLooks(outbox) {
 }
 
 test('delivery: after an outage of any length the entries go in order: those passed over are tried before an entry behind them', async t => {
-  // The review of milestone 6, smaller point 1: an entry behind one passed over, which came due
-  // first, went first, after 7 of these 30 lengths.
+  // An entry behind one passed over, which came due
+  // first, once went first, after 7 of these 30 lengths.
   for (const minutes of Array.from({ length: 30 }, (_, n) => 5 + 3 * n)) {
     await t.test(`${minutes} minutes`, async t => {
       const { write, drain, whatsapp, clock, entries, out, outbox } = setup(t)
@@ -514,8 +514,8 @@ test('delivery: an entry that isn\'t one is logged and removed, and the next goe
 test('delivery: an outbox the runner\'s user made a link is not looked into, and nothing the link leads to is removed', async t => {
   const context = setup(t, { started: false })
   const { paths, root, entries, whatsapp, clock } = context
-  // As the runner's user could make the outbox lead to the data folder (the review of milestone 6,
-  // smaller point 4): folders as the data folder holds them, and one named as an entry is.
+  // As the runner's user could make the outbox lead to the data folder: folders as
+  // the data folder holds them, and one named as an entry is.
   const elsewhere = path.join(root, 'elsewhere')
   for (const name of ['agents', 'datastore', '20261109T150000000-0001']) {
     fs.mkdirSync(path.join(elsewhere, name), { recursive: true })
@@ -536,8 +536,8 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   assert.deepEqual(fs.readdirSync(paths.bridgeSending), ['20261109T150000000-0001.json'])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.runner_outbox_refused').map(entry => entry.reason), ['not used: a symbolic link'])
-  // While there is no outbox, nothing is said to be taken from it (the review of milestone 13,
-  // smaller point 5); once it is a folder again, the record goes, and that is said.
+  // While there is no outbox, nothing is said to be taken from it;
+  // once it is a folder again, the record goes, and that is said.
   fs.unlinkSync(paths.outbox)
   for (let n = 0; n < 3; n++) await clock.advance(SECOND)
   assert.equal(context.events().filter(event => event === 'outbox.runner_outbox_taken').length, 0)
@@ -550,7 +550,7 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
 test("delivery: a name in the runner's outbox that isn't an entry's ID is left, and said once, and the entries after it go", async t => {
   const context = setup(t, { started: false })
   const { paths, whatsapp, entries, clock } = context
-  // The review of milestone 12, smaller point 3: a valid entry in a folder whose name is too long
+  // A valid entry in a folder whose name is too long
   // for the bridge's record once `.json` and a temporary prefix are added.
   const entry = JSON.stringify({ type: 'text', by: 'lifelog', text: 'not taken', about: 1 })
   for (const name of ['x'.repeat(240), '20261109T150000000-0001-more', 'notes']) {
@@ -572,7 +572,7 @@ test("delivery: a name in the runner's outbox that isn't an entry's ID is left, 
 
 test("delivery: in the runner's outbox the bridge removes only entry.json; in its own, also its sending.json", async t => {
   const { write, writeOwn, whatsapp, clock, paths, entries } = setup(t)
-  // A runner's entry with what an older bridge left in it (D205's cost), and one of the bridge's own.
+  // A runner's entry with what an older bridge left in it, and one of the bridge's own.
   const id = await write({ type: 'text', by: 'lifelog', text: 'the runner\'s', about: 1 })
   for (const name of [SENDING_FILE, `.tmp-${SENDING_FILE}-1`]) fs.writeFileSync(path.join(paths.outbox, id, name), '{}')
   const own = await writeOwn({ type: 'text', by: 'bridge', text: 'the bridge\'s', about: 2 })
@@ -634,8 +634,8 @@ test('delivery: a message the channel gives no ID for is logged without one', as
 
 test('delivery: a message whose ID the store already holds is logged without one, and the next goes', async t => {
   const { write, drain, whatsapp, out, entries } = setup(t)
-  // As a channel that answered with the ID of the message it reacted to (the review of milestone
-  // 5, point 4): the reaction went out, and is recorded.
+  // As a channel that answered with the ID of the message it reacted to:
+  // the reaction went out, and is recorded.
   whatsapp.idsNext('WA1', 'WA2')
   await write({ type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
   await write({ type: 'text', by: 'lifelog', text: 'about the lunch', about: 2 })

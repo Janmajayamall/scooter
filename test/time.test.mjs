@@ -1,4 +1,4 @@
-// Time (section 10 of DESIGN.md, "Time", for storage and conversion): stored times are UTC, the
+// Time: stored times are UTC, the
 // owner's time zone is applied explicitly, and schedules come due at the right local time across
 // daylight-saving changes.
 

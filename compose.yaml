@@ -9,9 +9,9 @@
 # Other commands run the same way: `docker compose run --rm bridge pair`, `… bridge backup-init`,
 # `… runner rebuild lifelog` with the runner stopped, `… bridge restore` with both stopped.
 #
-# - **The data.** One volume, `data`, holds the whole data folder, at /data in every container
-#   (D219). A new volume starts as a copy of the image's /data, whose folders have the owners and
-#   modes of 3.2, and those keep each user out of the others' folders, as natively: the runner, as
+# - **The data.** One volume, `data`, holds the whole data folder, at /data in every container.
+#   A new volume starts as a copy of the image's /data, whose folders have the same owners and modes
+#   as natively, and those keep each user out of the others' folders: the runner, as
 #   scooter-runner, reads the datastore and can't read the bridge's, wacli's or the email reader's
 #   folders. `build-image` builds beside runner/ in the same volume, and renames the image in.
 # - **The config** is the repository's ./config, read-only, which only the runner and build-image

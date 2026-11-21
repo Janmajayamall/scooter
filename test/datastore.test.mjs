@@ -1,4 +1,4 @@
-// The datastore (section 4 of DESIGN.md; section 10, "Datastore"): the line format, the reader,
+// The datastore: the line format, the reader,
 // the index, and the single writer with its recovery.
 
 import assert from 'node:assert/strict'
@@ -19,7 +19,7 @@ import { createTestLog } from './support/log.mjs'
 import { skipUnlessRoot, skipUnlessUsers } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
-// The example lines of 4.2, as the design gives them.
+// Example lines: messages in and out, a reaction, and an email.
 const EXAMPLES = [
   '{"seq":1042,"kind":"message","dir":"in","at":"2026-11-09T15:43:02Z","source":"whatsapp","sourceId":"3EB0A1B2C3D4E5F6A7B8","trust":"owner","text":"","files":[{"path":"1042.jpg","mime":"image/jpeg","bytes":482113}]}',
   '{"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T15:43:40Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}',
@@ -861,7 +861,7 @@ test('datastore: the runner\'s index, built from a reader, matches the store\'s'
 })
 
 // ---------------------------------------------------------------------------------------------
-// Owners and modes (3.2; section 10, "Least privilege")
+// Owners and modes
 
 test('datastore: folders are 0750 and files 0640, whatever the umask', async t => {
   for (const mask of [0o000, 0o022, 0o077]) {

@@ -1,4 +1,4 @@
-// The two systemd units of a native install (8.5 of DESIGN.md; the plan's milestone 12): what they
+// The two systemd units of a native install (the plan's milestone 12): what they
 // say, and `systemd-analyze verify` on both, which skips itself where systemd isn't installed.
 
 import assert from 'node:assert/strict'
@@ -62,9 +62,9 @@ test('units: the bridge runs as root, the runner as its user with the kvm group,
   assert.deepEqual(bridge['Service.Environment'], ['TZ=UTC'])
 })
 
-test('units: the waits the runner keeps itself where its service manager doesn\'t are those systemd works out for the runner\'s unit (D229)', () => {
+test('units: the waits the runner keeps itself where its service manager doesn\'t are those systemd works out for the runner\'s unit', () => {
   // systemd's waits grow from RestartSec to RestartMaxDelaySec in RestartSteps steps, each the one
-  // before times (max / first) ^ (1 / steps), and stay at the last (12.2, which measured it).
+  // before times (max / first) ^ (1 / steps), and stay at the last, as measured on systemd 255.
   const runner = units['scooter-runner.service']
   const minutes = value => Number(/^(\d+)min$/.exec(value)[1]) * 60_000
   const first = minutes(runner['Service.RestartSec'][0])

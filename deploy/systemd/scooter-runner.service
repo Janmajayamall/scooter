@@ -13,8 +13,8 @@
 #   systemd's start limit never stops it; these waits bound what such a fault spends.
 #   systemd keeps counting the restarts until the unit is started by hand or the machine starts
 #   again. SCOOTER_RESTART_WAITS=systemd tells the runner that systemd keeps these waits, so it
-#   keeps none of its own, which it does where its service manager doesn't wait, as in Docker
-#   (D229): a start by hand brings it back at once.
+#   keeps none of its own, which it does where its service manager doesn't wait, as in
+#   Docker: a start by hand brings it back at once.
 
 [Unit]
 Description=Scooter runner: the agent's runs, in VMs

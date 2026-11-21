@@ -22,7 +22,7 @@
 // - as `sync --follow`, posts each file that appears in `webhooks/` to its webhook, signed with the
 //   secret on its command line, and writes the answer's status beside it.
 //
-// It answers the way 13.1 and docs/DECISIONS.md describe wacli: JSON on stdout, errors as
+// It answers the way wacli 0.26.0 does, as `docs/architecture/whatsapp.md` says: JSON on stdout, errors as
 // JSON on stderr with exit code 1, and `null` for an empty list.
 
 import crypto from 'node:crypto'

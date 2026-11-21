@@ -1,5 +1,5 @@
-// A stub of pi, which the fake sandbox runs as a local process in place of the real one (section 10
-// of DESIGN.md). It takes pi's command line, reads the prompt, and picks what to do from keywords
+// A stub of pi, which the fake sandbox runs as a local process in place of the real one.
+// It takes pi's command line, reads the prompt, and picks what to do from keywords
 // in the messages, as the real pi would act on the model's answer:
 //
 // | In an item's text | It                                                                      |
@@ -64,7 +64,7 @@
 // | `LONGANSWER`           |                        | starts its answer with 64 KB of text               |
 //
 // It writes OpenRouter's answers to the network log as the runner's policy would, in its format,
-// and keeps its session as pi 1.5.2 does (`docs/DECISIONS.md`, 0.4, pi 2). Every absolute path it
+// and keeps its session as pi 1.5.2 does. Every absolute path it
 // is given is a path in the VM: it finds it under `PI_STUB_ROOT`, the fake VM's folder. What it
 // saw is added to `calls.jsonl` in its control folder.
 

@@ -1,4 +1,4 @@
-// Backfills (6.11 of DESIGN.md; section 10, "Runner"): `until` and covering every message once,
+// Backfills: `until` and covering every message once,
 // running only when nothing live waits, what a batch may change, its silence and its summary, its
 // progress across a restart, dropping it, and its own retries and pauses.
 
@@ -118,7 +118,7 @@ test('backfills: until is the live cursor when it starts, every message up to it
   assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 6, emoji: '✅' }])
 })
 
-test('backfills: with can_message: false, the batches send nothing and the summary still goes, as the runner\'s own (6.11)', async t => {
+test('backfills: with can_message: false, the batches send nothing and the summary still goes, as the runner\'s own', async t => {
   const { runner, outbox } = await openBackfill(t, { words: { 4: 'SAY' }, yaml: backfillYaml().replace('can_message: true', 'can_message: false') })
   for (const kind of ['backfill', 'backfill']) assert.equal((await runner.tick()).action.kind, kind)
   assert.deepEqual(outbox(), [])

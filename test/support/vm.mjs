@@ -128,8 +128,8 @@ const MESSAGE = {
   text: 'coffee 150',
 }
 
-// An agent's folder and a datastore under `dir`, laid out as sections 4.1 and 6.2 of DESIGN.md
-// give them, with one message, one skill and the system prompt file. Returns the paths.
+// An agent's folder and a datastore under `dir`, laid out as in the data folder,
+// with one message, one skill and the system prompt file. Returns the paths.
 export function makeDataDir(dir) {
   const agent = path.join(dir, 'data', 'agents', 'lifelog')
   const datastore = path.join(dir, 'data', 'datastore')
@@ -155,7 +155,7 @@ export function makeDataDir(dir) {
   }
 }
 
-// The mounts of section 6.6: the agent's folder read-only, except `views/`, `memory/` and
+// A run's mounts, as the runner gives them (`piMounts`): the agent's folder read-only, except `views/`, `memory/` and
 // `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore
 // read-only. `guest` gives the paths in the VM when they differ from the host's.
 export function designMounts(data, guest = data) {
@@ -168,7 +168,7 @@ export function designMounts(data, guest = data) {
   }
 }
 
-// pi's environment, as section 6.6 lists it.
+// pi's environment, as the runner gives it (`piEnv`), with the key's placeholder.
 export function piEnv(vm, { tz = 'Asia/Kolkata' } = {}) {
   return {
     PATH: GUEST_PATH,
@@ -182,7 +182,7 @@ export function piEnv(vm, { tz = 'Asia/Kolkata' } = {}) {
   }
 }
 
-// pi's arguments, as section 6.6 gives the command. `session` is `{ dir, id }`; without one the
+// pi's arguments, with the flags the runner gives it (`piArgs`). `session` is `{ dir, id }`; without one the
 // run keeps no session. `without` names flags to leave out, for the tests that show what a flag
 // does.
 export function piArgs({ prompt, model = MESSAGES_MODEL, thinking, session, systemPrompt, skills = [], without = [] }) {
@@ -220,8 +220,8 @@ export function runIn(vm, argv, { cwd, env = {} } = {}) {
   return vm.exec([ENV, '-i', ...assignments, ...argv], { cwd })
 }
 
-// Runs pi in the VM as the runner will: from an argument list, in `cwd`, with the environment of
-// 6.6 and nothing else.
+// Runs pi in the VM as the runner will: from an argument list, in `cwd`, with pi's environment
+// and nothing else.
 export function runPi(vm, options, { cwd, env = piEnv(vm) } = {}) {
   return runIn(vm, [PI, ...piArgs(options)], { cwd, env })
 }

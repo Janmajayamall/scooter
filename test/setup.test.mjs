@@ -1,4 +1,4 @@
-// `scooter setup` (8.4 and 8.5 of DESIGN.md; section 10, "Least privilege"): the decisions it
+// `scooter setup`: the decisions it
 // makes, its checks, and, as root in the plan's container, the install it leaves: the users and
 // folders, what wacli and the email reader can't read, and which env file each service can read.
 
@@ -39,7 +39,7 @@ const IDS = { wacli: { uid: 991, gid: 981 }, runner: { uid: 992, gid: 982 }, mai
 // ---------------------------------------------------------------------------------------------
 // The decisions
 
-test('setup: the folders of 3.2, with their owners and modes, and those it makes inside other users\' folders', () => {
+test('setup: the data folder\'s folders, with their owners and modes, and those it makes inside other users\' folders', () => {
   const paths = makePaths({ dataDir: '/var/lib/scooter', configDir: '/etc/scooter/config' })
   const table = dataFolders(paths, IDS).map(({ path: folder, owner, mode, inside }) => [folder.replace('/var/lib/scooter', 'DATA'), owner, `0${mode.toString(8)}`, inside])
   assert.deepEqual(table, [
@@ -296,7 +296,7 @@ test('setup: as root, without services, it makes the users and folders, twice ov
   }
   assert.ok((await proc.run('id', ['-nG', TEST_USERS.runner], { env })).stdout.split(/\s+/).includes(TEST_KVM))
 
-  // The folders, with the owners and modes of 3.2.
+  // The folders, with their owners and modes.
   const paths = makePaths({ dataDir: locations.dataDir, configDir: locations.configDir })
   for (const { path: folder, owner, mode } of dataFolders(paths, ids)) {
     const stat = fs.lstatSync(folder)
