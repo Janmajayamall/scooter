@@ -433,7 +433,7 @@ docker compose up -d
 
 ## Development
 
-The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19 and `npm ci`. Switching users and setting owners is then skipped, with one warning. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
+The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
 
 **The suite** runs three ways. With wacli and restic installed, restic in the container too, every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-21, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
 

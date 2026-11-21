@@ -19,7 +19,8 @@ import { createTestLog } from './support/log.mjs'
 import { skipUnlessRoot, skipUnlessUsers } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 
-// Example lines: messages in and out, a reaction, and an email.
+// The example lines that datastore.md shows under The line format: messages in and out, a
+// reaction, and an email.
 const EXAMPLES = [
   '{"seq":1042,"kind":"message","dir":"in","at":"2026-11-09T15:43:02Z","source":"whatsapp","sourceId":"3EB0A1B2C3D4E5F6A7B8","trust":"owner","text":"","files":[{"path":"1042.jpg","mime":"image/jpeg","bytes":482113}]}',
   '{"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T15:43:40Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}',
@@ -59,7 +60,7 @@ function setup(t, start = '2026-11-09T15:43:02Z') {
 // ---------------------------------------------------------------------------------------------
 // The line format
 
-test('datastore: the design\'s example lines are written exactly as the design shows them', () => {
+test('datastore: the example lines are written exactly as datastore.md shows them', () => {
   for (const text of EXAMPLES) {
     const line = decodeLine(text)
     assert.equal(encodeLine(line), `${text}\n`)

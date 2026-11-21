@@ -33,7 +33,7 @@ This document covers the format of each and how it is checked. What a setting or
 | `build-image` | the host, as root; in Docker, a container of its own | [build-image](sandbox.md#build-image), [The build-image container](install.md#the-build-image-container) |
 | `pair [--phone +91…]` | bridge | [Pairing](whatsapp.md#pairing) |
 | `email-check` | bridge | [email-check](email.md#email-check) |
-| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge; `restore` with both services stopped | [The CLI commands](backups.md#the-cli-commands), [Restore](backups.md#restore) |
+| `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge; `restore` into the data folder with both services stopped | [The CLI commands](backups.md#the-cli-commands), [Restore](backups.md#restore) |
 | `rebuild <agent>` | runner, with its service stopped | [Rebuild](rebuild-and-backfill.md#rebuild) |
 
 - **Who runs one.** Natively, a CLI command runs as its side's service user, the bridge's as root and the runner's as `scooter-runner`, and `setup` and `build-image` run as root. In Docker it runs in a one-off container of its service, `docker compose run --rm <service> <command>`, which is that user too, and `build-image` in a container of its own. The README shows how, for each ([Install natively](../../README.md#install-natively), [Install with Docker](../../README.md#install-with-docker)).
@@ -96,7 +96,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 | Field | Takes | What it does |
 |---|---|---|
 | `agents` | a map of agents by name, which holds exactly one ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)); a name is lowercase letters, digits and hyphens, starting with a letter | Each agent's fields, which follow |
-| `model` | an OpenRouter model ID, below | The agent's model, which must accept images ([How pi is run](agent.md#how-pi-is-run)) |
+| `model` | an OpenRouter model ID, below | The agent's model, which must accept images: the prompt has the agent look at photos with pi's `read` tool, which sends each image to the model inline ([The prompt](agent.md#the-prompt), [Facts about pi 1.5.2](agent.md#facts-about-pi-152)) |
 | `thinking` | optional: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` | The model's thinking level ([How pi is run](agent.md#how-pi-is-run)) |
 | `prompt` | a file in the config folder, below | The agent's prompt ([The prompt](agent.md#the-prompt)) |
 | `skills` | a list of skill folders in the config folder, below | The agent's skills ([Skills](agent.md#skills)) |
