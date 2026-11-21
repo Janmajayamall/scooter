@@ -54,8 +54,8 @@ Each service reads its own env file, as [Secrets](../ARCHITECTURE.md#secrets) sa
 **The format** is the part that Scooter's loader, systemd's `EnvironmentFile` and Compose's `env_file` all read the same way. Every other line is a fault that names the file, the line, and the variable when the line names one:
 
 - a comment is a line of its own, starting with `#`, indented or not; blank lines are passed over;
-- a setting is `NAME=value`: a name of letters, digits and `_`, not starting with a digit, with nothing before it and no space between it and the `=`;
-- an unquoted value is trimmed, so a space after the `=` is no part of it, and it may not contain `$`, `\`, `#`, `'` or `"`;
+- a setting is `NAME=value`: a name of letters, digits and `_`, not starting with a digit, with nothing before it and no space around the `=`;
+- an unquoted value is trimmed, and may not contain `$`, `\`, `#`, `'` or `"`;
 - a quoted value is inside single quotes, on one line, and is taken exactly as written, so a value can't contain a single quote at all;
 - a name may be set once.
 
@@ -77,7 +77,7 @@ The other settings are in the documents of the components that read them: [Whats
 The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHITECTURE.md#the-codes-layers)), each with a comment beside it that says what it protects. A number's value is there only, and a rule that depends on one names the constant.
 
 - **Constants aren't settings.** A value becomes a setting only when the owner has a reason to change it, and then it gets a valid range and a test. *Why:* a bad value can't then, for example, make Scooter retry in a tight loop or flood WhatsApp.
-- **How code reads them:** as `limits.NAME`, at the moment it needs one, never repeating the number. Durations are in milliseconds and sizes in bytes. The object is sealed, so a misspelled name fails rather than reading `undefined`.
+- **How code reads them:** as `limits.NAME`, at the moment it needs one, never repeating the number. Durations are in milliseconds and sizes in bytes. The object is sealed, so no name can be added or removed: a write to a misspelled name throws, but a read of one gives `undefined`.
 - **How tests change them:** `overrideLimits` changes some and returns the function that puts them back, and refuses a name that isn't there. `test/limits.test.mjs` holds each constant to its value.
 - **Not tuning numbers:** a limit of an outside program stays beside the code that relies on it, such as pi's on a skill's name and description ([agents.yaml](#agentsyaml)) and Gondolin's on a socket's path ([The runner's own folders](sandbox.md#the-runners-own-folders)), and so does a number that follows from what the system takes ([Files another program controls](shared-code.md#files-another-program-controls)).
 
@@ -138,7 +138,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 - `once` and `backfill` IDs are lowercase letters, digits and hyphens, unique within their kind. They go into session names, commit messages and the state ([rebuild and backfill](rebuild-and-backfill.md)).
 - `run` may be empty: an agent that runs on nothing is the owner's to configure.
 
-**A backfill** fills a newly added view from the whole datastore ([Backfill](rebuild-and-backfill.md#backfill)). Its `skill` is one of the agent's skills, by name, other than `day-pages`: a backfill fills one other view, and may change the day pages anyway. Its `writes` is what it may change besides the day pages: a list of at least one path, none twice, each `views/<…>` with at least one part after `views/`, a file, or a folder ending in `/`. Refused: `views/` itself, `views/days` and anything in it, `..`, `.`, empty parts, and names starting with a dot, which the file check would refuse anyway ([After a successful run](run.md#after-a-successful-run)).
+**A backfill** fills a newly added view from the whole datastore ([Backfill](rebuild-and-backfill.md#backfill)). Its `skill` is one of the agent's skills, by name, other than `day-pages`: a backfill fills one other view, and may change the day pages anyway. Its `writes` is what it may change besides the day pages: a list of at least one path, none twice, each `views/<…>` with at least one part after `views/`, a file, or a folder ending in `/`. Refused: `views/` itself, `views/days` and anything in it, a path holding a `\`, `..`, `.`, empty parts, and names starting with a dot, which the file check would refuse anyway ([After a successful run](run.md#after-a-successful-run)).
 
 ## Facts about yaml 2.9.1
 
