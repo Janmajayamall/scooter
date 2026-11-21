@@ -24,7 +24,7 @@ datastore/
 
 - A day folder is the **arrival date** in UTC: the day the bridge wrote the line. The message's own time is in `at`. The two differ only for a message that arrives late, such as one caught up after downtime.
 - Folder dates never go backwards. If the clock reads earlier than the newest folder's date, the line goes in the newest folder. So the files, read in date order, give the lines in `seq` order, and each attachment sits beside its line.
-- Folders are only storage. The agent dates what it files by the owner's day, so a day page may link to attachments in the folder before or after its date.
+- Folders are only storage. The agent dates what it files by the owner's day, so a row may be dated a day before or after the folder its message is in.
 - The store is never told the owner's time zone: a day folder is the UTC date of its clock.
 
 ## The line format

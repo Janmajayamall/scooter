@@ -147,12 +147,11 @@ export function acquireRunLock({ paths, deadline, clock }) {
 export const isReplay = job => job.kind === 'rebuild' || job.kind === 'backfill'
 
 // The commit message: `lifelog: #1050 #1051 #1053` for a batch, `lifelog: scheduled task
-// 21:30` or `lifelog: once task poems` for a task; for a replayed batch, the range of its items,
+// 21:30` for a task; for a replayed batch, the range of its items,
 // `lifelog: backfill people-1 #812-#831`, or `lifelog: rebuild #812-#831`, which the
 // finished rebuild folds into one commit, `lifelog: rebuild`.
 export function commitMessage(agentName, job) {
   if (job.kind === 'scheduled') return `${agentName}: scheduled task ${job.at}`
-  if (job.kind === 'once') return `${agentName}: once task ${job.id}`
   const seqs = job.batch.items.map(item => item.seq)
   if (isReplay(job)) {
     const [first, last] = [Math.min(...seqs), Math.max(...seqs)]
@@ -175,7 +174,6 @@ function settleJob(job, state, outcome, timing) {
 //
 //   { kind: 'messages', batch, prompt }            from `buildBatch`
 //   { kind: 'scheduled', at, date, task, prompt }  from `nextAction` and `buildTaskPrompt`
-//   { kind: 'once', id, task, prompt }
 //   { kind: 'rebuild', batch, prompt, sessionId }  a rebuild's batch (`rebuild.mjs`)
 //   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes }   from `backfillJob`
 //
@@ -204,7 +202,7 @@ export async function performRun(context) {
     const prepared = prepareRun({ paths, agent, protocol, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
-    const task = job.kind === 'scheduled' ? job.at : job.kind === 'once' ? job.id : undefined
+    const task = job.kind === 'scheduled' ? job.at : undefined
     log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, task, backfill: job.kind === 'backfill' ? job.id : undefined, session: id })
 
     let result

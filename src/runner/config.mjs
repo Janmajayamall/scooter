@@ -8,7 +8,7 @@
 //       model: anthropic/claude-sonnet-5.5
 //       thinking: low                        # optional
 //       prompt: prompts/lifelog.md           # paths are relative to the config folder
-//       skills: [skills/expenses, skills/day-pages]
+//       skills: [skills/expenses, skills/people]
 //       reads: [whatsapp, email]
 //       session: daily                       # daily or none
 //       reply_mode: quiet                    # quiet or confirm
@@ -19,8 +19,6 @@
 //         - on: new-messages
 //         - at: "21:30"                      # or "Sun 18:00"
 //           task: Evening check-in.
-//         - once: poems
-//           task: Write poems for my earlier images captioned "poem".
 //         - backfill: people-1
 //           skill: people
 //           writes: [views/people.csv]
@@ -38,19 +36,17 @@ import { parseLocalTime } from '../common/time.mjs'
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 export const SESSIONS = ['daily', 'none']
 export const REPLY_MODES = ['quiet', 'confirm']
-export const TRIGGER_KINDS = ['on', 'at', 'once', 'backfill']
-// The skill that writes the day pages. A backfill always may change them, so it can't be one.
-export const DAY_PAGES_SKILL = 'day-pages'
+export const TRIGGER_KINDS = ['on', 'at', 'backfill']
 
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
-// The IDs of `once` tasks and backfills go into session names, commit messages and the state.
-const TASK_ID = /^[a-z0-9][a-z0-9-]*$/
+// A backfill's ID goes into session names, commit messages and the state.
+const BACKFILL_ID = /^[a-z0-9][a-z0-9-]*$/
 // An OpenRouter model ID, such as `anthropic/claude-sonnet-5.5`, `~anthropic/claude-sonnet-latest`
 // or `google/gemma-3-4b-it:free`. Every model in pi's catalog has this form (milestone 0, pi 6).
 const MODEL_ID = /^~?[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/
 
 const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'session', 'reply_mode', 'ack_reaction', 'can_message', 'timeout_minutes', 'run']
-const TRIGGER_KEYS = { on: ['on'], at: ['at', 'task'], once: ['once', 'task'], backfill: ['backfill', 'skill', 'writes'] }
+const TRIGGER_KEYS = { on: ['on'], at: ['at', 'task'], backfill: ['backfill', 'skill', 'writes'] }
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value) && !Buffer.isBuffer(value)
 
@@ -87,8 +83,7 @@ function isInside(dir, target) {
 //
 //   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }], reads,
 //     session, replyMode, ackReaction, canMessage, timeoutMinutes,
-//     run: { newMessages, scheduled: [{ at, schedule, task }], once: [{ id, task }],
-//            backfill: [{ id, skill, writes }] } }
+//     run: { newMessages, scheduled: [{ at, schedule, task }], backfill: [{ id, skill, writes }] } }
 //
 // `thinking` is null when it isn't given. A path is kept as written, cleaned (`path`), and as the
 // file or folder it names (`file`, `dir`). A skill's `name` is its folder's name. `schedule` is
@@ -301,7 +296,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       agent.timeoutMinutes = value
     }
 
-    agent.run = { newMessages: false, scheduled: [], once: [], backfill: [] }
+    agent.run = { newMessages: false, scheduled: [], backfill: [] }
     if (raw.run !== undefined) {
       if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages}]')
       else raw.run.forEach((entry, n) => triggerOf(agent, at('run', n), entry))
@@ -329,9 +324,8 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       return
     }
 
-    const task = kind === 'at' || kind === 'once' ? nonEmptyString([...parts, 'task'], entry.task, 'the task, as text') : null
-
     if (kind === 'at') {
+      const task = nonEmptyString([...parts, 'task'], entry.task, 'the task, as text')
       const schedule = typeof entry.at === 'string' ? parseLocalTime(entry.at) : null
       if (!schedule) return fault([...parts, 'at'], 'must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"')
       // The `at` values are the keys of the state's `scheduled`.
@@ -340,23 +334,14 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       return
     }
 
-    const id = entry[kind]
-    if (typeof id !== 'string' || !TASK_ID.test(id)) {
-      return fault([...parts, kind], 'must be an ID of lowercase letters, digits and hyphens, such as people-1')
-    }
-    if (kind === 'once') {
-      if (run.once.some(other => other.id === id)) return fault([...parts, 'once'], `is ${id}, which another once entry has too`)
-      if (task !== null) run.once.push({ id, task })
-      return
-    }
-
     // A backfill.
+    const id = entry.backfill
+    if (typeof id !== 'string' || !BACKFILL_ID.test(id)) {
+      return fault([...parts, 'backfill'], 'must be an ID of lowercase letters, digits and hyphens, such as people-1')
+    }
     if (run.backfill.some(other => other.id === id)) return fault([...parts, 'backfill'], `is ${id}, which another backfill entry has too`)
     let ok = true
-    if (entry.skill === DAY_PAGES_SKILL) {
-      fault([...parts, 'skill'], `can't be ${DAY_PAGES_SKILL}: a backfill fills one other view, and may change the day pages anyway`)
-      ok = false
-    } else if (entry.skill !== undefined && !agent.skills.some(skill => skill.name === entry.skill)) {
+    if (entry.skill !== undefined && !agent.skills.some(skill => skill.name === entry.skill)) {
       fault([...parts, 'skill'], "must name one of the agent's skills, by its folder's name, such as people")
       ok = false
     }
@@ -369,7 +354,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
         entry.writes.forEach((value, n) => {
           const write = viewPath(value)
           if (write === null) {
-            fault([...parts, 'writes', n], 'must be a file, or a folder ending in /, inside views/ and outside views/days/')
+            fault([...parts, 'writes', n], 'must be a file, or a folder ending in /, inside views/')
             ok = false
           } else if (writes.includes(write)) {
             fault([...parts, 'writes', n], `is ${write}, which is listed twice`)
@@ -409,13 +394,13 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
   return { agents }
 }
 
-// A path a backfill may change: a file, or a folder ending in `/`, inside `views/` and outside
-// `views/days/`. Returns it cleaned, or null when it isn't one.
+// A path a backfill may change: a file, or a folder ending in `/`, inside `views/`. Returns it
+// cleaned, or null when it isn't one.
 function viewPath(value) {
   if (typeof value !== 'string' || value.includes('\\')) return null
   const folder = value.endsWith('/')
   const parts = value.split('/').slice(0, folder ? -1 : undefined)
-  if (parts.length < 2 || parts[0] !== 'views' || parts[1] === 'days') return null
+  if (parts.length < 2 || parts[0] !== 'views') return null
   // No `.`, `..` or empty parts, and no name the file check would refuse.
   if (parts.some(part => part === '' || part.startsWith('.'))) return null
   return `${parts.join('/')}${folder ? '/' : ''}`

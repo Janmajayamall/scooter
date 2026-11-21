@@ -12,11 +12,11 @@
 // - **Its batches** are replayed (`replay.mjs`): one of the owner's days each, `Now:` the time of
 //   the batch's newest item, a session of its own for each day, and the locks. The prompt starts
 //   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the
-//   backfill's skill and `day-pages`, with the system prompt of live runs, so the owner's current
+//   backfill's skill alone, with the system prompt of live runs, so the owner's current
 //   preferences apply to all of history.
-// - **What it may change:** the paths in `writes`, and the day pages. After the check of the files pi
-//   left, a batch that changed anything else, `memory/` included, fails as pi's own failure, and the
-//   clean-up throws it away (`mayChange`, used in `run.mjs`).
+// - **What it may change:** the paths in `writes`, and nothing else. After the check of the files
+//   pi left, a batch that changed anything else, `memory/` included, fails as pi's own failure, and
+//   the clean-up throws it away (`mayChange`, used in `run.mjs`).
 // - **Silent:** nothing is sent per batch. Texts, `REPLY_TO` and `NO_REPLY` are ignored, and a
 //   failure sends no notice.
 // - **Its own retries,** handled like the live ones (`settleBackfill`): an item not
@@ -35,13 +35,9 @@ import path from 'node:path'
 import { readUntrustedFile } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
-import { DAY_PAGES_SKILL } from './config.mjs'
 import { pauseAfterRun, settleLane } from './failures.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
 import { saveState } from './state.mjs'
-
-// The folder of the day pages, which a backfill may always change.
-export const DAY_PAGES = 'views/days/'
 
 // What "and" makes of a list.
 function listed(words) {
@@ -52,20 +48,18 @@ function listed(words) {
 export function backfillIntro(entry) {
   return (
     `Backfill (from your configuration, not a message from the owner): file these messages for the ${entry.skill} skill only. ` +
-    `Change only ${listed([...entry.writes, 'the day pages'])}.`
+    `Change only ${listed(entry.writes)}.`
   )
 }
 
-// The skills pi gets for a backfill's batch: the backfill's own and `day-pages`, if the agent has
-// it, in the agent's order.
+// The skills pi gets for a backfill's batch: the backfill's own, alone.
 export function backfillSkills(agent, entry) {
-  return agent.skills.filter(skill => skill.name === entry.skill || skill.name === DAY_PAGES_SKILL)
+  return agent.skills.filter(skill => skill.name === entry.skill)
 }
 
 // Whether a backfill that may change `writes` may change `file`, a path from the agent's folder: a
-// file `writes` names, anything in a folder it names (ending in `/`), or a day page.
+// file `writes` names, or anything in a folder it names (ending in `/`).
 export function mayChange(file, writes) {
-  if (file.startsWith(DAY_PAGES)) return true
   return writes.some(write => (write.endsWith('/') ? file.startsWith(write) : file === write))
 }
 

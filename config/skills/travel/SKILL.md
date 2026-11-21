@@ -31,6 +31,5 @@ One row per leg, under that header. The CSV rules of your instructions apply.
 - A stay at a hotel, or any place booked to sleep, is a row with `mode` `stay`: `date` is the day of check-in, `depart_time` the check-in time if given, `from` empty, `to` the town, `carrier` the place's name, `number` empty, `seat` the room if given, `booking_ref`, and `arrive` the day of check-out, with its time if given.
 - Getting around where the owner is, such as a cab across town, isn't travel: it is only an expense.
 - The price of a ticket or a stay is also an expense, dated the day it was paid, with the category `Travel`.
-- A journey goes on the page of the day it departs, and the day it was booked gets a "booked" line (the day-pages skill).
 - A change, such as a new time or seat, updates the row, and its message joins `source`. A cancellation keeps the row, with `cancelled` in `note`, and its message in `source`.
 - Before adding a row, look for the same `booking_ref` and leg: a ticket that arrives twice, once on WhatsApp and once by email, is one row.

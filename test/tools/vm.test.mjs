@@ -156,7 +156,7 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
   // two levels down, inside the read-only `run/`.
   const writable = [
     'views/expenses.csv',
-    'views/days/2026/11/2026-11-09.md',
+    'views/books/2026/11/dune.md',
     'memory/needs-review.md',
     'run/session/lifelog-2026-11-09.jsonl',
   ]

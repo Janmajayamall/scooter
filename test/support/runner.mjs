@@ -55,7 +55,7 @@ export const line = {
 }
 
 // The skills of the default config.
-export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages']
+export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people']
 
 // The example `agents.yaml`, with the backfill entry when `backfill` is true.
 export function exampleYaml({ backfill = false } = {}) {
@@ -70,7 +70,6 @@ export function exampleYaml({ backfill = false } = {}) {
       - skills/meals
       - skills/travel
       - skills/people
-      - skills/day-pages
     reads: [whatsapp, email]             # the sources this agent works on
     session: daily                       # daily or none
     reply_mode: quiet                    # quiet or confirm
@@ -83,8 +82,6 @@ export function exampleYaml({ backfill = false } = {}) {
         task: >-
           Evening check-in. List in a few lines what you filed today,
           mention anything that looks missing, and list the open questions.
-      # - once: poems                    # runs once; the ID is remembered
-      #   task: Write poems for my earlier images captioned "poem".
 ${backfill ? '      - backfill: people-1\n        skill: people\n        writes: [views/people.csv]\n' : ''}`
 }
 
@@ -137,7 +134,6 @@ export function exampleState() {
     retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T14:33:30Z', reason: 'not reported' }],
     failed: [],
     session: null,
-    onceDone: [],
     backfillDone: [],
     scheduled: { '21:30': '2026-11-08' },
     lastRun: { at: '2026-11-09T14:32:30Z', ok: true, seqs: [1047], durationMs: 41000 },

@@ -380,12 +380,8 @@ test('state: a task that fails on a setup error or an outage stays due; otherwis
   assert.equal(outage.paused.cause, 'outage')
   assert.deepEqual(outage.lastRun, { at: '2026-11-09T15:50:10Z', ok: false, seqs: [], durationMs: 50000 })
 
-  const once = { kind: 'once', id: 'poems' }
-  assert.deepEqual(settleTask(state, once, { ok: true }, TIMING).onceDone, ['poems'])
-  assert.deepEqual(settleTask(state, once, { ok: false, cause: 'other', reason: 'timed out' }, TIMING).onceDone, [])
-  assert.deepEqual(settleTask(state, once, { ok: false, cause: 'setup', reason: 'x' }, TIMING).onceDone, [])
   // The cursor is the messages', and a task leaves it.
-  assert.equal(settleTask({ ...state, cursor: 7 }, once, { ok: true }, TIMING).cursor, 7)
+  assert.equal(settleTask({ ...state, cursor: 7 }, scheduled, { ok: true }, TIMING).cursor, 7)
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -405,7 +401,10 @@ test('notices: the first failure, with its short reason', () => {
   assert.equal(text({ kind: 'messages' }, { cause: 'outage', reason: 'OpenRouter answered 503' }), "⚠️ I couldn't process your last messages (OpenRouter answered 503). I'll try again.")
   assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'other', reason: 'timed out' }), "⚠️ I couldn't run the scheduled task 21:30 (timed out). It runs again at its next time.")
   assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'outage', reason: 'x' }), "⚠️ I couldn't run the scheduled task 21:30 (x). I'll try again.")
-  assert.equal(text({ kind: 'once', id: 'poems' }, { cause: 'other', reason: 'pi exited with code 1' }), "⚠️ I couldn't run the task poems (pi exited with code 1). I'll try it again when I next start.")
+  assert.equal(
+    text({ kind: 'scheduled', at: '21:30' }, { cause: 'setup', reason: 'OpenRouter answered 401' }),
+    "⚠️ I couldn't run the scheduled task 21:30 (OpenRouter answered 401). Runs are paused until this is fixed. I'll try again every 30 minutes.",
+  )
 })
 
 test('notices: items given up on, each named by what it says now', t => {

@@ -140,9 +140,9 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
     // - the modes. git keeps only whether a file can be run, and pi chose the rest, such as a
     //   folder no later run could write. Folders get 0700, and files 0600, or 0700 when they can
     //   be run (`resetModes`).
-    // - empty folders. An ordinary run can leave one, such as a month's folder once its only day
-    //   page is gone, so it doesn't fail the run; but it would carry over to later runs outside
-    //   git. They are removed, the deepest first.
+    // - empty folders. An ordinary run can leave one, such as a folder once the only file a skill
+    //   kept in it is gone, so it doesn't fail the run; but it would carry over to later runs
+    //   outside git. They are removed, the deepest first.
     async stage(folders = AGENT_FOLDERS) {
       for (const folder of folders) {
         const full = Buffer.from(path.join(dir, folder))

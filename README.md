@@ -1,6 +1,6 @@
 # Scooter
 
-Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets and a page per day, and asks you when it's unsure. Everything is backed up every night, encrypted.
+Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets, and asks you when it's unsure. Everything is backed up every night, encrypted.
 
 This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`, and `AGENTS.md` says how to work on the code.
 
@@ -32,7 +32,7 @@ you (WhatsApp, email) ──▶ bridge ──▶ datastore ──▶ runner ─�
 ```
 
 - **The bridge** runs as root. It runs [wacli](https://github.com/openclaw/wacli), a WhatsApp client linked to the bot's number, as the user `scooter-wacli`, and the email reader as `scooter-mail`. It writes every message from you to the **datastore**, a log that is only ever appended to. It sends the replies, answers `/status`, `/backup` and `/help`, and makes the backups.
-- **The runner** runs as `scooter-runner`. It holds the OpenRouter key. When you have been quiet for 8 seconds it gives your new messages to the agent, [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), which runs in a fresh virtual machine for every batch, with no secrets and no network of its own. Everything pi sends goes through the runner's network policy, which allows OpenRouter's two chat endpoints and nothing else, and logs every request. pi writes the **views** (CSV files and day pages) and its **memory**; the runner checks what it wrote, commits it to git, and writes the replies to the outbox.
+- **The runner** runs as `scooter-runner`. It holds the OpenRouter key. When you have been quiet for 8 seconds it gives your new messages to the agent, [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), which runs in a fresh virtual machine for every batch, with no secrets and no network of its own. Everything pi sends goes through the runner's network policy, which allows OpenRouter's two chat endpoints and nothing else, and logs every request. pi writes the **views** (CSV files) and its **memory**; the runner checks what it wrote, commits it to git, and writes the replies to the outbox.
 
 The two services share folders and never talk over the network. Nothing listens for connections from outside.
 
@@ -214,7 +214,7 @@ The ones you set: `OWNER_NUMBER` (bridge) and `OPENROUTER_API_KEY` (runner), alw
 
 ## Daily use
 
-Send the bot what you want kept: a receipt photo, a screenshot of a run, a note such as "an hour with Sam, planning the Goa trip", a ticket, a voice note's announcement. Forward bookings and files to the mailbox. Scooter is quiet by default: it reacts ✅ to what it filed, and writes only when it has a question or you asked something. With `reply_mode: confirm` in `agents.yaml` it writes one short line per batch instead. You can reply to its questions; edit or delete a message, and it changes or removes what it filed from it. Standing instructions ("start tracking coffee") go into its memory, `memory/preferences.md`, and apply from then on.
+Send the bot what you want kept: a receipt photo, a screenshot of a run, a note such as "an hour with Sam, planning the Goa trip", a ticket, a voice note's announcement. Forward bookings and files to the mailbox. Scooter is quiet by default: it reacts ✅ to each message it has handled, and writes only when it has a question or you asked something. With `reply_mode: confirm` in `agents.yaml` it writes one short line per batch instead. A message that fits none of the views, such as a note about the day, or that holds nothing to keep, such as "thanks", is kept in the datastore as every message is, and filed in no view; in quiet mode it gets its ✅ all the same. A view for such notes is a skill you add ([The agent's instructions](#the-agents-instructions)). You can reply to its questions; edit or delete a message, and it changes or removes what it filed from it. Standing instructions ("start tracking coffee") go into its memory, `memory/preferences.md`, and apply from then on.
 
 **Commands**, sent on WhatsApp:
 
@@ -225,7 +225,7 @@ Send the bot what you want kept: a receipt photo, a screenshot of a run, a note 
 | `/help` | Lists the commands |
 | `/new` | Starts a fresh conversation with the agent for the rest of the day |
 
-**The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv`, `people.csv`, and `views/days/YYYY/MM/YYYY-MM-DD.md`, a page per day that links to the attachments. The folder is a git repository, with a commit for each batch. To copy the views out:
+**The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
 ```sh
 sudo cp -r /var/lib/scooter/agents/lifelog/views ~/scooter-views && sudo chown -R "$USER" ~/scooter-views   # natively
@@ -233,7 +233,7 @@ docker compose cp runner:/data/agents/lifelog/views ./scooter-views             
 sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog log --stat                                      # what changed when
 ```
 
-A day page links to attachments in the datastore by relative paths, so the links work when the views stay next to the datastore. A guess is marked ❓ at the start of a row's `note`, and the open questions are in `memory/needs-review.md`.
+A guess is marked ❓ at the start of a row's `note`, and the open questions are in `memory/needs-review.md`.
 
 **When a run fails** you get one notice ("⚠️ I couldn't process your last messages (…). I'll try again."), and nothing more until a run gets through. A message the agent couldn't handle after 4 attempts gets a notice too; send it again, or edit it, to bring it back. If OpenRouter refuses the key, has no credit, or has no endpoint that meets zero data retention, runs pause, and the notice says so: fix it, and the next try, every 30 minutes, or restarting the runner, goes on. Nothing is lost meanwhile: messages wait, and are handled once runs go again.
 
@@ -335,7 +335,7 @@ A backfill files the messages from before a skill was added, for that skill alon
 ```yaml
       - backfill: books-1           # an ID of your choosing, used once
         skill: books
-        writes: [views/books.csv]   # what it may change, besides the day pages
+        writes: [views/books.csv]   # what it may change
 ```
 
 It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `/status` shows how far it has got.
@@ -441,13 +441,13 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   npm ci && npm test
   ```
-  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 775 tests, 720 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 772 tests, 717 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
 - **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 777 tests, 759 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 774 tests, 756 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
 
   Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
   ```sh
@@ -458,7 +458,7 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
-  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 775 tests, 709 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 772 tests, 706 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
 
 **The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 
@@ -467,6 +467,7 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
 Some things can only be checked with your phone, your accounts and your keys. Set up the bot's number with `scooter pair`, Scooter's own OpenRouter key with its guardrail, the mailbox with `scooter email-check`, and the bucket with `scooter backup-init`. Then check, and tell the code where reality differs:
 
 - [ ] A receipt photo ends up in `expenses.csv`: the model reads photos through pi's `read` tool.
+- [ ] A note that fits no view, such as "a slow Sunday at home", gets its ✅, and no view changes: the prompt has the agent file nothing for it.
 - [ ] A real batch runs end to end in the sandbox, with your key.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
 - [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.

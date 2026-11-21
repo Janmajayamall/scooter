@@ -19,7 +19,7 @@ const START = '2026-11-09T15:50:30Z'
 test('run: the pi stub takes a message from the datastore to a committed view and a correct state.json', async t => {
   const { runner, clock, state, outbox, git, views, paths, sandbox } = await openTestRunner(t, {
     lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')],
-    state: { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, onceDone: [], backfillDone: [], scheduled: {}, lastRun: null },
+    state: { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null },
     start: START,
   })
 
@@ -55,7 +55,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
 })
 
 // A state that has dealt with the 1,041 lines of filler.
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, onceDone: [], backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
 
 // A runner with the filler and `lines` after it, at 21:20 in Kolkata.
 function openWith(t, lines, options = {}) {
@@ -110,7 +110,7 @@ test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its
     'lifelog-2026-11-09',
     '--append-system-prompt',
     path.join(run, 'system.md'),
-    ...['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages'].flatMap(skill => ['--skill', path.join(run, 'config', 'skills', skill)]),
+    ...['expenses', 'runs', 'meals', 'travel', 'people'].flatMap(skill => ['--skill', path.join(run, 'config', 'skills', skill)]),
     '--',
   ])
   assert.match(spec.argv.at(-1), /^\[scooter\] Now: Monday 9 November 2026, 21:20 \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
@@ -139,7 +139,7 @@ test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its
   assert.equal(seen.sessionsVisible, false)
   assert.deepEqual(seen.sessionFiles, [])
   assert.match(seen.systemPrompt, /^# How you work with Scooter\n/)
-  assert.deepEqual(seen.skills, [true, true, true, true, true, true])
+  assert.deepEqual(seen.skills, [true, true, true, true, true])
   assert.equal(seen.cwd, agent)
   assert.deepEqual(seen.env, env)
 })

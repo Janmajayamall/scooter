@@ -15,8 +15,7 @@
 // |                   | backfill may not change                                                 |
 //
 // A backfill's batch, whose prompt starts with `Backfill`, files each item in the first file
-// it may change instead of `views/notes.csv`, and adds a line for it to the day page of the
-// prompt's `Now:`, `views/days/YYYY/MM/YYYY-MM-DD.md`.
+// it may change instead of `views/notes.csv`.
 //
 // Anywhere in the items or the task, or in `behavior.json` in its control folder, which a test can
 // change between runs:
@@ -124,11 +123,8 @@ for (const line of (prompt ?? '').split('\n')) {
 }
 const everything = [...items.map(item => item.text), task].join('\n')
 
-// A backfill's batch: what it may change, and the owner's date its prompt says it is.
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const backfill = (prompt ?? '').startsWith('Backfill (from your configuration') ? /Change only (.*) and the day pages\./.exec(prompt)[1].split(', ') : null
-const nowLine = /Now: \w+ (\d+) (\w+) (\d{4}),/.exec(prompt ?? '')
-const today = nowLine ? `${nowLine[3]}-${String(MONTHS.indexOf(nowLine[2]) + 1).padStart(2, '0')}-${nowLine[1].padStart(2, '0')}` : null
+// A backfill's batch: what it may change, from its prompt's first line.
+const backfill = (prompt ?? '').startsWith('Backfill (from your configuration') ? /^.*Change only (.*)\.$/m.exec(prompt)[1].split(/, | and /) : null
 let behavior = {}
 try {
   behavior = JSON.parse(fs.readFileSync(path.join(CONTROL, 'behavior.json'), 'utf8'))
@@ -271,11 +267,6 @@ function act() {
       fs.mkdirSync(path.dirname(notes), { recursive: true })
       if (!fs.existsSync(notes)) fs.writeFileSync(notes, 'seq,text\n')
       fs.appendFileSync(notes, row)
-    }
-    if (backfill) {
-      const page = path.join(views, 'days', today.slice(0, 4), today.slice(5, 7), `${today}.md`)
-      fs.mkdirSync(path.dirname(page), { recursive: true })
-      fs.appendFileSync(page, `- #${item.seq}\n`)
     }
     if (word('ASK')) {
       fs.appendFileSync(path.join(memory, 'needs-review.md'), `- #${item.seq}: work or personal?\n`)

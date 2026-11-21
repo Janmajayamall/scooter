@@ -254,7 +254,7 @@ export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep
   return sections.join('\n\n')
 }
 
-// The prompt of a scheduled or `once` task: the task instead of messages.
+// The prompt of a scheduled task: the task instead of messages.
 export function renderTaskPrompt(task, { header }) {
   return fitToLimit(`${header}\n\n${SECTIONS.task}\n${task.trim()}`)
 }

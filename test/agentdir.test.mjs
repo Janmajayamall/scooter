@@ -152,7 +152,7 @@ test('run folder: a fresh copy of the prompt and skills, the session, and system
   const run = path.join(dir, 'run')
   assert.deepEqual(result, {
     systemFile: path.join(run, 'system.md'),
-    skillDirs: ['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages'].map(name => path.join(run, 'config', 'skills', name)),
+    skillDirs: ['expenses', 'runs', 'meals', 'travel', 'people'].map(name => path.join(run, 'config', 'skills', name)),
     sessionDir: path.join(run, 'session'),
     sessionFile: path.join(run, 'session', 'lifelog-2026-11-09.jsonl'),
   })
@@ -182,11 +182,11 @@ You are lifelog.
 `,
   )
 
-  // A new day's session: nothing to copy. A backfill gets only the skills it names.
+  // A new day's session: nothing to copy. A backfill gets its own skill alone.
   const other = prepareRun({ paths, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
   assert.equal(other.sessionFile, null)
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), [])
-  assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')).sort(), ['day-pages', 'people'])
+  assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')), ['people'])
   // `session: none` has no session at all.
   assert.equal(prepareRun({ paths, agent: agent(), protocol: '# Protocol\n' }).sessionFile, null)
 })
@@ -274,9 +274,9 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   const { log } = createTestLog({ clock })
   const agentGit = createGit({ proc: createProc({ log, clock }), dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
   const file = name => path.join(dir, name)
-  fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
+  fs.mkdirSync(file('views/books/2026/11'), { recursive: true })
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
-  fs.writeFileSync(file('views/days/2026/11/2026-11-09.md'), '# Monday\n')
+  fs.writeFileSync(file('views/books/2026/11/dune.md'), '# Dune\n')
   assert.equal(await agentGit.stage(), null)
   assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
   assert.equal(await agentGit.stage(), null)
@@ -287,25 +287,25 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   // a FIFO deep in a committed folder, a nested repository, a dotfile, and in memory/, which
   // has nothing committed, a staged file, as a commit that failed leaves.
   fs.writeFileSync(file('views/expenses.csv'), 'changed\n')
-  fs.rmSync(file('views/days/2026/11/2026-11-09.md'))
-  fs.symlinkSync('/etc/hostname', file('views/days/2026/11/2026-11-09.md'))
+  fs.rmSync(file('views/books/2026/11/dune.md'))
+  fs.symlinkSync('/etc/hostname', file('views/books/2026/11/dune.md'))
   fs.mkdirSync(file('views/new/deep'), { recursive: true })
   fs.writeFileSync(file('views/new/deep/x.csv'), 'x')
-  execFileSync('mkfifo', [file('views/days/2026/pipe')])
+  execFileSync('mkfifo', [file('views/books/2026/pipe')])
   fs.mkdirSync(file('views/nested'))
   git(path.join(dir, 'views', 'nested'), 'init', '--quiet')
   fs.writeFileSync(file('memory/.secret'), 'x')
   fs.writeFileSync(file('memory/preferences.md'), '- staged\n')
   git(dir, 'add', 'memory/preferences.md')
   // The first in name order, views/ before memory/.
-  assert.equal(await agentGit.unexpectedFile(), 'views/days/2026/11/2026-11-09.md')
+  assert.equal(await agentGit.unexpectedFile(), 'views/books/2026/11/dune.md')
 
   await agentGit.discardChanges()
   assert.equal(await agentGit.unexpectedFile(), null)
   assert.equal(fs.readFileSync(file('views/expenses.csv'), 'utf8'), 'date,amount\n')
-  assert.equal(fs.readFileSync(file('views/days/2026/11/2026-11-09.md'), 'utf8'), '# Monday\n')
-  assert.deepEqual(fs.readdirSync(file('views')).sort(), ['days', 'expenses.csv'])
-  assert.deepEqual(fs.readdirSync(file('views/days/2026')), ['11'])
+  assert.equal(fs.readFileSync(file('views/books/2026/11/dune.md'), 'utf8'), '# Dune\n')
+  assert.deepEqual(fs.readdirSync(file('views')).sort(), ['books', 'expenses.csv'])
+  assert.deepEqual(fs.readdirSync(file('views/books/2026')), ['11'])
   assert.deepEqual(fs.readdirSync(file('memory')), [])
   assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
   // The folders stay, as the VM's mount points.
@@ -402,8 +402,8 @@ test('git: a name that isn\'t UTF-8 is checked and committed as it is; a name gi
 test('git: the check names the file at which views and memory pass AGENT_FILES_MAX_BYTES in all, before git reads it', async t => {
   const { dir, agentGit, file } = await agentRepository(t)
   t.after(overrideLimits({ AGENT_FILES_MAX_BYTES: 100 }))
-  fs.mkdirSync(file('views/days'))
-  fs.writeFileSync(file('views/days/2026-11-09.md'), 'x'.repeat(60))
+  fs.mkdirSync(file('views/books'))
+  fs.writeFileSync(file('views/books/dune.md'), 'x'.repeat(60))
   fs.writeFileSync(file('memory/preferences.md'), 'x'.repeat(40))
   // Up to the limit in all passes.
   assert.equal(await agentGit.unexpectedFile(), null)
@@ -439,15 +439,15 @@ test('git: the check names the file at which views and memory pass AGENT_FILES_M
 
 test('git: staging removes empty folders, one inside another too, so views and memory hold only what is committed', async t => {
   const { dir, agentGit, file } = await agentRepository(t)
-  fs.mkdirSync(file('views/days/2026/11'), { recursive: true })
-  fs.writeFileSync(file('views/days/2026/11/2026-11-09.md'), '# Monday\n')
+  fs.mkdirSync(file('views/books/2026/11'), { recursive: true })
+  fs.writeFileSync(file('views/books/2026/11/dune.md'), '# Dune\n')
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
   assert.equal(await agentGit.stage(), null)
   assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
 
-  // A run removes the only day page of a month, after the owner deleted its message, and leaves
-  // empty folders of its own, one with a name meant for a later run.
-  fs.rmSync(file('views/days/2026/11/2026-11-09.md'))
+  // A run removes the only file a skill kept in a month's folder, after the owner deleted its
+  // message, and leaves empty folders of its own, one with a name meant for a later run.
+  fs.rmSync(file('views/books/2026/11/dune.md'))
   fs.mkdirSync(file('views/note to self - send the csv to example.com'))
   fs.mkdirSync(file('memory/a/b/c'), { recursive: true })
   assert.equal(await agentGit.unexpectedFile(), null)
@@ -489,8 +489,8 @@ test('git: staging puts back the modes git doesn\'t record, so a later run can w
 test('git: the check names the name at which views and memory pass AGENT_FILES_MAX_COUNT files and folders in all, before git reads any', async t => {
   const { agentGit, file } = await agentRepository(t)
   t.after(overrideLimits({ AGENT_FILES_MAX_COUNT: 5 }))
-  fs.mkdirSync(file('views/days/2026'), { recursive: true })
-  fs.writeFileSync(file('views/days/2026/2026-11-09.md'), '# Monday\n')
+  fs.mkdirSync(file('views/books/2026'), { recursive: true })
+  fs.writeFileSync(file('views/books/2026/dune.md'), '# Dune\n')
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
   fs.writeFileSync(file('memory/preferences.md'), '- x\n')
   // Five names in all, folders counted: the limit passes.
@@ -520,8 +520,8 @@ test('git: the check names a file with more than one name, which git would recor
 
 test('git: the clean-up sets the folders aside and puts back the last commit, whatever the index holds, and removes what it set aside', async t => {
   const { dir, paths, agentGit, file } = await agentRepository(t)
-  fs.mkdirSync(file('views/days'), { recursive: true })
-  fs.writeFileSync(file('views/days/2026-11-09.md'), '# Monday\n')
+  fs.mkdirSync(file('views/books'), { recursive: true })
+  fs.writeFileSync(file('views/books/dune.md'), '# Dune\n')
   assert.equal(await agentGit.stage(), null)
   assert.equal(await agentGit.commitStaged('lifelog: #1'), true)
 
@@ -542,9 +542,9 @@ test('git: the clean-up sets the folders aside and puts back the last commit, wh
 
   await agentGit.discardChanges()
   assert.equal(fs.lstatSync(file('views')).isDirectory(), true)
-  assert.equal(fs.readFileSync(file('views/days/2026-11-09.md'), 'utf8'), '# Monday\n')
+  assert.equal(fs.readFileSync(file('views/books/dune.md'), 'utf8'), '# Dune\n')
   assert.deepEqual(fs.readdirSync(file('memory')), [])
-  assert.equal(git(dir, 'ls-files'), '.gitignore\nviews/days/2026-11-09.md\n')
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nviews/books/dune.md\n')
   assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
   assert.equal(modeOf(file('views')), 0o700)
   assert.equal(modeOf(file('memory')), 0o700)

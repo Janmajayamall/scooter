@@ -208,13 +208,13 @@ test('pi 3: edit and write leave nothing beside the files they change', options,
   const data = makeDataDir(dir)
   const { agent } = data
   fs.writeFileSync(`${agent}/views/expenses.csv`, 'date,amount\n')
-  const page = `${agent}/views/days/2026/11/2026-11-09.md`
+  const book = `${agent}/views/books/2026/11/dune.md`
   const preferences = `${agent}/memory/preferences.md`
   const model = createFakeModel([
     { tool: 'write', args: { path: `${agent}/views/expenses.csv`, content: 'date,amount\n2026-11-09,150\n' } },
     { tool: 'write', args: { path: `${agent}/views/runs.csv`, content: 'date,distance_km\n' } },
-    { tool: 'write', args: { path: page, content: '# Monday 9 November 2026\n\n## Notes\n- coffee\n' } },
-    { tool: 'edit', args: { path: page, edits: [{ oldText: '- coffee', newText: '- coffee, ₹150' }] } },
+    { tool: 'write', args: { path: book, content: '# Dune\n\n- started\n' } },
+    { tool: 'edit', args: { path: book, edits: [{ oldText: '- started', newText: '- started, chapter 3' }] } },
     { tool: 'edit', args: { path: preferences, edits: [{ oldText: 'Track coffee.', newText: 'Track coffee and tea.' }] } },
     { text: 'NO_REPLY\nDONE: 1050' },
   ])
@@ -227,15 +227,15 @@ test('pi 3: edit and write leave nothing beside the files they change', options,
   await vm.close()
 
   assert.deepEqual(listing(`${agent}/views`), [
-    'days (folder)',
-    'days/2026 (folder)',
-    'days/2026/11 (folder)',
-    'days/2026/11/2026-11-09.md (file)',
+    'books (folder)',
+    'books/2026 (folder)',
+    'books/2026/11 (folder)',
+    'books/2026/11/dune.md (file)',
     'expenses.csv (file)',
     'runs.csv (file)',
   ])
   assert.deepEqual(listing(`${agent}/memory`), ['preferences.md (file)'])
-  assert.equal(fs.readFileSync(page, 'utf8'), '# Monday 9 November 2026\n\n## Notes\n- coffee, ₹150\n')
+  assert.equal(fs.readFileSync(book, 'utf8'), '# Dune\n\n- started, chapter 3\n')
   assert.equal(fs.readFileSync(preferences, 'utf8'), '- 2026-11-09 (#1040): Track coffee and tea.\n')
   // The session folder holds the session file and nothing else, such as a lock.
   assert.equal(listing(data.session).length, 1)

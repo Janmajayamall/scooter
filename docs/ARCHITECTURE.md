@@ -8,7 +8,7 @@ Scope: v2 on Linux.
 
 ## What Scooter does
 
-The owner sends receipts, run screenshots, food photos, travel tickets, notes about time spent with people, and other short notes to a second WhatsApp number, the bot. They can also email things to a mailbox of Scooter's own, such as a forwarded booking or a file. Scooter keeps every message for good. An AI agent turns the messages into spreadsheets and a page per day, and asks the owner when it's unsure. Everything is backed up nightly, encrypted. Answering questions about the data, and acting for the owner, are for a separate assistant later ([Deferred and out of scope](#deferred-and-out-of-scope)).
+The owner sends receipts, run screenshots, food photos, travel tickets, notes about time spent with people, and other short notes to a second WhatsApp number, the bot. They can also email things to a mailbox of Scooter's own, such as a forwarded booking or a file. Scooter keeps every message for good. An AI agent turns the messages into spreadsheets, and asks the owner when it's unsure. Everything is backed up nightly, encrypted. Answering questions about the data, and acting for the owner, are for a separate assistant later ([Deferred and out of scope](#deferred-and-out-of-scope)).
 
 The principles, which hold everywhere:
 
@@ -47,7 +47,7 @@ The principles, which hold everywhere:
 1. The owner sends a receipt photo to the bot. wacli, a linked device of the bot's number, receives it and posts a signed webhook to the bridge on loopback ([The webhook](architecture/whatsapp.md#the-webhook)).
 2. The WhatsApp channel checks the signature and drops anything that isn't the owner's ([From a message to a record](architecture/whatsapp.md#from-a-message-to-a-record)). Intake downloads the photo, and the store gives the message the next `seq` and appends one line to the datastore ([Intake](architecture/bridge.md#intake), [Writing](architecture/datastore.md#writing)).
 3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch and a prompt, takes the run lock, boots a fresh VM and runs pi in it ([When the agent runs](architecture/runner.md#when-the-agent-runs), [A run](architecture/run.md#a-run), [A VM for each run](architecture/sandbox.md#a-vm-for-each-run)).
-4. pi reads the photo from the datastore, which is mounted read-only, updates `views/expenses.csv` and the day page, and ends its answer with `DONE: 1042`. Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
+4. pi reads the photo from the datastore, which is mounted read-only, updates `views/expenses.csv`, and ends its answer with `DONE: 1042`. Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
 5. The runner checks the files pi left, commits them, writes outbox entries, here a ✅ reaction, and updates its state ([After a successful run](architecture/run.md#after-a-successful-run), [Outbox entries](architecture/exchange.md#outbox-entries)).
 6. The bridge takes the outbox entry, sends the reaction through wacli, and appends an `out` line to the datastore ([Sending an entry](architecture/delivery.md#sending-an-entry)).
 
@@ -72,7 +72,7 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
 | The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
 | The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
-| The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/day-pages/SKILL.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
+| The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
 | Configuration and the CLI | [configuration.md](architecture/configuration.md) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
 | Install, native and Docker | [install.md](architecture/install.md) | `src/ops/setup.mjs`, `src/ops/doctor.mjs`, `deploy/systemd/scooter-bridge.service`, `deploy/systemd/scooter-runner.service`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` |
 
@@ -252,7 +252,7 @@ These were settled with the owner. **Don't change any of them without asking the
 | Backups | restic 0.19.1 to an S3-compatible bucket (Cloudflare R2 or Backblaze B2), encrypted on the server before upload, nightly. Consistency comes from stopping the writers for the length of the backup, not from snapshots. |
 | Settings | Time zone, home currency, reply mode, model, the agent's internet access and how its VMs are accelerated are configurable. |
 | Internet | The agent has no internet access unless the owner turns it on (`AGENT_INTERNET=on`). Off, its VM can reach only OpenRouter's two chat endpoints. On, it can also reach public HTTPS websites. In both modes the runner refuses requests that would make OpenRouter fetch from the web for the agent, and logs every request: when, which host and path, and how many bytes each way, but not what was sent. |
-| Time | Every time Scooter stores or compares is in UTC: the datastore's times and day folders, the times in `state.json`, outbox IDs and logs. The owner's time zone (`SCOOTER_TZ`) is used only for what the owner sees or sets: replies, `/status`, views and day pages, the times in the agent's prompt, and the schedule settings (scheduled tasks, `BACKUP_TIME`, `SESSION_ROLLOVER_HOUR`), which code turns into UTC instants. |
+| Time | Every time Scooter stores or compares is in UTC: the datastore's times and day folders, the times in `state.json`, outbox IDs and logs. The owner's time zone (`SCOOTER_TZ`) is used only for what the owner sees or sets: replies, `/status`, views, the times in the agent's prompt, and the schedule settings (scheduled tasks, `BACKUP_TIME`, `SESSION_ROLLOVER_HOUR`), which code turns into UTC instants. |
 | Replies | Quiet mode by default. |
 | Preferences | Standing instructions the owner gives by message go in the agent's memory (`preferences.md`). There's no approval step and no change notice; git history is the audit trail. |
 
@@ -301,7 +301,7 @@ The project's own names, each used one way in these documents.
 | work item | An `in` line from a source the agent reads, of kind `message`, `edit` or `delete` |
 | batch | The work items one run is given |
 | run | One run of pi, in one VM, on one batch or task |
-| view | A file the agent keeps in `views/`: a CSV or a day page |
+| view | A file the agent keeps in `views/`, such as `expenses.csv` |
 | memory | The agent's `memory/`: the owner's standing instructions and the open questions |
 | session | pi's conversation, kept by the runner for each of the owner's days |
 | network policy | The runner's rules for what pi's VM may send |

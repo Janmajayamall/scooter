@@ -45,7 +45,7 @@ Every run of pi gets a fresh Gondolin micro-VM on QEMU, booted from an image Sco
 
 ## Mounts
 
-The runner asks for these mounts for every run (`piMounts`), at the same paths as on the host, so the paths in the prompt, in pi's tool calls and in the day pages' links read the same everywhere:
+The runner asks for these mounts for every run (`piMounts`), at the same paths as on the host, so the paths in the prompt and in pi's tool calls read the same everywhere:
 - the agent's folder, `agents/<agent>/`, read-only, except `views/`, `memory/` and `run/session/`, which are writable, and `sessions/`, which is hidden;
 - the datastore, read-only.
 

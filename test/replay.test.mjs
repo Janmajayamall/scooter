@@ -14,7 +14,7 @@ import { indexOf, line } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', session: 'daily', run: { newMessages: true, scheduled: [], once: [], backfill: [] } }
+const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', session: 'daily', run: { newMessages: true, scheduled: [], backfill: [] } }
 // When the replay looks at its retries: long after every message.
 const LATER = Date.parse('2026-11-18T10:00:00Z')
 
@@ -155,7 +155,7 @@ test('replay: an edit brings in the message it changes, from another day, which 
 })
 
 test("replay: a backfill's prompt starts with its line", () => {
-  const intro = 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and the day pages.'
+  const intro = 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv.'
   const built = replay({ intro })
   assert.equal(built.prompt.split('\n')[0], intro)
   assert.match(built.prompt.split('\n')[1], /^\[scooter\] Now: Saturday 7 November 2026, 23:50 /)
