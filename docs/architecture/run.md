@@ -44,7 +44,7 @@ The runner reads pi's final answer, its stdout as pi prints it ([Facts about pi 
 - Every other line is message text. Text before the first `REPLY_TO` is a plain message; in a batch its `about` is the batch's newest item, so it follows the owner's latest message ([Outbox entries](exchange.md#outbox-entries)). Empty messages are dropped.
 - `FAILED` wins over `DONE` for the same item. Its reason is the agent's, cut to one line of `REASON_MAX_CHARS`, or "no reason given". The agent explains it in its own answer, so the runner sends no notice.
 - `DONE` or `FAILED` for a `seq` that wasn't in the batch is ignored and logged.
-- `REPLY_TO` quotes a message. One that names an edit or a deletion quotes the message it changes. One that names a reaction, a command, or a number that doesn't exist sends its text without a quote, `about` the batch's newest item, like plain text.
+- `REPLY_TO` quotes a message. One that names an edit or a deletion quotes the message it changes. One that names a reaction, or a number that doesn't exist, sends its text without a quote, `about` the batch's newest item, like plain text.
 - `NO_REPLY` anywhere means no text is sent, `REPLY_TO` texts included. Reactions still go.
 - In quiet mode the runner also writes a `react` entry with `ack_reaction` for each item reported `DONE` that is a message, still there, and not answered by a `REPLY_TO`: those got a reply instead. Reacting to a message the owner has deleted would say nothing.
 - The texts go to the outbox first, in order, then the reactions, by `seq`.
@@ -114,7 +114,7 @@ A run fails when pi exits with a code other than 0, times out, is stopped, or it
 
 ## Notices
 
-Notices are outbox entries `by: "runner"`, which go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)), and go out also with `can_message: false`, as the reply to `/new` does ([Commands](runner.md#commands)).
+Notices are outbox entries `by: "runner"`, which go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)), and go out also with `can_message: false`: that setting is about what the agent sends.
 
 - **The first failure in a row** sends one notice; later failures send nothing until a run succeeds: "⚠️ I couldn't process your last messages (<short reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it, "run the scheduled task 21:30", and says when it runs again. A task is a live run, so a failing task can be the first failure of a row, and one that gets through ends the row.
 - **Items given up on:** one notice listing them: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds.

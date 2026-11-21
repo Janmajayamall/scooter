@@ -1,6 +1,6 @@
 # The email channel
 
-The owner can also email Scooter: a forwarded booking or invoice, or a file such as a voice memo, perhaps announced in a WhatsApp message ("I've emailed you the recording"). Email only comes in ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)): the channel can't send or react, and replies about an email go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)). An email is never a command, an edit, a deletion or a reaction.
+The owner can also email Scooter: a forwarded booking or invoice, or a file such as a voice memo, perhaps announced in a WhatsApp message ("I've emailed you the recording"). Email only comes in ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)): the channel can't send or react, and replies about an email go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)). An email is never an edit, a deletion or a reaction.
 
 The channel has two halves. The **email reader**, a program of its own run as `scooter-mail`, reads the mailbox and hands each email over as a folder in its **spool**. The **email module** of [the bridge](bridge.md#channels) supervises the reader, takes the spool's folders, applies the **sender check**, and hands each email to the core as a record. The reader is the only part of Scooter that uses `imapflow` and `postal-mime`, so their code never runs in the bridge's process.
 
@@ -53,7 +53,7 @@ An address used only by Scooter, at a provider that allows IMAP with an app pass
 - `newest` is when the newest message handed over arrived. If `UIDVALIDITY` changes, the server has renumbered the mailbox: the reader logs it, and `next` becomes the lowest UID the server gives for `SINCE` the day before `newest`, a date in UTC a day early since `SINCE` takes a date in the server's own zone, and everything from it on is handed over again. The bridge skips what it holds by `Message-ID` ([Rules](datastore.md#rules)). Before anything was handed over, `next` is the new `UIDNEXT`. *Cost:* an email without a `Message-ID` is stored again after a renumbering, under its new UID.
 - `parsing` is set to a message's UID before the reader parses it whole, and cleared as soon as postal-mime has returned or thrown, before the folder is written. A start that finds it set for the next message hands that message over unparsed (`mail.parse_failed`). *Why:* a message that ends the reader while it is parsed, killed at `STOP_GRACE` or out of memory, would end it at every start. Cleared only once the folder was renamed, a spool the reader couldn't write would look like such a parse. A `UIDVALIDITY` change clears it too. *Cost:* a reader stopped while parsing, which a backup's stop can do to a large email, hands that one over unparsed.
 - A position that can't be read, which only something other than the reader makes, is logged (`mail.position_unreadable`), and the reader starts from `UIDNEXT`, as the first time.
-- `connected` and `checkedAt`, written after every look, are for `/status`.
+- `connected` and `checkedAt`, written after every look, are for the channel's line in `scooter status` ([What scooter status says of email](#what-scooter-status-says-of-email)).
 
 ## Parsing
 
@@ -97,7 +97,7 @@ Anyone can write the owner's address in `From`; the DMARC result says whether th
 - **The header block** is read from the first `EMAIL_HEADER_MAX_BYTES` of `message.eml`, as UTF-8, up to the first empty line, unfolding continuation lines. A block that doesn't end there, or a line that is neither a header (printable ASCII without a colon, then a colon) nor a continuation, makes the email unreadable, and it is skipped: anything ambiguous is skipped, since the owner's own mail never is.
 - **`From`** is walked as RFC 5322 has it, quoted strings and nested comments passed over: an address in `<…>` with nothing after it but spaces and comments, or else a bare address. A `,` outside them is several addresses, and a `:` or `;` a group; either is skipped. The address is compared with `EMAIL_OWNER_ADDRESSES` exactly, without regard to case.
 - **`Authentication-Results`**: the first after unfolding. Comments are no part of a result: they are dropped, then it is split at `;` outside quoted strings. Its first token is the server, compared with `EMAIL_AUTHSERV_ID` without regard to case.
-- **A skip** is logged as `email.skipped`, with the UID, the sender (the address, when there is one, cut at 254 characters, the longest RFC 5321 allows) and the reason, which names the rule; never the subject or the contents. It is counted for `/status`.
+- **A skip** is logged as `email.skipped`, with the UID, the sender (the address, when there is one, cut at 254 characters, the longest RFC 5321 allows) and the reason, which names the rule; never the subject or the contents. It is counted for `scooter status`.
 
 ## The record of an email
 
@@ -110,9 +110,9 @@ A record ([Channels](bridge.md#channels)) with `source: "email"`, which intake w
 - **Attachments:** first the whole message, `{ type: 'email', mime: 'message/rfc822' }`, stored as `<seq>.eml`; then the parts, each typed `image`, `audio`, `video` or `document` by its MIME type. An email that couldn't be parsed adds `{ type: 'email', error: 'could not be parsed' }`, which intake turns into its `media`; one fetched without its body has the whole message as too large.
 - **Intake keeps an email's files only if the first, the whole message, was stored.** *Why:* the agent's prompt names an email's first file as the whole email, and without it the store would give the first part that name.
 
-## What /status says of email
+## What scooter status says of email
 
-`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started, 21:20` instead, with the time it started. Times past the window are dropped whenever one is added, as well as when `/status` is asked, so a mailbox strangers write to keeps the times of one `STATUS_WINDOW` at most. *Why:* skips are stored nowhere else, and counts in memory are the simplest.
+`Email: connected, last checked 21:40; 2 stored and 1 skipped in the last 24 hours.` The state comes from the reader's `state.json`, read as a file `scooter-mail` controls, up to `STATUS_FILE_MAX_BYTES`, and from whether the reader is running: `connecting to the mailbox`, `the reader stopped, and starts again shortly`, or `stopped`. The counts are kept in memory, over `STATUS_WINDOW`; within that long of the bridge's start the line says `since the bridge started, 21:20` instead, with the time it started. Times past the window are dropped whenever one is added, and whenever the bridge renders the line, every `POLL_INTERVAL` ([The bridge's status.json](bridge.md#the-bridges-statusjson)), so a mailbox strangers write to keeps the times of one `STATUS_WINDOW` at most. *Why:* skips are stored nowhere else, and counts in memory are the simplest.
 
 ## email-check
 

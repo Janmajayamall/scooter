@@ -1,6 +1,6 @@
 # The runner
 
-The runner is the agent's supervisor and bookkeeper. It watches the datastore and decides when the agent runs and on what, builds the batch and the prompt, and hands each run to [A run, and the agent's folder](run.md), which runs pi in [the sandbox](sandbox.md) under [the network policy](network-policy.md), checks and commits what pi left, and writes the outbox entries. It keeps the state, handles `/new`, and runs backfills; a rebuild runs with the runner stopped ([rebuild and backfill](rebuild-and-backfill.md)). Its user, its folders and what it can reach are in [The boundaries](../ARCHITECTURE.md#the-boundaries).
+The runner is the agent's supervisor and bookkeeper. It watches the datastore and decides when the agent runs and on what, builds the batch and the prompt, and hands each run to [A run, and the agent's folder](run.md), which runs pi in [the sandbox](sandbox.md) under [the network policy](network-policy.md), checks and commits what pi left, and writes the outbox entries. It keeps the state and runs backfills; a rebuild runs with the runner stopped ([rebuild and backfill](rebuild-and-backfill.md)). Its user, its folders and what it can reach are in [The boundaries](../ARCHITECTURE.md#the-boundaries).
 
 This document covers the planner, pure functions from the state, the datastore and the clock to the next action (`nextAction`), and the service around it: its start, its loop, its state and its restarts. [A run, and the agent's folder](run.md) covers the executor, one run from the lock to the state (`performRun`).
 
@@ -14,13 +14,12 @@ The runner never:
 - `src/runner/triggers.mjs`: what the agent does next, `nextAction`.
 - `src/runner/batch.mjs`: the batch, its context and its size.
 - `src/runner/prompt.mjs`: the prompt, and `run/system.md`.
-- `src/runner/commands.mjs`: handling the commands: the reply to the outbox, then the state.
 - `src/runner/datastore.mjs`: the runner's view of the datastore: the index, and when it last saw an incoming line.
-- `src/runner/state.mjs`: reading and writing `state.json`; sessions; `/new`; the state at a start.
+- `src/runner/state.mjs`: reading and writing `state.json`; sessions; the state at a start.
 - `src/runner/status.mjs`: `status.json`, and the emulation notice.
 - `src/runner/restarts.mjs`: the runner's own waits between starts.
-- `src/common/agentstate.mjs`: the format of `state.json`, its check and its reader, for the runner and for `/status`.
-- `src/common/runnerstatus.mjs`: the format of `status.json`, its check and its reader, for the runner and for `/status`.
+- `src/common/agentstate.mjs`: the format of `state.json`, its check and its reader, for the runner and for `scooter status`.
+- `src/common/runnerstatus.mjs`: the format of `status.json`, its check and its reader, for the runner and for `scooter status`.
 
 ## Settings
 
@@ -53,18 +52,17 @@ Any other failure to start or to go on exits with 1.
 One thing at a time: a round reads the new lines, asks `nextAction` what comes next, does it, and sleeps `POLL_INTERVAL`, after a run too. So runs never overlap, and are at least `POLL_INTERVAL` apart, which the cause of a failure relies on ([Failures](run.md#failures)).
 
 - An error in a round, such as a damaged datastore, stops the runner with exit code 1, and its service manager starts it again ([Restarts](#restarts)); the start says what is wrong. A run cut short that way changes nothing, and its batch runs again. The errors that come of what pi left are the exceptions, so that nothing pi left can make the runner run a batch again without counting an attempt: what they do instead is in [After a successful run](run.md#after-a-successful-run) and [The clean-up](run.md#the-clean-up).
-- Waiting for `backup.lock`, or for a `run.lock` that isn't the runner's own, as a rebuild holds it, is logged once, when it starts (`runner.waiting`). Commands don't take `run.lock`: they write only an outbox entry and the state.
+- Waiting for `backup.lock`, or for a `run.lock` that isn't the runner's own, as a rebuild holds it, is logged once, when it starts (`runner.waiting`).
 - A stop, on `SIGTERM` or `SIGINT`, aborts a run in progress: the sandbox closes the VM, the lock is let go of, and the run is one cut short, whose changes are thrown away as after a crash ([Failures](run.md#failures)).
 
 ## When the agent runs
 
 The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the newest `log.jsonl` and whether there is a newer day folder; it makes no network calls for this. What comes first, in each round:
 
-1. **Commands** newer than `commandSeq` ([Commands](#commands)), on every round, also while paused, and without waiting for the quiet period.
-2. **Nothing while paused** ([Failures](run.md#failures)) until the next try: no batches, scheduled tasks or backfill batches.
-3. **New messages**, with `on: new-messages`: when there are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without `on: new-messages`, messages wait.
-4. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
-5. **A backfill batch**, only when nothing live is waiting ([Backfill](rebuild-and-backfill.md#backfill)).
+1. **Nothing while paused** ([Failures](run.md#failures)) until the next try: no batches, scheduled tasks or backfill batches.
+2. **New messages**, with `on: new-messages`: when there are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without `on: new-messages`, messages wait.
+3. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
+4. **A backfill batch**, only when nothing live is waiting ([Backfill](rebuild-and-backfill.md#backfill)).
 
 *Why this order:* messages before a scheduled task, because the evening check-in reports what was filed; the backfill last, so that it never holds up live work.
 
@@ -73,26 +71,15 @@ The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the 
 - **At a start**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, in the zone the runner starts with, so a runner that starts after the time waits until the next day, and a changed `SCOOTER_TZ` takes effect at once. The dates of `at` values no longer in the config are dropped. A start during a pause keeps every date as it is instead, so a task a pause holds back stays due across the start, and is the try the start brings forward; a task new in the config starts from now, as at any start. *Why:* comparing dates of the owner's day keeps one run a day across clock changes, and overwriting at a start lets a changed zone start from where it is, where a date from a zone far ahead would hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all; and a zone changed during a pause takes effect for the dates only at the first start after the pause.
 - **Overlap:** runs never overlap ([The loop](#the-loop)). A run's lock is in [A run](run.md#a-run), and how it keeps runs and backups apart in [The locks](exchange.md#the-locks).
 
-## Commands
-
-Before anything else, the runner handles the command lines newer than `commandSeq` itself: it writes each reply, then saves the state at once. The index keeps the `seq` of each command, so they are found without reading every line again.
-
-- **`/new`** starts a fresh pi session for the rest of the session's day, by bumping the session ([Sessions](#sessions)), and replies "Started a fresh conversation.", `by: "runner"`, with `about` set to the command ([Outbox entries](exchange.md#outbox-entries)). It is sent also with `can_message: false`: that setting is about what the agent sends. It applies to all work not yet given to the agent, wherever the command sits among the waiting messages. A `/new` counts for the session of the day it was sent, or of now if its time is later.
-- The other commands are the bridge's, and the runner passes over them ([Commands](bridge.md#commands)).
-
-*Why `commandSeq`, and not the cursor:* a run cut short by a crash leaves the cursor where it was, so going by the cursor would handle the same command again. Handled at once, a lone `/new` doesn't wait for the next message.
-
 ## State
 
-The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, indented for the owner who reads it. Its format, and the check every reader and writer applies, are `src/common/agentstate.mjs`, which `/status` reads too ([/status](bridge.md#status)).
+The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, indented for the owner who reads it. Its format, and the check every reader and writer applies, are `src/common/agentstate.mjs`, which `scooter status` reads too ([scooter status](bridge.md#scooter-status)).
 
 ```json
 {
   "cursor": 1049,
-  "commandSeq": 1038,
   "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
   "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
-  "session": {"day": "2026-11-09", "bump": 0},
   "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
   "backfillDone": [],
   "scheduled": {"21:30": "2026-11-09"},
@@ -101,23 +88,22 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 ```
 
 - `cursor` is the highest `seq` the runner has dealt with, by giving it to the agent or by skipping it. Everything after it is new.
-- `commandSeq` is the `seq` of the newest command line the runner has handled.
 - An item in `retry` may have 0 `attempts`: after a setup error or an outage, a new item waits there with its count unchanged.
 - `paused` exists only while a setup error or an outage holds runs back: `{ since, cause, reason, next, tries }`, `cause` being `setup` or `outage`, and `tries` the failed tries in a row.
 - `backfill` exists only while a backfill is in progress; `backfillDone` lists the finished ones ([Backfill](rebuild-and-backfill.md#backfill)).
 - `lastRun` is `{ at, ok, seqs, durationMs }`, `at` being the run's start. A scheduled task is a live run too, with no `seqs`.
-- An agent that has never run has `cursor` and `commandSeq` 0, empty lists, `scheduled` `{}`, and `session` and `lastRun` null.
-- Times are UTC. `session.day` and the dates in `scheduled` are dates of the owner's day, since the session and the schedule follow it.
+- An agent that has never run has `cursor` 0, empty lists, `scheduled` `{}`, and `lastRun` null.
+- Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines, reactions and commands, isn't work: the cursor moves past it, and the agent doesn't report on it. `out` lines and reactions are shown to the agent as context ([The prompt](#the-prompt)); commands never are. *Why:* a command is an instruction to Scooter, not a message to file.
+**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines and reactions, isn't work: the cursor moves past it, and the agent doesn't report on it, and both are shown to the agent as context ([The prompt](#the-prompt)).
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 
 ## Sessions
 
 - **The session's day** is the owner's local date, or the day before while the local clock is before `SESSION_ROLLOVER_HOUR`. It goes by the clock, not by hours since midnight, so on a day the clocks change it still changes at that hour.
-- **The session's ID** is `<agent>-<day>`, and `-<n>` after the nth `/new` of that day: `session` holds the day of the newest `/new` and how many there were; on another day there were none. With `session: none`, pi runs without one. A scheduled task runs in the day's session too, so the evening check-in knows what the day's runs filed.
+- **The session's ID** is `<agent>-<day>`, so a day's session ends at `SESSION_ROLLOVER_HOUR`, or when its file is removed from `sessions/`. With `session: none`, pi runs without one. A scheduled task runs in the day's session too, so the evening check-in knows what the day's runs filed.
 - How a session is kept, and what a run may do to it, is in [The session's copy](run.md#the-sessions-copy).
 
 ## The batch
@@ -126,7 +112,7 @@ A batch is due retries first, then work items after the cursor, oldest first, at
 
 - **An edit or a deletion in the batch brings in the message it changes** when that message waits in `retry`, due or not, or is in `failed`. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. These may take the batch past `BATCH_MAX_ITEMS`. *Why:* otherwise the edit could be handled before the message it changes, and the retry would later file the old text.
 - An item in `retry` whose line isn't a work item of the agent, which only a changed `reads` or a damaged state gives, is never due, and starts no batch.
-- **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line, with the context, the commands and the lines of sources the agent doesn't read in that stretch. Where the cursor goes after the run is in [Failures](run.md#failures).
+- **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line, with the context and the lines of sources the agent doesn't read in that stretch. Where the cursor goes after the run is in [Failures](run.md#failures).
 - **The context:** the `out` lines and reactions from the oldest item to the end of what the batch covers, plus every message an item quotes.
 - **The newest item**, which an answer's plain text is about ([Reading the answer](run.md#reading-the-answer)), is the item with the highest `seq`.
 
@@ -167,8 +153,8 @@ For context only (no action, no DONE):
 - **Every text** the owner or the agent wrote is a JSON string, so a line break or a quote in it can't pass for the prompt's own lines.
 - **A file's kind** comes from its MIME type: `photo`, `video`, `audio` or `document`, with its absolute path, its MIME type and its original name. A message's further files are `attachment` lines under it. Media that couldn't be stored says so: `photo, not stored (download failed)`, with the caption if there is one.
 - **Every message is shown as it is now:** with the text of its latest edit, marked `(edited in #<seq>)`, or, if it was deleted, `(deleted in #<seq>)` in place of its content. That holds for new items, retries and quoted messages. An edit is `edit of #1051, now: "<its own text>"`, and a deletion `deletion of #1051`.
-- **A reply** shows the quoted message and who sent it: "you sent", "the owner sent", `↳ reply to an earlier message: "<the quoted preview>"` when Scooter doesn't have it, `↳ reply to a command`, or `↳ reply to #N: "<quoted>"` for a line the index can't show. A reply to a photo shows the photo's path. Forwarded messages are marked as forwarded.
-- **Context lines** are listed newest first, and say who sent them: `you` for the agent's own, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices and replies to `/status`. One is shown with the message it replies to: `you sent, in reply to #1047: "…"`.
+- **A reply** shows the quoted message and who sent it: "you sent", "the owner sent", `↳ reply to an earlier message: "<the quoted preview>"` when Scooter doesn't have it, or `↳ reply to #N: "<quoted>"` for a line the index can't show. A reply to a photo shows the photo's path. Forwarded messages are marked as forwarded.
+- **Context lines** are listed newest first, and say who sent them: `you` for the agent's own, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices. One is shown with the message it replies to: `you sent, in reply to #1047: "…"`.
 - **An email** shows `email`, its subject and its text, then each attachment, and the whole message; one that couldn't be read adds `email not stored (could not be parsed)`:
   ```
   #1071 21:42 email "Call with Sam": "Recording from today's call."
@@ -199,7 +185,7 @@ The runner stops on an error that isn't pi's, such as a damaged datastore or a s
 
 ## status.json
 
-The bridge reads neither the config folder nor `runner.env` ([Secrets](../ARCHITECTURE.md#secrets)), so the runner tells it what `/status` needs from them ([/status](bridge.md#status)). At every start it writes `runner/status.json`, atomically, mode 0600: `{ startedAt, accel, zdr, internet, imageBuiltAt, agents: { <name>: { model, timeoutMinutes, reads } }, restart }`. `accel` is `kvm` or `emulation`; `imageBuiltAt` is null when the sandbox doesn't know it; the model is each agent's, as `agents.yaml` has it; and `restart`, where the runner keeps its own waits, says whether this start waits before it goes on, how many stops, until when and why ([Restarts](#restarts)). A runner stopped during that wait writes it again without `restart`, as best it can, so `/status` doesn't say it waits. Its format, `src/common/runnerstatus.mjs`, refuses an agent's name `agents.yaml` wouldn't allow, because the bridge makes a path of it. A `status.json` that can't be read at a start is logged and counts as none.
+`scooter status` is a command of the bridge's side, which reads neither the config folder nor `runner.env` ([Secrets](../ARCHITECTURE.md#secrets)), so the runner writes what it needs from them ([scooter status](bridge.md#scooter-status)). At every start it writes `runner/status.json`, atomically, mode 0600: `{ startedAt, accel, zdr, internet, imageBuiltAt, agents: { <name>: { model, timeoutMinutes, reads } }, restart }`. `accel` is `kvm` or `emulation`; `imageBuiltAt` is null when the sandbox doesn't know it; the model is each agent's, as `agents.yaml` has it; and `restart`, where the runner keeps its own waits, says whether this start waits before it goes on, how many stops, until when and why ([Restarts](#restarts)). A runner stopped during that wait writes it again without `restart`, as best it can, so `scooter status` doesn't say it waits. Its format, `src/common/runnerstatus.mjs`, refuses an agent's name `agents.yaml` wouldn't allow, because `scooter status` makes a path of it. A `status.json` that can't be read at a start is logged and counts as none.
 
 **The emulation notice.** At a start, when `AGENT_ACCEL=auto`, the sandbox runs under emulation and the `status.json` of the last start doesn't say `emulation`, the runner sends a notice ([Notices](run.md#notices)): "⚠️ My VMs run under emulation now, because KVM isn't available, so each batch takes much longer. Run `scooter doctor` on the runner to see how to enable KVM." A first start counts as a change. `AGENT_ACCEL=emulation` sends none: nothing fell back. The notice is written before `status.json`, so a crash between the two sends it twice rather than never. *Why only on a change:* a runner that keeps restarting would otherwise message the owner each time.
 

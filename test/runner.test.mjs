@@ -459,6 +459,12 @@ test('sessions: a day\'s session ends at SESSION_ROLLOVER_HOUR, and the runs aft
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')).sort(), ['lifelog-2026-11-09.jsonl', 'lifelog-2026-11-10.jsonl'])
   // The new session didn't continue the old one.
   assert.equal(sandbox.seen()[1].sessionContinued, false)
+  // A session whose file is removed ends too: the next run starts it again.
+  fs.rmSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-10.jsonl'))
+  add(line.text(1044, '2026-11-09T22:31:00Z', 'and breakfast'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(sandbox.runs[2].spec.argv[sandbox.runs[2].spec.argv.indexOf('--session-id') + 1], 'lifelog-2026-11-10')
+  assert.equal(sandbox.seen()[2].sessionContinued, false)
 })
 
 // ---------------------------------------------------------------------------------------------

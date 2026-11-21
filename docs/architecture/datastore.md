@@ -9,7 +9,7 @@ Who owns its folders, and their modes, is in [Folders and their owners](../ARCHI
 ## Files
 
 - `src/bridge/store.mjs`: the store, the only writer.
-- `src/common/datastore/line.mjs`: the line format and its check, `checkLine`, and the four commands, `COMMANDS`.
+- `src/common/datastore/line.mjs`: the line format and its check, `checkLine`.
 - `src/common/datastore/index.mjs`: the index the bridge and the runner each keep.
 - `src/common/datastore/reader.mjs`: reading the lines back, by polling.
 
@@ -34,14 +34,14 @@ datastore/
 | Field | Type | Present | Meaning |
 |---|---|---|---|
 | `seq` | integer | always | The message's permanent number. Starts at 1, goes up by 1, never reused |
-| `kind` | string | always | `message`, `edit`, `delete`, `reaction` or `command` |
+| `kind` | string | always | `message`, `edit`, `delete` or `reaction` |
 | `dir` | string | always | `in` (from a source) or `out` (sent by Scooter) |
 | `at` | string | always | When it was sent: ISO 8601 in UTC (`Z`), to the second |
 | `source` | string | always | The channel: `whatsapp` or `email` |
 | `sourceId` | string | when the source has one | The channel's own ID: the WhatsApp message ID, or the email's `Message-ID` |
 | `trust` | string | `dir: in` | `owner` (may give instructions) or `external` (data only; unused in v2) |
 | `by` | string | `dir: out` | Who produced it: the agent's name, `runner` or `bridge` |
-| `text` | string | `message`, `edit`, `command` | The text, a media caption, or an email's body. `""` if none. On a `command`, one of `COMMANDS` |
+| `text` | string | `message`, `edit` | The text, a media caption, or an email's body. `""` if none |
 | `subject` | string | an email's `message` | The email's subject. `""` if none |
 | `files` | array | messages with stored attachments | `[{"path": "1042.jpg", "mime": "image/jpeg", "name": "receipt.jpg", "bytes": 482113}]`. `path` is a file name in the line's own day folder; `name` is the original file name, if the source gave one |
 | `media` | object | media that couldn't be stored | `{"type": "image", "mime": "image/jpeg", "error": "download failed"}` |
@@ -73,7 +73,7 @@ The store is the only module that appends a line, stores an attachment or trunca
 - **`seq` and `files` are the store's to set.** The caller gives the line without them, and the attachments as files already downloaded, `{ path, mime, name }`. The store copies them and leaves the originals, which belong to whoever staged them.
 - **An attachment that can't be copied** stores nothing and uses up no `seq`. What becomes of its message is intake's ([Intake](bridge.md#intake)).
 - **Never rewrite or delete a line.** Edits, deletions and reactions are new lines that point at their target.
-- **A target must be a message or a command.** The store refuses an edit, a deletion or a reaction whose target is any other kind of line.
+- **A target must be a message.** The store refuses an edit, a deletion or a reaction whose target is any other kind of line.
 - **Owners and modes** are those of [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners), set explicitly on every folder and file the store makes, so the umask doesn't matter. The owner is given by whoever opens the store, as `{ uid, gid }`, and left alone without one ([Starting up](bridge.md#starting-up)).
 - **A failed write stops the store.** If a line's `write` or `fsync` fails, the log may end in part of a line, which only a start removes. So the store refuses every later append until the bridge restarts.
 
@@ -87,7 +87,7 @@ At startup the store reads every `log.jsonl` in date order and rebuilds the inde
 
 ## Rules
 
-- **Duplicates.** A `message` or a `command` whose `(source, sourceId)` is already in the index is skipped. The webhook and catch-up can both deliver the same event ([Catch-up](whatsapp.md#catch-up)), so the other kinds have rules too:
+- **Duplicates.** A `message` whose `(source, sourceId)` is already in the index is skipped. The webhook and catch-up can both deliver the same event ([Catch-up](whatsapp.md#catch-up)), so the other kinds have rules too:
   - an `edit` carries the ID of the message it changes ([wacli's formats](whatsapp.md#waclis-formats)), so it is skipped when its text equals its target's current text;
   - a `delete` is skipped when its target is already deleted;
   - a `reaction` is skipped when its own `(source, sourceId)` is already stored.
@@ -98,9 +98,9 @@ At startup the store reads every `log.jsonl` in date order and rebuilds the inde
 
 ## The index
 
-The bridge and the runner each build the same index from the same lines, `createIndex` in `index.mjs`. It answers: which line has this `seq`, and in which day folder and at which line number of its log; which `seq` has this channel ID; and what a message or a command says now, after its edits, and whether it was deleted. It also keeps the `seq` of every command.
+The bridge and the runner each build the same index from the same lines, `createIndex` in `index.mjs`. It answers: which line has this `seq`, and in which day folder and at which line number of its log; which `seq` has this channel ID; and what a message says now, after its edits, and whether it was deleted.
 
-- Messages, commands and reactions are known by their own ID, and the first line with an ID keeps it.
+- Messages and reactions are known by their own ID, and the first line with an ID keeps it.
 - Edits and deletions are never looked up by ID. *Why:* an edit carries its message's ID, and one that took it over would send replies and reactions to the edit.
 - It refuses a line whose `seq` isn't one more than the last, or whose day folder is before the newest.
 

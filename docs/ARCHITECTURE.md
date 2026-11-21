@@ -33,7 +33,7 @@ The principles, which hold everywhere:
  ┌──────────────────────────────────┐                      ┌──────────────────────────────────┐
  │ bridge                           │ ───▶  datastore ───▶ │ runner                           │
  │ channels · intake · delivery     │                      │ triggers · batches · state · git │
- │ commands · backups               │ ◀───   outbox  ◀──── │ ┌──────────────────────────────┐ │
+ │ backups · status                 │ ◀───   outbox  ◀──── │ ┌──────────────────────────────┐ │
  └────────────────┬─────────────────┘                      │ │ network policy and its log   │─┼──▶ OpenRouter
                   │ restic                                 │ └──────────────▲───────────────┘ │
                   ▼                                        │ ┌──────────────┴───────────────┐ │
@@ -60,14 +60,14 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | Component | Document | Files |
 |---|---|---|
 | The datastore | [datastore.md](architecture/datastore.md) | `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, `src/common/datastore/line.mjs`, `src/common/datastore/reader.mjs` |
-| The bridge | [bridge.md](architecture/bridge.md) | `src/bridge/main.mjs`, `src/bridge/channels/index.mjs`, `src/bridge/intake.mjs`, `src/bridge/commands.mjs`, `src/bridge/status.mjs`, `src/bridge/state.mjs` |
+| The bridge | [bridge.md](architecture/bridge.md) | `src/bridge/main.mjs`, `src/bridge/channels/index.mjs`, `src/bridge/intake.mjs`, `src/bridge/status.mjs`, `src/bridge/state.mjs` |
 | The WhatsApp channel | [whatsapp.md](architecture/whatsapp.md) | `src/bridge/channels/whatsapp.mjs` |
 | The email channel | [email.md](architecture/email.md) | `src/bridge/channels/email.mjs`, `src/mail/reader.mjs`, `src/mail/imap.mjs`, `src/mail/parse.mjs`, `src/mail/spool.mjs` |
 | Delivery | [delivery.md](architecture/delivery.md) | `src/bridge/outbox.mjs` |
 | The exchange | [exchange.md](architecture/exchange.md) | `src/common/outbox.mjs`, `src/common/locks.mjs` |
 | Backups | [backups.md](architecture/backups.md) | `src/bridge/backup.mjs` |
 | Shared code | [shared-code.md](architecture/shared-code.md) | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/instance.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/paths.mjs` |
-| The runner | [runner.md](architecture/runner.md) | `src/runner/main.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/commands.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
+| The runner | [runner.md](architecture/runner.md) | `src/runner/main.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
 | A run, and the agent's folder | [run.md](architecture/run.md) | `src/runner/run.mjs`, `src/runner/answer.mjs`, `src/runner/failures.mjs`, `src/runner/agentdir.mjs`, `src/runner/git.mjs` |
 | Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
 | The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
@@ -84,7 +84,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 
 | Level | What | How it's treated |
 |---|---|---|
-| The owner | Their WhatsApp IDs ([Owner matching](architecture/whatsapp.md#owner-matching)); their email addresses, when the mail passes DMARC ([The sender check](architecture/email.md#the-sender-check)) | The only source of instructions and commands |
+| The owner | Their WhatsApp IDs ([Owner matching](architecture/whatsapp.md#owner-matching)); their email addresses, when the mail passes DMARC ([The sender check](architecture/email.md#the-sender-check)) | The only source of instructions |
 | Scooter's own code | The bridge and the runner | Holds the secrets. The bridge's process loads no third-party library; the runner's loads `yaml` and Gondolin |
 | Third-party programs that face the outside | wacli; the email reader, with `imapflow` and `postal-mime` | Their own users, their own folders, only their own settings. What they hand over is validated |
 | A third-party program with the bridge's privileges | restic | Pinned and checksummed ([Running restic](architecture/backups.md#running-restic)) |
@@ -125,7 +125,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | `mail` | `scooter-mail`, 0700 | takes spool folders | no | no | no | writes |
 | `config` | root, group `scooter-runner`; folders 0750, files 0640 | no | reads | sees only the run's copy | no | no |
 
-What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
+What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json`, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
 
 The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner mounts into its VM.
 
@@ -187,8 +187,9 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The outbox entry | runner, bridge → delivery | `src/common/outbox.mjs` | [Outbox entries](architecture/exchange.md#outbox-entries) |
 | The lock files | bridge ↔ runner | `src/common/locks.mjs` | [The locks](architecture/exchange.md#the-locks) |
 | The services' sockets | runner, rebuild, `build-image` ↔ bridge, `restore` | `src/common/instance.mjs` | [One service per data folder](architecture/shared-code.md#one-service-per-data-folder) |
-| `state.json` of an agent | runner → bridge (`/status`) | `src/common/agentstate.mjs` | [State](architecture/runner.md#state) |
-| `status.json` | runner → bridge (`/status`) | `src/common/runnerstatus.mjs` | [status.json](architecture/runner.md#statusjson) |
+| `state.json` of an agent | runner → `scooter status` | `src/common/agentstate.mjs` | [State](architecture/runner.md#state) |
+| `status.json` | runner → `scooter status` | `src/common/runnerstatus.mjs` | [status.json](architecture/runner.md#statusjson) |
+| The bridge's `status.json` | bridge → `scooter status` | `src/bridge/status.mjs` | [The bridge's status.json](architecture/bridge.md#the-bridges-statusjson) |
 | The network log line | runner → bridge, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
 | The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
@@ -252,7 +253,7 @@ These were settled with the owner. **Don't change any of them without asking the
 | Backups | restic 0.19.1 to an S3-compatible bucket (Cloudflare R2 or Backblaze B2), encrypted on the server before upload, nightly. Consistency comes from stopping the writers for the length of the backup, not from snapshots. |
 | Settings | Time zone, home currency, reply mode, model, the agent's internet access and how its VMs are accelerated are configurable. |
 | Internet | The agent has no internet access unless the owner turns it on (`AGENT_INTERNET=on`). Off, its VM can reach only OpenRouter's two chat endpoints. On, it can also reach public HTTPS websites. In both modes the runner refuses requests that would make OpenRouter fetch from the web for the agent, and logs every request: when, which host and path, and how many bytes each way, but not what was sent. |
-| Time | Every time Scooter stores or compares is in UTC: the datastore's times and day folders, the times in `state.json`, outbox IDs and logs. The owner's time zone (`SCOOTER_TZ`) is used only for what the owner sees or sets: replies, `/status`, views, the times in the agent's prompt, and the schedule settings (scheduled tasks, `BACKUP_TIME`, `SESSION_ROLLOVER_HOUR`), which code turns into UTC instants. |
+| Time | Every time Scooter stores or compares is in UTC: the datastore's times and day folders, the times in `state.json`, outbox IDs and logs. The owner's time zone (`SCOOTER_TZ`) is used only for what the owner sees or sets: replies, `scooter status`, views, the times in the agent's prompt, and the schedule settings (scheduled tasks, `BACKUP_TIME`, `SESSION_ROLLOVER_HOUR`), which code turns into UTC instants. |
 | Replies | Quiet mode by default. |
 | Preferences | Standing instructions the owner gives by message go in the agent's memory (`preferences.md`). There's no approval step and no change notice; git history is the audit trail. |
 
@@ -269,9 +270,9 @@ The project's own names, each used one way in these documents.
 | pi | The coding agent program, run in a VM for each run |
 | agent | pi and the model behind it, as one; `lifelog` is its name |
 | channel | A way to the owner: WhatsApp or email, each one module of the bridge |
-| core | The bridge apart from its channels: the store, intake, delivery, the commands and the backups |
+| core | The bridge apart from its channels: the store, intake, delivery and the backups |
 | record | A message as a channel hands it to the core, the same for every channel |
-| line | One JSON object in the datastore, for one message, edit, deletion, reaction or command, in or out |
+| line | One JSON object in the datastore, for one message, edit, deletion or reaction, in or out |
 | `seq` | A line's permanent number, and the only name a message has outside the bridge |
 | datastore | The append-only log of lines, a `log.jsonl` per day folder with the attachments beside it |
 | day folder | `datastore/YYYY/MM/DD`, the UTC date a line was written |
@@ -284,7 +285,7 @@ The project's own names, each used one way in these documents.
 | email reader | The program, run as `scooter-mail`, that reads the mailbox |
 | spool | `mail/spool/`, where the email reader hands each email over as a folder |
 | sender check | The bridge's test that an email is the owner's |
-| command | `/status`, `/backup`, `/help` or `/new`, sent on WhatsApp. A command of `src/cli.mjs`, such as `scooter restore`, is a CLI command |
+| CLI command | A command of `src/cli.mjs`, such as `scooter status` or `scooter restore`. Scooter takes no command by message: whatever the owner sends is a message |
 | exchange | `exchange/`, the runner's folder that holds the outbox and the locks |
 | outbox | Where messages to send wait as entries: the runner's, `exchange/outbox/`, and the bridge's own, `bridge/outbox/` |
 | entry | One message to send, a folder holding `entry.json` |
@@ -314,18 +315,18 @@ The project's own names, each used one way in these documents.
 | To change | Modules | Tests | Documents |
 |---|---|---|---|
 | The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs` | [datastore](architecture/datastore.md), [The prompt](architecture/runner.md#the-prompt) |
-| What becomes a line, attachments, commands recognized | `src/bridge/intake.mjs`, `src/bridge/channels/index.mjs` | `test/intake.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md), [datastore](architecture/datastore.md) |
+| What becomes a line, attachments | `src/bridge/intake.mjs`, `src/bridge/channels/index.mjs` | `test/intake.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md), [datastore](architecture/datastore.md) |
 | WhatsApp: webhook, filters, owner matching, catch-up, downloads, `pair` | `src/bridge/channels/whatsapp.mjs` | `test/whatsapp.test.mjs`, `test/support/wacli-stub.mjs`, `test/tools/wacli.test.mjs` | [whatsapp](architecture/whatsapp.md) |
 | Email: the reader, parsing, the spool, the sender check, `email-check` | `src/mail/`, `src/bridge/channels/email.mjs` | `test/email.test.mjs`, `test/mail-reader.test.mjs`, `test/mail-imap.test.mjs`, `test/mail-parse.test.mjs` | [email](architecture/email.md) |
 | The bridge's start, stop and state | `src/bridge/main.mjs`, `src/bridge/state.mjs` | `test/bridge.test.mjs` | [Starting up](architecture/bridge.md#starting-up), [The bridge's state](architecture/bridge.md#the-bridges-state) |
 | Another channel | a module in `src/bridge/channels/`, `src/bridge/main.mjs`, `SOURCES` in `src/common/datastore/line.mjs` | `test/support/fake-channel.mjs`, `test/routing.test.mjs` | [bridge](architecture/bridge.md), [delivery](architecture/delivery.md) |
 | Routing, chunks, pacing, failed sends | `src/bridge/outbox.mjs` | `test/delivery.test.mjs`, `test/routing.test.mjs` | [delivery](architecture/delivery.md) |
 | The outbox entry, or the locks | `src/common/outbox.mjs`, `src/common/locks.mjs`, and both services' users of them | `test/outbox.test.mjs`, `test/locks.test.mjs`, `test/delivery.test.mjs`, `test/backup.test.mjs`, `test/runner.test.mjs` | [exchange](architecture/exchange.md) |
-| A command the bridge answers, or `/status` | `src/bridge/commands.mjs` (`HELP_TEXT`), `src/bridge/status.mjs`, `COMMANDS` in `src/common/datastore/line.mjs` | `test/status.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md) |
+| `scooter status`, or the bridge's `status.json` | `src/bridge/status.mjs`, `src/bridge/main.mjs` | `test/status.test.mjs`, `test/bridge.test.mjs` | [scooter status](architecture/bridge.md#scooter-status) |
 | Backups and restore | `src/bridge/backup.mjs` | `test/backup.test.mjs`, `test/support/restic-stub.mjs` | [backups](architecture/backups.md) |
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
 | A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
-| The runner's files that `/status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [/status](architecture/bridge.md#status) |
+| The runner's files that `scooter status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [scooter status](architecture/bridge.md#scooter-status) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [Constants](architecture/configuration.md#constants) |
 | A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [The env files](architecture/configuration.md#the-env-files) |
 | A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [The CLI](architecture/configuration.md#the-cli), and the document of the component it belongs to |
@@ -353,8 +354,8 @@ The project's own names, each used one way in these documents.
 **Out of scope for v2:**
 - More than one agent, and channels other than WhatsApp and the owner's email, such as Telegram or bank alerts.
 - Sending email, and keeping email from anyone but the owner.
-- Approvals for preference changes, notices about them, and an `/undo` command.
-- A `/retry` command that puts messages in `failed` back in the queue. Until then, editing or resending a message brings it back.
+- Approvals for preference changes, notices about them, and a way to undo one.
+- A way to put messages in `failed` back in the queue. Until then, editing or resending a message brings it back.
 - Group chats, and messages typed directly on the bot's phone.
 - Voice transcription, reminders, and a web interface.
 - Answering questions about the data, sending views as files, and acting for the owner, such as creating calendar events. These belong to a separate assistant agent, later.

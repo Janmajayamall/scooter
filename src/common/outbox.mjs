@@ -6,7 +6,7 @@
 // taken when the folder is renamed, the entry takes the next ID (`handOff`).
 //
 //   {"type":"text","by":"lifelog","text":"Blue Tokai, ₹450 at 12:40: work or personal?","replyTo":1042}
-//   {"type":"text","by":"runner","text":"Started a fresh conversation.","about":1060}
+//   {"type":"text","by":"lifelog","text":"Logged the run and the coffee.","about":1061}
 //   {"type":"react","by":"lifelog","target":1044,"emoji":"✅"}
 //
 // There is no recipient: everything goes to the owner. Messages are named by `seq` only, and the

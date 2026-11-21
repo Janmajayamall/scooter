@@ -33,6 +33,7 @@ This document covers the format of each and how it is checked. What a setting or
 | `build-image` | the host, as root; in Docker, a container of its own | [build-image](sandbox.md#build-image), [The build-image container](install.md#the-build-image-container) |
 | `pair [--phone +91…]` | bridge | [Pairing](whatsapp.md#pairing) |
 | `email-check` | bridge | [email-check](email.md#email-check) |
+| `status` | bridge | [scooter status](bridge.md#scooter-status) |
 | `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge; `restore` into the data folder with both services stopped | [The CLI commands](backups.md#the-cli-commands), [Restore](backups.md#restore) |
 | `rebuild <agent>` | runner, with its service stopped | [Rebuild](rebuild-and-backfill.md#rebuild) |
 

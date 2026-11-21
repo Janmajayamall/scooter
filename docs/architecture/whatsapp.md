@@ -1,6 +1,6 @@
 # The WhatsApp channel
 
-The WhatsApp channel is how the owner reaches Scooter, and how Scooter answers. It runs wacli, a third-party, unofficial WhatsApp client linked to the bot's number, and is the only code that does. It receives the owner's messages, by wacli's webhook and by catching up, drops everything that isn't the owner's, downloads media, and sends texts and reactions for [delivery](delivery.md). It is one channel of [the bridge](bridge.md#channels), and takes commands.
+The WhatsApp channel is how the owner reaches Scooter, and how Scooter answers. It runs wacli, a third-party, unofficial WhatsApp client linked to the bot's number, and is the only code that does. It receives the owner's messages, by wacli's webhook and by catching up, drops everything that isn't the owner's, downloads media, and sends texts and reactions for [delivery](delivery.md). It is one channel of [the bridge](bridge.md#channels).
 
 wacli runs as `scooter-wacli`, reaches only its own folder, `wacli/`, and gets none of the bridge's settings ([The boundaries](../ARCHITECTURE.md#the-boundaries)). Everything wacli says is input to check, and nothing that isn't the owner's reaches the core.
 
