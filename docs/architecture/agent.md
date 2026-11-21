@@ -81,7 +81,7 @@ Views (all under views/):
 It also gives the rules that apply to every view:
 - One message can produce several entries: a restaurant bill is an expense and a meal, and a train ticket is an expense and travel.
 - Date things by when they happened (the date on the receipt or ticket), not when they were sent.
-- Record amounts exactly as shown, in their own currency. Don't convert. Totals are per currency, home currency first. A text entry without a currency is in the home currency.
+- Record amounts exactly as shown, in their own currency. Don't convert. A text entry without a currency is in the home currency.
 - The `source` column holds the message number: `#1050`, or `#1050 #1063` when a later message changed the row, or when several messages make one entry, such as a WhatsApp note and the email it announced. Before adding a row, check for the same source, and for the same date, amount and merchant, or the same booking reference. Never add duplicates.
 - When unsure about something that matters (an unreadable amount, the category, personal or work, split or not), file your best guess with ❓, add a line to `memory/needs-review.md`, and ask. When the owner answers, fix the row, and remove the ❓ and the line.
 - When the owner edits a message, update what you filed from it. When they delete one, remove what you filed from it.
