@@ -114,13 +114,27 @@ function reasonOf(step, result) {
 // `timeout` and `signal`, as for `proc.run`.
 //
 // restic needs a cache folder or none: without a home, it fails before it does anything.
+//
+// What restic prints, on stdout and stderr, comes back with every secret of the backup settings in
+// it, the password and the bucket's keys, replaced by `…` (`SECRET_SETTINGS`). That is all of
+// restic's that is kept or shown: the reason a backup failed, in the bridge's state, its
+// `status.json` and the notice, and what the CLI commands print.
 export function createRestic({ backup, paths, proc }) {
-  return (args, { cache = false, timeZone = 'UTC', timeout = null, signal = null } = {}) => {
+  const secrets = [backup.password, ...SECRET_SETTINGS.map(name => backup.env[name])].filter(value => typeof value === 'string' && value !== '')
+  // The longest first, so that one secret inside another is hidden whole.
+  secrets.sort((a, b) => b.length - a.length)
+  const hide = text => secrets.reduce((hidden, secret) => hidden.replaceAll(secret, '…'), text)
+  return async (args, { cache = false, timeZone = 'UTC', timeout = null, signal = null } = {}) => {
     const env = { RESTIC_REPOSITORY: backup.repository, RESTIC_PASSWORD: backup.password, ...backup.env, TMPDIR: os.tmpdir(), TZ: timeZone }
     const where = cache ? ['--cache-dir', paths.backupCache] : ['--no-cache']
-    return proc.run(RESTIC, [...where, ...args], { env, timeout, signal })
+    const result = await proc.run(RESTIC, [...where, ...args], { env, timeout, signal })
+    return { ...result, stdout: hide(result.stdout), stderr: hide(result.stderr) }
   }
 }
+
+// The settings of restic's environment that are secrets, besides the password: the bucket's keys,
+// as the frame's table of secrets has them.
+const SECRET_SETTINGS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'B2_ACCOUNT_ID', 'B2_ACCOUNT_KEY']
 
 // ---------------------------------------------------------------------------------------------
 // The operations

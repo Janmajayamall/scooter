@@ -414,6 +414,26 @@ test('backups: a backup says nothing when it works, and sends a notice when it f
   assert.ok(!h.stub.commands().includes('check'))
 })
 
+test('backups: restic\'s words come back with the password and the bucket\'s keys hidden, so no reason, notice, state or status holds one', async t => {
+  const h = harness(t)
+  const secrets = [BACKUP.password, 'key-id', 'key-secret']
+  h.stub.fixtures({ exit: { backup: 1 }, stderr: { backup: `Fatal: ${secrets.join(' and ')} were refused\n` } })
+  await h.backups.request('signal')
+  const reason = 'restic backup: Fatal: … and … and … were refused'
+  assert.deepEqual(h.state.get().lastBackup.reason, reason)
+  assert.equal(h.outbox()[0].text, `⚠️ The backup failed: ${reason}.${NEXT}`)
+  assert.match(h.backups.statusLine(h.clock.now()), /failed \(restic backup: Fatal: … and … and … were refused\)/)
+  // And what the CLI commands pass on.
+  h.stub.fixtures({ exit: {}, stderr: { snapshots: `${BACKUP.password} key-secret\n` } })
+  let out = ''
+  let err = ''
+  await runSnapshots({ settings: h.settings, stdout: { write: text => (out += text) }, stderr: { write: text => (err += text) }, clock: h.clock, log: h.log, proc: h.proc })
+  assert.equal(err, '… …\n')
+  assert.match(out, /^abcd1234 /m)
+  const said = `${out}${err}${JSON.stringify(h.state.get())}${JSON.stringify(h.outbox())}`
+  for (const secret of secrets) assert.ok(!said.includes(secret), secret)
+})
+
 test('backups: a scheduled backup is told as one on SIGUSR1 is; a request during a backup joins it, and one notice goes out; no notice names a command', async t => {
   const h = harness(t)
   await h.backups.request('scheduled')
