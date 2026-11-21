@@ -125,7 +125,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | `mail` | `scooter-mail`, 0700 | takes spool folders | no | no | no | writes |
 | `config` | root, group `scooter-runner`; folders 0750, files 0640 | no | reads | sees only the run's copy | no | no |
 
-What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json`, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
+What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json` in a folder of its own, `status/`, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
 
 The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner mounts into its VM.
 
@@ -143,6 +143,8 @@ The bridge, as root, takes what it needs out of three folders other users contro
 - **Where root makes a folder in a folder another user owns**, as `setup` and the bridge make wacli's, it sets the folder's owner and mode through what it opened, which follows no link (`settleFolder`). *Why:* the folder's owner could rename what root made and put a link in its place between the making and the `chmod` and `chown`, and be given whatever the link led to, `/etc/shadow` among them.
 
 *Cost, accepted:* Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a user who controls one of these folders can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, which nothing else of Scooter's or the system's has, and empty folders, which are all a folder's removal takes; and where the bridge makes `backup.lock`, under that name. Only the runner's user controls `exchange/`, and an escape from pi's VM is needed to reach it.
+
+`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules, the first without the check of the owner: it uses each of those folders only while it is a folder and not a link. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
 
 `build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [build-image](architecture/sandbox.md#build-image).
 
@@ -190,7 +192,7 @@ The interfaces between components. Changing one means changing both sides. Each 
 | `state.json` of an agent | runner → `scooter status` | `src/common/agentstate.mjs` | [State](architecture/runner.md#state) |
 | `status.json` | runner → `scooter status` | `src/common/runnerstatus.mjs` | [status.json](architecture/runner.md#statusjson) |
 | The bridge's `status.json` | bridge → `scooter status` | `src/bridge/status.mjs` | [The bridge's status.json](architecture/bridge.md#the-bridges-statusjson) |
-| The network log line | runner → bridge, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
+| The network log line | runner → `scooter status`, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
 | The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
 | The answer | pi → runner | `src/runner/answer.mjs` | [Reading the answer](architecture/run.md#reading-the-answer) |
