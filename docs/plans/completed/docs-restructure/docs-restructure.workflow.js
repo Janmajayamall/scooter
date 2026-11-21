@@ -2,7 +2,7 @@ export const meta = {
   name: 'scooter-docs-restructure',
   description: "Reshape Scooter's documents in four pieces, each a pull request: implement, review, fix, merge",
   whenToUse:
-    "Run from the checkout at ~/scooter on the owner's Linux machine, with gh signed in. Covers pieces 1 to 4 of docs/plans/active/docs-restructure.md.",
+    "Run from the checkout at ~/scooter on the owner's Linux machine, with gh signed in. Covers pieces 1 to 4 of docs/plans/completed/docs-restructure/docs-restructure.md.",
   phases: [
     { title: 'Progress' },
     { title: "Piece 1: the frame, and the bridge's side" },
@@ -20,8 +20,9 @@ export const meta = {
 //   4. once approved, the pull request is merged into `main`, and the next piece starts from there.
 //
 // The prompts give only the role, the piece's number, the pull request's number and the plan's path.
-// Everything else is in the plan, docs/plans/active/docs-restructure.md, which every agent reads whole:
-// what each piece covers, what each role does, and how to run things on this machine.
+// Everything else is in the plan, docs/plans/completed/docs-restructure/docs-restructure.md, which
+// every agent reads whole: what each piece covers, what each role does, and how to run things on
+// this machine.
 //
 // The loop stops, and returns why, when an agent has a question for the owner, when an agent returns
 // nothing, which is how a usage limit shows, when a pull request isn't approved within `maxRounds`
@@ -76,7 +77,7 @@ if (cfg.to > LAST) {
 }
 
 const BASE = 'main'
-const PLAN = 'docs/plans/active/docs-restructure.md'
+const PLAN = 'docs/plans/completed/docs-restructure/docs-restructure.md'
 const WORKER = { model: 'opus', effort: 'xhigh' }
 const STEP = { model: 'opus', effort: 'low' }
 const READ = `Read \`${PLAN}\` whole, and do what it says for your role and this piece.`

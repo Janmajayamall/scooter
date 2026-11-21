@@ -1,6 +1,6 @@
 # Scooter's documents: one place for each fact
 
-Status: active. Written 2026-11-20 from the owner's brief. The workflow [`docs-restructure.workflow.js`](docs-restructure.workflow.js), beside this plan, runs it.
+Status: completed. Written 2026-11-20 from the owner's brief. Pieces 1 to 4 were merged by 2026-11-21, as pull requests 19 to 22, and the plan moved to this folder on 2026-11-21. The workflow [`docs-restructure.workflow.js`](docs-restructure.workflow.js), beside this plan, ran it.
 
 Every agent of this work is new, remembers nothing, and starts here. Read this plan whole. Your prompt gives your role, implementer, reviewer or fixer, and a piece's number. [How the work runs](#how-the-work-runs) says what each role does, the piece's own heading says what the piece covers, and [This machine](#this-machine) says how to run things here.
 
