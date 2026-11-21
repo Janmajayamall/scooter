@@ -4,8 +4,8 @@
 //
 // The files are the repository's own, as `setup` copies them and Docker mounts them. What the
 // agent's document gives word for word, the views' list, the CSV headers, the categories and the day
-// page's template, is taken from it, and the example of `agents.yaml` from DESIGN.md, so the two
-// can't drift apart.
+// page's template, is taken from it, so the two can't drift apart. The default `agents.yaml` is held
+// to the tests' own example of the format, `exampleYaml`, which the other tests of the config use.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -22,14 +22,12 @@ import { makeTestDir } from './support/tmp.mjs'
 
 const REPO = path.resolve(import.meta.dirname, '..')
 const CONFIG = path.join(REPO, 'config')
-const DESIGN = fs.readFileSync(path.join(REPO, 'docs', 'DESIGN.md'), 'utf8')
 const AGENT = fs.readFileSync(path.join(REPO, 'docs', 'architecture', 'agent.md'), 'utf8')
 const read = (...parts) => fs.readFileSync(path.join(CONFIG, ...parts), 'utf8')
 const linesOf = text => text.split('\n')
 
-// The section of a document, DESIGN.md unless another is given, that starts with `heading`, up to
-// the next heading of its level.
-function designSection(heading, text = DESIGN) {
+// The section of a document's text that starts with `heading`, up to the next heading of its level.
+function designSection(heading, text) {
   const start = text.indexOf(`\n${heading}\n`)
   assert.notEqual(start, -1, heading)
   const level = heading.match(/^#+ /)[0]
@@ -67,10 +65,9 @@ test('instructions: the default config validates, and is the example of 6.1', t 
   const withoutFiles = ({ prompt, skills, ...rest }) => ({ ...rest, prompt: prompt.path, skills: skills.map(skill => skill.path) })
   assert.deepEqual(withoutFiles(agent), withoutFiles(example))
 
-  // And the file holds 6.1's example, as the owner will read it there, comments included.
-  const designExample = fencedBlocks(designSection('### 6.1 Config')).find(block => block.info === 'yaml').body
+  // And the file holds the example's lines, as the owner will read them there, comments included.
   const lines = linesOf(read('agents.yaml'))
-  for (const wanted of linesOf(designExample.trimEnd())) {
+  for (const wanted of linesOf(exampleYaml().trimEnd())) {
     const kept = wanted.replace('# paths are relative to /config', '# paths are relative to this config folder')
     assert.ok(lines.includes(kept), kept)
   }

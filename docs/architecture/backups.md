@@ -29,6 +29,7 @@ In `bridge.env`. Without `RESTIC_REPOSITORY` backups are off; the backup setting
 - **Its environment** is `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, the bucket's credentials (`AWS_*` or `B2_*`), `TMPDIR`, the bridge's own temporary folder, and `TZ`, and nothing else. `TZ` is UTC, so restic writes a snapshot's time in UTC, except for `snapshots`, whose list the owner reads, which gets `SCOOTER_TZ`.
 - **Its cache.** The nightly backup keeps restic's cache in `bridge/backup-cache/`, which restic marks with a `CACHEDIR.TAG`, so `--exclude-caches` leaves it out of the backup. The CLI commands use `--no-cache`. *Why:* without a home or a cache folder restic stops before it does anything, and a cache saves the nightly backup reading the repository's index from the bucket; `restore` mustn't keep one, since it can delete inside `bridge/`, where the cache is.
 - **Each CLI command** exits with 2, saying so, when `RESTIC_REPOSITORY` isn't set; without `RESTIC_PASSWORD` the settings stop it with 2 already.
+- **In the tests,** `test/support/restic-stub.mjs` stands in for restic in the backup coordination tests, behind a shell wrapper placed first on `PATH`; it records its arguments and environment to a file, and answers from fixtures.
 
 ## What a backup holds
 

@@ -2,7 +2,7 @@
 
 This document is the way into Scooter's design: what it does, how one message goes through it, its components and where each is described, the boundaries between them, the contracts they share, and the reasons for how it is built. It holds what belongs to no single component. Each component has a document of its own in `docs/architecture/`, with its files, its rules, the reason beside each rule that needs one, and the facts about outside tools it relies on. Each fact is stated in one place, and a document refers to another by a link to the heading.
 
-Read this document whole, then the document of the component you change. The README is the operator's guide: installing, running and the known limits ([README](../README.md)). A link marked "(not yet written)" leads to a component document still to come: until then its rules are in `docs/DESIGN.md` and `docs/DECISIONS.md`, and the old text of this document for those components is at its end, under [Old text, still to be moved](#old-text-still-to-be-moved).
+Read this document whole, then the document of the component you change. The README is the operator's guide: installing, running and the known limits ([README](../README.md)). How to work on the code, and what "done" means, is in [AGENTS.md](../AGENTS.md).
 
 Scope: v2 on Linux.
 
@@ -73,8 +73,8 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
 | The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
 | The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/day-pages/SKILL.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
-| Configuration and the CLI | [configuration.md](architecture/configuration.md) (not yet written) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
-| Install, native and Docker | [install.md](architecture/install.md) (not yet written) | `src/ops/setup.mjs`, `src/ops/doctor.mjs`, `deploy/systemd/scooter-bridge.service`, `deploy/systemd/scooter-runner.service`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` |
+| Configuration and the CLI | [configuration.md](architecture/configuration.md) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
+| Install, native and Docker | [install.md](architecture/install.md) | `src/ops/setup.mjs`, `src/ops/doctor.mjs`, `deploy/systemd/scooter-bridge.service`, `deploy/systemd/scooter-runner.service`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` |
 
 The exchange, the folder the two services coordinate through, is a component of its own, since both services follow its two contracts. The runner is two components, its planner and service, and a run with the agent's folder, which the runner owns and is the only committer of: one document would be too long to read whole. `src/common/` is split by what each file defines: a format goes with the component that owns the contract, and what belongs to no side is shared code.
 
@@ -101,14 +101,14 @@ The exchange, the folder the two services coordinate through, is a component of 
 | wacli | `scooter-wacli` | the bridge | `wacli/` |
 | Email reader | `scooter-mail` | the bridge | `mail/` |
 | restic | root | the bridge | The folders it backs up |
-| Runner | `scooter-runner`, group `kvm` | systemd, or Docker | `agents/`, `exchange/`, `runner/`; `datastore/` and `config/` read-only |
+| Runner | `scooter-runner`, with the `kvm` group where it is given | systemd, or Docker | `agents/`, `exchange/`, `runner/`; `datastore/` and `config/` read-only |
 | QEMU | `scooter-runner` | the runner, through Gondolin | What the runner mounts |
 | pi | the VM's own root | the runner | The mounts |
 
 Scooter has four users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user (uid 8 on Ubuntu 24.04, whose group can write the system's mail spool, `/var/mail`), and Debian 12's and Alpine 3.24's images have one too; the `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account. Sharing an account would share its files and its environment.
-- Natively, `setup` makes them as system users, which the system numbers, and everything refers to them by name ([install](architecture/install.md) (not yet written)).
+- Natively, `setup` makes them as system users, which the system numbers, and everything refers to them by name ([setup](architecture/install.md#setup)).
 - In Docker, the image gives them the uids 10001, 10002 and 10003, so the data volume's files are theirs in every container. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included.
-- `scooter-runner` is also in the host's `kvm` group.
+- Natively, `scooter-runner` is also in the `kvm` group. How it reaches `/dev/kvm` in Docker is in [KVM](architecture/install.md#kvm).
 
 ### Folders and their owners
 
@@ -193,8 +193,8 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
 | The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
 | The answer | pi → runner | `src/runner/answer.mjs` | [Reading the answer](architecture/run.md#reading-the-answer) |
-| `agents.yaml` | owner → runner | `src/runner/config.mjs` | [configuration](architecture/configuration.md) (not yet written) |
-| The env files | owner → both services | `src/common/settings.mjs` | [configuration](architecture/configuration.md) (not yet written) |
+| `agents.yaml` | owner → runner | `src/runner/config.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
+| The env files | owner → both services | `src/common/settings.mjs` | [The env files](architecture/configuration.md#the-env-files) |
 
 ## The code's layers
 
@@ -326,10 +326,10 @@ The project's own names, each used one way in these documents.
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
 | A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
 | The runner's files that `/status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [/status](architecture/bridge.md#status) |
-| A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [configuration](architecture/configuration.md) (not yet written) |
-| A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [configuration](architecture/configuration.md) (not yet written) |
-| A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
-| `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [configuration](architecture/configuration.md) (not yet written) |
+| A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [Constants](architecture/configuration.md#constants) |
+| A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [The env files](architecture/configuration.md#the-env-files) |
+| A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [The CLI](architecture/configuration.md#the-cli), and the document of the component it belongs to |
+| `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
 | The runner's start, loop and restarts | `src/runner/main.mjs`, `src/runner/restarts.mjs`, `src/runner/status.mjs` | `test/runner.test.mjs`, `test/restarts.test.mjs`, `test/runnerfiles.test.mjs` | [the runner](architecture/runner.md) |
 | When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) |
 | Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
@@ -339,11 +339,11 @@ The project's own names, each used one way in these documents.
 | The agent's instructions | `src/runner/protocol.md`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
 | pi's version | `config/image/build.json`, `src/runner/sandbox/policy.mjs`, `test/fixtures/pi-requests/` (`test/tools/capture-pi-requests.mjs`) | `test/tools/pi.test.mjs`, `test/tools/fixtures.test.mjs`, `test/policy.test.mjs`, `test/image.test.mjs` | [Facts about pi 1.5.2](architecture/agent.md#facts-about-pi-152), [What pi sends](architecture/network-policy.md#what-pi-sends), [The VM image](architecture/sandbox.md#the-vm-image) |
 | Gondolin's version | `package.json`, `src/runner/sandbox/` | `test/tools/vm.test.mjs`, `test/sandbox.test.mjs`, `test/policy.test.mjs` | [Facts about Gondolin 0.14.0](architecture/sandbox.md#facts-about-gondolin-0140), [Facts about Gondolin's network](architecture/network-policy.md#facts-about-gondolins-network) |
-| The native install or Docker | `src/ops/`, `deploy/systemd/`, `Dockerfile`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | `test/setup.test.mjs`, `test/doctor.test.mjs`, `test/units.test.mjs`, `test/docker.test.mjs` | [install](architecture/install.md) (not yet written), the [README](../README.md) |
+| The native install or Docker | `src/ops/`, `deploy/systemd/`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | `test/setup.test.mjs`, `test/doctor.test.mjs`, `test/units.test.mjs`, `test/docker.test.mjs` | [install](architecture/install.md), the [README](../README.md) |
 
 ## Deferred and out of scope
 
-**Deferred with macOS:** launchd daemons for the two services; Apple's hypervisor for pi's VMs (`AGENT_ACCEL=hvf`, which stays a known value and fails on Linux, as any accelerator that can't be used does); a data folder such as `/usr/local/var/scooter` in `setup`; running under Docker Desktop, OrbStack or Colima; and the test suite passing on a Mac. Notes for then:
+**Deferred with macOS:** launchd daemons for the two services; Apple's hypervisor for pi's VMs (`AGENT_ACCEL=hvf`, which stays a known value and fails on Linux, as any accelerator that can't be used does); building the VM image on a Mac; a data folder such as `/usr/local/var/scooter` in `setup`; running under Docker Desktop, OrbStack or Colima, the `./config` bind mount included; and the test suite passing on a Mac. Notes for then:
 - Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Catch-up collects what arrived while it slept.
 - Docker Desktop gives containers no hypervisor, so on a Mac the native install is the fast one.
 - With Docker Desktop, OrbStack or Colima, keep the project folder in the home folder (Colima shares only that), and set Docker to start at login so `restart: unless-stopped` brings Scooter back.
@@ -367,71 +367,3 @@ The project's own names, each used one way in these documents.
 | Bank feeds and other data that isn't the owner's words | A channel that writes lines with `trust: "external"` | The `trust` field; `reads` per agent |
 | More agents | `agents.yaml` | The map of agents; `reads`; `by` on `out` lines; one folder per agent |
 | The assistant | A reader of the views | Views in git, written only by Scooter |
-
-## Old text, still to be moved
-
-The text of the old `docs/ARCHITECTURE.md` for the components whose documents are still to be written, as it was, but for its headings, one level down, the rows and sentences of the bridge's side and the runner's, which moved, and references that would otherwise lead nowhere. Numbers in parentheses, such as (8.4), are sections of `docs/DESIGN.md`. It goes as those documents are written.
-
-### 2. Components
-
-#### 2.12 Configuration
-
-| What | Where | Read by | Changed by |
-|---|---|---|---|
-| Agents, prompts, skills, the VM image's build file | `config/` | the runner only | the owner |
-| Settings and secrets | `bridge.env`, `runner.env` | each service its own ([Secrets](#secrets)) | the owner |
-| Tuning constants | `src/common/limits.mjs` | code | a code change |
-
-#### 2.13 The CLI
-
-`src/cli.mjs` is the one entry point. Each command belongs to one side and loads only that side's settings (8.4):
-
-| Side | Commands |
-|---|---|
-| Bridge | `bridge`, `pair`, `email-check`, `backup-init`, `snapshots`, `check`, `restore` |
-| Runner | `runner`, `doctor`, `rebuild` |
-| Root, on the host | `setup`, `build-image` |
-
-### 4. Dependencies
-
-#### 4.3 Third-party
-
-| Dependency | Version | Used by | Note |
-|---|---|---|---|
-| Node.js | ≥ 22.19 | everything | Gondolin and pi need it |
-| `yaml` | 2.9.1 | runner config | |
-
-### 6. Deployment on Linux
-
-| | Native | Docker Compose | Development |
-|---|---|---|---|
-| Set up by | `sudo scooter setup` | `docker compose build`; the image's `/data` makes the data volume's folders | nothing |
-| Services | `scooter-bridge.service` as root; `scooter-runner.service` as `scooter-runner` | `bridge` and `runner`, one image | two processes run by hand |
-| Users | [Processes and users](#processes-and-users) | [Processes and users](#processes-and-users) | the developer's own ([Running programs](architecture/shared-code.md#running-programs)) |
-| Data and settings | `/var/lib/scooter`, `/etc/scooter` | one volume for the data folder ([Folders and their owners](#folders-and-their-owners)); `./config` bind-mounted; an env file for each service | `DATA_DIR`, `CONFIG_DIR` |
-| KVM | the `kvm` group, through `SupplementaryGroups` | `/dev/kvm` passed in: by group on rootful Docker, by a udev rule for the runner's host uid on rootless, each a Compose file of its own | the developer's `kvm` group |
-
-In every mode there are no published ports.
-
-### 7. Decisions
-
-Each entry says what was decided, why, and what follows from it. "Settled" means it was agreed with the owner and is among [the owner's fixed choices](#the-owners-fixed-choices): don't change it without asking.
-
-#### 7.4 The runner and the agent
-
-33. **One agent, in a format that allows more.** Settled. `agents.yaml` is a map of agents, and v2 refuses more than one. ([the owner's fixed choices](#the-owners-fixed-choices), 6.1)
-
-#### 7.6 Operations
-
-48. **Two ways to deploy on Linux,** native services or Docker Compose, at the owner's choice. Settled. Neither publishes a port. (8.3, 8.5)
-49. **Constants are not settings.** Every tuning number lives in one module, with a comment saying what it protects. A value becomes a setting only when the owner has a reason to change it, and then it gets a valid range and a test. (8.6)
-
-### 8. Changes made to DESIGN.md while planning
-
-DESIGN.md was updated on 2026-11-15 to include each row of a table here. Rows 1 to 3, the owner's decisions of that day, and the rows of the bridge's side and the runner's, are beside their rules now, in the documents of [the map](#the-map), row 8 with the owner's confirmation of that day. The row left was worked out while planning, from a gap in DESIGN.md, by its own rule: the simplest option that keeps the principles.
-
-| # | DESIGN.md said | It now says | Why |
-|---|---|---|---|
-| 16 | Where a native install keeps the code wasn't said (8.5) | The code lives in a root-owned folder every service user can read, with a system-wide Node. `setup` checks both. The runner's home and temporary folder are in [The runner's own folders](architecture/sandbox.md#the-runners-own-folders) | The service users must be able to run Node and read the code |
-
-Kept as designed, after being considered for cutting on 2026-11-15: Docker Compose as a deployment option, backfills, `once` tasks, and daily sessions with `/new`.

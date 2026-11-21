@@ -2,7 +2,7 @@
 
 The agent is pi, a third-party coding agent (`@earendil-works/pi-coding-agent`), and the model behind it, run headless in a VM for each run with every kind of discovery turned off and seven tools. It is given the prompt, which the runner builds from the batch ([The prompt](runner.md#the-prompt)); the system prompt: the protocol, which ships with the runner, the agent's prompt from the config folder, and its memory; and the skills, from that run's copy of the config folder ([A run](run.md#a-run)). It produces changes to `views/` and `memory/`, and a final answer that ends with the protocol's instruction lines. This document covers how pi is run, its instructions, and the facts about pi that Scooter relies on. What pi can reach in its VM is in [Mounts](sandbox.md#mounts) and [the network policy](network-policy.md); what the runner accepts of what it leaves, in [After a successful run](run.md#after-a-successful-run).
 
-The config folder's `prompts/` and `skills/` are the owner's, which `setup` copies from the repository and Docker mounts ([configuration](configuration.md) (not yet written)); the agent can't change them, and sees only the run's copy.
+The config folder's `prompts/` and `skills/` are the owner's, which `setup` copies from the repository and Docker mounts ([setup](install.md#setup), [compose.yaml](install.md#composeyaml)); the agent can't change them, and sees only the run's copy.
 
 ## Files
 
@@ -96,7 +96,7 @@ It also gives the rules that apply to every view:
 
 ## Skills
 
-Each skill uses the Agent Skills format: frontmatter with `name`, the skill folder's name, and `description`, then instructions. The description says what the skill covers and when to use it; pi offers a skill to the model by its name and description, and the runner checks both at its start ([configuration](configuration.md) (not yet written)).
+Each skill uses the Agent Skills format: frontmatter with `name`, the skill folder's name, and `description`, then instructions. The description says what the skill covers and when to use it; pi offers a skill to the model by its name and description, and the runner checks both at its start ([agents.yaml](configuration.md#agentsyaml)).
 
 | Skill | View | Contents |
 |---|---|---|
