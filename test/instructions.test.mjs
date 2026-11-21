@@ -40,10 +40,15 @@ function fencedBlocks(text) {
   return [...text.matchAll(/^```([a-z]*)\n([\s\S]*?)^```$/gm)].map(match => ({ info: match[1], body: match[2] }))
 }
 
-// The table of skills in the agent's document: for each skill, its view and what the row says of it.
+// The table of skills in the agent's document: for each skill, its view, what the row says of it,
+// and the CSV header the row starts with, which every row has.
 function designSkills() {
   const rows = [...designSection('## Skills', AGENT).matchAll(/^\| `([a-z-]+)` \| `([^`]+)` \| (.*) \|$/gm)]
-  return rows.map(([, name, view, contents]) => ({ name, view, contents, header: /^Header `([^`]+)`/.exec(contents)?.[1] ?? null }))
+  return rows.map(([, name, view, contents]) => {
+    const header = /^Header `([^`]+)`/.exec(contents)
+    assert.ok(header, `${name}: its row gives no header`)
+    return { name, view, contents, header: header[1] }
+  })
 }
 
 // The skills folder's own skills.
@@ -109,13 +114,8 @@ test('instructions: each view in the prompt names a skill that exists, as the ag
 })
 
 test('instructions: each CSV header is the one the agent\'s document gives, and the expenses skill has its categories', () => {
-  const csvSkills = designSkills().filter(skill => skill.header !== null)
-  // Every skill keeps a CSV view.
-  assert.deepEqual(
-    csvSkills.map(skill => skill.name),
-    SKILLS,
-  )
-  for (const { name, view, header } of csvSkills) {
+  // Every skill keeps a CSV view: `designSkills` holds each row to a header.
+  for (const { name, view, header } of designSkills()) {
     assert.ok(view.endsWith('.csv'), view)
     const text = read('skills', name, 'SKILL.md')
     // The header is the one CSV block of the skill, and its every column is described.

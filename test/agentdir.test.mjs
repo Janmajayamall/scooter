@@ -182,11 +182,11 @@ You are lifelog.
 `,
   )
 
-  // A new day's session: nothing to copy. A backfill gets only the skills it names.
-  const other = prepareRun({ paths, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(3) })
+  // A new day's session: nothing to copy. A backfill gets its own skill alone.
+  const other = prepareRun({ paths, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
   assert.equal(other.sessionFile, null)
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), [])
-  assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')).sort(), ['people', 'travel'])
+  assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')), ['people'])
   // `session: none` has no session at all.
   assert.equal(prepareRun({ paths, agent: agent(), protocol: '# Protocol\n' }).sessionFile, null)
 })
