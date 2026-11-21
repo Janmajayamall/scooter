@@ -104,7 +104,7 @@ Intake also keeps the time of the newest incoming line of each channel.
 
 **What it prints.** Every control character in the report, a line break among them, is printed as U+FFFD. *Why:* the reasons the runner records, a backfill's ID and restic's words reach root's terminal, and a terminal acts on what some control characters say; a line break in a reason could also pass for a line of the report.
 
-**No secret** is in the report or in `bridge/status.json`: the bridge's lines are fixed words, counts, times, a snapshot's ID and the reason a backup failed, in restic's words with the backup's secrets hidden ([Running restic](backups.md#running-restic)); the runner's part is what its formats hold.
+**No secret** is in the report or in `bridge/status.json`: the bridge's lines are fixed words, counts, times, a snapshot's ID and the reason a backup failed, in restic's words with the backup's secrets hidden ([Running restic](backups.md#running-restic)); the runner's part is numbers, times, which accelerator runs the VMs and which settings are on, and the reasons the runner recorded, in its own words, OpenRouter's or the network policy's, or with a name pi chose, and pi holds no secret ([Secrets](../ARCHITECTURE.md#secrets)).
 
 ### The bridge's status.json
 
@@ -115,7 +115,7 @@ The running bridge writes what only it knows, each channel's line and the backup
 ```
 
 - **When:** at its start; then every `POLL_INTERVAL` it renders the lines, and writes the file when they differ from what it last wrote; and once more when it stops, with `stoppedAt`. *Why on a poll:* a line changes on events in the channels and the backups, and also with the clock, as the counts of the last 24 hours and a time shown against a new day do, and polling is how the services notice change ([Why it is built this way](../ARCHITECTURE.md#why-it-is-built-this-way)).
-- **The lines are rendered at `writtenAt`,** with times against that instant, in `SCOOTER_TZ`. While the bridge runs they are at most `POLL_INTERVAL` old; once it has stopped, the report says when, and they are from then.
+- **The lines are rendered at `writtenAt`,** with times against that instant, in `SCOOTER_TZ`. While the bridge runs, they are what it rendered at most `POLL_INTERVAL` ago, though `writtenAt` is when they last changed; once it has stopped, the report says when, and they are from then.
 - **A stop or a crash between a change and the write** leaves the last file, which says when it was written; a crash leaves `stoppedAt` null. The report says when the bridge last wrote, and the logs, or the service manager, say whether it runs. A write that fails, as on a full disk, is logged once (`bridge.status_not_written`), and tried again at the next look.
 - **Backups leave it out** ([What a backup holds](backups.md#what-a-backup-holds)): it is written while a backup runs, so that the report shows the backup, and it says how the bridge that wrote it was doing, which a restore can't bring back.
 - Its format, and the check every reader and writer applies, are `checkBridgeStatus` in `status.mjs`; only `scooter status` reads it.

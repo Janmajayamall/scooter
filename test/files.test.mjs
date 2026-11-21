@@ -295,6 +295,40 @@ test('files: a small file another program wrote is read only when it is a regula
   assert.throws(() => read('missing'), { code: 'ENOENT' })
 })
 
+test('files: a small file another program wrote that grows as it is read is read whole within the size, and refused past it', t => {
+  const dir = makeTestDir(t)
+  const file = path.join(dir, 'state.json')
+  // The writer appends after the reader has looked at the file's size.
+  const fstat = fs.fstatSync
+  let grow = ''
+  fs.fstatSync = (fd, ...rest) => {
+    const stat = fstat(fd, ...rest)
+    if (grow !== '') {
+      fs.appendFileSync(file, grow)
+      grow = ''
+    }
+    return stat
+  }
+  atEnd(t, () => (fs.fstatSync = fstat))
+  for (const [start, more, maxBytes] of [
+    ['', 'abc', 20],
+    ['{"n":1}', 'x'.repeat(13), 20],
+    ['{"n":1}', 'x'.repeat(100), 1000],
+  ]) {
+    fs.writeFileSync(file, start)
+    grow = more
+    assert.equal(readUntrustedFile(file, { maxBytes }), `${start}${more}`)
+  }
+  for (const [start, more] of [
+    ['', 'x'.repeat(21)],
+    ['{"n":1}', 'x'.repeat(14)],
+  ]) {
+    fs.writeFileSync(file, start)
+    grow = more
+    assert.throws(() => readUntrustedFile(file, { maxBytes: 20 }), { code: 'EFBIG' })
+  }
+})
+
 test('files: a small file replaced by a rename as it is opened is opened again, once', t => {
   const dir = makeTestDir(t)
   const file = path.join(dir, 'state.json')

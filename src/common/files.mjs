@@ -216,15 +216,25 @@ export function readUntrustedFile(file, { maxBytes, owner = null }) {
   const { fd, stat } = openUntrusted(file, owner)
   try {
     if (stat.size > maxBytes) throw refuse('EFBIG', 'too large')
-    // One byte more than allowed tells a file that grew since from one that didn't.
-    const buffer = Buffer.alloc(maxBytes + 1)
+    // Room for the size it had and one byte more, which tells a file that grew since from one that
+    // didn't. One that grew is read on, in a room that doubles, up to one byte more than allowed.
+    // *Why not room for `maxBytes` at once:* the bridge reads the email reader's `state.json`, a
+    // few bytes, every `POLL_INTERVAL`, and a buffer of `STATUS_FILE_MAX_BYTES` each time is
+    // megabytes a second to fill with zeros and collect.
+    let buffer = Buffer.alloc(stat.size + 1)
     let filled = 0
     for (;;) {
+      if (filled === buffer.length) {
+        if (filled > maxBytes) throw refuse('EFBIG', 'too large')
+        const room = Buffer.alloc(Math.min(buffer.length * 2, maxBytes + 1))
+        buffer.copy(room, 0, 0, filled)
+        buffer = room
+      }
       const count = fs.readSync(fd, buffer, filled, buffer.length - filled, null)
       if (count === 0) break
       filled += count
-      if (filled > maxBytes) throw refuse('EFBIG', 'too large')
     }
+    if (filled > maxBytes) throw refuse('EFBIG', 'too large')
     return buffer.toString('utf8', 0, filled)
   } finally {
     fs.closeSync(fd)
