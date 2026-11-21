@@ -92,6 +92,8 @@ test('settings: a line that systemd, Compose and Scooter would read differently 
     "A='it's'": 'A',
     "A='unfinished": 'A',
     "A='two' words": 'A',
+    // A quote after a space: how systemd and Compose read one was never checked.
+    "A= 'two words'": 'A',
     // Compose reads a bare name as "take it from my environment"; systemd ignores the line.
     A: null,
     'export A=1': null,
@@ -111,6 +113,8 @@ test('settings: a line that systemd, Compose and Scooter would read differently 
   const twice = parseEnvFile('A=1\nB=2\nA=3\n')
   assert.deepEqual(twice.problems.map(problem => [problem.line, problem.variable]), [[3, 'A']])
   assert.match(twice.problems[0].message, /A is set twice/)
+  assert.match(parseEnvFile("A= 'two words'\n").problems[0].message, /a quoted value starts right after the "="/)
+  assert.match(parseEnvFile('A =1\n').problems[0].message, /no space before the "="/)
 })
 
 // ---------------------------------------------------------------------------------------------

@@ -205,8 +205,8 @@ Keep `RESTIC_PASSWORD` in a password manager too: the env files aren't backed up
 
 Each service reads its own file, so neither sees the other's secrets: the bridge `bridge.env`, the runner `runner.env`. Natively they are in `/etc/scooter/`, mode 0600, the first root's and the second `scooter-runner`'s; in Docker, beside `compose.yaml`. `bridge.env.example` and `runner.env.example` explain every variable.
 
-- One `KEY=value` a line, no spaces around the `=`, comments on lines of their own.
-- A value with `$`, `\`, `#` or a double quote in it goes in single quotes: `RESTIC_PASSWORD='pa$$word'`. Nothing is expanded. A value can't hold a single quote.
+- One `KEY=value` a line, no space before the `=`, comments on lines of their own.
+- A value with `$`, `\`, `#` or a double quote in it goes in single quotes, the first right after the `=`: `RESTIC_PASSWORD='pa$$word'`. Nothing is expanded. A value can't hold a single quote.
 - A variable left out takes its default. One already in the service's environment wins over the file.
 - A name the service doesn't know is an error, so a misspelled one doesn't go unnoticed.
 
