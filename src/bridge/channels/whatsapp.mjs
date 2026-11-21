@@ -248,7 +248,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   const owners = ownerIds(settings)
   const env = wacliEnv(paths)
   const ids = createIds(clock)
-  // The chat of each record handed over, for its download. A record carries no chat (5).
+  // The chat of each record handed over, for its download. A record carries no chat.
   const chats = new WeakMap()
   // `stopped`, `checking` (is wacli paired?), `unpaired`, `linked` (sync is running) or
   // `restarting` (sync exited and waits to start again).

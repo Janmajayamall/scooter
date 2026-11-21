@@ -1,8 +1,8 @@
 // Docker (the plan's milestone 13): the Dockerfile and the Compose files, read as
-// text and as YAML, against what the native install does: the users and their uids,
-// the data folder's owners and modes, restic's checksum, the two services and their settings, the
-// one data volume, the container that builds the VM image, and the KVM files. Where Docker is
-// installed, `docker compose config` also reads each combination of the files.
+// text and as YAML, and checked: the users and their uids, the data folder's owners and modes,
+// restic's checksum, the two services and their settings, the one data volume, the container that
+// builds the VM image, and the KVM files. Where Docker is installed, `docker compose config` also
+// reads each combination of the files.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'

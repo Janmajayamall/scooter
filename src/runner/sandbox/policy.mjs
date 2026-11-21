@@ -61,7 +61,7 @@ export const PI_BETAS = {
 }
 
 // Where the policy asks for zero data retention when `OPENROUTER_ZDR=on`. OpenRouter's reference
-// shows a `provider` object on the messages route only with `allow_fallbacks` (14): if that route
+// shows a `provider` object on the messages route only with `allow_fallbacks`: if that route
 // turns out to refuse these fields, it is set false here, and the key's guardrail enforces ZDR on
 // that route alone (the plan's rule for milestone 8).
 export const ZDR_ROUTES = { messages: true, chat: true }

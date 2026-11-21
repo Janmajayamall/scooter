@@ -85,7 +85,7 @@ test("policy: the allowlists are what the pinned pi sends, for every model of it
     assert.deepEqual([...PI_BETAS[route]].sort(), [...new Set(shapes.flatMap(shape => shape.beta))].sort(), route)
     for (const shape of shapes) assert.ok(queries.includes(shape.query), `${route} ${shape.query}`)
   }
-  // Both routes ask for zero data retention, until OpenRouter says one can't (14).
+  // Both routes ask for zero data retention, until OpenRouter says one can't.
   assert.deepEqual(ZDR_ROUTES, { messages: true, chat: true })
 })
 

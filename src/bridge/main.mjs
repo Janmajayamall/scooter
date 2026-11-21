@@ -5,7 +5,7 @@
 //
 // At startup, in order:
 // 1. It looks up its users: wacli runs as `scooter-wacli`, and the datastore belongs to root with
-//    the group `scooter-runner`. Not root, it is neither, and switching is skipped (10).
+//    the group `scooter-runner`. Not root, it is neither, and switching is skipped.
 // 2. It makes sure it is the only bridge on this data folder (`holdInstance`). Two would each give
 //    out the same `seq`, and the datastore would need repairing by hand.
 // 3. It removes a leftover `backup.lock`, which would otherwise keep the agent from running for

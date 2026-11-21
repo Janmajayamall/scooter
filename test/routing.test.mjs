@@ -92,8 +92,8 @@ test('routing: a reaction to an email becomes a ✅ Email: text on DEFAULT_CHANN
 })
 
 test('routing: the ✅ Email: text is cut as an entry\'s text is, whatever subject the datastore holds', () => {
-  // It was once made after the entry was written, from a subject the
-  // datastore bounds only since milestone 6.
+  // The text was once made after the entry was written, from a subject the datastore bounds only
+  // since milestone 6.
   const lines = [...LINES, line.email(10, AT, `a\0${'s'.repeat(60000)}`, 'long', { sourceId: 'mail-3@example.com' })]
   const [channel, quote, text] = route(react(10), { lines })
   assert.deepEqual([channel, quote], ['whatsapp', null])
