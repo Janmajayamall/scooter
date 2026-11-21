@@ -2,7 +2,7 @@
 
 Scooter keeps a log of your life from what you send it. You send receipts, run screenshots, food photos, tickets and short notes to a second WhatsApp number, the bot, or email them to a mailbox of Scooter's own. Scooter keeps every message for good. An AI agent turns them into spreadsheets and a page per day, and asks you when it's unsure. Everything is backed up every night, encrypted.
 
-This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`; `docs/DESIGN.md` and `docs/DECISIONS.md` still hold what the parts whose documents aren't written yet do, and the choices made while building them.
+This README is for installing and running it on Linux, natively or with Docker. `docs/ARCHITECTURE.md` maps the parts, with a document for each in `docs/architecture/`, and `AGENTS.md` says how to work on the code.
 
 - [How it fits together](#how-it-fits-together)
 - [What you need](#what-you-need)
@@ -407,6 +407,7 @@ Lines of one request share its `id`. No line holds a header, a body or a query s
 - **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `/status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 ([Failures](docs/architecture/run.md#failures)).
 - **A WhatsApp message that reaches wacli long after messages sent later**, more than 2 minutes, and whose webhook to the bridge was also lost, may never be stored. Catch-up lists wacli's store by the messages' own times, from where it had got to, less 2 minutes; your messages normally reach wacli in their order. It stays in WhatsApp and in wacli's own store ([Catch-up](docs/architecture/whatsapp.md#catch-up)).
 - **The image on arm64**, Docker Desktop, OrbStack, Colima and macOS have never been run.
+- **The native install and upgrade, as written here,** have never been run whole: the install's steps ran in a throwaway VM, as the plan the code was built by worded them, and the upgrade's one at a time. `sudo RESTORE_TARGET=… scooter restore` has never been run.
 - **A native bridge runs as root**, so that it can start wacli and the email reader as their own users: a flaw in it would expose the whole machine, not one container. Running it as its own user, with systemd starting the other two, is a possible later change.
 
 ## Upgrading

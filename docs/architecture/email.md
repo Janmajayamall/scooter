@@ -83,6 +83,7 @@ The `mail/` folder is the reader's, and the bridge, as root, takes what it needs
 - **Removing.** The names the bridge removes in a folder of the spool are those the reader writes there: `message.eml`, `parsed.json` and `part-<n>`. A folder that holds anything else is left, and logged once (`email.not_removed`).
 - **An email the bridge can't store whole for a reason of its own** stays in the spool, whole, and is tried again after `SPOOL_RETRY_BACKOFF`; the folders after it wait, in order. That is one the store can't take, and one whose files the bridge can't copy out of the spool or into the day folder ([Intake](bridge.md#intake)). A failure to open a file of the spool is the email's own only when it is `ENOENT` on that file, a file that isn't the reader's or isn't a regular file with one name (`EUNTRUSTED`), or one too large (`EFBIG`); anything else, such as `EMFILE`, is the bridge's. Only a file of the email's own that fails so leaves the email stored without it, with a `media` object saying so. *Cost:* a fault of the bridge's that lasts, such as a `bridge/incoming/` it can't write, holds back every email behind the first, until it is mended. When the store has stopped, the consumer stops with the bridge.
 - `stop()` stops the reader, and waits for the spool folder it is taking.
+- **In the tests,** this side is tested by placing folders in the spool, as the reader writes them.
 
 ## The sender check
 

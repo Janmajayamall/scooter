@@ -54,12 +54,14 @@ test('docker: the image is built as 8.3 says: its two stages, restic checked aga
   assert.match(DOCKERFILE, /^FROM node:24-trixie-slim$/m)
   for (const name of ['ca-certificates', 'curl', 'bzip2', 'git', 'tini', 'tzdata', 'cpio', 'lz4', 'e2fsprogs', 'qemu-utils']) assert.match(DOCKERFILE, new RegExp(`apt-get install -y --no-install-recommends [^;]*\\b${name}\\b`), name)
   assert.match(DOCKERFILE, /amd64\) qemu=qemu-system-x86 ;;\s+arm64\) qemu=qemu-system-arm ;;/)
-  // restic's checksums are those milestone 0 took from the release's SHA256SUMS (docs/DECISIONS.md, 0.2).
-  const decisions = read('docs/DECISIONS.md')
+  // restic's checksums are those milestone 0 took from the release's SHA256SUMS, as checked then.
+  const recorded = {
+    amd64: 'f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c',
+    arm64: 'a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465',
+  }
   assert.match(DOCKERFILE, /^ARG RESTIC_VERSION=0\.19\.1$/m)
-  for (const arch of ['amd64', 'arm64']) {
-    const recorded = new RegExp(`\\| \`restic_0\\.19\\.1_linux_${arch}\\.bz2\` \\| \`([0-9a-f]{64})\` \\|`).exec(decisions)[1]
-    assert.match(DOCKERFILE, new RegExp(`^ARG RESTIC_SHA256_${arch.toUpperCase()}=${recorded}$`, 'm'), arch)
+  for (const [arch, sum] of Object.entries(recorded)) {
+    assert.match(DOCKERFILE, new RegExp(`^ARG RESTIC_SHA256_${arch.toUpperCase()}=${sum}$`, 'm'), arch)
   }
   assert.match(DOCKERFILE, /sha256sum -c -/)
   assert.match(DOCKERFILE, /^RUN npm ci --omit=dev --ignore-scripts /m)

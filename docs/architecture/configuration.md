@@ -1,6 +1,6 @@
 # Configuration and the CLI
 
-How the owner configures Scooter, and how each of its commands starts. The configuration is of three kinds, each with its own readers and one writer:
+How the owner configures Scooter, and how each of its CLI commands starts. The configuration is of three kinds, each with its own readers and one writer:
 
 | What | Where | Read by | Changed by |
 |---|---|---|---|
@@ -12,18 +12,19 @@ This document covers the format of each and how it is checked. What a setting or
 
 ## Files
 
-- `src/cli.mjs`: the one entry point, `scooter <command>`: each command, its side, and its exit codes.
+- `src/cli.mjs`: the one entry point, `scooter <command>`: each CLI command, its side, and its exit codes.
 - `src/common/settings.mjs`: the env files, read and checked for one side: `loadSettings`, `parseEnvFile` and `loadFolders`.
 - `src/common/limits.mjs`: the tuning constants, and `overrideLimits`, for the tests.
 - `src/runner/config.mjs`: `agents.yaml`, read and checked, with each skill's `SKILL.md`: `loadConfig`, `parseConfig` and `skillFileProblem`.
 - `config/agents.yaml`: the default `agents.yaml`, which `setup` copies and Docker mounts.
-- `bridge.env.example`, `runner.env.example`: every variable of each service, explained, from which `setup` writes the env files.
+- `bridge.env.example`: every variable of the bridge, explained, from which `setup` writes `bridge.env`.
+- `runner.env.example`: every variable of the runner, explained, from which `setup` writes `runner.env`.
 
 ## The CLI
 
-`src/cli.mjs` is the one entry point. Each command belongs to one side and loads only that side: its settings, from its own env file, and its code, which is imported only when the command runs. So a bridge command never holds the runner's key, and a runner command never holds the bridge's secrets: the other side's env file is never opened. The two commands root runs on the machine itself load neither side's settings here, and read only what they need.
+`src/cli.mjs` is the one entry point. Each CLI command belongs to one side and loads only that side: its settings, from its own env file, and its code, which is imported only when the CLI command runs. So the bridge's CLI commands never hold the runner's key, and the runner's never hold the bridge's secrets: the other side's env file is never opened. The two that root runs on the machine itself load neither side's settings here, and read only what they need.
 
-| Command | Side | Described in |
+| CLI command | Side | Described in |
 |---|---|---|
 | `bridge` | bridge | [Starting up](bridge.md#starting-up) |
 | `runner` | runner | [Starting up](runner.md#starting-up) |
@@ -35,9 +36,9 @@ This document covers the format of each and how it is checked. What a setting or
 | `backup-init`, `snapshots`, `check`, `restore [snapshot] [--force]` | bridge; `restore` with both services stopped | [The CLI commands](backups.md#the-cli-commands), [Restore](backups.md#restore) |
 | `rebuild <agent>` | runner, with its service stopped | [Rebuild](rebuild-and-backfill.md#rebuild) |
 
-- **Who runs a command.** Natively, a command runs as its side's service user: the bridge's as root, the runner's as `scooter-runner`, and `setup` and `build-image` as root. In Docker it runs in a one-off container of its service, `docker compose run --rm <service> <command>`, which is that user too, and `build-image` in its own. The README gives the commands ([Install natively](../../README.md#install-natively), [Install with Docker](../../README.md#install-with-docker)).
-- **Exit codes:** 0 when the command did its work; 1 when it failed; 2 when it couldn't start because of how it was called or how Scooter is configured. A fault in the side's settings is a 2, printed before the command's code is loaded ([The env files](#the-env-files)); so are no command and an unknown one, each with the list of commands on stderr. What else is a 2 is with each command.
-- **`scooter help`**, or `--help` or `-h`, prints every command, with its arguments, what it does and where it runs, and exits with 0. It is the image's default command ([The image](install.md#the-image)).
+- **Who runs one.** Natively, a CLI command runs as its side's service user, the bridge's as root and the runner's as `scooter-runner`, and `setup` and `build-image` run as root. In Docker it runs in a one-off container of its service, `docker compose run --rm <service> <command>`, which is that user too, and `build-image` in a container of its own. The README shows how, for each ([Install natively](../../README.md#install-natively), [Install with Docker](../../README.md#install-with-docker)).
+- **Exit codes:** 0 when the CLI command did its work; 1 when it failed; 2 when it couldn't start because of how it was called or how Scooter is configured. A fault in the side's settings is a 2, printed before the CLI command's code is loaded ([The env files](#the-env-files)); so are no CLI command and an unknown one, each with the list of CLI commands on stderr. What else is a 2 is in each one's document.
+- **`scooter help`**, or `--help` or `-h`, prints every CLI command, with its arguments, what it does and where it runs, and exits with 0. The image runs it when it is given no CLI command ([The image](install.md#the-image)).
 
 ## The env files
 
@@ -105,7 +106,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 | `ack_reaction` | one emoji, such as `"✅"`, or `""` for none, below | The reaction of quiet mode ([Reading the answer](run.md#reading-the-answer)) |
 | `can_message` | `true` or `false` | Whether what the agent says is sent ([Reading the answer](run.md#reading-the-answer)) |
 | `timeout_minutes` | a whole number of minutes, within `CONFIG_RANGES` | How long a run may take ([A run](run.md#a-run)) |
-| `run` | a list of when the agent runs, which may be empty, below | [When the agent runs](runner.md#when-the-agent-runs) |
+| `run` | a list of triggers, when the agent runs, which may be empty, below | [When the agent runs](runner.md#when-the-agent-runs) |
 
 **`model`** matches `~?provider/name[:variant]`, in lowercase letters, digits, `.`, `_`, `-` and `:`, as all 403 models of pi's catalog do ([What pi sends](network-policy.md#what-pi-sends)). One that ends in `:online` is refused, with the reason. *Why:* the network policy refuses such a model ([Requests to OpenRouter](network-policy.md#requests-to-openrouter)), so every run would fail, and saying so at the start is cheaper.
 
@@ -130,7 +131,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 **`timeout_minutes`** gets its range from `CONFIG_RANGES`, as the numeric settings get theirs from `SETTING_RANGES`. *Why:* the low end keeps a run from being cut off before pi starts; the high end is a slip of the hand, and also how long a backup can wait ([The locks](exchange.md#the-locks)).
 
 **`run`.**
-- Each entry has exactly one of `on`, `at`, `once` and `backfill`, and only the keys that go with it: `at` and `once` a `task`, a text, and `backfill` a `skill` and `writes`.
+- Each trigger in it has exactly one of `on`, `at`, `once` and `backfill`, and only the keys that go with it: `at` and `once` a `task`, a text, and `backfill` a `skill` and `writes`.
 - `on: new-messages` is the only `on`: the agent runs on every batch of new messages. It is given at most once.
 - `at` is `HH:MM`, daily, or a weekday from `Mon` to `Sun` and `HH:MM`, weekly, such as `"Sun 18:00"`, in `SCOOTER_TZ`. The values are unique: they are the keys of `scheduled` in the state ([State](runner.md#state)).
 - A `once` task runs once, and its ID is remembered.
