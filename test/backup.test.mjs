@@ -121,7 +121,7 @@ function harness(t, { extra = {}, start = START, quiesce, resume, onFatal } = {}
     onFatal,
   })
   atEnd(t, () => backups.stop())
-  // The bridge writes its own entries to its own outbox (D205).
+  // The bridge writes its own entries to its own outbox.
   const outbox = () => listHandOffs(paths.bridgeOutbox).map(id => JSON.parse(fs.readFileSync(path.join(paths.bridgeOutbox, id, 'entry.json'), 'utf8')))
   return { root, stub, clock, log, entries, events, proc, settings, paths, state, backups, happened, outbox }
 }
@@ -135,7 +135,7 @@ async function seconds(clock, count) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The locks (5.5, rows 6 and 7)
+// The locks
 
 test('backups: a backup takes backup.lock, waits for a run to finish, and stops the writers only while restic runs', async t => {
   const h = harness(t)
@@ -167,7 +167,7 @@ test('backups: the runner gives way to a backup in progress, and a run taken fir
   h.stub.fixtures({ hold: ['backup'] })
   const done = h.backups.request('signal')
   await h.stub.holding('backup')
-  // When both locks appear together the runner gives way (6.4): it takes its lock, sees the
+  // When both locks appear together the runner gives way: it takes its lock, sees the
   // backup's, and lets go of its own.
   assert.equal(acquireRunLock({ paths: h.paths, deadline: h.clock.now() + MINUTE, clock: h.clock }), 'backup')
   assert.equal(lockExists(h.paths.runLock), false)
@@ -296,7 +296,7 @@ test('backups: restic backs up the folders of 5.5, leaves out the caches and wha
     p.agentsDiscarded,
     '--exclude-caches',
   ])
-  // Scooter's snapshots are one group, whatever folders each holds (D195).
+  // Scooter's snapshots are one group, whatever folders each holds.
   assert.deepEqual(forget.args, ['--cache-dir', p.backupCache, 'forget', '--host', 'scooter', '--tag', 'scooter', '--group-by', 'host,tags', '--keep-daily', '14', '--keep-weekly', '0', '--keep-monthly', '24', '--prune'])
   for (const call of [backup, forget]) {
     // The settings in its environment, never on its command line, and nothing else of the bridge's.
@@ -704,7 +704,7 @@ test('backups: in the bridge, a /backup waiting for a run doesn\'t hold back a /
 })
 
 // ---------------------------------------------------------------------------------------------
-// The commands (8.4)
+// The commands
 
 function cli(t, extra) {
   const root = makeTestDir(t)
@@ -899,7 +899,7 @@ test('backups: as root, restore refuses until setup has made Scooter\'s users, w
 })
 
 // ---------------------------------------------------------------------------------------------
-// The real round trip, when restic is installed (section 10)
+// The real round trip, when restic is installed
 
 const withRestic = { skip: realRestic === null ? 'restic is not installed' : false }
 

@@ -45,19 +45,19 @@ test('units: the bridge runs as root, the runner as its user with the kvm group,
   assert.deepEqual(runner['Service.Group'], [USERS.runner])
   assert.deepEqual(runner['Service.SupplementaryGroups'], ['kvm'])
   for (const unit of [bridge, runner]) {
-    // VMs die with the runner, and wacli and the email reader with the bridge (6.6).
+    // VMs die with the runner, and wacli and the email reader with the bridge.
     assert.deepEqual(unit['Service.KillMode'], ['control-group'])
     assert.deepEqual(unit['Service.Restart'], ['on-failure'])
     assert.equal(unit['Service.Environment'][0], 'TZ=UTC')
     assert.deepEqual(unit['Install.WantedBy'], ['multi-user.target'])
-    // Nothing else of the environment: each service reads its own env file (8.2).
+    // Nothing else of the environment: each service reads its own env file.
     assert.equal(unit['Service.EnvironmentFile'], undefined)
   }
-  // The runner's restarts wait 1 minute, then about 5, then 30 (D207): a fault that stays after pi
+  // The runner's restarts wait 1 minute, then about 5, then 30: a fault that stays after pi
   // has run would otherwise run pi again every few seconds.
   assert.deepEqual([runner['Service.RestartSec'], runner['Service.RestartSteps'], runner['Service.RestartMaxDelaySec']], [['1min'], ['2'], ['30min']])
   assert.deepEqual([bridge['Service.RestartSec'], bridge['Service.RestartSteps'], bridge['Service.RestartMaxDelaySec']], [['5s'], ['6'], ['5min']])
-  // systemd keeps those waits, so the runner keeps none of its own (D229); the bridge is told nothing.
+  // systemd keeps those waits, so the runner keeps none of its own; the bridge is told nothing.
   assert.deepEqual(runner['Service.Environment'], ['TZ=UTC', `SCOOTER_RESTART_WAITS=${SERVICE_MANAGER_WAITS}`])
   assert.deepEqual(bridge['Service.Environment'], ['TZ=UTC'])
 })

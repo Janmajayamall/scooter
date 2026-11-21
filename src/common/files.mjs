@@ -3,8 +3,8 @@
 //
 // Two services and several programs share Scooter's folders, so a reader must never see half of
 // anything. A file is written under a temporary name and renamed into place. A folder that is
-// handed from one program to another, such as an outbox entry (5.3 of DESIGN.md) or a mail spool
-// folder (5.6), is filled as `.tmp-<id>` and renamed to `<id>` once it's complete.
+// handed from one program to another, such as an outbox entry or a mail spool
+// folder, is filled as `.tmp-<id>` and renamed to `<id>` once it's complete.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -25,7 +25,7 @@ function fsyncPath(target) {
 }
 
 // Sets the owner of a file or folder. Without an owner this does nothing: a process that isn't
-// root can't give files away, and skips it (section 10).
+// root can't give files away, and skips it.
 export function setOwner(target, owner) {
   if (owner) fs.chownSync(target, owner.uid, owner.gid)
 }
@@ -36,7 +36,7 @@ export function setOwner(target, owner) {
 //
 // Root makes folders in folders other users own, such as `wacli/store` in `wacli/`, and that user
 // can rename what root made and put a link in its place at any moment. A `chown` or `chmod` by the
-// path would then follow the link, and give that user whatever it leads to (D206). One made through
+// path would then follow the link, and give that user whatever it leads to. One made through
 // the descriptor reaches only the folder that was opened.
 export function settleFolder(dir, { mode, owner } = {}) {
   const fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW)
@@ -106,7 +106,7 @@ export function readJsonFile(file) {
 }
 
 // Copies a file that another program wrote, in a folder that program controls, into a folder of
-// Scooter's own: a download in wacli's staging folder (5.2), or an attachment in the mail spool
+// Scooter's own: a download in wacli's staging folder, or an attachment in the mail spool
 // (5.6). The bridge runs as root and the other program doesn't, so the other program could leave
 // something in the file's place that gets root to copy what the program can't read itself:
 // - a symbolic link: the file is opened without following a link at the end of its path;
@@ -173,7 +173,7 @@ export async function copyUntrustedFile(source, target, { owner = null, maxBytes
 // that renames a new file into place replaces it: the reader's `state.json` and the runner's
 // `status.json` are written so. It is opened again, once. On tmpfs that nearly always finds the new
 // file; on ext4 the name can still lead to the old one, with no name left, for the moment the
-// rename takes, and the second look is refused as well (D138). The window is microseconds, about
+// rename takes, and the second look is refused as well. The window is microseconds, about
 // once a minute for the reader's file, only `/status` reads then, and a refusal is the safe side.
 function openUntrusted(file, owner, again = true) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
@@ -204,7 +204,7 @@ function openUntrusted(file, owner, again = true) {
 }
 
 // Reads a small file that another program wrote, in a folder that program controls, such as an
-// outbox entry, which the runner's user writes and the bridge, as root, reads (5.3). As with
+// outbox entry, which the runner's user writes and the bridge, as root, reads. As with
 // `copyUntrustedFile`, it is opened without following a link at the end of its path and without
 // waiting for a writer, and it must be a regular file with exactly one name, of at most `maxBytes`,
 // and belong to `owner` when one is given (`{ uid, gid }`). Returns its contents as text. Throws an
@@ -231,7 +231,7 @@ export function readUntrustedFile(file, { maxBytes, owner = null }) {
 }
 
 // Reads at most the first `maxBytes` of a file that another program wrote, with the care of
-// `readUntrustedFile`, such as the header block of an email in the mail spool (5.6), whose whole
+// `readUntrustedFile`, such as the header block of an email in the mail spool, whose whole
 // file may be 100 MB. Returns `{ bytes, size }`: what was read, as a Buffer, and the file's size.
 export function readUntrustedStart(file, { maxBytes, owner = null }) {
   const { fd, stat } = openUntrusted(file, owner)
@@ -251,8 +251,8 @@ export function readUntrustedStart(file, { maxBytes, owner = null }) {
 
 // Checks that `dir` is a folder, and not a link to one, belonging to `owner` when one is given
 // (`{ uid, gid }`): what a folder another program controls must be before the bridge, as root,
-// takes anything out of it or removes anything in it, such as the mail spool (5.6), the outbox
-// (5.3) or wacli's staging folder (5.2). That program owns the folder above it, and can put a link
+// takes anything out of it or removes anything in it, such as the mail spool, the outbox
+// or wacli's staging folder. That program owns the folder above it, and can put a link
 // in its place: the bridge would then list, read and remove what the link leads to, which for root
 // is anything. Throws an error with the code `EUNTRUSTED` when it isn't such a folder, and the
 // system's error, `ENOENT` among them, when it can't be looked at.
@@ -329,7 +329,7 @@ function takeFolderBack(folder) {
 
 // Removes `target` and everything under it, without following links: a link goes as a link. A
 // `target` that isn't there is fine. `target` is a path, as a string or as bytes. It is for what a
-// sandboxed program wrote (6.6, 6.9 of DESIGN.md), and nothing in it can stop the removal
+// sandboxed program wrote, and nothing in it can stop the removal
 // (`emptyFolder`).
 export function removeTree(target) {
   let stat
@@ -351,7 +351,7 @@ export function removeTree(target) {
 // and the runner's. A `target` that isn't there is fine. It makes nothing new, so it can free a
 // disk that is full: it only removes, and renames within the folder.
 //
-// It is for a folder that a sandboxed program wrote (6.6, 6.9 of DESIGN.md), and nothing in it can
+// It is for a folder that a sandboxed program wrote, and nothing in it can
 // stop the removal:
 // - pi runs as root in its VM, and what it writes there belongs to the runner on the host, so it
 //   can take the runner's access away from a file or a whole folder. Each folder is given back

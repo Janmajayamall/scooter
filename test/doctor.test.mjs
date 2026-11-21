@@ -200,7 +200,7 @@ test("doctor: a VM boots from the image with the runner's accelerator, in its ow
   const { check, runner, paths, booted } = install(t)
   await check()
   assert.deepEqual(booted, [paths.dataDir])
-  // KVM that opens and doesn't boot a VM, as under nested virtualization (D218).
+  // KVM that opens and doesn't boot a VM, as under nested virtualization.
   const checks = await check({ runner: { ...runner, bootCheck: async () => Promise.reject(new Error("the VM couldn't start: timeout")) } })
   const [boot] = byName(checks, 'VM boot')
   assert.equal(boot.status, 'fail')
@@ -238,7 +238,7 @@ test('doctor: a folder with the wrong mode or owner, or no users, each with its 
   checks = await check({ docker: true })
   assert.match(byName(checks, 'folders')[0].fix, /^docker compose run --rm --entrypoint sh bridge -c 'chown \d+:\d+ \S+\/datastore && chmod 0750 \S+\/datastore'$/)
 
-  // A data folder another user could write would let them steer build-image, as root (D151).
+  // A data folder another user could write would let them steer build-image, as root.
   fs.chmodSync(paths.agents, 0o700)
   fs.chmodSync(paths.datastore, 0o750)
   fs.chmodSync(paths.dataDir, 0o777)

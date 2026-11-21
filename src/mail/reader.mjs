@@ -21,13 +21,13 @@
 //   even when its UID is lower than `n`, so a UID below `next` is ignored. When `UIDVALIDITY`
 //   changes, the server has renumbered the mailbox: the reader starts again from the first message
 //   that arrived since the day before the newest one it handed over, and the bridge skips what it
-//   has already stored, by `Message-ID` (4.4).
+//   has already stored, by `Message-ID`.
 //
 // It never deletes, moves or flags mail. Any error with the mailbox ends it with exit code 1, and
 // the bridge starts it again after a wait that doubles (`RESTART_BACKOFF`), which is how it
 // reconnects with backoff. SIGTERM ends it with 0.
 //
-// `node src/mail/reader.mjs newest`, for `scooter email-check` (8.4): prints the header blocks of
+// `node src/mail/reader.mjs newest`, for `scooter email-check`: prints the header blocks of
 // the mailbox's newest `EMAIL_CHECK_COUNT` messages, one JSON object a line, and stores nothing.
 //
 // Its logs, on stderr, hold UIDs, counts and sizes, never what an email says.
@@ -64,7 +64,7 @@ export const systemClock = {
 // A time to the second, as the spool and the position write it.
 export const isoSeconds = ms => new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z')
 
-// The variables the reader reads (5.6), besides `HOME`, `TZ`, `PATH` and `LANG`.
+// The variables the reader reads, besides `HOME`, `TZ`, `PATH` and `LANG`.
 export const READER_VARIABLES = ['EMAIL_IMAP_HOST', 'EMAIL_IMAP_PORT', 'EMAIL_USER', 'EMAIL_PASSWORD', 'EMAIL_OWNER_ADDRESSES', 'EMAIL_CHECK_SECONDS']
 
 // The reader's settings, from the environment the bridge gives it, which the bridge has checked

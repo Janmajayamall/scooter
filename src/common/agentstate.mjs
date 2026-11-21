@@ -1,4 +1,4 @@
-// An agent's `state.json` (6.3 of DESIGN.md): the runner's bookkeeping for one agent.
+// An agent's `state.json`: the runner's bookkeeping for one agent.
 //
 //   {
 //     "cursor": 1049,
@@ -24,12 +24,12 @@
 // - `session`: the owner's day of the newest `/new`, and how many there were that day. Null before
 //   the first `/new`: a day without one has the session `<agent>-<day>`.
 // - `onceDone`, `backfillDone`: the IDs of the `once` tasks and backfills that have finished.
-// - `backfill`: only while a backfill is in progress (6.11). Its own cursor, its retries, and the
+// - `backfill`: only while a backfill is in progress. Its own cursor, its retries, and the
 //   items it gave up on.
 // - `scheduled`: for each `at` of the config, the owner's date of the last time it came due that
 //   has been dealt with.
 // - `lastRun`: the last live run, null before the first.
-// - `paused`: only while a setup error or an outage holds runs back (6.9). `cause` is `setup` or
+// - `paused`: only while a setup error or an outage holds runs back. `cause` is `setup` or
 //   `outage`, `next` is the next try, and `tries` how many tries in a row have failed.
 //
 // Times are UTC to the second. `session.day` and the dates in `scheduled` are dates of the owner's
@@ -202,7 +202,7 @@ export class AgentStateError extends Error {
 // Reads a `state.json`. Returns null when there is none, and throws an `AgentStateError` that
 // names the file when it isn't a state. The file is written atomically, so a crash doesn't leave
 // half of one. With `maxBytes`, it is read as a file another user controls (`readUntrustedFile`):
-// so the bridge, as root, reads the runner's for `/status` (5.4).
+// so the bridge, as root, reads the runner's for `/status`.
 export function readAgentState(file, { maxBytes = null } = {}) {
   let state
   try {

@@ -16,7 +16,7 @@ import { OPENROUTER_HOST } from './fake-model.mjs'
 import { createTestLog } from './log.mjs'
 import { atEnd } from './tmp.mjs'
 // Loaded first, so that Gondolin keeps its list of running VMs in this process's own folder, which
-// is removed when the process exits (D53), and not in the first test's.
+// is removed when the process exits, and not in the first test's.
 import { vmSkipReason } from './vm.mjs'
 
 export function sandboxSkipReason() {
@@ -40,7 +40,7 @@ export async function linkTestImage(paths) {
 }
 
 // Puts back, when the test ends, what the sandbox changes in the process's environment: its home,
-// its temporary folder, its cache folder and Gondolin's list of VMs (row 16). Register it after `makeTestDir`.
+// its temporary folder, its cache folder and Gondolin's list of VMs. Register it after `makeTestDir`.
 export function keepEnvironment(t) {
   const before = Object.fromEntries(['HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'GONDOLIN_SESSIONS_DIR'].map(name => [name, process.env[name]]))
   atEnd(t, () => {

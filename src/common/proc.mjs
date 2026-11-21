@@ -2,12 +2,12 @@
 //
 // - A program is started from an argument list, never through a shell.
 // - Its environment is exactly what the caller gives. Nothing is inherited, so a secret reaches
-//   only the program it is meant for (3.2 of DESIGN.md).
+//   only the program it is meant for.
 // - It can run as another user. That needs root. A process that isn't root skips the switch and
-//   logs one warning, which is how Scooter runs in development and in most tests (section 10).
+//   logs one warning, which is how Scooter runs in development and in most tests.
 // - It is stopped with SIGTERM, then SIGKILL after `STOP_GRACE`.
 // - Logs name the program, never its arguments or its environment: wacli's command line carries
-//   the webhook secret (5.1).
+//   the webhook secret.
 //
 // This is the only module that imports `node:child_process`.
 
@@ -41,7 +41,7 @@ export function findProgram(program, searchPath = process.env.PATH ?? '') {
 const USER_NAME = /^[a-z_][a-z0-9_-]*$/
 
 // Whether this process runs in a Docker container, where the commands that set or fix things
-// differ from a native install's (8.3).
+// differ from a native install's.
 export const inDocker = () => fs.existsSync('/.dockerenv')
 
 // Returns `run`, `supervise` and `lookupUser`, which share one log, one clock, and the one warning
@@ -88,7 +88,7 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
   // SIGTERM now, and SIGKILL if the child is still there after `STOP_GRACE`. Resolves once it's
   // gone. `ended` is the child's `ending`.
   //
-  // The signals go to the program alone (D25). Once it has exited, its pipes are closed from this
+  // The signals go to the program alone. Once it has exited, its pipes are closed from this
   // side: whatever it left running may hold them open for as long as it likes, and a program that
   // was stopped isn't owed the rest of its output. So a stop takes at most `STOP_GRACE`.
   async function terminate(child, ended) {
@@ -239,7 +239,7 @@ export function createProc({ log, clock = systemClock, isRoot = () => process.ge
   }
 
   // The uid and gid of a user of this machine, by name, such as `scooter-wacli`, whoever asks; null
-  // when there is no such user. `setup` and `doctor` ask it (8.4).
+  // when there is no such user. `setup` and `doctor` ask it.
   async function findUser(name) {
     if (!USER_NAME.test(name)) throw new Error(`not a user name: ${name}`)
     const ids = []

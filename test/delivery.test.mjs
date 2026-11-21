@@ -1,6 +1,6 @@
 // Delivery (5.3 of DESIGN.md; section 10, "Delivery"): the outbox processor with fake channels and
 // a real store. Order, pacing, chunking, quoting, reactions, `out` lines with the channel's IDs,
-// recovery from the bridge's record of an entry, which it keeps in its own folder (D205), waiting,
+// recovery from the bridge's record of an entry, which it keeps in its own folder, waiting,
 // failed sends, entries that aren't entries, pausing, and how long a text may be. Routing has its own tests (`routing.test.mjs`), and the WhatsApp module's
 // command lines theirs (`whatsapp.test.mjs`).
 
@@ -87,7 +87,7 @@ function setup(t, { lines = LINES, started = true } = {}) {
   return context
 }
 
-// The IDs of the runner's entries the bridge keeps a record of, in its own folder (D205).
+// The IDs of the runner's entries the bridge keeps a record of, in its own folder.
 const records = paths => listHandOffs(paths.bridgeSending).map(name => name.replace(/\.json$/, ''))
 const recordOf = (paths, id) => JSON.parse(fs.readFileSync(path.join(paths.bridgeSending, `${id}.json`), 'utf8'))
 
@@ -531,7 +531,7 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   context.start()
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   for (const name of ['agents', 'datastore', '20261109T150000000-0001']) assert.ok(fs.existsSync(path.join(elsewhere, name, 'kept')), name)
-  // The bridge's own entry goes, while nothing of the runner's does, its record included (D226).
+  // The bridge's own entry goes, while nothing of the runner's does, its record included.
   assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status'])
   assert.deepEqual(fs.readdirSync(paths.bridgeSending), ['20261109T150000000-0001.json'])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
@@ -676,7 +676,7 @@ test('delivery: an entry with U+0000 in its text is refused at once, not tried S
 test('delivery: when the store takes no more lines, the message counts as sent and the bridge is told', async t => {
   const context = setup(t)
   const { write, whatsapp, clock, store, fatal, paths } = context
-  // As after a write that failed (D29).
+  // As after a write that failed.
   store.append = async () => {
     throw Object.assign(new Error('no space'), { code: 'ENOSPC' })
   }

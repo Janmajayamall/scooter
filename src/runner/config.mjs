@@ -1,4 +1,4 @@
-// The agents' configuration, `agents.yaml` (6.1 of DESIGN.md).
+// The agents' configuration, `agents.yaml`.
 //
 // The runner reads it at startup and refuses to start on any fault. Every fault is reported at once,
 // each naming the field and the line it is on. This is the only module that imports `yaml`.
@@ -159,7 +159,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
   }
 
   // A skill's folder holds only files and folders, and a `SKILL.md`. The runner copies it for each
-  // run, and pi sees nothing else of the config (8.5). Returns whether it does.
+  // run, and pi sees nothing else of the config. Returns whether it does.
   function checkSkillFolder(parts, { path: clean, real }) {
     if (!fs.statSync(real).isDirectory()) {
       fault(parts, `names ${clean}, which isn't a folder`)
@@ -180,7 +180,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
     try {
       text = fs.readFileSync(skillFile, 'utf8')
     } catch (error) {
-      // As a fault that names the field, with the others (the review of milestone 11, point 4).
+      // As a fault that names the field, with the others.
       fault(parts, `names ${clean}, whose SKILL.md can't be read (${error.code ?? error.name})`)
       return false
     }
@@ -256,7 +256,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       }
     }
 
-    // Each is copied into `run/config/` at its own path (8.5), so none may lie inside a skill's
+    // Each is copied into `run/config/` at its own path, so none may lie inside a skill's
     // folder: the copies would overlap, and every run would fail.
     const within = (folder, inner) => inner.startsWith(`${folder}/`)
     for (const skill of agent.skills) {
@@ -350,7 +350,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       return
     }
 
-    // A backfill (6.11).
+    // A backfill.
     if (run.backfill.some(other => other.id === id)) return fault([...parts, 'backfill'], `is ${id}, which another backfill entry has too`)
     let ok = true
     if (entry.skill === DAY_PAGES_SKILL) {
@@ -410,13 +410,13 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
 }
 
 // A path a backfill may change: a file, or a folder ending in `/`, inside `views/` and outside
-// `views/days/` (6.1). Returns it cleaned, or null when it isn't one.
+// `views/days/`. Returns it cleaned, or null when it isn't one.
 function viewPath(value) {
   if (typeof value !== 'string' || value.includes('\\')) return null
   const folder = value.endsWith('/')
   const parts = value.split('/').slice(0, folder ? -1 : undefined)
   if (parts.length < 2 || parts[0] !== 'views' || parts[1] === 'days') return null
-  // No `.`, `..` or empty parts, and no name the file check would refuse (6.8).
+  // No `.`, `..` or empty parts, and no name the file check would refuse.
   if (parts.some(part => part === '' || part.startsWith('.'))) return null
   return `${parts.join('/')}${folder ? '/' : ''}`
 }
@@ -429,10 +429,10 @@ const SKILL_DESCRIPTION_MAX_CHARS = 1024
 
 // What is wrong with a skill's `SKILL.md`, as words that follow "whose SKILL.md", or null. Its
 // frontmatter, read as pi reads it (`---`, YAML, then a line starting `---`), must give `name`, the
-// skill folder's own name, and a `description` (7.3). pi offers the model a skill by its name and
+// skill folder's own name, and a `description`. pi offers the model a skill by its name and
 // description, and leaves out one whose description is missing or whose frontmatter isn't YAML;
-// and the runner, the prompt and a backfill name a skill by its folder (D197). pi also leaves out of
-// what it offers the model a skill with `disable-model-invocation: true` (D208).
+// and the runner, the prompt and a backfill name a skill by its folder. pi also leaves out of
+// what it offers the model a skill with `disable-model-invocation: true`.
 export function skillFileProblem(text, folderName) {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
   const end = normalized.startsWith('---') ? normalized.indexOf('\n---', 3) : -1
@@ -444,7 +444,7 @@ export function skillFileProblem(text, folderName) {
   if (!isObject(front)) return 'has frontmatter that is no map of name and description'
   const { description } = front
   // A name of digits only is a number to YAML: pi then takes the folder's name, so the check
-  // takes it as written (D208).
+  // takes it as written.
   const name = typeof front.name === 'number' ? String(front.name) : front.name
   if (name === undefined) return `has no name: it must be ${folderName}, the folder's name`
   if (name !== folderName) return `gives the name ${JSON.stringify(name)}: it must be ${folderName}, the folder's name`

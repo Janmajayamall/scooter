@@ -1,4 +1,4 @@
-// The runner's side of an agent's `state.json` (6.3 of DESIGN.md): reading and writing it, and the
+// The runner's side of an agent's `state.json`: reading and writing it, and the
 // changes to it that planning makes. The format and its check are in `src/common/agentstate.mjs`,
 // because the bridge reads the file too, for `/status`.
 //
@@ -24,7 +24,7 @@ export function saveState(file, state) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Sessions (6.6, 5.4)
+// Sessions
 
 // The owner's day that a session belongs to: the local date at `now`, or the date before until the
 // local clock reaches `rolloverHour`. The hour is the clock's, so on a day when clocks change the
@@ -41,13 +41,13 @@ export function currentSession(state, { now, timeZone, rolloverHour }) {
   return { day, bump: state.session?.day === day ? state.session.bump : 0 }
 }
 
-// The session ID pi is given: `<agent>-<day>`, with `-<n>` after the nth `/new` of the day (6.6).
+// The session ID pi is given: `<agent>-<day>`, with `-<n>` after the nth `/new` of the day.
 export function sessionId(agentName, { day, bump }) {
   return `${agentName}-${day}${bump > 0 ? `-${bump}` : ''}`
 }
 
 // ---------------------------------------------------------------------------------------------
-// Commands (6.4)
+// Commands
 
 export const NEW_SESSION_REPLY = 'Started a fresh conversation.'
 
@@ -61,7 +61,7 @@ export const NEW_SESSION_REPLY = 'Started a fresh conversation.'
 // later than `now` counts as `now`.
 //
 // The runner writes the replies and saves the state before it builds a batch, so a crash or a
-// failed batch afterwards doesn't handle a command twice (row 11).
+// failed batch afterwards doesn't handle a command twice.
 export function applyCommands(state, lines, { now, timeZone, rolloverHour }) {
   let next = state
   const replies = []
@@ -78,7 +78,7 @@ export function applyCommands(state, lines, { now, timeZone, rolloverHour }) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Startup (6.4, 6.9, 6.11)
+// Startup
 
 // The occurrence of a scheduled task that last came due at or before `now`: `{ instant, date }`,
 // with `date` its owner's date.
@@ -90,17 +90,17 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 // What the runner does to the state when it starts, given the agent's config:
 //
 // - **Scheduled tasks.** Every occurrence up to now counts as dealt with: a runner that starts after
-//   a task's time leaves it for its next time (6.4). The dates are worked out in the time zone the
+//   a task's time leaves it for its next time. The dates are worked out in the time zone the
 //   runner starts with, so a changed `SCOOTER_TZ` takes effect from here. Tasks no longer in the
 //   config are forgotten. During a pause, though, the dates already there are kept: a task that
 //   failed on a setup error or an outage stays due, and is the next try (the plan's rule for
-//   milestone 4), and one that came due during the pause runs after it (D67, D83). Otherwise a
+//   milestone 4), and one that came due during the pause runs after it. Otherwise a
 //   pause that only a task held would be left with nothing to try.
 // - **A pause** is tried again at once: runs pause "until the next try, every 30 minutes and
-//   whenever it restarts" (6.9).
+//   whenever it restarts".
 // - **Backfills.** One whose entry is gone from the config is dropped. If none is in progress, the
 //   first entry not in `backfillDone` starts, from the beginning of the datastore up to `until`,
-//   the live cursor now (6.11).
+//   the live cursor now.
 //
 // Returns `{ state, started, dropped }`, the last two being the backfill IDs started and dropped,
 // or null.

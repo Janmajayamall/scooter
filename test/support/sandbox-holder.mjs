@@ -1,6 +1,6 @@
 // Opens the real sandbox on a data folder and starts a run that never ends, the way the runner
 // would, then waits to be killed. The test of what a killed runner leaves behind runs this as a
-// process of its own, in its own process group, as a service manager runs the runner (6.6).
+// process of its own, in its own process group, as a service manager runs the runner.
 //
 //   node test/support/sandbox-holder.mjs <data folder> <config folder>
 //

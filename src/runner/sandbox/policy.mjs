@@ -3,7 +3,7 @@
 //
 // pi's VM has no network of its own. Gondolin's host side, in the runner's process, answers its DNS
 // with made-up addresses, refuses UDP, raw TCP and private addresses, and hands each HTTP(S)
-// request to this policy's `onRequest` hook, after terminating the VM's TLS (13.4). The hook:
+// request to this policy's `onRequest` hook, after terminating the VM's TLS. The hook:
 //
 // - **Hosts.** Lets out only `openrouter.ai` over HTTPS, and, with `AGENT_INTERNET=on`, any other
 //   host over HTTPS but OpenRouter's others. Plain HTTP is refused. Gondolin then refuses a host
@@ -40,7 +40,7 @@ import { isoSeconds } from '../../common/time.mjs'
 import { OPENROUTER_HOST } from './index.mjs'
 import { MARKER_HEADER, createNetworkLog, followRequests, hostForLog, methodForLog, pathForLog, quoteForLog, reasonForLog } from './netlog.mjs'
 
-// OpenRouter's two chat routes (13.2): the path, the query strings pi uses, and the header pi sends
+// OpenRouter's two chat routes: the path, the query strings pi uses, and the header pi sends
 // the key in, with how the key is written there.
 export const ROUTES = {
   messages: { path: '/api/v1/messages', queries: ['', '?beta=true'], keyHeader: 'x-api-key', keyValue: key => key },
@@ -123,7 +123,7 @@ function checkContent(route, body) {
 }
 
 // What is wrong with a request's body on OpenRouter's `route`, for an agent whose model is `model`,
-// as a short reason, or null when it is shaped like the pinned pi's (6.13).
+// as a short reason, or null when it is shaped like the pinned pi's.
 export function checkModelRequest({ route, body, model }) {
   if (!isObject(body)) return "the body isn't a JSON object"
   if (body.model !== model) return "the model isn't the agent's"

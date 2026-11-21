@@ -1,9 +1,9 @@
-// The VM image (6.12 of DESIGN.md; row 8): building it, what is recorded about it, and the check
+// The VM image: building it, what is recorded about it, and the check
 // the runner makes at startup.
 //
 // `scooter build-image` builds the image from `config/image/build.json` into `runner/image/`:
 // - **Who builds.** Gondolin's builder runs the build's install commands in a chroot, which needs
-//   root (13.4). As root, it builds natively. Otherwise it uses Gondolin's container build when
+//   root. As root, it builds natively. Otherwise it uses Gondolin's container build when
 //   Docker or Podman is there, and otherwise stops, saying which of the two it needs.
 // - **What runs as root.** pi is installed with `npm install --ignore-scripts`, and the build's
 //   commands never run pi or anything else npm installed. pi's installed version is read from its
@@ -13,10 +13,10 @@
 //   was built, pi's version, Alpine's release, the architecture and the image's time zones; and
 //   `packages.txt` the versions of the Alpine packages in it, since they change within a release.
 // - **One at a time, and not under a running runner.** It holds `runner/runner.sock` while it
-//   builds (D90), so a runner can't start meanwhile, and it can't start while one runs.
+//   builds, so a runner can't start meanwhile, and it can't start while one runs.
 // - **Where it builds.** In `.image-build/`, beside `runner/` in the data folder, which natively
 //   only root can write, not in the runner's own folder: the image is built, recorded and given to
-//   the runner's user there, and renamed into `runner/image/` once it is complete (D151).
+//   the runner's user there, and renamed into `runner/image/` once it is complete.
 //
 // At startup the runner refuses to run when the image is missing, was built for another pi version
 // than the one the build file pins, for another architecture, or doesn't know the owner's time
@@ -69,7 +69,7 @@ const isObject = value => typeof value === 'object' && value !== null && !Array.
 // The build file
 
 // Reads `config/image/build.json`. It says what goes into the image; how it is built is
-// `build-image`'s to choose (D5), so it may not name the architecture or the container build.
+// `build-image`'s to choose, so it may not name the architecture or the container build.
 export function readBuildFile(file) {
   let build
   try {
@@ -109,12 +109,12 @@ const PLAIN_COMMAND = /^[A-Za-z0-9@/._=:+,\- ]+$/
 // The switches the command that installs pi may give npm: those the build file uses, and `-g`.
 // npm takes a word after a switch as its value, and a switch by the start of its name, so any other
 // word, such as `false` after `--ignore-scripts`, or `--ignore-s=false`, could turn pi's install
-// scripts back on (the second review of milestone 7, smaller point 1).
+// scripts back on.
 const INSTALL_SWITCHES = ['--global', '-g', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund']
 
 // pi's version, as the build file pins it, strictly: the commands name pi once, with or without a
 // version, and that is in an install command of plain words that pins it to an exact version, such
-// as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install scripts (row 8):
+// as `@earendil-works/pi-coding-agent@1.5.2`, and installs it without its install scripts:
 // `npm install`, pi, and switches from `INSTALL_SWITCHES`, `--ignore-scripts` among them, and no
 // other word. Throws an `ImageError` that names the command otherwise.
 export function pinnedPiVersion(build, file = 'config/image/build.json') {
@@ -183,7 +183,7 @@ async function listImageFolder(proc, rootfs, folder) {
 }
 
 // The time zones the image knows: every file under its zoneinfo folder, by its name there, such as
-// `Asia/Kolkata`. pi's `TZ` is one of these (6.6), and the image's C library reads it from there.
+// `Asia/Kolkata`. pi's `TZ` is one of these, and the image's C library reads it from there.
 async function imageZones(proc, rootfs) {
   const zones = []
   const folders = ['']
@@ -243,7 +243,7 @@ function checkRecord(record) {
   return problems
 }
 
-// Checks the image in `dir` at the runner's startup (6.12): it is there whole, with its record;
+// Checks the image in `dir` at the runner's startup: it is there whole, with its record;
 // built for `pinned`, pi's version as the build file pins it; for this machine's architecture; and
 // it knows `timeZone`, the zone pi runs in. Returns `{ dir, builtAt }`. Throws an `ImageError` that
 // says what to do.
@@ -396,7 +396,7 @@ async function fetchApkIndexes({ repositories, arch, fetch, clock }) {
 // How to build, as row 8 has it: natively as root, or else in a container when Docker or Podman is
 // there. Returns `{ native: true }` or `{ native: false, runtime }`. Throws an `ImageError` that
 // says what is needed: in Docker, the container `docker compose run --rm build-image` makes, as root
-// with the privileges a chroot needs (D220).
+// with the privileges a chroot needs.
 export function buildMethod({ isRoot, find = findProgram, docker = inDocker() }) {
   if (isRoot) return { native: true }
   for (const runtime of ['docker', 'podman']) if (find(runtime) !== null) return { native: false, runtime }
@@ -414,7 +414,7 @@ function imageReader(proc) {
   return dir => recordImage(dir, { proc })
 }
 
-// As root, `build-image` builds in the data folder (D151), so the data folder must be root's, and
+// As root, `build-image` builds in the data folder, so the data folder must be root's, and
 // writable by root alone: otherwise another user could put a link in the place of the folder it
 // builds in. Natively it is `/var/lib/scooter`, which `setup` makes.
 function checkDataFolder(dataDir) {
@@ -501,7 +501,7 @@ const STAGED_OLD = 'old'
 // The image is built, recorded and given to the runner's user in `paths.imageStaging`, beside the
 // runner's folder, which natively only root can write. The runner's user owns `runner/`, and
 // could put a link where the image is built, or in an image's place, at any moment: root would
-// then write into, give away or remove what the link leads to (D151). So, in the runner's folder,
+// then write into, give away or remove what the link leads to. So, in the runner's folder,
 // `build-image` holds its socket and makes two renames, the old image out to the staging folder
 // and the new one in, and nothing else. A rename follows no link, and replaces nothing but an
 // empty folder or what it moves.
@@ -544,7 +544,7 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
     writeFileAtomic(path.join(fresh, IMAGE_RECORD), `${JSON.stringify(found.record, null, 2)}\n`, { mode: 0o644 })
     const bytes = fs.readdirSync(fresh).reduce((sum, name) => sum + fs.lstatSync(path.join(fresh, name)).size, 0)
 
-    // Natively the image is root's: it goes to the runner's user, who boots it (row 8), while it is
+    // Natively the image is root's: it goes to the runner's user, who boots it, while it is
     // still where only root can reach it.
     const owner = isRoot ? await proc.lookupUser('scooter-runner') : null
     if (owner) {
@@ -579,7 +579,7 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
   }
 }
 
-// `scooter build-image`: builds the VM image, as root natively or in a container (8.4). It reads
+// `scooter build-image`: builds the VM image, as root natively or in a container. It reads
 // only `DATA_DIR` and `CONFIG_DIR`, from `runner.env` or the environment: it needs neither the key
 // nor any other setting. Exits with 2 when it can't start for how it was called or configured,
 // and with 1 when the build fails.

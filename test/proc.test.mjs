@@ -1,6 +1,6 @@
 // Running programs: an explicit environment, an argument list and no shell, a timeout, stopping
 // with SIGTERM then SIGKILL, restarts with backoff, and running as another user, which is skipped
-// with one warning when not root (3.2, 5.1 and section 10 of DESIGN.md).
+// with one warning when not root.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -167,7 +167,7 @@ test('proc: a stopped program is waited for until it exits, even when what it st
   assert.equal(result.signal, 'SIGTERM')
   assert.equal(result.timedOut, true)
   assert.deepEqual(clock.sleeping(), [])
-  // What it left behind is still running. The signals go to the program alone (D25).
+  // What it left behind is still running. The signals go to the program alone.
   assert.ok(pidIsAlive(innerPid))
 })
 
@@ -239,7 +239,7 @@ test('proc: as root, a user is looked up by name', { skip: skipUnlessRoot }, asy
 
 test('proc: as root, a user that setup would create is found', { skip: skipUnlessUsers }, async () => {
   const { proc } = setup()
-  // What `setup` does for each of Scooter's users (8.4): a system user without a login shell.
+  // What `setup` does for each of Scooter's users: a system user without a login shell.
   const add = await proc.run('useradd', ['--system', '--user-group', '--shell', '/usr/sbin/nologin', 'scooter-test-user'], {
     env: { PATH: process.env.PATH },
   })
@@ -280,7 +280,7 @@ test('proc: a supervised program is restarted after 5 seconds, then 10, doubling
   assert.deepEqual(exits.map(exit => exit.restartIn), [...expected, 300 * SECOND])
   assert.deepEqual(exits.map(exit => [exit.code, exit.signal]), exits.map(() => [7, null]))
   assert.equal(new Set(starts).size, 9)
-  // The log names the program and never its arguments, which may hold a secret (5.1).
+  // The log names the program and never its arguments, which may hold a secret.
   const text = JSON.stringify(entries)
   assert.ok(text.includes(`"program":"${path.basename(NODE)}"`))
   assert.ok(!text.includes('process.exit'))

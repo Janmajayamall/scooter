@@ -183,7 +183,7 @@ test('cli: package.json points at it', () => {
   assert.equal(pkg.type, 'module')
   assert.equal(pkg.engines.node, '>=22.19')
   assert.deepEqual(pkg.bin, { scooter: 'src/cli.mjs' })
-  // The four libraries, pinned to exact versions (4.3 of ARCHITECTURE.md), and nothing else.
+  // The four libraries, pinned to exact versions, and nothing else.
   assert.deepEqual(pkg.dependencies, {
     '@earendil-works/gondolin': '0.14.0',
     imapflow: '2.11.0',

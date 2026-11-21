@@ -130,7 +130,7 @@ test('setup: the scooter command execs Node with the code\'s cli.mjs, so Node is
 })
 
 // ---------------------------------------------------------------------------------------------
-// The checks (row 16)
+// The checks
 
 // A tree as a native install's code is, owned by this test's user, which the checks take as root.
 function codeTree(root) {
@@ -157,7 +157,7 @@ test('setup: the code must be readable by every user and changed by root alone, 
     `${path.join(code, 'src', 'cli.mjs')} can't be read by other users (mode 0750)`,
     `yaml isn't installed: run npm ci --omit=dev --ignore-scripts in ${code}`,
   ])
-  // In someone's home folder, which other users can't pass through (row 16).
+  // In someone's home folder, which other users can't pass through.
   fs.chmodSync(path.join(root, 'opt'), 0o750)
   assert.match(pathProblems(path.join(code, 'src'), { owner }).join('\n'), /opt can't be passed through by other users \(mode 0750\)/)
 })
@@ -201,7 +201,7 @@ test("setup: with services, a machine without a kvm group gets one, which the ru
       },
     }
   }
-  // No group, with services: made, then the runner put in it (the review of milestone 12, smaller point 1).
+  // No group, with services: made, then the runner put in it.
   let found = machine()
   assert.equal(
     await kvmMembership({ runner: 'scooter-runner', kvmGroup: 'kvm', services: true, ...found }),
@@ -360,7 +360,7 @@ test('setup: as root, without services, it makes the users and folders, twice ov
   assert.equal(await tryRead(ids.runner, secrets.bridge), 'EACCES')
   assert.equal(await tryRead(ids.runner, paths.datastore), 'read')
   assert.equal(await tryRead(ids.runner, path.join(locations.configDir, 'skills', 'expenses', 'SKILL.md')), 'read')
-  // Each side loads its own file as its service does (8.2).
+  // Each side loads its own file as its service does.
   const settingsEnv = { SCOOTER_ENV_DIR: locations.envDir, OWNER_NUMBER: '+919812345678' }
   assert.equal(loadSettings('bridge', { env: settingsEnv }).dataDir, locations.dataDir)
   const runnerLoad = `import(${JSON.stringify(path.join(code, 'src', 'common', 'settings.mjs'))}).then(({ loadSettings }) => { const s = loadSettings('runner', { env: { SCOOTER_ENV_DIR: ${JSON.stringify(locations.envDir)} } }); console.log(s.dataDir, s.openrouterApiKey) })`

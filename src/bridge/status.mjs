@@ -1,8 +1,8 @@
-// The reply to `/status` (5.4 of DESIGN.md).
+// The reply to `/status`.
 //
 // What the bridge knows itself: each channel's state, the newest message, and the backups. What it
 // says about the runner comes from three of the runner's files, since the bridge reads neither
-// `config/` nor `runner.env` (3.2): `status.json` for the runner's settings, each agent's
+// `config/` nor `runner.env`: `status.json` for the runner's settings, each agent's
 // `state.json` for its runs, and the network log for the last 24 hours. It reports what it can
 // read, and says so when one of them isn't there yet or can't be read. Before the runner has ever
 // started there is no `status.json`, and so no agent to report on.
@@ -11,7 +11,7 @@
 // following a link, without waiting on a FIFO, and only if it is a regular file of a bounded size
 // (`readUntrustedFile`): one that isn't is said to be unreadable, and the rest is reported.
 //
-// Times are in `SCOOTER_TZ` (section 2). The reply is text for the owner, and a function of the
+// Times are in `SCOOTER_TZ`. The reply is text for the owner, and a function of the
 // files and the clock, so a test can give it both.
 
 import { AgentStateError, readAgentState } from '../common/agentstate.mjs'
@@ -24,7 +24,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CHANNEL_NAMES = { whatsapp: 'WhatsApp', email: 'email' }
 
-// The kinds of line that are work for an agent (6.3).
+// The kinds of line that are work for an agent.
 const WORK = ['message', 'edit', 'delete']
 
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
@@ -48,7 +48,7 @@ function counts(index, state, reads) {
 }
 
 // The requests in the network log over the last `STATUS_WINDOW`, the hosts they went to, and the
-// requests the policy refused (6.13): those written one by one, and those a run only counted.
+// requests the policy refused: those written one by one, and those a run only counted.
 function network(paths, now) {
   let requests = 0
   let refused = 0
@@ -103,7 +103,7 @@ export function statusText({ now, settings, paths, channels, index, backups }) {
     const accel = status.accel === 'kvm' ? 'KVM' : 'emulation, which is much slower'
     const image = status.imageBuiltAt === null ? 'when, unknown' : at(status.imageBuiltAt)
     lines.push(`Runner: started ${at(status.startedAt)}. VMs run with ${accel}; their image was built ${image}.`)
-    // A runner that stopped on an error, and waits before it goes on (D229).
+    // A runner that stopped on an error, and waits before it goes on.
     const restart = status.restart ?? null
     if (restart !== null && parseIsoSeconds(restart.until) > now) {
       const why = restart.reason === null ? "it stopped, and couldn't record why" : `it stopped on an error (${restart.reason})`

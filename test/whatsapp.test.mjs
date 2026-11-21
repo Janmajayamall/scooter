@@ -641,7 +641,7 @@ const FIRST_START = '2026-11-01T00:00:00Z'
 
 // Puts lines in the datastore before the bridge starts, and the state a bridge that wrote them
 // keeps, as an older bridge wrote it: its first start, and nothing of where catch-up had got to,
-// so catch-up starts from the newest incoming WhatsApp line, as it did (D179). `catchUp`, when
+// so catch-up starts from the newest incoming WhatsApp line, as it did. `catchUp`, when
 // given, is where it had got to.
 function seedLines(lines, { catchUp, ownerChat = null } = {}) {
   return async (paths, { clock, log }) => {
@@ -782,7 +782,7 @@ test('whatsapp: catch-up lists the chat of the owner\'s newest message', async t
   assert.equal(list.args[list.args.indexOf('--after') + 1], '2026-11-01T00:00:00Z')
 })
 
-// Where catch-up got to (D179). The rows the webhook missed, after a catch-up that found nothing
+// Where catch-up got to. The rows the webhook missed, after a catch-up that found nothing
 // new at 15:30; and a record the webhook hands over, newer than them by more than
 // CATCHUP_OVERLAP.
 const MISSED = [
@@ -868,7 +868,7 @@ test('whatsapp: after a crash between catch-up\'s rows, the next start lists the
 })
 
 test('whatsapp: a message whose webhook never came is listed by the next catch-up, though a newer one was stored meanwhile (D179)', async t => {
-  // wacli waits 5 seconds for the webhook, and never tries again (5.2 step 1).
+  // wacli waits 5 seconds for the webhook, and never tries again.
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo() })
   const { stub, lines, clock, caughtUp, synced } = context
   await synced()
@@ -960,7 +960,7 @@ test('whatsapp: a catch-up that fails is tried again at the next one, and not wh
   assert.deepEqual(context.lines().map(line => line.sourceId), ['C1'])
 
   // Not paired: no list, and so no failure, neither at startup, where catch-up waits for the first
-  // check of the pairing (D227), nor every ten minutes.
+  // check of the pairing, nor every ten minutes.
   const unpaired = await setup(t, { fixtures: { paired: false } })
   await waitFor(() => unpaired.events().includes('whatsapp.not_paired'), 'the pairing check')
   await new Promise(resolve => setTimeout(resolve, 100))
@@ -971,7 +971,7 @@ test('whatsapp: a catch-up that fails is tried again at the next one, and not wh
 })
 
 // ---------------------------------------------------------------------------------------------
-// Sending (5.3)
+// Sending
 
 // Writes outbox entries as the runner would, and moves the fake clock on, a second at a time, while
 // the sends go through the stub in real time, until the outbox is empty.
@@ -1052,7 +1052,7 @@ test('whatsapp: entries wait while wacli isn\'t paired, and go once it is', asyn
   const { stub, clock, paths, events } = context
   // The pairing check has had its answer, so its next look is a minute from now. Waiting for any
   // sleep could find the outbox's instead, and then, under load, the clock was moved before the
-  // check's minute began, and nobody moved it again (the second review of milestone 6, point 4).
+  // check's minute began, and nobody moved it again.
   await waitFor(() => events().includes('whatsapp.not_paired'), 'the pairing check')
   await clock.whenSleeping()
   const ids = createIds(clock)
@@ -1104,7 +1104,7 @@ test('whatsapp: every wacli call gets only wacli\'s environment, and no secret b
   for (const secret of ['mailbox-password-123', 'restic-password-456', 'aws-secret-789', 'AKIAEXAMPLE', 'scooter@example.com']) {
     assert.ok(!everything.includes(secret), secret)
   }
-  // The webhook's secret is on sync's command line, the one exception (5.1), and on no other.
+  // The webhook's secret is on sync's command line, the one exception, and on no other.
   const [sync] = stub.callsOf('sync')
   const secret = sync.args[sync.args.indexOf('--webhook-secret') + 1]
   assert.deepEqual(calls.filter(call => JSON.stringify(call).includes(secret)), [sync])
@@ -1116,7 +1116,7 @@ test('whatsapp: every wacli call gets only wacli\'s environment, and no secret b
 })
 
 test('whatsapp: as root, wacli runs as its own user, and its folders are its own', { skip: skipUnlessRoot }, async t => {
-  // A made-up user: running as another user needs no user to exist (D32). It must be able to reach
+  // A made-up user: running as another user needs no user to exist. It must be able to reach
   // the stub and its control folder.
   const wacliUser = { uid: 4242, gid: 4242 }
   const root = makeTestDir(t)
@@ -1158,7 +1158,7 @@ test('whatsapp: as root, wacli runs as its own user, and its folders are its own
 })
 
 // ---------------------------------------------------------------------------------------------
-// Pairing: `scooter pair` (8.4)
+// Pairing: `scooter pair`
 
 function pairContext(t, fixtures) {
   const root = makeTestDir(t)
@@ -1187,7 +1187,7 @@ test('pair: runs wacli auth with wacli\'s environment alone, with --phone as wac
     ['--json', '--read-only', 'auth', 'status'],
     ['auth', '--phone', '919812345678'],
   ])
-  // Nothing but wacli's own environment, on every call (5.1).
+  // Nothing but wacli's own environment, on every call.
   for (const call of stub.calls()) assert.deepEqual(call.env, wacliEnv(paths))
   assert.match(out.stdout, /^Linked\./)
   // Its folders are made, as the channel makes them.

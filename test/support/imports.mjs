@@ -198,7 +198,7 @@ const MAY_IMPORT = {
   ops: ['ops', 'common'],
 }
 
-// The third-party libraries, and where each may be imported (4.2 and 4.3).
+// The third-party libraries, and where each may be imported.
 const LIBRARIES = {
   yaml: file => file === RUNNER_CONFIG,
   '@earendil-works/gondolin': file => file.startsWith('src/runner/sandbox/'),

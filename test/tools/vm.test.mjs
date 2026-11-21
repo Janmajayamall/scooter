@@ -429,7 +429,7 @@ const needsGit = { ...options, skip: options.skip || (onPath('git') ? false : 'g
 test('VM 5: git log works on the read-only agent folder', needsGit, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  // The agent's folder as the runner makes it (section 6.2).
+  // The agent's folder as the runner makes it.
   const identity = ['-c', 'user.name=Scooter', '-c', 'user.email=scooter@localhost']
   const git = (...args) => execFileSync('git', ['-C', data.agent, ...identity, ...args], { encoding: 'utf8' })
   fs.writeFileSync(path.join(data.agent, '.gitignore'), '/sessions/\n/run/\n/state.json\n')

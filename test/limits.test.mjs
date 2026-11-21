@@ -1,4 +1,4 @@
-// The constants module (8.6 of DESIGN.md): every value the design gives, and how tests change one.
+// The constants module: every value the design gives, and how tests change one.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -47,7 +47,7 @@ test('limits: the values of 8.6, the webhook port, and those of milestones 2 to 
     REASON_MAX_CHARS: 200,
     NOTICE_QUOTE_CHARS: 40,
     AGENT_FILES_MAX_BYTES: 100 * MB,
-    // Milestone 4, after the owner's answer (docs/DECISIONS.md, 4.7).
+    // Milestone 4, after the owner's answer.
     AGENT_FILES_MAX_COUNT: 20000,
     ANSWER_MAX_TEXTS: 25,
     // Milestone 5: docs/DECISIONS.md, milestone 5.
@@ -121,7 +121,7 @@ test('limits: a line the network policy writes, at its longest, fits what a read
 })
 
 test('limits: the prompt fits in one command-line argument', () => {
-  // Linux refuses a single argument of 128 KB or more (13.3).
+  // Linux refuses a single argument of 128 KB or more.
   assert.ok(limits.PROMPT_MAX_BYTES < 128 * 1024)
 })
 

@@ -1,4 +1,4 @@
-// Which of the tests that need root can run here (section 10 of DESIGN.md).
+// Which of the tests that need root can run here.
 //
 // Some behavior needs root: giving files to another owner, and running a program as another user.
 // Those tests run when the suite runs as root, and skip themselves otherwise. Tests that go

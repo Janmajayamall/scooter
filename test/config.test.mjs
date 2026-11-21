@@ -278,7 +278,7 @@ test("config: a skill's SKILL.md gives the folder's name and a description, as p
     ['---\nname: runs\ndescription: "  "\n---\n', /has no description/],
     ['---\nname: runs\ndescription: 42\n---\n', /has no description/],
     [`---\nname: runs\ndescription: ${'x'.repeat(1025)}\n---\n`, /has a description of 1025 characters, where the Agent Skills format allows 1024, and pi warns of more/],
-    // pi leaves it out of what it offers the model (the review of milestone 11, point 3).
+    // pi leaves it out of what it offers the model.
     ['---\nname: runs\ndescription: Runs.\ndisable-model-invocation: true\n---\n', /says disable-model-invocation: true, so pi wouldn't offer it to the model/],
     ['---\nname: 42\ndescription: Runs.\n---\n', /gives the name "42": it must be runs/],
   ]

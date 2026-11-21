@@ -12,7 +12,7 @@
 
 import { isoSeconds, systemClock } from './time.mjs'
 
-// The fields of a datastore line that hold what was written (4.2). Its other content, `files` and
+// The fields of a datastore line that hold what was written. Its other content, `files` and
 // `media`, is nested, and nothing nested is logged.
 const CONTENT_FIELDS = new Set(['text', 'subject', 'quoted'])
 const RESERVED_FIELDS = new Set(['at', 'level', 'component', 'event'])

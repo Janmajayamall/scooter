@@ -1,12 +1,12 @@
-// The commands the bridge answers (5.4 of DESIGN.md): `/status`, `/help` and `/backup`. `/new` is
+// The commands the bridge answers: `/status`, `/help` and `/backup`. `/new` is
 // the runner's, and the bridge passes over it.
 //
 // Commands reach the bridge as command lines in the datastore, written by intake like any other
 // line. The bridge handles those newer than `commandSeq`, in its state, as the runner does with its
-// own (6.4): it writes the reply to its outbox, then records the command as handled. So a command
+// own: it writes the reply to its outbox, then records the command as handled. So a command
 // is answered once, also across a restart; a crash between the two can answer it twice, and never
 // leaves it unanswered. The reply is `by: "bridge"`, with `about` set to the command, so it goes
-// back where the command was sent (5.3).
+// back where the command was sent.
 //
 // It runs when intake has stored a command, and once at startup for any the bridge didn't get to.
 // A reply that can't be written, as on a full disk, is tried again after a wait that doubles,

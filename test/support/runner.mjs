@@ -54,7 +54,7 @@ export const line = {
   email: (seq, at, subject, text, extra = {}) => ({ seq, kind: 'message', dir: 'in', at, source: 'email', sourceId: `${sourceId()}@mail.example`, trust: 'owner', subject, text, ...extra }),
 }
 
-// The skills of the default config (7.3).
+// The skills of the default config.
 export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people', 'day-pages']
 
 // The `agents.yaml` of 6.1, with the backfill entry when `backfill` is true.

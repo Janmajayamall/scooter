@@ -1,4 +1,4 @@
-// An agent's folder (6.2 of DESIGN.md), and `run/`, which the runner builds again before each run.
+// An agent's folder, and `run/`, which the runner builds again before each run.
 //
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
 //     views/                   the agent's views, in git
@@ -8,7 +8,7 @@
 //     state.json               the runner's state, not in git, 0600
 //
 // pi sees the folder through its VM's mounts: `views/`, `memory/` and `run/session/` writable,
-// `sessions/` hidden, and the rest read-only (6.6). Everything in it belongs to the runner's user.
+// `sessions/` hidden, and the rest read-only. Everything in it belongs to the runner's user.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -18,7 +18,7 @@ import { errorFields } from '../common/log.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside `views/`
-// or `memory/` (6.2).
+// or `memory/`.
 export const GITIGNORE = '/sessions/\n/run/\n/state.json\n'
 
 const FOLDER_MODE = 0o700
@@ -31,14 +31,14 @@ const FILE_MODE = 0o600
 // First it frees what pi wrote that a crash or a stop may have left taking room: what a clean-up
 // set aside and couldn't remove, in `agents/.discarded/<agent>/`, and `run/session/`. pi could have
 // filled the disk, and on a full disk no folder can be made, so this comes before any is. The
-// clean-up that follows at a start frees `views/` and `memory/` (6.9). `agents/.discarded/<agent>/`
+// clean-up that follows at a start frees `views/` and `memory/`. `agents/.discarded/<agent>/`
 // is made here, while there is room, and kept, so a clean-up makes nothing before it has freed
 // what it set aside.
 //
 // `git init` runs whenever the folder has no commit: a start killed during `git init` can leave an
 // empty `.git`, and running it again on a repository is safe. A git killed while it held the
 // index or a branch leaves its lock file, such as `.git/index.lock`, and git would refuse to work
-// until it is gone, so it goes first. Only the runner uses this repository (D90).
+// until it is gone, so it goes first. Only the runner uses this repository.
 export async function ensureAgentDir({ paths, name, git, log }) {
   const dir = paths.agentDir(name)
   try {
@@ -81,12 +81,12 @@ function copyTree(source, target) {
   }
 }
 
-// Builds `run/` for one run (6.2, 6.5, 6.6), from nothing:
+// Builds `run/` for one run, from nothing:
 // - `config/`: a copy of the agent's prompt and of `skills` (all of the agent's by default), each
-//   at its path in the config folder, so pi only ever sees this run's copy (8.5);
+//   at its path in the config folder, so pi only ever sees this run's copy;
 // - `session/`: empty, with a copy of the session `sessionId` if the runner has one, as
 //   `sessions/<sessionId>.jsonl`. With `session: none`, `sessionId` is null;
-// - `system.md`: the protocol, the agent's prompt, and its memory as it is now (6.5).
+// - `system.md`: the protocol, the agent's prompt, and its memory as it is now.
 //
 // Returns `{ systemFile, skillDirs, sessionDir, sessionFile }`: the paths pi is given, and the
 // session file copied in, or null.
@@ -115,7 +115,7 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
   let sessionFile = null
   if (sessionId !== null) {
     const kept = path.join(paths.agentSessions(name), `${sessionId}.jsonl`)
-    // Only the runner writes `sessions/`, and it keeps regular files there (6.6).
+    // Only the runner writes `sessions/`, and it keeps regular files there.
     if (fs.existsSync(kept) && fs.lstatSync(kept).isFile()) {
       sessionFile = path.join(sessionDir, `${sessionId}.jsonl`)
       fs.copyFileSync(kept, sessionFile, fs.constants.COPYFILE_EXCL)
@@ -135,7 +135,7 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
   return { systemFile, skillDirs, sessionDir, sessionFile }
 }
 
-// After a successful run, keeps the session pi wrote as `sessions/<sessionId>.jsonl` (6.6). Returns
+// After a successful run, keeps the session pi wrote as `sessions/<sessionId>.jsonl`. Returns
 // `kept`, `none` when pi left no session file, or `refused` when the file isn't one to keep: a link,
 // anything but a regular file, a file with more than one name, one over `SESSION_MAX_BYTES`, or
 // one the runner can't open, such as a file pi made unreadable or a session folder it can't list.
@@ -150,7 +150,7 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 // pi wrote everything in `run/session/`, so nothing there may stop the runner: the folder is read
 // as a stream, which a folder of millions of names can't make costly in memory, and the file is
 // copied without following a link, and checked on what was opened (`copyUntrustedFile`). Any error
-// is a refusal: the run is committed by now (6.8), and the session kept before stays.
+// is a refusal: the run is committed by now, and the session kept before stays.
 export async function keepSession({ paths, agent, sessionId, log }) {
   const sessionDir = paths.agentRunSession(agent.name)
   const refuse = (error = null) => {

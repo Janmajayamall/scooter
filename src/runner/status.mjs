@@ -1,4 +1,4 @@
-// The runner's `status.json` (6.3 of DESIGN.md; row 6), and the notice about emulation (6.6;
+// The runner's `status.json`, and the notice about emulation (6.6;
 // row 15). The format, and its reader for the bridge, are in `src/common/runnerstatus.mjs`.
 //
 // At startup the runner writes what `/status` needs to know about its settings: how its VMs run,
@@ -12,7 +12,7 @@ import { isoSeconds } from '../common/time.mjs'
 
 // What `status.json` says about this start. `sandbox` is the one the runner opened; `agents` the
 // config's; `restarts`, what `openRestarts` returns, when the runner keeps its own waits between
-// starts, which says whether this start waits before it goes on (D229).
+// starts, which says whether this start waits before it goes on.
 export function runnerStatus({ settings, agents, sandbox, now, restarts = null }) {
   const waits = restarts !== null && restarts.until !== null && restarts.until > now
   const status = {

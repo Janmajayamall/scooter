@@ -252,7 +252,7 @@ test('time: dates, and days added to them', () => {
 test('time: which names are time zones', () => {
   for (const zone of ['Asia/Kolkata', 'America/New_York', 'UTC', 'Europe/London']) assert.equal(isTimeZone(zone), true, zone)
   for (const zone of ['Mars/Olympus', 'IST ', '', null, undefined, 330]) assert.equal(isTimeZone(zone), false, String(zone))
-  // Node reads these, but they aren't names in the tz database, where pi's TZ is looked up (6.6).
+  // Node reads these, but they aren't names in the tz database, where pi's TZ is looked up.
   for (const zone of ['asia/kolkata', 'Asia/kolkata', 'utc', '+05:30', '-08:00', 'Asia/Kolkata/']) {
     assert.equal(isTimeZone(zone), false, zone)
   }
@@ -264,7 +264,7 @@ test('time: which names are time zones', () => {
 })
 
 test('time: nothing depends on the time zone of the process', () => {
-  // The services run with TZ=UTC, but the code must not rely on it (8.2). The same questions,
+  // The services run with TZ=UTC, but the code must not rely on it. The same questions,
   // asked by a process in another zone, get the same answers.
   const script = `
     import { fromLocal, isoSeconds, nextLocalTime, parseLocalTime, toLocal, utcDate, utcStamp } from ${JSON.stringify(

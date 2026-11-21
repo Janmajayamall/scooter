@@ -286,7 +286,7 @@ test('policy: the request line is written before the request goes out, and a str
       response.end('event: message_stop\ndata: {}\n\n')
     },
   })
-  // No response hook: in Gondolin 0.14.0 one would hold back the whole answer (13.4).
+  // No response hook: in Gondolin 0.14.0 one would hold back the whole answer.
   assert.equal(policy.options.onResponse, undefined)
 
   const out = await policy.send(piRequest('messages'))

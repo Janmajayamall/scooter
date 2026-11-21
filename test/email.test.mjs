@@ -394,7 +394,7 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   // A file where a folder should be.
   fs.writeFileSync(path.join(context.paths.mailSpool, '20261109T161500000-0900'), 'x')
   // A link where a folder should be, to a folder laid out as a spool folder outside the spool: the
-  // bridge, as root, reads and removes nothing it leads to (section 10).
+  // bridge, as root, reads and removes nothing it leads to.
   const elsewhere = path.join(context.root, 'elsewhere')
   fs.mkdirSync(elsewhere)
   for (const [file, content] of [['message.eml', gmailPlain()], ['parsed.json', '{}'], ['part-1', 'x']]) fs.writeFileSync(path.join(elsewhere, file), content)
@@ -423,7 +423,7 @@ test('email: the bridge refuses a bad parsed.json, picks file names itself, and 
   )
   const [line] = context.lines()
   // The stored names are the bridge's: `<seq>-<n>.<ext>`, the extension from the original name
-  // when it is one, else from the MIME type (4.4).
+  // when it is one, else from the MIME type.
   assert.deepEqual(
     line.files.map(file => [file.path, file.name]),
     [
@@ -608,7 +608,7 @@ test('email: a spool file the bridge can\'t open for a reason of its own, such a
   await context.take()
   const id = spoolMemo(context)
   // Opening the spool's file fails with EMFILE, an error with the file's path that isn't about
-  // the file (the second review of milestone 6, smaller point 1).
+  // the file.
   const open = fs.promises.open
   let out = true
   fs.promises.open = (target, flags, ...rest) =>

@@ -1,16 +1,16 @@
-// The bridge's own state, `bridge/state.json` (5.1 of DESIGN.md).
+// The bridge's own state, `bridge/state.json`.
 //
 //   {"firstStart":"2026-11-09T15:43:02Z","ownerChat":{"jid":"919812345678@s.whatsapp.net","at":"2026-11-09T15:50:11Z"},"lastBackup":null,"commandSeq":1038}
 //
 // - `firstStart`: when the bridge first started. WhatsApp's catch-up never reaches back before it,
-//   so the chat's earlier history is never imported (5.2 step 7).
+//   so the chat's earlier history is never imported.
 // - `ownerChat`: the chat of the owner's newest message, and that message's time. Replies go to it
 //   (5.2 step 5). Null before the owner has written.
-// - `lastBackup`: the last backup that ran to its end (5.5): `{ at, ok, snapshot, reason }`, when it
+// - `lastBackup`: the last backup that ran to its end: `{ at, ok, snapshot, reason }`, when it
 //   started, whether it worked, the snapshot it saved or null, and, when it failed, why, in words
 //   for the owner, restic's among them, which no log holds. Null before the first.
-// - `commandSeq`: the `seq` of the newest command line the bridge has handled (5.4), as the runner
-//   keeps its own in `state.json` (6.3). A state written before the bridge handled commands has
+// - `commandSeq`: the `seq` of the newest command line the bridge has handled, as the runner
+//   keeps its own in `state.json`. A state written before the bridge handled commands has
 //   none, and gets the newest line's, so commands sent before that are never answered.
 // - `catchUp`: where WhatsApp's catch-up has got to in each of the owner's chats (5.2 step 7;
 //   D179): `{ "<chat JID>": "<UTC time>" }`, the time of the newest of the owner's rows it has
@@ -19,7 +19,7 @@
 //   saves one.
 //
 // Only the bridge reads and writes it. It is written atomically, mode 0600, in the bridge's own
-// folder, which only root can read (3.2).
+// folder, which only root can read.
 
 import { readJsonFile, writeFileAtomic } from '../common/files.mjs'
 import { isoSeconds, parseIsoSeconds, systemClock } from '../common/time.mjs'

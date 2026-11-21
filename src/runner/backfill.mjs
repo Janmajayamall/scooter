@@ -1,7 +1,7 @@
-// Backfills (6.11 of DESIGN.md): the datastore's history run through a newly added skill alone,
+// Backfills: the datastore's history run through a newly added skill alone,
 // without touching the other views and without stopping live work. A rebuild for one view.
 //
-// - **Its lane in the state.** `state.backfill` is `{ id, until, cursor, retry, skipped }` (6.3).
+// - **Its lane in the state.** `state.backfill` is `{ id, until, cursor, retry, skipped }`.
 //   A start begins the first backfill of the config that isn't in `backfillDone`, with `until` the
 //   live cursor, and drops one whose entry has left the config (`startupState` in `state.mjs`).
 //   Live runs, which load the new skill from then on, handle everything after `until`, and the
@@ -40,7 +40,7 @@ import { pauseAfterRun, settleLane } from './failures.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
 import { saveState } from './state.mjs'
 
-// The folder of the day pages, which a backfill may always change (6.11).
+// The folder of the day pages, which a backfill may always change.
 export const DAY_PAGES = 'views/days/'
 
 // What "and" makes of a list.
@@ -48,7 +48,7 @@ function listed(words) {
   return words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
 }
 
-// The line a backfill's prompt starts with (6.11), for the backfill `entry` of `agents.yaml`.
+// The line a backfill's prompt starts with, for the backfill `entry` of `agents.yaml`.
 export function backfillIntro(entry) {
   return (
     `Backfill (from your configuration, not a message from the owner): file these messages for the ${entry.skill} skill only. ` +
@@ -119,7 +119,7 @@ export function settleBackfill(state, batch, outcome, { now }) {
 // Finishing
 
 // The rows of a CSV file's text, and how many of them are marked ❓: the records after the header,
-// blank ones left out. A field in double quotes may hold commas and line breaks (7.3).
+// blank ones left out. A field in double quotes may hold commas and line breaks.
 export function countRows(text) {
   let quoted = false
   let records = 0
@@ -194,7 +194,7 @@ function describeCsv({ name, file }) {
   return `${name} has ${plural(rows, 'row')}, ${unsure === 0 ? 'none' : unsure} marked ❓`
 }
 
-// The message a backfill sends when it finishes (6.11): "Backfill people-1 finished: people.csv
+// The message a backfill sends when it finishes: "Backfill people-1 finished: people.csv
 // has 143 rows, 12 marked ❓. Skipped: #1031, #1207."
 export function backfillSummary({ paths, agent, entry, skipped }) {
   const parts = csvFilesOf(paths.agentDir(agent.name), entry.writes).map(describeCsv)
@@ -207,7 +207,7 @@ export function backfillSummary({ paths, agent, entry, skipped }) {
 // the outbox, then moves its ID to `backfillDone` and saves the state, so a crash between the two
 // sends the summary twice and never loses it. Its sessions go. Returns the new state.
 //
-// The summary is the runner's, by `runner`, and goes to `DEFAULT_CHANNEL` (5.3), also with
+// The summary is the runner's, by `runner`, and goes to `DEFAULT_CHANNEL`, also with
 // `can_message: false`, as the notices do: that setting is about what the agent sends.
 export async function finishBackfill({ agent, entry, state, stateFile, paths, ids, log }) {
   const { backfill, ...rest } = state

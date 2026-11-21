@@ -372,7 +372,7 @@ test('reader: an email it parsed but couldn\'t hand over, as on a full disk, is 
   const context = setup(t)
   const first = context.start()
   await context.looked(1)
-  // The spool can't take a folder, once (the review of milestone 6, smaller point 2).
+  // The spool can't take a folder, once.
   const mkdir = fs.mkdirSync
   let refuse = true
   fs.mkdirSync = (target, ...rest) => {

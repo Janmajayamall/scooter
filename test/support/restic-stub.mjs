@@ -1,4 +1,4 @@
-// A stand-in for restic 0.19.1, for the backup coordination tests (section 10 of DESIGN.md).
+// A stand-in for restic 0.19.1, for the backup coordination tests.
 //
 // It is run through the wrapper that `createResticStub` in `restic.mjs` writes and puts first on
 // `PATH`. Its control folder is `../restic-stub/` from the wrapper. There it:

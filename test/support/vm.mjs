@@ -107,7 +107,7 @@ export async function startVm(t, { mounts = {}, model, fuseMount = FUSE_MOUNT, s
   return vm
 }
 
-// A skill's file (section 7.3).
+// A skill's file.
 const SKILL = `---
 name: expenses
 description: How to file an expense in views/expenses.csv. Use it for receipts and amounts.
@@ -116,7 +116,7 @@ description: How to file an expense in views/expenses.csv. Use it for receipts a
 Add one row for each expense.
 `
 
-// A datastore line (section 4.2).
+// A datastore line.
 const MESSAGE = {
   seq: 1050,
   kind: 'message',

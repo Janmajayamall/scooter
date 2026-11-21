@@ -1,18 +1,18 @@
 // The runner's service, `scooter runner` (section 6 of DESIGN.md; ARCHITECTURE.md 4.4).
 //
 // At startup, in order:
-// 1. It reads `agents.yaml`, and stops on any fault, naming the field (6.1).
+// 1. It reads `agents.yaml`, and stops on any fault, naming the field.
 // 2. It makes sure it is the only runner on this data folder (`holdInstance`).
 // 3. It frees what pi wrote that a crash or a stop left taking room, before it makes any folder:
-//    pi may have filled the disk. Then it creates the agent's folder if it is new (6.2), removes the
+//    pi may have filled the disk. Then it creates the agent's folder if it is new, removes the
 //    lock files a git that was killed left there, and throws away the changes of a run that a
-//    crash or a stop cut short, so the next run starts from the last commit (6.9).
-// 4. It opens the sandbox, which checks the VM image and picks the accelerator (6.6, 6.12).
-// 5. It removes a leftover `run.lock` (6.4).
+//    crash or a stop cut short, so the next run starts from the last commit.
+// 4. It opens the sandbox, which checks the VM image and picks the accelerator.
+// 5. It removes a leftover `run.lock`.
 // 6. It writes `status.json`, and tells the owner if its VMs have just fallen back to emulation
 //    (6.3, 6.6; rows 6 and 15).
 // 7. It brings the state up to date: scheduled tasks already past, a pause tried again at once, and
-//    backfills started or dropped (6.4, 6.9, 6.11).
+//    backfills started or dropped.
 // 8. It reads the datastore.
 // 9. Where its service manager doesn't wait between its starts, as Docker's doesn't, and this start
 //    follows a stop on an error, it waits as the native unit would have, then records itself as the
@@ -51,7 +51,7 @@ import { emulationNotice, runnerStatus, writeRunnerStatus } from './status.mjs'
 import { nextAction } from './triggers.mjs'
 
 // Makes the data folder's folders that the runner uses, if they are missing: `setup` makes them in
-// an install (8.4), so this is for development. Then holds `runner/runner.sock`, for a runner or a
+// an install, so this is for development. Then holds `runner/runner.sock`, for a runner or a
 // rebuild, and returns what `holdInstance` returns: nothing else of the runner's may run on the
 // data folder meanwhile. It throws if something else holds it.
 export async function holdRunnerFolder(paths) {
@@ -60,11 +60,11 @@ export async function holdRunnerFolder(paths) {
   return holdInstance(paths.runnerSocket, RUNNER_SOCKET_HOLDERS)
 }
 
-// Readies the agent's folder for runs, as a start does, before anything runs there (D89): frees
+// Readies the agent's folder for runs, as a start does, before anything runs there: frees
 // what pi wrote that a crash or a stop left taking room, before it makes any folder; creates the
-// folder if it is new (6.2); removes the lock files a git that was killed left; and throws away
+// folder if it is new; removes the lock files a git that was killed left; and throws away
 // the changes of a run that a crash or a stop cut short, so the next run starts from the last
-// commit (6.9). Returns git for the folder (`createGit`). The caller holds `runner.sock`.
+// commit. Returns git for the folder (`createGit`). The caller holds `runner.sock`.
 export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
   const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
   await ensureAgentDir({ paths, name: agent.name, git, log })
@@ -85,7 +85,7 @@ export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
 export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }), restartWaits = false }) {
   const paths = makePaths(settings)
   const { agents } = loadConfig({ paths })
-  // There is exactly one agent in v2 (6.1).
+  // There is exactly one agent in v2.
   const [agent] = agents
 
   const instance = await holdRunnerFolder(paths)
@@ -128,7 +128,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     const datastore = openDatastore({ paths, clock })
     datastore.poll()
     const protocol = loadProtocol()
-    // The `once` tasks run since this start, whatever came of them (D68).
+    // The `once` tasks run since this start, whatever came of them.
     const onceTried = new Set()
     let waitingFor = null
 
@@ -219,7 +219,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       datastore,
       restarts,
       tick,
-      // A start stopped while it waited (D229) no longer waits, and `/status` mustn't go on saying
+      // A start stopped while it waited no longer waits, and `/status` mustn't go on saying
       // it does until the next start: `status.json` loses its `restart` (the review of milestone 14,
       // smaller point 8). As best it can: the stop goes on if it can't be written.
       endRestartWait() {

@@ -28,10 +28,10 @@ const SESSION_MODELS = { messages: MESSAGES_MODEL, chat: CHAT_MODEL }
 const ROUTE_NAMES = { messages: 'messages', chat: 'chat completions' }
 const WRITTEN_BY = 'Written by test/tools/capture-pi-requests.mjs.'
 
-// The default config asks for this level (section 6.1).
+// The default config asks for this level.
 const SESSION_THINKING = 'low'
 
-// A prompt as the runner writes it (section 6.5).
+// A prompt as the runner writes it.
 const PROMPT = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
 Your folder: ${GUEST.agent}. Attachments are in ${GUEST.datastore} (read-only).
 

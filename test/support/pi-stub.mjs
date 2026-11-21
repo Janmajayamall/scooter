@@ -14,7 +14,7 @@
 // | `OUTSIDE`         | in a backfill's batch, also files it in `views/notes.csv`, which the    |
 // |                   | backfill may not change                                                 |
 //
-// A backfill's batch (6.11), whose prompt starts with `Backfill`, files each item in the first file
+// A backfill's batch, whose prompt starts with `Backfill`, files each item in the first file
 // it may change instead of `views/notes.csv`, and adds a line for it to the day page of the
 // prompt's `Now:`, `views/days/YYYY/MM/YYYY-MM-DD.md`.
 //

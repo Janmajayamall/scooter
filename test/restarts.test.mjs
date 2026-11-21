@@ -1,6 +1,6 @@
 // The runner's own waits between its starts (D229; `src/runner/restarts.mjs`): where its service
 // manager doesn't wait, as Docker's doesn't, a fault that stays after pi has run must not run pi
-// more often than the native unit's waits allow (D207). Docker is played here by starting the
+// more often than the native unit's waits allow. Docker is played here by starting the
 // runner again at once, each time it stops on its own.
 
 import assert from 'node:assert/strict'
@@ -152,7 +152,7 @@ test('restarts: a stop asked for ends the waiting, and a run recorded makes the 
   assert.equal(control.record().stops, 0)
   assert.equal(control.piRuns.length, 2)
   // Stopped, it no longer waits, so `/status` doesn't say it does, as `docker compose stop runner`
-  // would leave it (the review of milestone 14, smaller point 8); the rest of status.json stays.
+  // would leave it; the rest of status.json stays.
   const status = readRunnerStatus(paths.runnerStatus)
   assert.equal(status.restart, null)
   assert.equal(status.startedAt, startedAt)

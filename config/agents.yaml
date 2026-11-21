@@ -1,4 +1,4 @@
-# The agent Scooter runs, and when (docs/DESIGN.md, 6.1). The runner reads this file when it
+# The agent Scooter runs, and when. The runner reads this file when it
 # starts, and refuses to start on any fault, naming the field. Restart the runner after a change.
 agents:
   lifelog:
@@ -26,6 +26,6 @@ agents:
           mention anything that looks missing, and list the open questions.
       # - once: poems                    # runs once; the ID is remembered
       #   task: Write poems for my earlier images captioned "poem".
-      # - backfill: people-1             # fills a newly added view from the whole datastore (6.11)
+      # - backfill: people-1             # fills a newly added view from the whole datastore
       #   skill: people
       #   writes: [views/people.csv]     # what it may change, besides the day pages

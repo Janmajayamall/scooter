@@ -1,5 +1,5 @@
 // Lock files: `run.lock`, which the runner holds for each run, and `backup.lock`, which the bridge
-// holds for each backup (5.5 and 6.4 of DESIGN.md).
+// holds for each backup.
 //
 // A lock is a small JSON file: who made it, when, and when its work must be over.
 //

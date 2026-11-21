@@ -352,7 +352,7 @@ test('run: the modes pi set, which git doesn\'t record, are put back after a run
 test('run: a folder the runner can\'t read in run/session/ is passed over, a session file it can\'t read isn\'t kept, and the next runs start', { skip: skipIfRoot }, async t => {
   const { runner, clock, paths, state, add, sandbox, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee RUNLOCKED')])
   const kept = path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-09.jsonl')
-  // Anything but the session in run/session/ is ignored (6.6), and once the session is kept, the
+  // Anything but the session in run/session/ is ignored, and once the session is kept, the
   // folder is emptied, before the run is recorded.
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.equal(fs.readFileSync(kept, 'utf8').split('\n').length, 3)

@@ -10,7 +10,7 @@
 // - turns what wacli says into a normalized message, and drops everything that isn't the owner's
 //   one-to-one chat before it reaches the core;
 // - downloads media into wacli's staging folder, and copies it out with care;
-// - sends texts, always with link previews off, and reactions, to the owner's chat (5.3).
+// - sends texts, always with link previews off, and reactions, to the owner's chat.
 //
 // wacli is third-party code that talks to the outside world, so everything it says is input to
 // check. Its formats are read in two functions only, `fromWebhook` and `fromListRow`. How it
@@ -40,10 +40,10 @@ const isObject = value => typeof value === 'object' && value !== null && !Array.
 const stringOf = value => (typeof value === 'string' ? value : '')
 
 // ---------------------------------------------------------------------------------------------
-// wacli's environment (5.1)
+// wacli's environment
 
 // Everything wacli is given: its own folders, UTC, and nothing else. Not even `PATH`: wacli is
-// found on the bridge's own (D25).
+// found on the bridge's own.
 export function wacliEnv(paths) {
   return {
     HOME: paths.wacli,
@@ -56,10 +56,10 @@ export function wacliEnv(paths) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The signature (5.2 step 1)
+// The signature
 
 // Whether `header` is wacli's signature of `body` with `secret`: `sha256=` and the lowercase hex
-// HMAC-SHA256 of the raw body (13.1), compared in constant time.
+// HMAC-SHA256 of the raw body, compared in constant time.
 export function verifySignature(secret, body, header) {
   if (typeof header !== 'string') return false
   const expected = Buffer.from(`sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`)
@@ -68,7 +68,7 @@ export function verifySignature(secret, body, header) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// wacli's two formats (13.1)
+// wacli's two formats
 //
 // Both become the normalized message of 5.2 step 3:
 //   { chat, id, sender, at, fromMe, text, media, replyToId, replyToPreview, reactionToId,
@@ -174,7 +174,7 @@ export function fromListRow(row) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The owner, and what is dropped (5.2 steps 4 and 5)
+// The owner, and what is dropped
 
 // A JID as Scooter compares it: lowercase, without the `:device` suffix, nor the `.agent` part that
 // whatsmeow writes before it (`919812345678.0:12@s.whatsapp.net`).
@@ -192,7 +192,7 @@ export function ownerIds({ ownerNumber, ownerJids = [] }) {
 
 // Why a normalized message is dropped before it reaches the core, or null when it is the owner's:
 // the bot's own, a group, broadcast or channel, someone other than the owner, a sticker, or
-// nothing at all (5.2 step 4, 4.4).
+// nothing at all.
 export function dropReason(message, owners) {
   if (message.fromMe) return 'from the bot'
   if (/@(?:g\.us|broadcast|newsletter)$/.test(canonicalJid(message.chat))) return 'not a one-to-one chat'
@@ -241,9 +241,9 @@ export function toRecord(message) {
 // - `proc`: what `createProc` returns. Every wacli call goes through it.
 // - `state`: the bridge's state (`../state.mjs`), for the owner's chat, the first start, and where
 //   catch-up has got to.
-// - `user`: `{ uid, gid }` of `scooter-wacli`, or null when the bridge isn't root (section 10).
+// - `user`: `{ uid, gid }` of `scooter-wacli`, or null when the bridge isn't root.
 // - `newestIncomingAt()`: the `at` of the newest incoming WhatsApp line in the datastore, or null.
-//   Catch-up starts from it only for a state an older bridge wrote (D179).
+//   Catch-up starts from it only for a state an older bridge wrote.
 export function createWhatsApp({ settings, paths, proc, log, clock = systemClock, state, user = null, newestIncomingAt = () => null }) {
   const owners = ownerIds(settings)
   const env = wacliEnv(paths)
@@ -259,7 +259,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   // of milestone 12, smaller point 7; D227).
   let pairingChecked = () => {}
 
-  // Runs wacli with `--json` and returns the `data` part of its answer (13.1). Rejects when it
+  // Runs wacli with `--json` and returns the `data` part of its answer. Rejects when it
   // fails, without repeating what it said: its errors can name chats and files. `signal` stops it,
   // and a call it stopped rejects with the code `ESTOPPED`. One that ended well as the signal came
   // is a success: a send that went out isn't sent again.
@@ -280,7 +280,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     return answer.data
   }
 
-  // Whether wacli has a session: `data.authenticated`. Its exit code is 0 either way (0.6).
+  // Whether wacli has a session: `data.authenticated`. Its exit code is 0 either way.
   async function isPaired(signal) {
     const data = await wacli(['--read-only', 'auth', 'status'], { signal })
     return isObject(data) && data.authenticated === true
@@ -312,13 +312,13 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   }
 
   // The chat replies go to: that of the owner's newest message, or their number's before they
-  // have written (5.2 step 5).
+  // have written.
   function ownerChat() {
     return state.get().ownerChat?.jid ?? `${settings.ownerNumber}@s.whatsapp.net`
   }
 
   // Where catch-up has got to in each of the owner's chats it lists: the time of the newest of the
-  // owner's rows it has listed there, with every row before it handled (D179). A state an older
+  // owner's rows it has listed there, with every row before it handled. A state an older
   // bridge wrote says nothing of it: that bridge went on from the newest incoming WhatsApp line, in
   // the chat it listed, and so does this one. It is saved at once, and kept here if it can't be.
   const legacy = state.get().catchUp === undefined ? { [ownerChat()]: newestIncomingAt() ?? state.get().firstStart } : null
@@ -338,7 +338,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     const jid = canonicalJid(message.chat)
     // A chat of the owner's that catch-up doesn't list yet, such as an `@lid` one: it is listed from
     // the bridge's first start, as the first chat was, so that a message there the webhook missed
-    // isn't passed for good (D179).
+    // isn't passed for good.
     if (!Object.hasOwn(points(), jid)) savePoint(jid, state.get().firstStart)
     const at = message.at ?? isoSeconds(clock.now())
     const known = state.get().ownerChat
@@ -382,7 +382,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       log.warn('whatsapp.webhook_unreadable', { bytes: body.length })
       return
     }
-    // Receipts and presence carry an `EventType`; messages don't (5.2 step 2).
+    // Receipts and presence carry an `EventType`; messages don't.
     if (isObject(payload) && Object.hasOwn(payload, 'EventType')) return
     const message = fromWebhook(payload)
     if (message === null) {
@@ -392,7 +392,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     deliver(message, onRecord, 'webhook').catch(error => log.error('whatsapp.deliver_failed', errorFields(error)))
   }
 
-  // The webhook server (5.2 step 1): `POST /wacli` on loopback, at most `WEBHOOK_MAX_BYTES`, with a
+  // The webhook server: `POST /wacli` on loopback, at most `WEBHOOK_MAX_BYTES`, with a
   // valid signature. It answers at once and handles the message afterwards, because wacli waits at
   // most 5 seconds and never retries.
   function listen(secret, onRecord) {
@@ -449,7 +449,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     })
   }
 
-  // Catch-up of one chat (5.2 step 7; D179): lists it from `CATCHUP_OVERLAP` before where catch-up
+  // Catch-up of one chat: lists it from `CATCHUP_OVERLAP` before where catch-up
   // had got to there, never before the bridge's first start, and passes every row through the
   // same steps as a webhook.
   //
@@ -477,7 +477,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       for (;;) {
         const args = ['--read-only', 'messages', 'list', '--chat', chat, '--after', isoSeconds(after), '--asc']
         const data = await wacli([...args, '--limit', String(limits.CATCHUP_LIMIT)], { signal })
-        // wacli answers `null`, not an empty list, when there is nothing (0.6).
+        // wacli answers `null`, not an empty list, when there is nothing.
         const rows = isObject(data) ? (data.messages ?? []) : null
         if (!Array.isArray(rows)) throw Object.assign(new Error('wacli messages list: the answer has no list'), { code: 'EWACLI' })
         for (const row of rows) {
@@ -551,7 +551,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     }
   }
 
-  // The ID wacli gives a message it sent, in `data.id` (13.1), or null when it gives none.
+  // The ID wacli gives a message it sent, in `data.id`, or null when it gives none.
   const sentId = data => (isObject(data) ? idOf(data.id) : null)
 
   // Removes a download the bridge asked for from wacli's staging folder, by unlinking it, which
@@ -594,7 +594,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     // Starts the webhook server, then sync once wacli is paired, then catch-up.
     async start(onRecord) {
       if (running) throw new Error('the WhatsApp channel is already started')
-      // wacli reads and writes only its own folder (3.2). A native install makes these folders in
+      // wacli reads and writes only its own folder. A native install makes these folders in
       // `setup`; here they are made if they're missing, as in development.
       ensureWacliFolders(paths, user)
       clearStaging()
@@ -622,7 +622,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     // of the pairing, a download. Resolves once they have stopped and the messages they were
     // handing over have been taken. A download it stops, or one asked for once it has stopped,
     // fails with `ESTOPPED`, and intake leaves its message, and the ones after it, for catch-up,
-    // which lists them again when the channel starts (D179). A stop takes at most `STOP_GRACE` for
+    // which lists them again when the channel starts. A stop takes at most `STOP_GRACE` for
     // each call, rather than up to `WACLI_CALL_TIMEOUT` for each try of a download.
     async stop() {
       if (!running) return
@@ -658,13 +658,13 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
     },
 
     // Whether a send can go out now: wacli is paired and sync is running, and sends are handed to
-    // it (0.6). Otherwise the outbox waits, and its entries with it.
+    // it. Otherwise the outbox waits, and its entries with it.
     ready: () => link === 'linked',
 
-    // Sends a text to the owner's chat (5.3): `wacli send text --to <owner chat> --message <text>
+    // Sends a text to the owner's chat: `wacli send text --to <owner chat> --message <text>
     // --no-preview`, with `--reply-to <quoteId>` to quote a message. Link previews are always off:
     // without `--no-preview` wacli fetches the first link in the text, which the agent wrote, to
-    // build a preview, and nothing would log that request (0.8). Resolves with the ID of the
+    // build a preview, and nothing would log that request. Resolves with the ID of the
     // message sent, or null if wacli gave none. wacli's warning about sends less than 5 seconds
     // apart is on stderr, with exit code 0, and isn't a failure.
     async sendText(text, quoteId = null, { signal = null } = {}) {
@@ -698,7 +698,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pairing (8.4)
+// Pairing
 
 // wacli's folders, made if they are missing, as the channel makes them when it starts.
 function ensureWacliFolders(paths, user) {
@@ -716,7 +716,7 @@ export function pairingPhone(given) {
 
 // `scooter pair [--phone +91…]`: links wacli to the bot's number, with a QR code to scan, or with
 // `--phone`, the bot's number, a code to type into WhatsApp. It runs `wacli auth` as
-// `scooter-wacli`, with wacli's environment and nothing else (5.1), and the terminal attached.
+// `scooter-wacli`, with wacli's environment and nothing else, and the terminal attached.
 // When wacli is linked already, it says so and does nothing. A bridge that is running finds the
 // link at its next pairing check, within a minute, and starts sync. Exits with 2 for wrong
 // arguments, and with 1 when wacli fails.

@@ -1,14 +1,14 @@
-// `scooter rebuild <agent>` (6.10 of DESIGN.md): an agent's views and memory made again from the
+// `scooter rebuild <agent>`: an agent's views and memory made again from the
 // whole datastore, which is the record (principle 1).
 //
 // It runs as the runner's user, with the runner's service stopped; in Docker, as
 // `docker compose run --rm runner rebuild lifelog`. The bridge keeps running, so messages that
 // arrive meanwhile are stored, and handled once the runner is back. In order:
 //
-// 0. **Alone.** It holds `runner/runner.sock`, as a runner does (D90), so it refuses to start
+// 0. **Alone.** It holds `runner/runner.sock`, as a runner does, so it refuses to start
 //    while a runner, another rebuild or `build-image` runs, and nothing of those can start while
 //    it does: a runner's start would remove its `run.lock` and git's lock files, and throw its
-//    changes away (D89). It also refuses while `run.lock` is there (the plan's rule). Then it
+//    changes away. It also refuses while `run.lock` is there (the plan's rule). Then it
 //    readies the agent's folder as a runner's start does, and opens the sandbox.
 // 1. **Tag** the last commit `before-rebuild-<UTC time>`, such as
 //    `before-rebuild-20261118T101500Z`.
@@ -25,18 +25,18 @@
 //    owner's days, `Now:` each batch's own time, a session for each day, each batch taking
 //    `run.lock` and giving way to `backup.lock`. Its progress is a lane it keeps in memory, the
 //    live lane's fields of a state that is never saved, and it handles failures as the runner
-//    does (6.8, 6.9): items not reported are tried again a minute later, and given up on after
+//    does: items not reported are tried again a minute later, and given up on after
 //    `MAX_ATTEMPTS`; a setup error or an outage pauses it until the next try. It waits for an item
 //    to be tried again before it takes the items after it, so the history is replayed in its order,
-//    and a rule the owner sent is learned before the days after it are filed (D182). Nothing goes
+//    and a rule the owner sent is learned before the days after it are filed. Nothing goes
 //    to the outbox: it says what it does on its own output instead.
 // 5. **Commit** the rebuilt folders as one commit, `lifelog: rebuild`, on the tagged one: each
 //    batch committed as it went, so a failed batch's clean-up had its last good state, and those
 //    commits are folded into this one. Then write the state, with what it gave up on in `failed`,
-//    where an edit of the message brings it back (6.5); and remove its sessions.
+//    where an edit of the message brings it back; and remove its sessions.
 //
 // Steps 1 to 3, and 5, take `run.lock` and give way to `backup.lock`, as each batch does: they
-// change `views/`, `memory/` and `.git`, and a backup must not read those halfway (D181).
+// change `views/`, `memory/` and `.git`, and a backup must not read those halfway.
 //
 // Rules the owner sent as messages are learned again at the point they were sent. Rules in the
 // config apply to all of history.
@@ -224,7 +224,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
         continue
       }
       // An item to be tried again is waited for, rather than passed by: the items after it, and
-      // the days after it, wait with it, as they wait for a pause (D182).
+      // the days after it, wait with it, as they wait for a pause.
       const waiting = state.retry.map(entry => parseIsoSeconds(entry.due))
       if (waiting.length > 0 && Math.min(...waiting) > now) {
         if (!(await sleep('retry', Math.min(...waiting) - now))) return stopped()
@@ -287,7 +287,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
   }
 }
 
-// `scooter rebuild <agent>`: rebuilds the agent's views and memory (6.10), saying what it does on
+// `scooter rebuild <agent>`: rebuilds the agent's views and memory, saying what it does on
 // stdout. Stops on SIGTERM, SIGINT or SIGHUP, which a terminal that is closed sends, throwing away
 // the batch in progress, and letting go of `run.lock`. Exits with 0 once it has rebuilt, 2 when it
 // can't start for how it was called or how things stand, and 1 when it fails or is stopped.

@@ -1,4 +1,4 @@
-// The runner's view of the datastore (6.4 of DESIGN.md).
+// The runner's view of the datastore.
 //
 // The runner only reads the datastore. It follows it by polling once a second, and keeps the same
 // index the bridge does (`src/common/datastore/index.mjs`): every line by `seq`, and what each

@@ -1,4 +1,4 @@
-// Every path under the data folder and the config folder (3.2, 4.1 and 6.2 of DESIGN.md).
+// Every path under the data folder and the config folder.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -65,7 +65,7 @@ test('paths: the folders of 3.2, as they are in Docker', () => {
 })
 
 test('paths: everything follows DATA_DIR and CONFIG_DIR', () => {
-  // Natively the data is in /var/lib/scooter and the config in /etc/scooter/config (8.5).
+  // Natively the data is in /var/lib/scooter and the config in /etc/scooter/config.
   const paths = makePaths({ dataDir: '/var/lib/scooter', configDir: '/etc/scooter/config' })
   for (const [name, value] of Object.entries(paths)) {
     const resolved = typeof value === 'function' ? value('x') : value

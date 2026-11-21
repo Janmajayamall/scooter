@@ -8,7 +8,7 @@
 
 import path from 'node:path'
 
-// A day folder's name: the `YYYY/MM/DD` of a UTC date such as `2026-11-09` (4.1).
+// A day folder's name: the `YYYY/MM/DD` of a UTC date such as `2026-11-09`.
 export function dayOfDate(date) {
   return date.replaceAll('-', '/')
 }
@@ -22,12 +22,12 @@ export function makePaths({ dataDir, configDir }) {
     dataDir,
     configDir,
 
-    // The datastore (4.1). `day` is a day folder's name, `YYYY/MM/DD`.
+    // The datastore. `day` is a day folder's name, `YYYY/MM/DD`.
     datastore: data('datastore'),
     dayDir: day => data('datastore', day),
     dayLog: day => data('datastore', day, 'log.jsonl'),
 
-    // The agents' folders (6.2).
+    // The agents' folders.
     agents: data('agents'),
     agentDir: agent,
     agentViews: name => path.join(agent(name), 'views'),
@@ -38,25 +38,25 @@ export function makePaths({ dataDir, configDir }) {
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
     agentState: name => path.join(agent(name), 'state.json'),
-    // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them (6.9):
+    // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them:
     // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
     // Backups leave the whole of `agents/.discarded/` out: it holds what is being removed.
     agentDiscarded: name => data('agents', '.discarded', name),
     agentsDiscarded: data('agents', '.discarded'),
 
-    // The exchange (5.3, 5.5, 6.4).
+    // The exchange.
     exchange: data('exchange'),
     outbox: data('exchange', 'outbox'),
     locks: data('exchange', 'locks'),
     runLock: data('exchange', 'locks', 'run.lock'),
     backupLock: data('exchange', 'locks', 'backup.lock'),
 
-    // The runner's own folder (6.3, 6.6, 6.12, 6.13), and the socket that keeps a second runner
+    // The runner's own folder, and the socket that keeps a second runner
     // from starting on the same data. `date` is a UTC date, `2026-11-09`.
     runner: data('runner'),
     runnerStatus: data('runner', 'status.json'),
     // How the runner's latest starts ended, for the waits it keeps between them where its service
-    // manager doesn't (D229).
+    // manager doesn't.
     runnerRestarts: data('runner', 'restarts.json'),
     runnerSocket: data('runner', 'runner.sock'),
     runnerImage: data('runner', 'image'),
@@ -65,16 +65,16 @@ export function makePaths({ dataDir, configDir }) {
     networkLogDir: data('runner', 'log'),
     networkLog: date => data('runner', 'log', `${date}.jsonl`),
     // Where `build-image` builds the VM image, and sets the old one aside, before and after it
-    // renames the new one into `runner/image/` (6.12): beside `runner/`, so on the same file
+    // renames the new one into `runner/image/`: beside `runner/`, so on the same file
     // system, and natively in a folder only root can write, not in the runner's own.
     imageStaging: data('.image-build'),
 
-    // The bridge's own folder (5.1): its state; the socket that keeps a second bridge from
+    // The bridge's own folder: its state; the socket that keeps a second bridge from
     // starting on the same data; where attachments wait between their channel and the store; the
-    // cache of the backup program (5.5), which marks itself as a cache, so backups leave it out;
-    // and delivery's two folders (5.3): the bridge's own outbox entries, and its record of how much
+    // cache of the backup program, which marks itself as a cache, so backups leave it out;
+    // and delivery's two folders: the bridge's own outbox entries, and its record of how much
     // of each runner's entry it has sent, `<entry ID>.json`. Both are here, in a folder only root
-    // can write, rather than in the runner's outbox, so the bridge writes nothing there (D205).
+    // can write, rather than in the runner's outbox, so the bridge writes nothing there.
     bridge: data('bridge'),
     bridgeState: data('bridge', 'state.json'),
     bridgeSocket: data('bridge', 'bridge.sock'),
@@ -83,7 +83,7 @@ export function makePaths({ dataDir, configDir }) {
     bridgeOutbox: data('bridge', 'outbox'),
     bridgeSending: data('bridge', 'sending'),
 
-    // wacli's folder (5.1, 5.5): its home, its store, where it downloads media for the bridge, and
+    // wacli's folder: its home, its store, where it downloads media for the bridge, and
     // the XDG folders it is given.
     wacli: data('wacli'),
     wacliStore: data('wacli', 'store'),
@@ -92,12 +92,12 @@ export function makePaths({ dataDir, configDir }) {
     wacliState: data('wacli', 'state'),
     wacliCache: data('wacli', 'cache'),
 
-    // The email reader's folder (5.6).
+    // The email reader's folder.
     mail: data('mail'),
     mailState: data('mail', 'state.json'),
     mailSpool: data('mail', 'spool'),
 
-    // The owner's configuration, which only the runner reads (6.1, 6.12).
+    // The owner's configuration, which only the runner reads.
     config: configDir,
     agentsYaml: config('agents.yaml'),
     imageBuild: config('image', 'build.json'),

@@ -137,7 +137,7 @@ test('wacli 3: the commands and flags of section 13.1 exist as written', options
   assert.match(sync.help, /--webhook-events string .*message, receipt, chat_presence \(default "message"\)/)
 
   // Unless told otherwise, `send text` fetches the first URL in the text to build a link preview.
-  // The bridge passes this flag with every text, so that it never does (section 5.3).
+  // The bridge passes this flag with every text, so that it never does.
   const text = await flagsOf(dir, ['send', 'text'])
   assert.match(text.help, /--no-preview\s+disable automatic link previews for the first URL in text/)
 

@@ -252,12 +252,12 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   const { done, said } = startRebuild(prepared)
   const result = await drive(prepared, done)
   assert.deepEqual(result, { stopped: false, tag: TAG, until: 3, cursor: 3, batches: 6, failed: [2] })
-  // An item tried again is waited for: the next day waits until it is done with (D182).
+  // An item tried again is waited for: the next day waits until it is done with.
   assert.deepEqual(
     sandbox.seen().map(call => call.items),
     [[1, 2], [1, 2], [2], [2], [2], [3]],
   )
-  // A backup held its lock when the rebuild started: it changed nothing before it was over (D181).
+  // A backup held its lock when the rebuild started: it changed nothing before it was over.
   assert.deepEqual(said, [
     'Waiting for a backup to finish.',
     `Rebuilding lifelog from the datastore, up to #3. The last commit before the rebuild is tagged ${TAG}.`,

@@ -1,4 +1,4 @@
-// Backups (5.5 of DESIGN.md): nightly, encrypted, with restic, and the commands that look after
+// Backups: nightly, encrypted, with restic, and the commands that look after
 // the repository and restore from it.
 //
 // This is the only module that runs restic (ARCHITECTURE.md 4.2). It runs it directly, with the
@@ -33,18 +33,18 @@ import { isoSeconds, nextLocalTime, parseIsoSeconds, parseLocalTime, shortLocalT
 
 const RESTIC = 'restic'
 
-// Every snapshot Scooter makes has this host and this tag (5.5), and the snapshots it lists, forgets
-// and restores are only those. In Docker the bridge's container is called `scooter` too (8.3).
+// Every snapshot Scooter makes has this host and this tag, and the snapshots it lists, forgets
+// and restores are only those. In Docker the bridge's container is called `scooter` too.
 const HOST = 'scooter'
 const TAG = 'scooter'
 // They are one group, whatever folders each holds. restic groups by host and paths unless told,
 // and the folders change when one first appears, such as `runner/log/` after the first run or
-// `mail/` when email is turned on (D185): `forget` would then keep the last snapshot of the old
-// folders for good, and `backup` would find no parent, and read every file again (D195).
+// `mail/` when email is turned on: `forget` would then keep the last snapshot of the old
+// folders for good, and `backup` would find no parent, and read every file again.
 const GROUP = ['--group-by', 'host,tags']
 
-// What a backup holds (5.5), and what it leaves out: wacli's cache, and what the runner's clean-up
-// set aside and is removing (6.9). The cache restic keeps in the bridge's folder marks itself as
+// What a backup holds, and what it leaves out: wacli's cache, and what the runner's clean-up
+// set aside and is removing. The cache restic keeps in the bridge's folder marks itself as
 // one, and `--exclude-caches` leaves it out. `exchange/locks/` isn't held: a lock restored would
 // keep the runner, or the backups, waiting for a run or a backup that isn't there.
 export function backupSources(paths) {
@@ -221,7 +221,7 @@ export class RestoreRefused extends Error {
   }
 }
 
-// Scooter's users, which `setup` makes (3.2), and whose names a backup's files have as owners.
+// Scooter's users, which `setup` makes, and whose names a backup's files have as owners.
 const USERS = ['scooter-wacli', 'scooter-runner', 'scooter-mail']
 
 // `restore`: the snapshot `snapshot`, or the latest of Scooter's, into `RESTORE_TARGET`. Each folder
@@ -239,7 +239,7 @@ const USERS = ['scooter-wacli', 'scooter-runner', 'scooter-mail']
 export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest', force = false }) {
   // restic gives a file whose owner's name isn't a user here to root, and says nothing: the runner
   // couldn't then read the agent's folder, nor wacli its own. That is a restore before `setup` on
-  // a new machine, so it comes after (D190). Not root, files stay the restoring user's anyway.
+  // a new machine, so it comes after. Not root, files stay the restoring user's anyway.
   for (const name of USERS) {
     try {
       await proc.lookupUser(name)
@@ -279,8 +279,8 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
   }
   // restic replaces a link at a folder it restores, or inside one, but follows one at a folder
   // between, `runner/` or `exchange/`, and writes, and with `--force` deletes, where it leads. A
-  // native data folder is root's, so no other user can put one there (D151), but `restore` doesn't
-  // rest on that (D198).
+  // native data folder is root's, so no other user can put one there, but `restore` doesn't
+  // rest on that.
   for (const between of new Set(held.folders.filter(folder => folder.includes('/')).map(folder => path.posix.dirname(folder)))) {
     const at = path.join(root, between)
     let stat = null
@@ -294,7 +294,7 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
     }
     if (stat !== null && !stat.isDirectory()) throw new RestoreRefused(`${at} isn't a folder: remove it, or restore into another RESTORE_TARGET`)
   }
-  // Every service user passes through the data folder to reach its own (D49).
+  // Every service user passes through the data folder to reach its own.
   ensureDir(root, { mode: 0o755 })
   const args = ['restore', `${shot.id}:${held.base}`, '--target', root, ...held.folders.flatMap(folder => ['--include', `/${folder}`]), '--delete', '--ownership-by-name']
   const restored = await restic(args)
@@ -311,7 +311,7 @@ export async function restoreSnapshot({ backup, paths, proc, snapshot = 'latest'
 export const OFF_REPLY = `Backups are off, because ${BACKUPS_OFF}.`
 const STOPPED_REPLY = 'The backup was stopped, because the bridge was stopping. Send /backup to try again.'
 
-// The wait after the `n`th failure in a row to write a reply, as for a command's (5.4).
+// The wait after the `n`th failure in a row to write a reply, as for a command's.
 function backoff(n) {
   const { first, factor, max } = limits.SEND_RETRY_BACKOFF
   return Math.min(first * factor ** Math.max(0, n - 1), max)
@@ -322,7 +322,7 @@ function backoff(n) {
 // - `paths`, `proc`, `log`, `clock`; `ids`, the bridge's one generator, for outbox entries.
 // - `state`: the bridge's state (`state.mjs`), which keeps the last backup.
 // - `runnerUser`: `{ uid, gid }` of `scooter-runner`, who owns the exchange, or null when the
-//   bridge isn't root (section 10).
+//   bridge isn't root.
 // - `quiesce()`: stops whatever writes what a backup holds: delivery, then the channels, then
 //   what intake was storing. `resume()` starts them again. A `resume()` that fails is fatal.
 // - `onFatal(error)`: the bridge can't go on.
@@ -342,8 +342,8 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
   const jobs = new Set()
   let loop = null
 
-  // `exchange/locks/` is the runner's (3.2), and the bridge writes its lock there as root, so it
-  // uses the folder only while it is the runner's and not a link (D136).
+  // `exchange/locks/` is the runner's, and the bridge writes its lock there as root, so it
+  // uses the folder only while it is the runner's and not a link.
   function takeBackupLock() {
     ensureDir(paths.locks, { mode: 0o700, owner: runnerUser })
     checkOwnFolder(paths.locks, runnerUser)
@@ -418,7 +418,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     let locked = false
     let quiet = false
     try {
-      // 1. Its own lock first, then the other's (row 7).
+      // 1. Its own lock first, then the other's.
       takeBackupLock()
       locked = true
       // 2.
@@ -453,8 +453,8 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     }
   }
 
-  // Writes an outbox entry of the bridge's, into its own outbox (D205), trying again after a wait
-  // that doubles when it can't, as a command's reply is (5.4), until the bridge stops.
+  // Writes an outbox entry of the bridge's, into its own outbox, trying again after a wait
+  // that doubles when it can't, as a command's reply is, until the bridge stops.
   async function send(entry) {
     for (let failures = 1; ; failures++) {
       try {
@@ -604,7 +604,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
 }
 
 // ---------------------------------------------------------------------------------------------
-// The commands: `backup-init`, `snapshots`, `check`, `restore` (8.4)
+// The commands: `backup-init`, `snapshots`, `check`, `restore`
 
 // What every command checks first. Returns the exit code to stop with, or null to go on.
 function refuseWithout(name, settings, args, stderr, usage = null) {

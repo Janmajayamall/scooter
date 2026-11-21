@@ -1,9 +1,9 @@
-// The runner's own waits between its starts (D229).
+// The runner's own waits between its starts.
 //
-// The runner stops on an error and leans on its service manager to start it again (D93). A fault
+// The runner stops on an error and leans on its service manager to start it again. A fault
 // that stays after pi has run, such as a disk too full to record the run, or a bug the batch's
 // answer runs into, then runs pi again at every start, and spends on OpenRouter each time. The
-// native unit waits 1 minute, then about 5½, then 30, and every 30 after (D207). Docker's restart
+// native unit waits 1 minute, then about 5½, then 30, and every 30 after. Docker's restart
 // policy starts a container that ran longer than 10 seconds again at once, which a runner that ran
 // pi always has: 12 seconds from one start to the next, measured (the review of milestone 13). So
 // wherever its service manager doesn't wait, the runner keeps the same waits itself:
@@ -18,9 +18,9 @@
 //   isn't a fault that stops every run. A stop it was asked for, by SIGTERM or SIGINT, makes it
 //   none: the owner's restart, `docker compose stop` or `up`, Docker's own restart, and the
 //   machine's shutdown all end the waiting, as a start by hand or the machine's start does for
-//   systemd (D207).
+//   systemd.
 // - The first wait in a row tells the owner, once, why and until when; `/status` says so while it
-//   lasts, from `status.json` (6.3). The reason is the error's code or name, never its message.
+//   lasts, from `status.json`. The reason is the error's code or name, never its message.
 //
 // The native unit says, with `SCOOTER_RESTART_WAITS=systemd`, that systemd keeps these waits, and
 // the runner then keeps none of its own: a start by hand must bring it back at once.

@@ -1,4 +1,4 @@
-// A fake sandbox, for the runner's tests (section 10 of DESIGN.md): it runs the pi stub
+// A fake sandbox, for the runner's tests: it runs the pi stub
 // (`pi-stub.mjs`) as a local process, in a temporary folder laid out like the VM's mounts.
 //
 // It takes the same spec as the real sandbox (`src/runner/sandbox/index.mjs`) and checks it. For

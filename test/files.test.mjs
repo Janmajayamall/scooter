@@ -1,6 +1,6 @@
 // Atomic file writes, the folder hand-off that the outbox and the mail spool share, sortable IDs,
 // copying a file out of a folder another program controls, and removing what such a program
-// wrote (5.2, 5.3, 5.6, 6.3 and 6.9 of DESIGN.md).
+// wrote.
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -155,7 +155,7 @@ test('files: two writers that make the same ID get different names', async t => 
   const dir = makeTestDir(t)
   const outbox = path.join(dir, 'outbox')
   fs.mkdirSync(outbox)
-  // The runner and the bridge both write entries, each with its own counter (5.3).
+  // The runner and the bridge both write entries, each with its own counter.
   const runner = createIds(createFakeClock('2026-11-09T15:50:15.123Z'))
   const bridge = createIds(createFakeClock('2026-11-09T15:50:15.123Z'))
 
@@ -200,7 +200,7 @@ test('files: an owner is given to what is created', { skip: skipUnlessRoot }, t 
 
 test('files: a folder\'s mode and owner are set through what was opened, so a link put in its place is changed, followed, nowhere', t => {
   // Root makes folders in folders other users own, such as `wacli/store` in `wacli/`, and that user
-  // can swap a link in between the folder's making and the setting of its owner (D206).
+  // can swap a link in between the folder's making and the setting of its owner.
   const dir = makeTestDir(t)
   const target = path.join(dir, 'elsewhere')
   fs.mkdirSync(target, { mode: 0o755 })

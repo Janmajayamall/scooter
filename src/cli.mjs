@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The one entry point: `scooter <command>` (8.4 of DESIGN.md).
+// The one entry point: `scooter <command>`.
 //
 // Each command belongs to one side and loads only that side: its settings, from its own env file,
 // and its code. So a bridge command never holds the runner's key, and a runner command never holds
@@ -32,8 +32,8 @@ export const COMMANDS = {
     usage: 'runner',
     where: 'runner',
     summary: 'Run the runner',
-    // The runner, with pi's runs in Gondolin VMs (6.6), and its own waits between starts unless
-    // its service manager keeps them (D229).
+    // The runner, with pi's runs in Gondolin VMs, and its own waits between starts unless
+    // its service manager keeps them.
     load: async () => {
       const [{ runRunner }, { openGondolinSandbox }, { keepsRestartWaits }] = await Promise.all([
         import('./runner/main.mjs'),
@@ -99,7 +99,7 @@ export const COMMANDS = {
     summary: 'List the mailbox\'s newest 5 messages and whether each would pass the sender check',
     load: async () => (await import('./bridge/channels/email.mjs')).runEmailCheck,
   },
-  // The backup module's operations (5.5).
+  // The backup module's operations.
   'backup-init': {
     side: 'bridge',
     usage: 'backup-init',
@@ -133,7 +133,7 @@ export const COMMANDS = {
     usage: 'rebuild <agent>',
     where: 'runner, with the runner stopped',
     summary: 'Rebuild an agent\'s views from the whole datastore',
-    // Its batches run in Gondolin VMs, as the runner's do (6.10).
+    // Its batches run in Gondolin VMs, as the runner's do.
     load: async () => {
       const [{ runRebuild }, { openGondolinSandbox }] = await Promise.all([import('./runner/rebuild.mjs'), import('./runner/sandbox/gondolin.mjs')])
       return ({ args, settings, stdout, stderr }) => runRebuild({ args, settings, stdout, stderr, openSandbox: openGondolinSandbox })

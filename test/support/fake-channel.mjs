@@ -1,4 +1,4 @@
-// A channel for tests of the bridge's core (section 5 of DESIGN.md): the test hands it records,
+// A channel for tests of the bridge's core: the test hands it records,
 // and its downloads come from contents the test gives, or fail as the test says.
 
 import fs from 'node:fs'

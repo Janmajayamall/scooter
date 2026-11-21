@@ -128,10 +128,10 @@ test('datastore: what is not a line, and why', () => {
     [{ ...decodeLine(EXAMPLES[3]), emoji: undefined }, /emoji is missing/],
     [{ ...decodeLine(EXAMPLES[3]), text: 'hi' }, /text doesn't belong/],
     [{ ...decodeLine(EXAMPLES[3]), files: [{ path: 'a.jpg', mime: 'image/jpeg', bytes: 1 }] }, /files doesn't belong/],
-    // An email's message has its subject, "" when it had none (4.2).
+    // An email's message has its subject, "" when it had none.
     [{ ...decodeLine(EXAMPLES[4]), subject: undefined }, /subject is missing/],
     [{ ...decodeLine(EXAMPLES[4]), subject: null }, /subject must be a string/],
-    // A command's text is one of the four commands, exactly (5.4).
+    // A command's text is one of the four commands, exactly.
     [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: '/stats' }, /text must be one of \/status, \/backup, \/help, \/new/],
     [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: ' /status' }, /text must be one of/],
     [[], /not an object/],
@@ -268,7 +268,7 @@ test('datastore: day folders never go backwards, even when the clock does', asyn
 })
 
 test('datastore: the time zone of the process changes nothing', async t => {
-  // Everything stored is UTC (section 2), and the store is never told the owner's time zone. So
+  // Everything stored is UTC, and the store is never told the owner's time zone. So
   // a restart in another time zone can't reorder the datastore or move a day folder.
   const { root, linesOf } = setup(t)
   const script = `
@@ -518,7 +518,7 @@ test('datastore: a line that is not well formed is refused, and uses up no seq',
 })
 
 // ---------------------------------------------------------------------------------------------
-// The store: duplicates (4.4)
+// The store: duplicates
 
 test('datastore: a message, a command or a reaction whose ID is stored is ignored', async t => {
   const { open, linesOf } = setup(t)
@@ -528,7 +528,7 @@ test('datastore: a message, a command or a reaction whose ID is stored is ignore
   const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 1, emoji: '👍' }
   for (const line of [message, command, reaction]) assert.equal((await store.append(line)).stored, true)
 
-  // The webhook and catch-up both deliver the same event (5.2).
+  // The webhook and catch-up both deliver the same event.
   for (const line of [message, command, reaction]) {
     assert.deepEqual(await store.append(line), { stored: false, reason: 'duplicate' })
   }
@@ -557,7 +557,7 @@ test('datastore: the same edit or deletion delivered twice is stored once', asyn
   await store.append(incoming('coffee 150', { sourceId: 'MSG-1' }))
   await store.append(incoming('lunch 400', { sourceId: 'MSG-2' }))
 
-  // An edit carries the ID of the message it changes (13.1), so its text is what tells it apart.
+  // An edit carries the ID of the message it changes, so its text is what tells it apart.
   const edit = text => incoming(text, { kind: 'edit', target: 1, sourceId: 'MSG-1' })
   assert.equal((await store.append(edit('coffee 120'))).seq, 3)
   assert.deepEqual(await store.append(edit('coffee 120')), { stored: false, reason: 'duplicate' })
@@ -581,7 +581,7 @@ test('datastore: the same edit or deletion delivered twice is stored once', asyn
 })
 
 // ---------------------------------------------------------------------------------------------
-// The store: attachments (4.1, 4.4)
+// The store: attachments
 
 test('datastore: attachment names', () => {
   const name = (attachment, n = 1) => attachmentName(1042, n, attachment)
@@ -680,7 +680,7 @@ test('datastore: an attachment that can\'t be copied stores nothing, and the seq
   assert.equal(linesOf('2026/11/09').length, 1)
   assert.equal(store.index.seqOf('whatsapp', 'MEDIA-1'), undefined)
 
-  // Intake stores the message with a `media` object instead (5.2), and it gets seq 2.
+  // Intake stores the message with a `media` object instead, and it gets seq 2.
   const result = await store.append(incoming('', { sourceId: 'MEDIA-1', media: { type: 'document', mime: 'application/pdf', error: 'download failed' } }))
   assert.equal(result.seq, 2)
   assert.deepEqual(result.line.media, { type: 'document', mime: 'application/pdf', error: 'download failed' })
@@ -942,7 +942,7 @@ test('datastore: as root, the group is found by the name setup gives it', { skip
   const { log } = createTestLog()
   const proc = createProc({ log })
   const env = { PATH: process.env.PATH }
-  // `setup` creates this user (8.4). Nothing here depends on its number.
+  // `setup` creates this user. Nothing here depends on its number.
   const add = await proc.run('useradd', ['--system', '--user-group', '--shell', '/usr/sbin/nologin', 'scooter-runner'], { env })
   assert.equal(add.code, 0, add.stderr)
   atEnd(t, () => proc.run('userdel', ['scooter-runner'], { env }))

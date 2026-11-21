@@ -323,7 +323,7 @@ test('pi 5: stdout holds the last answer and nothing else, and a refusal ends wi
     stderr: '401: {"message":"User not found.","code":401}\n',
     requests: 1,
   })
-  // The other statuses that mean a setup error (section 6.9) end the same way.
+  // The other statuses that mean a setup error end the same way.
   for (const status of [402, 403, 404]) {
     const other = await run(MESSAGES_MODEL, [{ status, message: 'refused' }])
     assert.match(other.stderr, new RegExp(`^${status} `))
@@ -421,7 +421,7 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     { tool: 'read', args: { path: `${day}/1051.png` } },
     { tool: 'write', args: { path: `${agent}/views/expenses.csv`, content: 'date,amount\n2026-11-09,150\n' } },
     { tool: 'edit', args: { path: preferences, edits: [{ oldText: 'coffee', newText: 'coffee and tea' }] } },
-    // The two commands the agent's prompt tells it to use on attachments (section 7.2).
+    // The two commands the agent's prompt tells it to use on attachments.
     { tool: 'bash', args: { command: `pdftotext -layout ${day}/1052.pdf -` } },
     { tool: 'bash', args: { command: `heif-enc -o "$HOME/in.heic" ${day}/1051.png && ${toJpeg}` } },
     { tool: 'read', args: { path: '/root/out.jpg' } },

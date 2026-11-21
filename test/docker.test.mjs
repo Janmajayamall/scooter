@@ -66,7 +66,7 @@ test('docker: the image is built as 8.3 says: its two stages, restic checked aga
   assert.match(DOCKERFILE, /sha256sum -c -/)
   assert.match(DOCKERFILE, /^RUN npm ci --omit=dev --ignore-scripts /m)
   // The app is readable by every user, writable by root alone, whatever the checkout's modes, and
-  // after everything is copied in (the review of milestone 13, smaller point 4).
+  // after everything is copied in.
   const lines = DOCKERFILE.split('\n')
   const chmod = lines.indexOf('RUN chmod -R a+rX,go-w /app')
   assert.ok(chmod > lines.indexOf('COPY src ./src') && lines.indexOf('COPY src ./src') > 0)
@@ -90,17 +90,17 @@ test('docker: compose.yaml has the two services of 8.3, one data volume, and no 
     assert.deepEqual(service.logging, { driver: 'json-file', options: { 'max-size': '10m', 'max-file': '3' } }, name)
     assert.deepEqual(service.environment, { DATA_DIR: '/data', CONFIG_DIR: '/config' }, name)
     assert.equal(service.env_file, `${name}.env`)
-    // Neither needs added capabilities, privileges or seccomp changes, nor publishes a port (13.4).
+    // Neither needs added capabilities, privileges or seccomp changes, nor publishes a port.
     for (const key of ['ports', 'privileged', 'cap_add', 'devices', 'group_add', 'network_mode']) assert.equal(service[key], undefined, `${name}.${key}`)
     assert.equal(service.build, '.')
     assert.equal(service.image, 'scooter:local')
   }
-  // The bridge: root, the same hostname from one container to the next (5.5), the data volume.
+  // The bridge: root, the same hostname from one container to the next, the data volume.
   const { bridge, runner } = file.services
   assert.equal(bridge.user, undefined)
   assert.equal(bridge.hostname, 'scooter')
   assert.deepEqual(bridge.volumes, ['data:/data'])
-  // The runner: scooter-runner in every variant (D217), a read-only root file system with /tmp in
+  // The runner: scooter-runner in every variant, a read-only root file system with /tmp in
   // memory, and the config read-only.
   assert.equal(runner.user, USERS.runner)
   assert.equal(runner.read_only, true)

@@ -1,4 +1,4 @@
-// What the agent does next (6.4 of DESIGN.md): the planner's first question.
+// What the agent does next: the planner's first question.
 //
 // `nextAction` is a pure function of the agent's config, its state, the datastore's index and the
 // clock, with two facts the runner keeps in memory: when it last saw an incoming line, and which
@@ -6,21 +6,21 @@
 // and does what it says. In order:
 //
 // 1. **Commands** newer than `commandSeq`, handled at once, even while runs are paused.
-// 2. **Paused** (6.9): nothing more until the next try.
+// 2. **Paused**: nothing more until the next try.
 // 3. **`once` tasks** not done yet, each tried once per start of the runner.
 // 4. **New messages:** work items after the cursor, or retries that are due, once the owner has
 //    been quiet for `BATCH_SECONDS`. Only with `on: new-messages`.
 // 5. **Scheduled tasks** whose time has come since they were last dealt with. One that comes due
 //    during a run or a pause waits, and runs afterwards.
 // 6. **A backfill batch**, only when nothing live is waiting: no work items after the cursor, quiet
-//    or not, and no due retries (6.11). Messages are live work only with `on: new-messages`;
+//    or not, and no due retries. Messages are live work only with `on: new-messages`;
 //    without it they wait for good, and don't hold a backfill back. When its work is done, the
 //    backfill finishes.
 // 7. Otherwise, nothing.
 
 import { previousLocalTime, localDate, parseIsoSeconds } from '../common/time.mjs'
 
-// The kinds of line that are work for the agent (6.3). Everything else is context or skipped.
+// The kinds of line that are work for the agent. Everything else is context or skipped.
 const WORK_KINDS = ['message', 'edit', 'delete']
 
 // Whether a line is a work item for an agent that reads `reads`: an incoming message, edit or
@@ -104,7 +104,7 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
   if (once) return { kind: 'once', id: once.id, task: once.task }
 
   // Messages are live work only for an agent that runs on them. Without `on: new-messages` they
-  // wait for good (D59), and must not hold a backfill back.
+  // wait for good, and must not hold a backfill back.
   const live = agent.run.newMessages && (hasWorkAfter(index, agent.reads, state.cursor) || dueRetries(state.retry, index, agent.reads, now).length > 0)
   const quiet = incomingSeenAt === null || now - incomingSeenAt >= batchSeconds * 1000
   if (live && quiet) return { kind: 'messages' }

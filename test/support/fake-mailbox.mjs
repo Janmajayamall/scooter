@@ -1,5 +1,5 @@
 // A fake mailbox, behind the same functions as the IMAP one (`src/mail/imap.mjs`), for the email
-// reader's tests (section 10 of DESIGN.md).
+// reader's tests.
 //
 // It holds messages by UID, as an IMAP server's `INBOX` does, answers `n:*` as IMAP does (the
 // newest message, when none has a UID of `n` or more), and records what was asked of it, so a test

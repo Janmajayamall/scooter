@@ -1,4 +1,4 @@
-// An agent's state (6.3 of DESIGN.md): its format, reading and writing it, and the changes that
+// An agent's state: its format, reading and writing it, and the changes that
 // planning makes to it: sessions, commands and startup.
 
 import assert from 'node:assert/strict'

@@ -1,6 +1,6 @@
 // What the pinned pi sends to OpenRouter, as fixtures.
 //
-// The network policy lets through only requests shaped like pi's own (section 6.13 of DESIGN.md),
+// The network policy lets through only requests shaped like pi's own,
 // so the shape is recorded from the real pi and kept:
 //
 //   test/fixtures/pi-requests/messages.json   one session on the messages route

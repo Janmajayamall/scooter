@@ -1,4 +1,4 @@
-// A stand-in for wacli 0.26.0, for the tests (section 10 of DESIGN.md).
+// A stand-in for wacli 0.26.0, for the tests.
 //
 // It is run through the wrapper that `createWacliStub` in `wacli.mjs` writes and puts first on
 // `PATH`. Its control folder is `../stub/` from the wrapper. There it:
@@ -22,7 +22,7 @@
 // - as `sync --follow`, posts each file that appears in `webhooks/` to its webhook, signed with the
 //   secret on its command line, and writes the answer's status beside it.
 //
-// It answers the way 13.1 and docs/DECISIONS.md (0.6) describe wacli: JSON on stdout, errors as
+// It answers the way 13.1 and docs/DECISIONS.md describe wacli: JSON on stdout, errors as
 // JSON on stderr with exit code 1, and `null` for an empty list.
 
 import crypto from 'node:crypto'

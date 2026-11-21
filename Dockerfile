@@ -1,16 +1,16 @@
-# Scooter's image (8.3 of DESIGN.md): one image for both services, `bridge` and `runner`, which
+# Scooter's image: one image for both services, `bridge` and `runner`, which
 # compose.yaml runs. It builds for the machine's own architecture, amd64 or arm64.
 #
-# - wacli is built from source in the first stage, so it always matches the architecture (13.1).
+# - wacli is built from source in the first stage, so it always matches the architecture.
 # - restic comes from its release, checked against the checksum the release's SHA256SUMS gives,
-#   which is written here (13.3; docs/DECISIONS.md, 0.2).
-# - QEMU and the tools build-image needs: cpio, lz4 and e2fsprogs (6.12).
+#   which is written here.
+# - QEMU and the tools build-image needs: cpio, lz4 and e2fsprogs.
 # - Scooter's three users, at fixed uids, so that the files of the data volume are theirs in every
-#   container (3.2; row 4).
+#   container.
 # - The data folder, /data, with the owners and modes of 3.2: a new volume mounted there starts as
-#   a copy of it (D219).
+#   a copy of it.
 # - The app, with its dependencies installed without their install scripts. pi isn't here: it is in
-#   the VM image, which build-image builds into the data volume (6.12).
+#   the VM image, which build-image builds into the data volume.
 
 # --- wacli, from source ---
 FROM golang:1.27-trixie AS wacli
@@ -52,7 +52,7 @@ RUN set -eu; \
 
 COPY --from=wacli /go/bin/wacli /usr/local/bin/wacli
 
-# Scooter's users, without a login shell or a home, as `setup` makes them natively (D212), at the
+# Scooter's users, without a login shell or a home, as `setup` makes them natively, at the
 # uids of 3.2.
 RUN set -eu; \
     for user in scooter-wacli:10001 scooter-runner:10002 scooter-mail:10003; do \
@@ -74,14 +74,14 @@ RUN set -eu; \
 
 # The app, root's, readable by every user and writable by root alone, whatever modes the checkout
 # gave it: a checkout made under umask 077 would otherwise leave scooter-runner and scooter-mail
-# unable to read it (the review of milestone 13, smaller point 4).
+# unable to read it.
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 COPY src ./src
 RUN chmod -R a+rX,go-w /app
 
-# The services run in UTC (8.2), as the systemd units do.
+# The services run in UTC, as the systemd units do.
 ENV TZ=UTC
 ENTRYPOINT ["tini", "--", "node", "/app/src/cli.mjs"]
 CMD ["help"]

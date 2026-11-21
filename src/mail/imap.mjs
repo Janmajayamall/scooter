@@ -1,4 +1,4 @@
-// The mailbox, over IMAP with `imapflow` (5.6 of DESIGN.md).
+// The mailbox, over IMAP with `imapflow`.
 //
 // This is the reader's only contact with the mail server, and a small one, so that the reader's
 // own logic can be tested against a fake mailbox with the same functions
@@ -19,7 +19,7 @@
 //   close()             logs out
 //
 // Nothing here changes the mailbox: it is opened read-only, and the messages are fetched with
-// `BODY.PEEK`, so not even the `\Seen` flag changes. The mailbox doubles as a copy (5.6).
+// `BODY.PEEK`, so not even the `\Seen` flag changes. The mailbox doubles as a copy.
 //
 // imapflow logs nothing (`logger: false`): its logs can hold what the server sent. Its keepalive
 // breaks IDLE every five minutes of quiet, so a server that ends an IDLE of 30 minutes (RFC 9051)

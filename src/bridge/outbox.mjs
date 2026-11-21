@@ -13,12 +13,12 @@
 //   paragraph or line break where there is one (`splitText`). Only the first quotes.
 // - **Pacing.** At most one message every `SEND_INTERVAL`, reactions included, whatever channel.
 // - **Recording.** After each message that goes out, an `out` line is appended to the datastore,
-//   with the channel as `source` and the ID the channel gave it as `sourceId` (4.2). The entry is
+//   with the channel as `source` and the ID the channel gave it as `sourceId`. The entry is
 //   deleted once all of it has gone.
 // - **Two outboxes.** The runner writes its entries to `exchange/outbox/`, and the bridge its own,
 //   such as its replies to commands, to `bridge/outbox/`, in the same form. The entries of both are
 //   taken together, in the order of their IDs.
-// - **Crash safety** (row 3). Before the first message goes, the bridge records the entry and how
+// - **Crash safety**. Before the first message goes, the bridge records the entry and how
 //   many of its messages have gone out, and writes the record again after each one, once its `out`
 //   line is in the datastore. After a crash the entry is sent again from the first message the
 //   record doesn't count as sent, a reaction included. So a crash can send one message twice, and
@@ -26,8 +26,8 @@
 //   already has: if that fails, as on a full disk, nothing is sent, since what was sent couldn't be
 //   recorded, and a bridge that restarted for it would send the same message again at every start.
 //   A message whose `out` line the store refuses is counted as sent all the same, for the same
-//   reason, and the bridge stops (D29).
-// - **Where the record is** (D205). The bridge, as root, writes nothing in the runner's outbox,
+//   reason, and the bridge stops.
+// - **Where the record is**. The bridge, as root, writes nothing in the runner's outbox,
 //   whose user could put a link in an entry's place, or the outbox's, between the bridge's look and
 //   its write, and so steer the write anywhere. It keeps the record of a runner's entry in its own
 //   folder, as `bridge/sending/<id>.json`, which wins over what the entry's folder holds from then
@@ -47,14 +47,14 @@
 //   is ready while wacli reconnects, and only a send shows that it isn't. An entry with nothing
 //   behind it holds nothing back, and is tried again after the longest wait. A look at the outbox
 //   that fails for another reason, such as a full disk, is tried again after the same waits.
-// - **Pausing.** `pause()` stops it between two messages, for a backup (5.5), and `resume()`
+// - **Pausing.** `pause()` stops it between two messages, for a backup, and `resume()`
 //   starts it again.
 //
 // The runner's user owns its outbox and writes the entries. The bridge, as root, takes them only
 // while the outbox is the runner's folder and not a link, reads each file without following a link,
 // and checks it (`checkOutboxEntry`); an entry that isn't one is logged and removed. It takes only
 // folders named as `createIds` names them, since it names its record after the entry, and leaves
-// any other name, logged once (D226). It removes an entry only by the names one holds, which in the
+// any other name, logged once. It removes an entry only by the names one holds, which in the
 // runner's outbox is `entry.json` alone, and leaves what isn't a folder, logged once. While the
 // runner's outbox isn't one to take from, the bridge's own entries still go, `/status`'s reply
 // among them. Logs name entries by their ID and never hold their text.
@@ -68,7 +68,7 @@ import { ENTRY_FILE, SENDING_FILE, checkOutboxEntry, checkSendingFile, cutText, 
 import { isoSeconds, systemClock } from '../common/time.mjs'
 
 // ---------------------------------------------------------------------------------------------
-// Chunking (5.3)
+// Chunking
 
 const isSpace = char => char === ' ' || char === '\t' || char === '\n' || char === '\r'
 
@@ -114,7 +114,7 @@ export function splitText(text, max = limits.CHUNK_CHARS) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Routing (5.3)
+// Routing
 
 // The message a line is, or changes: a message or a command is itself, and an edit or a deletion
 // is the message it changes. Null for anything else.
@@ -166,7 +166,7 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
   if (message === null || message.dir !== 'in') return { action: 'drop', reason: "not one of the owner's messages" }
   if (message.source === 'email') {
     // Made here, after the entry was written, from a subject the datastore holds: cut as an entry's
-    // text is. Intake already cuts a subject at `EMAIL_SUBJECT_MAX_CHARS` (5.6).
+    // text is. Intake already cuts a subject at `EMAIL_SUBJECT_MAX_CHARS`.
     const subject = (message.subject ?? '').replace(/\s+/g, ' ').trim() || '(no subject)'
     return { action: 'text', channel: fallback, text: cutText(`${entry.emoji} Email: ${subject}`), quote: null }
   }
@@ -179,7 +179,7 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
 // The processor
 
 // The names an entry folder holds, the only names the bridge removes in one: in the runner's
-// outbox, its `entry.json` alone, since the bridge writes nothing there (D205, D226); in the
+// outbox, its `entry.json` alone, since the bridge writes nothing there; in the
 // bridge's own, also the `sending.json` the bridge makes of it, and what a write of that one cut
 // short leaves (`writeFileAtomic`).
 const isRunnerEntryFile = name => name === ENTRY_FILE
@@ -203,10 +203,10 @@ function listRecords(dir) {
 // - `paths`: what `makePaths` returns; the entries are in `paths.outbox`, the runner's, and
 //   `paths.bridgeOutbox`, the bridge's own, and the records of the runner's in `paths.bridgeSending`.
 // - `owner`: `{ uid, gid }` of the runner's user, who owns the runner's outbox, or null when the
-//   bridge isn't root (section 10).
+//   bridge isn't root.
 // - `store`: the open store (`store.mjs`), which logs the `out` lines and whose index routing reads.
 // - `channels`: a Map from each channel's name to the channel; `defaultChannel`, a name in it.
-// - `onFatal(error)`: called once if the store stops taking lines (D29). Delivery stops with it.
+// - `onFatal(error)`: called once if the store stops taking lines. Delivery stops with it.
 //
 // `start()` starts the loop, `stop()` stops it, cutting short a send in progress, which is then
 // sent again at the next start. `pause()` resolves once no message is going out, and none will
@@ -241,7 +241,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   // An entry, as the look lists it: `{ key, id, own }`, where `own` is true for one of the bridge's
   // own, in `bridge/outbox/`, and false for one of the runner's.
   const item = (id, own) => ({ key: `${own ? 'bridge' : 'runner'}/${id}`, id, own })
-  // The entry's folder, and the bridge's record of it (D205).
+  // The entry's folder, and the bridge's record of it.
   const folderOf = ({ id, own }) => path.join(own ? paths.bridgeOutbox : paths.outbox, id)
   const recordOf = target => (target.own ? path.join(folderOf(target), SENDING_FILE) : path.join(paths.bridgeSending, `${target.id}${RECORD_SUFFIX}`))
 
@@ -437,7 +437,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
       }
       sent = part
       if (storeError !== null) {
-        // The store takes no more lines (D29), and the bridge restarts. The message went out, and
+        // The store takes no more lines, and the bridge restarts. The message went out, and
         // counts as sent, so the restart doesn't send it again; its `out` line is missing.
         broken = true
         log.error('outbox.store_failed', { entry: id, part, ...errorFields(storeError) })
@@ -459,7 +459,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   // has a record of. Each other name in the outbox is logged once and left. The runner's user owns
   // the folder above its outbox, and could put a link in its place: then none of the runner's
   // entries is taken, not even one the bridge has a record of, whose removal would reach through
-  // the link, and that is logged once (D226).
+  // the link, and that is logged once.
   function runnerEntries() {
     let names = []
     let there = true

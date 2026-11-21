@@ -108,7 +108,7 @@ test('sandbox: a VM boots from the built image and runs pi --version, in under 3
 })
 
 test("sandbox: pi's VMs get QEMU's q35 machine on x86_64, with KVM as under emulation, and Gondolin's own on arm64", () => {
-  // microvm, Gondolin's choice with KVM, hangs under nested KVM with 2 processors (D218).
+  // microvm, Gondolin's choice with KVM, hangs under nested KVM with 2 processors.
   assert.equal(machineType('x86_64'), 'q35')
   assert.equal(machineType('aarch64'), undefined)
 })
@@ -143,7 +143,7 @@ test("sandbox: doctor's boot check, stopped during the boot, closes its VM and r
   fs.mkdirSync(path.dirname(prepared.paths.imageBuild), { recursive: true })
   fs.copyFileSync(new URL('../config/image/build.json', import.meta.url), prepared.paths.imageBuild)
   const scratch = base => fs.readdirSync(base).filter(name => name.startsWith('scooter-doctor-'))
-  // The sandbox sets the process's temporary folder to its own, as the runner's does (6.6).
+  // The sandbox sets the process's temporary folder to its own, as the runner's does.
   const tmp = os.tmpdir()
   const stop = new AbortController()
   const checking = bootCheck({ paths: prepared.paths, settings: prepared.settings, signal: stop.signal })
@@ -460,7 +460,7 @@ test("sandbox: a VM that doesn't start in time fails the run as one that couldn'
   assert.deepEqual(prepared.entries.filter(entry => entry.event === 'sandbox.vm_closed').map(entry => entry.ended), ['not_started'])
 
   // The run's own time running out first, as when it is no longer than the start limit, is the
-  // same (the second review of milestone 7, smaller point 2).
+  // same.
   const restore = overrideLimits({ VM_START_TIMEOUT: 600_000 })
   try {
     await assert.rejects(sandbox.run(sh(paths, 'true', { timeoutMs: 200 })), /^Error: the VM couldn't start: it didn't boot within the run's time/)
@@ -563,7 +563,7 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   assert.equal(state.cursor, 1)
   assert.equal(state.lastRun.ok, true)
   const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
-  // Under emulation the runner's first start also told the owner its VMs fell back to it (6.6).
+  // Under emulation the runner's first start also told the owner its VMs fell back to it.
   const notices = runner.sandbox.accel === 'emulation' ? [{ type: 'text', by: 'runner', text: EMULATION_NOTICE }] : []
   assert.deepEqual(outbox, [...notices, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' }])
   assert.equal(fs.readdirSync(paths.agentSessions('lifelog')).length, 1)

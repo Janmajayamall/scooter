@@ -1,11 +1,11 @@
-// The commands the runner handles (6.4 and 5.4 of DESIGN.md): `/new`, and passing over the
+// The commands the runner handles: `/new`, and passing over the
 // bridge's.
 //
 // Before it builds a batch, the runner handles the command lines newer than `commandSeq`: it works
 // out the new state and the replies (`applyCommands`), writes the replies to the outbox, and saves
 // the state at once. Going by the cursor instead would handle a command again after a run cut
 // short by a crash or a stop, which leaves the cursor where it was; a run that finishes, failed or
-// not, moves it (row 11; `docs/DECISIONS.md`, D78). A crash between the two writes can send a
+// not, moves it. A crash between the two writes can send a
 // reply twice, and never loses one.
 
 import { writeOutboxEntry } from '../common/outbox.mjs'

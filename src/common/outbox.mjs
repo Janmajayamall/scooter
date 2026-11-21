@@ -1,4 +1,4 @@
-// Outbox entries (5.3 of DESIGN.md): what the runner, and the bridge itself, ask the bridge to send.
+// Outbox entries: what the runner, and the bridge itself, ask the bridge to send.
 //
 // Each entry is a folder `exchange/outbox/<id>/` holding `entry.json`. It is made as `.tmp-<id>/`
 // and renamed once complete, so the bridge never sees half of one. IDs are the UTC time and a
@@ -13,14 +13,14 @@
 // bridge picks the channel from the line an entry points at.
 //
 // While the bridge sends an entry, it keeps a record of it: the entry, and how many of its messages
-// have gone out (row 3):
+// have gone out:
 //
 //   {"entry":{"type":"text","by":"lifelog","text":"…","replyTo":1042},"sent":1}
 //
 // The bridge keeps that record in its own folder, never in the runner's outbox, which the runner's
 // user controls: `bridge/sending/<id>.json` for an entry of the runner's. The bridge's own entries,
 // such as its replies to commands, are written to `bridge/outbox/` in the same form, and their
-// record is `sending.json` in the entry's folder there (D205).
+// record is `sending.json` in the entry's folder there.
 //
 // A text is at most `TEXT_MAX_CHARS` long. `writeOutboxEntry` cuts a longer one, with a line that
 // says so, rather than refuse it: what the agent wrote is its own to make as long as it likes, and
@@ -47,7 +47,7 @@ export const textLength = text => {
 }
 
 // `text` as it can be sent: U+0000 in it replaced by U+FFFD, since no program takes a command-line
-// argument that holds one, and wacli takes a text as one (5.3); and, when it is longer than
+// argument that holds one, and wacli takes a text as one; and, when it is longer than
 // `TEXT_MAX_CHARS`, as much of it as fits before `CUT_NOTE`.
 export function cutText(given) {
   const text = given.replaceAll('\0', '\ufffd')
@@ -141,9 +141,9 @@ export function orderedEntry(entry) {
 // and cut at `TEXT_MAX_CHARS`. Throws if the entry isn't well formed.
 //
 // `outbox` is the runner's outbox, `paths.outbox`, unless given: the bridge gives its own,
-// `paths.bridgeOutbox`, so that it writes nothing in a folder the runner's user controls (D205).
+// `paths.bridgeOutbox`, so that it writes nothing in a folder the runner's user controls.
 // The folder is made, 0700, if it is missing, as in development. An installed Scooter makes the
-// runner's in `setup`, owned by the runner's user (3.2).
+// runner's in `setup`, owned by the runner's user.
 export async function writeOutboxEntry({ paths, ids, entry: given, outbox = paths.outbox }) {
   const entry = given?.type === 'text' && typeof given.text === 'string' ? { ...given, text: cutText(given.text) } : given
   const problems = checkOutboxEntry(entry)
