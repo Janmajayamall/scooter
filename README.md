@@ -223,7 +223,7 @@ sudo scooter status                        # natively
 docker compose run --rm bridge status      # Docker
 ```
 
-It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Scooter sends no message when the runner or the bridge is down: the logs and `scooter status` show it ([When something goes wrong](#when-something-goes-wrong)).
+It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down: the logs and `scooter status` show it ([When something goes wrong](#when-something-goes-wrong)).
 
 **The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
