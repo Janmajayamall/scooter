@@ -511,7 +511,9 @@ test('email: /status says whether the reader is connected, when it last looked, 
   const context = await setup(t)
   let line
   await waitFor(() => (line = context.channel.status()).startsWith('Email: connected, last checked'), 'the reader to connect')
-  assert.match(line, /^Email: connected, last checked (\d\d:\d\d|\w{3} \d+ \w{3} \d\d:\d\d); 0 stored and 0 skipped since the bridge started, 21:45\.$/)
+  // The reader runs in its stub's process, with the real clock, and the bridge with the test's: the
+  // time it last looked is shown with a date, and with a year once the real year isn't the test's.
+  assert.match(line, /^Email: connected, last checked (\d\d:\d\d|\w{3} \d+ \w{3}( \d{4})? \d\d:\d\d); 0 stored and 0 skipped since the bridge started, 21:45\.$/)
   spool(context, { parsed: { text: 'one' } })
   spool(context, { raw: stranger(), parsed: { uid: 99, fetched: 'whole' } })
   await context.take()

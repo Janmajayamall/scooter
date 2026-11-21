@@ -486,7 +486,11 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   if (!(await portIsFree(limits.WEBHOOK_PORT))) return t.skip(`port ${limits.WEBHOOK_PORT} is in use`)
   const root = makeTestDir(t)
   const stub = createWacliStub(t, root)
-  stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: '2099-01-01T00:00:00Z', Text: 'caught up' })] })
+  // The messages' times, to the second: an hour after now, and the second after. Catch-up lists a
+  // chat from the bridge's first start on, which this process takes from the real clock, so any
+  // fixed time would be passed one day, and catch-up would then list nothing.
+  const later = seconds => new Date((Math.floor(Date.now() / 1000) + 3600 + seconds) * 1000).toISOString().replace('.000Z', 'Z')
+  stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: later(0), Text: 'caught up' })] })
   const restic = createResticStub(t, root)
   const dataDir = path.join(root, 'data')
   const env = {
@@ -499,6 +503,11 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
     RESTIC_REPOSITORY: path.join(root, 'repository'),
     RESTIC_PASSWORD: 'correct horse',
     BACKUP_TIME: 'off',
+    // A backup checks the repository on Sundays in SCOOTER_TZ, and this bridge reads the real
+    // clock, which the test can't fake. With FORCE_CHECK=1 it checks after every backup, so restic
+    // is asked the same on every day, in any zone. The Sunday rule is backup.test.mjs's, with a
+    // fake clock.
+    FORCE_CHECK: '1',
   }
   const child = spawn(process.execPath, [CLI, 'bridge'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
@@ -525,14 +534,14 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   if (await portTakenBefore(() => events().includes('whatsapp.caught_up') && stub.callsOf('sync').length > 0, 'the bridge to start')) {
     return t.skip(`port ${limits.WEBHOOK_PORT} was taken`)
   }
-  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: '2099-01-01T00:00:01Z' })), 200)
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: later(1) })), 200)
   const log = path.join(dataDir, 'datastore')
   await waitFor(() => events().filter(event => event === 'intake.stored').length === 2, 'two lines')
 
   // A backup now: WhatsApp stops while restic runs, and starts again.
   child.kill('SIGUSR1')
   await waitFor(() => events().includes('backup.finished'), 'the backup')
-  assert.deepEqual(restic.commands(), ['backup', 'forget'])
+  assert.deepEqual(restic.commands(), ['backup', 'forget', 'check'])
   if (await portTakenBefore(() => stub.callsOf('sync').length === 2, 'sync to start again')) {
     return t.skip(`port ${limits.WEBHOOK_PORT} was taken while the backup had the webhook closed`)
   }
@@ -543,8 +552,10 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   assert.deepEqual(events().slice(-2), ['whatsapp.stopped', 'bridge.stopped'])
   // Every log line is JSON, and none holds what the owner wrote.
   assert.ok(!stderr.includes('coffee') && !stderr.includes('caught up'))
-  const day = fs.readdirSync(log, { recursive: true }).find(name => name.endsWith('log.jsonl'))
-  const texts = fs.readFileSync(path.join(log, day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).text)
+  // Each line is in the folder of the UTC day it was stored on: two folders, when a UTC midnight
+  // came between the two.
+  const days = fs.readdirSync(log, { recursive: true }).filter(name => name.endsWith('log.jsonl'))
+  const texts = days.flatMap(day => fs.readFileSync(path.join(log, day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).text))
   assert.deepEqual(texts.sort(), ['caught up', 'coffee 150'])
   assert.equal(fs.existsSync(path.join(dataDir, 'bridge', 'bridge.sock')), false)
 })
