@@ -315,16 +315,52 @@ test('backups: restic backs up the folders a backup holds, leaves out the caches
   }
 })
 
-test('backups: restic check runs on Sundays in SCOOTER_TZ, and after every backup with FORCE_CHECK=1', async t => {
-  // 03:30 on Sunday 15 November in Kolkata is Saturday in UTC.
-  const sunday = harness(t, { start: '2026-11-14T22:00:00Z' })
-  assert.deepEqual(await sunday.backups.request('scheduled'), { ok: true, snapshot: 'abcd1234', checked: true })
-  assert.deepEqual(sunday.stub.commands(), ['backup', 'forget', 'check'])
+test('backups: restic check runs on Sundays in SCOOTER_TZ and on no other day, on the day the backup started, and after every backup with FORCE_CHECK=1', async t => {
+  const h = harness(t)
+  // A backup started at `start`, and with `held`, still running 31 minutes later. Resolves with its
+  // result and what restic was asked.
+  const backUpAt = async (start, { held = false } = {}) => {
+    h.clock.set(start)
+    const before = h.stub.commands().length
+    h.stub.fixtures({ hold: held ? ['backup'] : [] })
+    const done = h.backups.request('scheduled')
+    if (held) {
+      await h.stub.holding('backup')
+      h.clock.set(h.clock.now() + 31 * MINUTE)
+      h.stub.release('backup')
+    }
+    const result = await done
+    // The stub's files of a hold go, so that the next backup is held again.
+    for (const name of ['holding-backup', 'release-backup']) fs.rmSync(path.join(h.stub.control, name), { force: true })
+    return { result, commands: h.stub.commands().slice(before) }
+  }
 
-  const monday = harness(t, { start: '2026-11-15T22:00:00Z' })
-  assert.equal((await monday.backups.request('scheduled')).checked, false)
+  // A backup at 03:30 in Kolkata on each day of one week, from Monday 9 November. That is 22:00 in
+  // UTC the day before, so Kolkata's Sunday is Saturday in UTC, and its Monday is Sunday.
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  for (const [n, day] of days.entries()) {
+    const checked = day === 'Sun'
+    assert.deepEqual(await backUpAt(Date.parse('2026-11-08T22:00:00Z') + n * 24 * HOUR), {
+      result: { ok: true, snapshot: 'abcd1234', checked },
+      commands: checked ? ['backup', 'forget', 'check'] : ['backup', 'forget'],
+    }, day)
+  }
+
+  // The day is the one the backup started on: one started at 23:59 in Kolkata, on Saturday 21 and on
+  // Sunday 22 November, and still running at 00:30, is checked only if it started on the Sunday.
+  for (const [start, day, checked] of [
+    ['2026-11-21T18:29:00Z', 'Sat', false],
+    ['2026-11-22T18:29:00Z', 'Sun', true],
+  ]) {
+    assert.deepEqual(await backUpAt(start, { held: true }), {
+      result: { ok: true, snapshot: 'abcd1234', checked },
+      commands: checked ? ['backup', 'forget', 'check'] : ['backup', 'forget'],
+    }, `${day} 23:59`)
+  }
+
+  // Monday, with FORCE_CHECK.
   const forced = harness(t, { start: '2026-11-15T22:00:00Z', extra: { backup: { forceCheck: true } } })
-  assert.equal((await forced.backups.request('scheduled')).checked, true)
+  assert.deepEqual(await forced.backups.request('scheduled'), { ok: true, snapshot: 'abcd1234', checked: true })
   assert.deepEqual(forced.stub.commands(), ['backup', 'forget', 'check'])
 })
 
