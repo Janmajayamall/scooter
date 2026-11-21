@@ -836,8 +836,9 @@ test('whatsapp: a catch-up a stop cut short between its rows lists them again wh
 })
 
 test('whatsapp: after a crash between catch-up\'s rows, the next start lists them from where catch-up had last saved it got to', async t => {
-  // The review's case by a crash: the bridge dies while catch-up hands over R2, after the webhook
-  // stored N1. A crash leaves nothing in memory: the next start reads the state as it was on disk.
+  // The case of the test before, by a crash: the bridge dies while catch-up hands over R2, after
+  // the webhook stored N1. A crash leaves nothing in memory: the next start reads the state as it
+  // was on disk.
   const context = await setup(t, { fixtures: { paired: true, messages: [] }, seed: gotTo(), start: '2026-11-09T16:00:00Z' })
   const { stub, bridge, whatsapp, caughtUp, paths, settings, clock, log, proc } = context
   await caughtUp()
