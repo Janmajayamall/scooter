@@ -54,12 +54,12 @@ Each service reads its own env file, as [Secrets](../ARCHITECTURE.md#secrets) sa
 **The format** is the part that Scooter's loader, systemd's `EnvironmentFile` and Compose's `env_file` all read the same way. Every other line is a fault that names the file, the line, and the variable when the line names one:
 
 - a comment is a line of its own, starting with `#`, indented or not; blank lines are passed over;
-- a setting is `NAME=value`: a name of letters, digits and `_`, not starting with a digit, with nothing before it and no space around the `=`;
-- an unquoted value is trimmed, and may not contain `$`, `\`, `#`, `'` or `"`;
-- a quoted value is inside single quotes, on one line, and is taken exactly as written, so a value can't contain a single quote at all;
+- a setting is `NAME=value`: a name of letters, digits and `_`, not starting with a digit, with nothing before it and no space before the `=`;
+- an unquoted value is trimmed, spaces after the `=` among them, and may not contain `$`, `\`, `#`, `'` or `"`;
+- a quoted value is inside single quotes, the first right after the `=`, on one line, and is taken exactly as written, so a value can't contain a single quote at all;
 - a name may be set once.
 
-*Why:* a line the three read differently would give the service one value under systemd and another under Compose ([Facts about systemd's and Compose's env files](#facts-about-systemds-and-composes-env-files)). The loader is stricter than it has to be in four places, where the three happen to agree: `#` without a space before it, a lone `'`, plain double quotes, and spaces around the `=`. One short rule, "anything unusual goes in single quotes", is easier to follow than the exact edge of each.
+*Why:* a line the three read differently would give the service one value under systemd and another under Compose ([Facts about systemd's and Compose's env files](#facts-about-systemds-and-composes-env-files)). The loader is stricter than it has to be in four places, where the three happen to agree: `#` without a space before it, a lone `'`, plain double quotes, and a space before the `=`. A quote after a space is refused too, since how systemd and Compose read one was never checked. One short rule, "anything unusual goes in single quotes", is easier to follow than the exact edge of each.
 
 **The settings both services read:**
 

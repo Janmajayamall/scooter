@@ -110,7 +110,7 @@ export function parseEnvFile(text) {
 
     const assignment = ASSIGNMENT.exec(line)
     if (!assignment) {
-      fault(null, 'expected KEY=value, with nothing before the name and no space around the "="')
+      fault(null, 'expected KEY=value, with nothing before the name and no space before the "="')
       continue
     }
     const [, name, raw] = assignment
@@ -124,6 +124,11 @@ export function parseEnvFile(text) {
       value = quoted[1]
     } else {
       value = raw.trim()
+      // A quote after a space: how systemd and Compose read one was never checked.
+      if (value.startsWith("'")) {
+        fault(name, `${name}: a quoted value starts right after the "="`)
+        continue
+      }
       if (NEEDS_QUOTES.test(value)) {
         fault(name, `${name}: a value with $, \\, # or a quote in it must be inside single quotes`)
         continue
