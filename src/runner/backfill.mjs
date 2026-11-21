@@ -14,12 +14,12 @@
 //   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the
 //   backfill's skill and `day-pages`, with the system prompt of live runs, so the owner's current
 //   preferences apply to all of history.
-// - **What it may change:** the paths in `writes`, and the day pages. After the check of 6.8, a
-//   batch that changed anything else, `memory/` included, fails as pi's own failure, and the
+// - **What it may change:** the paths in `writes`, and the day pages. After the check of the files pi
+//   left, a batch that changed anything else, `memory/` included, fails as pi's own failure, and the
 //   clean-up throws it away (`mayChange`, used in `run.mjs`).
 // - **Silent:** nothing is sent per batch. Texts, `REPLY_TO` and `NO_REPLY` are ignored, and a
 //   failure sends no notice.
-// - **Its own retries,** handled like the live ones (6.8, 6.9; `settleBackfill`): an item not
+// - **Its own retries,** handled like the live ones (`settleBackfill`): an item not
 //   reported is tried again a minute later; one reported `FAILED`, or given up on after
 //   `MAX_ATTEMPTS`, goes to `skipped`. An edit or deletion brings in the message it changes from
 //   the backfill's retries or `skipped`, as from the live ones. A setup error or an outage pauses
@@ -184,7 +184,7 @@ function describeCsv({ name, file }) {
   if (file === null) return `${name} holds no CSV file`
   let text
   try {
-    // The views are the last commit's now, which the check of 6.8 let through: within its limits,
+    // The views are the last commit's now, which the check of the files pi left let through: within its limits,
     // and no link. Read with care all the same, as everything pi wrote is.
     text = readUntrustedFile(file, { maxBytes: limits.AGENT_FILES_MAX_BYTES })
   } catch (error) {

@@ -174,8 +174,8 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
     return { head: `${head}${edited}`, extra }
   }
 
-  // The line under a reply: what it quotes, and who sent that. A command is never shown
-  // (5.4), so a reply to one says only that. A reply to a line the index can't show as a message,
+  // The line under a reply: what it quotes, and who sent that. A command is never shown,
+  // so a reply to one says only that. A reply to a line the index can't show as a message,
   // which only a damaged datastore gives, shows the channel's preview if there is one.
   function replyLine(line) {
     const preview = () => quote(line.quoted, cap, `the whole text is ${lineRef(line.seq)}`)
@@ -242,7 +242,7 @@ export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep
     const lines = retrying.map(item => describe.item(item.seq, ` (attempt ${item.attempt} of ${limits.MAX_ATTEMPTS})`))
     sections.push([SECTIONS.retrying, ...lines].join('\n'))
   }
-  // Newest first, as 6.5 shows them. When the prompt is too long, the oldest are left out first.
+  // Newest first. When the prompt is too long, the oldest are left out first.
   const newestFirst = [...batch.context].reverse()
   const shown = newestFirst.slice(0, contextKeep)
   if (newestFirst.length > 0) {

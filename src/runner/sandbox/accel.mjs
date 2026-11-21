@@ -1,4 +1,4 @@
-// How pi's VMs are accelerated: `AGENT_ACCEL` (6.6 of DESIGN.md; ARCHITECTURE.md decision 43).
+// How pi's VMs are accelerated: `AGENT_ACCEL`.
 //
 // - `auto`, the default, uses KVM when the runner can open `/dev/kvm` for reading and writing, and
 //   emulation otherwise. The runner says which at startup, `/status` shows it, and falling back to

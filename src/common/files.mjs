@@ -106,8 +106,8 @@ export function readJsonFile(file) {
 }
 
 // Copies a file that another program wrote, in a folder that program controls, into a folder of
-// Scooter's own: a download in wacli's staging folder, or an attachment in the mail spool
-// (5.6). The bridge runs as root and the other program doesn't, so the other program could leave
+// Scooter's own: a download in wacli's staging folder, or an attachment in the mail spool.
+// The bridge runs as root and the other program doesn't, so the other program could leave
 // something in the file's place that gets root to copy what the program can't read itself:
 // - a symbolic link: the file is opened without following a link at the end of its path;
 // - a hard link to someone else's file: the file must have exactly one name, and, when `owner` is

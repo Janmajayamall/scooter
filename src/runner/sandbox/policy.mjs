@@ -1,4 +1,4 @@
-// The network policy (6.13 of DESIGN.md; ARCHITECTURE.md 2.8): what pi's VM may send, checked and
+// The network policy: what pi's VM may send, checked and
 // logged in the runner before anything goes out.
 //
 // pi's VM has no network of its own. Gondolin's host side, in the runner's process, answers its DNS
@@ -30,7 +30,7 @@
 // Refusals answer the VM with an error in OpenRouter's shape, so pi prints the policy's reason.
 //
 // The allowlists are what the pinned pi sends for any model in its catalog, on each route, as
-// milestone 0 captured them (`test/fixtures/pi-requests/`; `docs/DECISIONS.md`, 0.4, pi 6). A test
+// milestone 0 captured them (`test/fixtures/pi-requests/`). A test
 // compares them with the fixtures, which are captured again with every new pi.
 
 import { createIds } from '../../common/files.mjs'
@@ -182,7 +182,7 @@ async function readBody(request, max) {
   return Buffer.concat(chunks, size)
 }
 
-// The answer to a request the policy refuses, in OpenRouter's shape, which pi prints (0.4, pi 5).
+// The answer to a request the policy refuses, in OpenRouter's shape, which pi prints.
 function refusal(status, reason) {
   const body = { error: { message: `Scooter's network policy refused this request: ${reason}`, code: status } }
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -280,8 +280,7 @@ function runNetwork({ policy, placeholders, netlog, ids, clock, log }) {
 
     // The request is counted before its body is read, which waits on the VM, and given back if it
     // doesn't go out: counted after, requests read at the same time would each pass the check
-    // above, and a run could make up to as many more as Gondolin handles at once (the review of
-    // milestone 8, smaller point 2).
+    // above, and a run could make up to as many more as Gondolin handles at once.
     letOut += 1
     let sent = false
     try {

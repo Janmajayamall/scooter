@@ -169,8 +169,8 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
     const waitFor = why => {
       if (waitingFor !== why) say(why === 'backup' ? 'Waiting for a backup to finish.' : `Waiting for ${paths.runLock} to go.`)
     }
-    // Does `step` holding `run.lock`, as a batch does, and giving way to a backup in the same way
-    // (D181). Returns false when `signal` stopped it before it could.
+    // Does `step` holding `run.lock`, as a batch does, and giving way to a backup in the same way.
+    // Returns false when `signal` stopped it before it could.
     const locked = async step => {
       for (;;) {
         const lock = acquireRunLock({ paths, deadline: clock.now() + agent.timeoutMinutes * MINUTE, clock })

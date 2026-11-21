@@ -1,4 +1,4 @@
-// The email reader (5.6 of DESIGN.md; ARCHITECTURE.md 2.3): `node src/mail/reader.mjs run`.
+// The email reader: `node src/mail/reader.mjs run`.
 //
 // A program of its own, which the bridge starts as `scooter-mail` and starts again with backoff
 // whenever it exits (`src/bridge/channels/email.mjs`). It is the only part of Scooter that uses
@@ -42,7 +42,7 @@ import { openImapMailbox } from './imap.mjs'
 import { firstChars, mentionsOwner, parseEmail, parseSubject } from './parse.mjs'
 import { openSpool, readPosition, writePosition, writeSpoolFolder } from './spool.mjs'
 
-// The clock of `src/common/time.mjs`, which the reader may not import (ARCHITECTURE.md 4.2): the
+// The clock of `src/common/time.mjs`, which the reader may not import: the
 // time in milliseconds, and a wait that an AbortSignal cuts short.
 export const systemClock = {
   now: () => Date.now(),

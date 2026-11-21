@@ -1,4 +1,4 @@
-// The email channel (5.6 of DESIGN.md; ARCHITECTURE.md 2.3).
+// The email channel.
 //
 // This is the only module that runs the email reader, `src/mail/reader.mjs`, a program of its own
 // that reads the mailbox as `scooter-mail` and hands each email over as a folder in its spool. The
@@ -23,8 +23,8 @@
 // Email only comes in: the channel can't send or react, and replies about an email go to
 // `DEFAULT_CHANNEL`. An email is never a command, an edit, a deletion or a reaction.
 //
-// The spool's format is `src/mail/spool.mjs`'s, which this module can't import (ARCHITECTURE.md
-// 4.2): its names are repeated here, and a test hands over through the real reader.
+// The spool's format is `src/mail/spool.mjs`'s, which this module can't import:
+// its names are repeated here, and a test hands over through the real reader.
 
 import fs from 'node:fs'
 import path from 'node:path'

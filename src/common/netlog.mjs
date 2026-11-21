@@ -11,8 +11,8 @@
 // - `request`: the policy let a request out. Written before it goes out, so nothing leaves without
 //   a line, even if the runner crashes.
 // - `response`: the status of the request with the same `id`, written when it arrives, before the
-//   answer's body: a run that ends while the model is still streaming has its status in the log
-//   (6.9; `docs/DECISIONS.md`, D82). `ms` is the time from the request line to the status.
+//   answer's body: a run that ends while the model is still streaming has its status in the log.
+//   `ms` is the time from the request line to the status.
 // - `end`: the answer's body is over. `sent` and `received` are the bytes of the request and the
 //   answer, head and body, each way; `ms` the time from the request line. `reason` says why the
 //   answer was cut short, when it was.

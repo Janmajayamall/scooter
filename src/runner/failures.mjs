@@ -48,7 +48,7 @@ const isOutageStatus = status => status === 408 || status === 429 || status >= 5
 //
 // A refusal that comes before any request has gone out is pi's own request: nothing the agent
 // does can run before the model's first answer, which pi asks for itself. pi asks the same way all
-// run long (0.4, pi 6), so the policy refusing it there means the policy and the pinned pi don't
+// run long, so the policy refusing it there means the policy and the pinned pi don't
 // agree, which no try of the batch can mend. A later refusal may be the agent's, from a command it
 // ran, and reads as pi's own failure, so that a message that misled the agent uses its attempts
 // rather than hold runs back for good (the plan's rules for milestone 8).
@@ -89,8 +89,8 @@ function openRouterAnswers() {
 }
 
 // What OpenRouter said, in its own words, from the last line pi printed on stderr: `401 {…}` on
-// the messages route and `401: {…}` on the chat route, each with the error's message in it
-// (`docs/DECISIONS.md`, 0.4, pi 5). Returns null when that line isn't one for `status`. The words
+// the messages route and `401: {…}` on the chat route, each with the error's message in it.
+// Returns null when that line isn't one for `status`. The words
 // come from outside: they go into the owner's notice and the state, never into Scooter's logs.
 export function openRouterMessage(stderr, status) {
   const last = stderr
@@ -218,7 +218,7 @@ function afterRun(state, outcome, { now, startedAt, durationMs, seqs }) {
 }
 
 // Whether a failed run is the first of a row: the run before it got through, or there was none.
-// The first sends the owner a notice, and later ones don't (6.9; the plan's rule for milestone 4).
+// The first sends the owner a notice, and later ones don't (the plan's rule for milestone 4).
 export function isFirstFailure(state) {
   return state.lastRun === null || state.lastRun.ok
 }

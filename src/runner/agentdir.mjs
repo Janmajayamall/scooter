@@ -141,8 +141,8 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 // one the runner can't open, such as a file pi made unreadable or a session folder it can't list.
 // A refusal is logged as `runner.session_refused`, with why.
 //
-// pi finds a session by the first line of its file, not by its name (`docs/DECISIONS.md`, 0.4,
-// pi 2). It continues the copy `prepareRun` made, under that copy's name. A session it starts
+// pi finds a session by the first line of its file, not by its name.
+// It continues the copy `prepareRun` made, under that copy's name. A session it starts
 // afresh, which happens on the first run of a session and when the agent's folder has moved, goes
 // into a new file it names `<UTC time>_<sessionId>.jsonl`, and that is the one to take. Anything
 // else in `run/session/` is ignored, so a run can only extend its own session.

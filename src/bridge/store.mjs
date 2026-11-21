@@ -218,8 +218,8 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     if (attachments.length > 0 && draft.kind !== 'message') {
       throw new DatastoreError('only a message has attachments')
     }
-    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too
-    // (4.2). Intake skips the ones whose target it doesn't know, so one that reaches the store
+    // An edit, a deletion or a reaction refers to a message, or a command, which is a message too.
+    // Intake skips the ones whose target it doesn't know, so one that reaches the store
     // pointing anywhere else is a bug in its writer.
     if (['edit', 'delete', 'reaction'].includes(draft.kind) && index.current(draft.target) === undefined) {
       throw new DatastoreError(`a ${draft.kind} must point at a message or a command, and seq ${draft.target} is neither`)

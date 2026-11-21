@@ -52,8 +52,8 @@ export function sessionId(agentName, { day, bump }) {
 export const NEW_SESSION_REPLY = 'Started a fresh conversation.'
 
 // Handles the command lines newer than `commandSeq`, given in `seq` order. `/new` starts a fresh
-// session for the rest of the owner's day, and is answered with a text about the command (5.3,
-// 5.4). The other commands are the bridge's, and are passed over. Returns `{ state, replies }`:
+// session for the rest of the owner's day, and is answered with a text about the command.
+// The other commands are the bridge's, and are passed over. Returns `{ state, replies }`:
 // the state with `commandSeq` moved to the newest command, and the outbox entries to write.
 //
 // The day a `/new` applies to is the session's day when the owner sent it, which is the day it is

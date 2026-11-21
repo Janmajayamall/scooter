@@ -2,7 +2,7 @@
 // datastore's history again. Both share what is here.
 //
 // - **One of the owner's days per batch.** A replayed batch is drawn from its lane as a live one
-//   is (6.5, `batch.mjs`): due retries first, then work items after the lane's cursor, up to the
+//   is (`batch.mjs`): due retries first, then work items after the lane's cursor, up to the
 //   `seq` the replay stops at, at most `BATCH_MAX_ITEMS` and within `PROMPT_MAX_BYTES`. And every
 //   item it takes was sent on one day of the owner's: the local date, in `SCOOTER_TZ`, of the
 //   first item's `at`. It stops at the first item sent on another. A message that an edit or a

@@ -1,4 +1,4 @@
-// `scooter setup`: a native install on Linux (8.4 and 8.5 of DESIGN.md; ARCHITECTURE.md 6).
+// `scooter setup`: a native install on Linux.
 //
 // Run as root, from the code's own folder, with the Node the services will run:
 //
@@ -12,7 +12,7 @@
 //    folders setup makes.
 // 2. **Users:** `scooter-wacli`, `scooter-runner` and `scooter-mail`, system users without a login
 //    shell or a home; `scooter-runner` in the `kvm` group.
-// 3. **Folders:** the data folder and its folders, with the owners and modes of 3.2, and the
+// 3. **Folders:** the data folder and its folders, with their owners and modes (`dataFolders`), and the
 //    config folder, copied from the code's `config/` if it isn't there.
 // 4. **Env files:** `bridge.env` and `runner.env`, from the examples, with `DATA_DIR` and
 //    `CONFIG_DIR` filled in, if they aren't there. Never written over.
@@ -22,7 +22,7 @@
 //    where systemd isn't running.
 //
 // As root, in folders other users own, setup makes only what is missing, and sets owners and
-// modes through a descriptor that follows no link (`settleFolder`, D206); what is already there
+// modes through a descriptor that follows no link (`settleFolder`); what is already there
 // inside them is theirs, and left alone.
 
 import fs from 'node:fs'
@@ -51,7 +51,7 @@ export const KVM_GROUP = 'kvm'
 // The units of `deploy/systemd/`, which run `<binDir>/scooter`.
 export const UNITS = ['scooter-bridge.service', 'scooter-runner.service']
 
-// The oldest Node Scooter runs on (8.5; `package.json`).
+// The oldest Node Scooter runs on, as `package.json` says.
 export const NODE_MIN = [22, 19]
 
 // The code's own folder: the one that holds `src/`.
@@ -191,7 +191,7 @@ export function envFileProblems(file, { dataDir, configDir }) {
 // ---------------------------------------------------------------------------------------------
 // The decisions
 
-// The folders of 3.2 in the data folder, each `{ path, owner, mode }`, in the order they are made,
+// Scooter's folders in the data folder, each `{ path, owner, mode }`, in the order they are made,
 // for the users' `{ uid, gid }`, `ids.wacli`, `ids.runner` and `ids.mail`, and root's, `ids.root`,
 // which tests give as their own. `inside` marks a folder in a folder another user owns: setup makes
 // it if it is missing, and leaves it alone otherwise. `doctor` checks the same folders.
@@ -511,8 +511,9 @@ export async function setup({ locations = NATIVE, codeDir = CODE_DIR, node = pro
   return { done, next }
 }
 
-// `scooter setup [--no-services]`: sets Scooter up natively. Exits with 2 when a check fails
-// or it was called wrongly, and with 1 when a step fails.
+// `scooter setup [--no-services]`: sets Scooter up natively. Exits with 2 when a check fails,
+// when a step refuses what it finds, or when it was called wrongly, and with 1 when a step fails
+// otherwise.
 export async function runSetup({ args = [], stdout = process.stdout, stderr = process.stderr }) {
   const services = !args.includes('--no-services')
   const unknown = args.filter(arg => arg !== '--no-services')

@@ -1,7 +1,7 @@
-// The WhatsApp channel (5.1 and 5.2 of DESIGN.md; ARCHITECTURE.md 2.2).
+// The WhatsApp channel.
 //
 // This is the only module that runs wacli. It:
-// - runs every wacli call as `scooter-wacli`, with the environment of 5.1 and nothing else;
+// - runs every wacli call as `scooter-wacli`, with the environment of `wacliEnv` and nothing else;
 // - checks that wacli is paired, and keeps `wacli sync --follow` running while it is;
 // - serves the webhook that sync posts each message to, on loopback, signed with a secret that is
 //   new on every start;
@@ -15,7 +15,7 @@
 // wacli is third-party code that talks to the outside world, so everything it says is input to
 // check. Its formats are read in two functions only, `fromWebhook` and `fromListRow`. How it
 // reports edits, deletions and `@lid` senders is known from its source, not yet from a paired
-// number (gate G4), and a correction should touch nothing else.
+// number, and a correction should touch nothing else.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -70,7 +70,7 @@ export function verifySignature(secret, body, header) {
 // ---------------------------------------------------------------------------------------------
 // wacli's two formats
 //
-// Both become the normalized message of 5.2 step 3:
+// Both become the normalized message:
 //   { chat, id, sender, at, fromMe, text, media, replyToId, replyToPreview, reactionToId,
 //     reactionEmoji, edited, revoked, forwarded }
 // where `media` is null or `{ type, caption, filename, mime, size }`, `at` is a UTC time to the
@@ -96,11 +96,11 @@ const textOf = (text, media) => (media ? media.caption : stringOf(text))
 // ID of the message it changes and the new text, and a deletion with `Revoked: true` and the ID of
 // the message deleted. Returns null for a payload that isn't a message with an ID.
 //
-// Not yet seen on a paired number (gate G4): the same source takes `Chat` and `FromMe` of an edit
+// Not yet seen on a paired number: the same source takes `Chat` and `FromMe` of an edit
 // or a deletion from the key the sender's phone wrote, from the sender's side. So the owner's own
 // deletion may well arrive with `FromMe: true` and the bot's JID as `Chat`, and be dropped as the
-// bot's. If G4 finds it so, the correction is here: for an edit or a deletion from the owner, take
-// the chat and `fromMe` from the sender (docs/DECISIONS.md, 3.3, point 1).
+// bot's. If a paired number shows it so, the correction is here: for an edit or a deletion from the owner, take
+// the chat and `fromMe` from the sender.
 export function fromWebhook(payload) {
   if (!isObject(payload)) return null
   const id = idOf(payload.ID)
@@ -255,8 +255,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   let link = 'stopped'
   let running = null
   // Called once the first check of the pairing since the channel started has its answer, or has
-  // failed. Catch-up waits for it: an unpaired wacli has nothing to list, and only fails (the review
-  // of milestone 12, smaller point 7; D227).
+  // failed. Catch-up waits for it: an unpaired wacli has nothing to list, and only fails.
   let pairingChecked = () => {}
 
   // Runs wacli with `--json` and returns the `data` part of its answer. Rejects when it
@@ -457,7 +456,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
   // stored: a stop or a crash between its rows, a webhook that never came, or a message stored
   // out of turn would otherwise move the start past a row that was never stored, for good. So it
   // moves on to a row's time once the row, and every row listed before it, has been handled:
-  // stored, skipped as a duplicate, or dropped as 5.2 drops it. It doesn't move past a row intake
+  // stored, skipped as a duplicate, or dropped by those steps. It doesn't move past a row intake
   // must be handed again (`again`), such as one whose download a stop cut short, nor by the bot's
   // own rows, which wacli stores with the time they were sent: after downtime, a reply can be sent
   // before wacli has received the owner's messages from while it was down, which have older times.
@@ -601,7 +600,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       const secret = crypto.randomBytes(32).toString('hex')
       const server = await listen(secret, onRecord)
       const url = `http://127.0.0.1:${server.address().port}${WEBHOOK_PATH}`
-      // wacli takes the secret only on its command line (0.6, wacli 1).
+      // wacli takes the secret only on its command line.
       const args = ['sync', '--follow', '--webhook', url, '--webhook-secret', secret, '--webhook-allow-private']
       const checked = new Promise(resolve => (pairingChecked = resolve))
       const supervisor = proc.supervise(WACLI, args, {

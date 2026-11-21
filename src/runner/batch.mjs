@@ -19,8 +19,8 @@
 // the whole of each is; and, last, the prompt is cut at the limit.
 //
 // A batch is drawn from a **lane**: `{ cursor, retry, failed }`, a cursor, the items waiting to be
-// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own
-// (6.3); a backfill from its own, with `skipped` as `failed`; and a rebuild from a state it
+// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own;
+// a backfill from its own, with `skipped` as `failed`; and a rebuild from a state it
 // keeps in memory. `upTo` is the last line a lane's work reaches: the newest line for live
 // runs, and the `seq` a replay stops at (`replay.mjs`).
 
@@ -58,8 +58,7 @@ export function selectCandidates({ agent, lane, index, now, upTo = index.lastSeq
 //
 // `items` are in `seq` order, with those brought in by an edit or deletion (`origin` `retry` or
 // `failed`). `context` is in `seq` order. `covered` is where the lane's cursor goes once the run is
-// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`
-// (6.7).
+// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`.
 export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, candidates, fresh) {
   const items = new Map(candidates.map(candidate => [candidate.seq, candidate]))
   for (const candidate of candidates) {

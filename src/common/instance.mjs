@@ -1,7 +1,7 @@
 // One service per data folder.
 //
-// Two bridges on one datastore would each give out the same `seq` (D29 and D48 of
-// `docs/DECISIONS.md`). Two runners would run the same batch twice, write `state.json` against
+// Two bridges on one datastore would each give out the same `seq`.
+// Two runners would run the same batch twice, write `state.json` against
 // each other, and each remove the other's `run.lock` when it starts. So each service listens
 // on a Unix socket in its own folder while it runs.
 

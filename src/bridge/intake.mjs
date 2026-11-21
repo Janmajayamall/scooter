@@ -16,8 +16,8 @@
 // - Each attachment is downloaded, with `MEDIA_DOWNLOAD_RETRIES` more tries if that fails, and
 //   handed to the store, which copies it into the day folder. An attachment that can't be stored
 //   leaves a `media` object on the line saying why: too large, not a file, a failed download, or a
-//   copy that failed. A channel that keeps a message until it is stored, as email's spool does
-//   (5.6), is the exception: when a copy fails on the bridge's side, such as on a full disk,
+//   copy that failed. A channel that keeps a message until it is stored, as email's spool does,
+//   is the exception: when a copy fails on the bridge's side, such as on a full disk,
 //   nothing of the message is stored, and the channel hands it over again later, files and all.
 // - Duplicates, which the webhook and catch-up both deliver, are the store's to skip. A
 //   message already stored is recognized before its attachments are downloaded again.

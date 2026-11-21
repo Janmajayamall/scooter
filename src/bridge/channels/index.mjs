@@ -1,5 +1,4 @@
-// The channels: what the bridge's core asks of each one, and the record each one hands it (5 of
-// DESIGN.md; ARCHITECTURE.md 2.1).
+// The channels: what the bridge's core asks of each one, and the record each one hands it.
 //
 // A channel is one module in this folder, and only that module deals with its service: only
 // `whatsapp.mjs` runs wacli, and only `email.mjs` runs the email reader. The core (the store,
@@ -39,7 +38,7 @@
 //                     resolves with the reaction's channel ID, or null, as `sendText` does
 //
 // A record is the message as the channel received it, in a form that is the same for every
-// channel: the normalized message of 5.2 step 3, without what only the channel needs (for
+// channel: the normalized message, without what only the channel needs (for
 // WhatsApp, the chat, the sender and whether the bot sent it), plus `subject` for email.
 //
 //   source           the channel's name

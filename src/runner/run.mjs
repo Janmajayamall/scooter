@@ -1,10 +1,10 @@
-// One run (6.6 to 6.9 of DESIGN.md): from `run.lock` to the state update.
+// One run: from `run.lock` to the state update.
 //
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
 //    If a backup holds it, let go of `run.lock` and wait.
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, and a copy of the
 //    current session.
-// 3. **Run** pi in the sandbox, with the command, mounts, environment and network policy of 6.6.
+// 3. **Run** pi in the sandbox, with its command, mounts, environment and network policy.
 // 4. **After a successful run,** in this order: check the files pi left, staging them as the
 //    check's last step; commit; copy its session back; write the outbox entries; update the state.
 //    A crash part-way through only means the batch runs again.
@@ -19,7 +19,7 @@
 // are cleaned up after it, so nothing pi left takes room the clean-up or the state needs: pi may
 // have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
 //
-// A replayed batch, of a rebuild or a backfill (6.10, 6.11; `replay.mjs`), is a run like the
+// A replayed batch, of a rebuild or a backfill (`replay.mjs`), is a run like the
 // others, with its own session, skills and commit message, and three differences: it sends
 // nothing, neither texts, reactions nor notices; a backfill's batch fails if it changed anything
 // but what the backfill may change; and each settles its own lane of the state.
@@ -233,7 +233,7 @@ export async function performRun(context) {
   }
 }
 
-// 6.8, steps 1 and 2, after pi exited with 0: anything git wouldn't record fails the run, then what
+// After pi exited with 0: anything git wouldn't record fails the run, then what
 // was staged is committed. Staging is the check's last step, because only git knows every name it
 // refuses. A backfill's batch also fails when it changed a file it may not change, which only the
 // staged changes say. Returns `{ committed }`, whether there was a commit; `{ unexpected }`,
@@ -255,7 +255,7 @@ async function commitFiles({ agent, git, log, job }) {
   }
 }
 
-// 6.8, after the commit: the session, the outbox, the state; then, outside what the run depends
+// After the commit: the session, the outbox, the state; then, outside what the run depends
 // on, the repository is packed if it needs it.
 async function afterSuccess(context, { result, sessionId: id, seqs, timing, committed }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
@@ -311,7 +311,7 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
   return { state: next, outcome: { ok: true, cause: null } }
 }
 
-// 6.9: throw the run away, find why it failed, and count it. `files` is what `commitFiles` found,
+// After a failed run: throw it away, find why it failed, and count it. `files` is what `commitFiles` found,
 // or null when pi itself failed. `run/session/` is emptied first: it frees room, which the clean-up
 // needs to make the folders again if pi filled the disk.
 async function afterFailure(context, { result, files, seqs, timing }) {

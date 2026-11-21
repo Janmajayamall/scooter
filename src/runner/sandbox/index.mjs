@@ -1,4 +1,4 @@
-// The sandbox interface (6.6 of DESIGN.md; ARCHITECTURE.md 2.7): how the runner runs pi without
+// The sandbox interface: how the runner runs pi without
 // knowing what runs it. The real sandbox is a Gondolin VM (`gondolin.mjs`, milestone 7); the tests
 // use a fake that runs a stub of pi as a local process (`test/support/fake-sandbox.mjs`).
 //

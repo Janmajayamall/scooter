@@ -1,5 +1,4 @@
-// Time: UTC for everything Scooter stores or compares, and the owner's time zone at the edges
-// (section 2 of DESIGN.md).
+// Time: UTC for everything Scooter stores or compares, and the owner's time zone at the edges.
 //
 // Instants are milliseconds since the epoch, as `Date.now()` gives them. Nothing here reads the
 // process's own time zone: UTC parts come from the `getUTC…` methods, and a local time is always

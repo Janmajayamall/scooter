@@ -393,7 +393,7 @@ async function fetchApkIndexes({ repositories, arch, fetch, clock }) {
 // ---------------------------------------------------------------------------------------------
 // Building
 
-// How to build, as row 8 has it: natively as root, or else in a container when Docker or Podman is
+// How to build: natively as root, or else in a container when Docker or Podman is
 // there. Returns `{ native: true }` or `{ native: false, runtime }`. Throws an `ImageError` that
 // says what is needed: in Docker, the container `docker compose run --rm build-image` makes, as root
 // with the privileges a chroot needs.
@@ -474,9 +474,8 @@ function openStaging(paths, isRoot) {
 }
 
 // Runs `step`, which writes in `dir`, and returns what it returns. A user who may not write there
-// gets an error that says who builds the image, with exit code 2: since D151 that is every user but
-// root on a native install, `scooter-runner` among them (the second review of milestone 7, smaller
-// point 3). Any other error is passed on.
+// gets an error that says who builds the image, with exit code 2: that is every user but
+// root on a native install, `scooter-runner` among them. Any other error is passed on.
 function canWrite(dir, step) {
   try {
     return step()

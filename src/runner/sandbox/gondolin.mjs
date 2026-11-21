@@ -1,4 +1,4 @@
-// The real sandbox: one Gondolin micro-VM for each run (6.6 of DESIGN.md; ARCHITECTURE.md 2.7).
+// The real sandbox: one Gondolin micro-VM for each run.
 //
 // `openGondolinSandbox` is the runner's `openSandbox`. At the runner's start, after it has freed
 // what pi left, it:
@@ -6,21 +6,21 @@
 //   its certificate authority, its list of running VMs, the VMs' disk overlays and their sockets,
 //   and empties the temporary folder, which a runner that was killed leaves full;
 // - checks the VM image: there, built for the pi version the build file pins, for this machine,
-//   knowing the owner's time zone (6.12; `image.mjs`);
+//   knowing the owner's time zone (`image.mjs`);
 // - picks the accelerator (`accel.mjs`), and checks that QEMU is installed.
 //
 // `run(spec)` then boots a fresh VM from `runner/image/` for each run, with the spec's mounts at
 // the host's own paths, Gondolin's own mount point moved off `/data`, `sessions/` hidden
 // with `ShadowProvider`; runs the program from its argument list through `env -i`, so it gets the
-// spec's environment and nothing else (0.5, VM 2); and closes the VM on every path: when the
+// spec's environment and nothing else; and closes the VM on every path: when the
 // program exits, at the timeout, when the runner stops, and when the run writes more than it may.
 // Closing is what stops the program: aborting the command in Gondolin 0.14.0 doesn't.
 //
-// The network is the policy's (6.13; `policy.mjs`): it checks and logs every request the VM makes,
+// The network is the policy's (`policy.mjs`): it checks and logs every request the VM makes,
 // and the key, which the VM sees only as a placeholder, is swapped in on requests to OpenRouter.
 // Tests give one with the scripted fake model behind the policy, in OpenRouter's place.
 //
-// Only `src/runner/sandbox/` loads Gondolin (ARCHITECTURE.md 4.2), and this module loads it only
+// Only `src/runner/sandbox/` loads Gondolin, and this module loads it only
 // once the runner's folders are set, because Gondolin fixes the folder of its list of running VMs
 // when it loads.
 
@@ -40,7 +40,7 @@ import { GUEST_PATH, SandboxSetupError, checkRunSpec, createOutput } from './ind
 import { policyNetwork } from './policy.mjs'
 
 // Where Gondolin's own file system goes in the VM, instead of `/data`, which is where Scooter's
-// folders are in Docker (row 14; 0.5, VM 1). `/run` is a temporary file system of the VM's boot.
+// folders are in Docker. `/run` is a temporary file system of the VM's boot.
 export const FUSE_MOUNT = '/run/gondolin-vfs'
 
 // QEMU's machine for pi's VMs, with KVM and under emulation alike. Gondolin 0.14.0 gives
@@ -350,11 +350,10 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
 // and reaches no host. Returns `{ accel, ms }`, how its VMs run and how long the boot took. Throws
 // a `SandboxSetupError` when the sandbox can't open, and an error when the VM doesn't boot within
 // `VM_START_TIMEOUT`, or `signal` stops it first, which closes the VM: `doctor` stops it on a
-// signal, so a `doctor` killed during the boot leaves no QEMU (the review of milestone 13, smaller
-// point 2).
+// signal, so a `doctor` killed during the boot leaves no QEMU.
 //
 // Its folder is in the system's temporary folder, or in `/tmp` when a `TMPDIR` of the owner's is
-// too long a path for Gondolin's sockets (the same review, smaller point 3).
+// too long a path for Gondolin's sockets.
 export async function bootCheck({ paths, settings, clock = systemClock, signal = null }) {
   const base = socketsFit(path.join(os.tmpdir(), 'scooter-doctor-XXXXXX', 'tmp')) ? os.tmpdir() : '/tmp'
   const scratch = fs.mkdtempSync(path.join(base, 'scooter-doctor-'))

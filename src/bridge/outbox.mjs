@@ -1,4 +1,4 @@
-// Delivery: the bridge's side of the outbox (5.3 of DESIGN.md; ARCHITECTURE.md 5.3).
+// Delivery: the bridge's side of the outbox.
 //
 // The runner, and the bridge itself, ask for messages to be sent by writing entries to
 // `exchange/outbox/` (`src/common/outbox.mjs`). This module sends them:
@@ -426,7 +426,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
         result = await store.append(line)
         // The store holds a line with that ID already: the channel gave the ID of something else,
         // such as the message reacted to. The message went out all the same, and the record keeps
-        // it, without the ID (4.2 makes it optional).
+        // it, without the ID, which an `out` line may leave out.
         if (!result.stored) {
           log.warn('outbox.id_taken', { entry: id, part, channel: route.channel.name, reason: result.reason })
           const { sourceId: _, ...withoutId } = line
@@ -475,8 +475,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
       if (error.code !== 'ENOENT') throw error
       there = false
     }
-    // Said once it is taken from again, not while it isn't there (the review of milestone 13,
-    // smaller point 5).
+    // Said once it is taken from again, not while it isn't there.
     if (there && refusedRunners !== null) {
       log.info('outbox.runner_outbox_taken')
       refusedRunners = null

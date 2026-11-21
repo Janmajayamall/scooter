@@ -118,8 +118,7 @@ const values = {
   STATUS_FILE_MAX_BYTES: 4 * MB,
   // The largest model request the network policy reads.
   MODEL_REQUEST_MAX_BYTES: 50 * MB,
-  // Restart waits for wacli and the email reader: the first wait, then doubling up to `max`
-  // (5.1, 5.6).
+  // Restart waits for wacli and the email reader: the first wait, then doubling up to `max`.
   RESTART_BACKOFF: { first: 5 * SECOND, factor: 2, max: 5 * MINUTE },
   // From SIGTERM to SIGKILL when stopping a program.
   STOP_GRACE: 15 * SECOND,
@@ -161,14 +160,14 @@ const values = {
   GIT_CALL_TIMEOUT: 1 * MINUTE,
   // The most `views/` and `memory/` may hold together after a run, in bytes. pi can make a file of
   // any size in an instant, all holes, and git reads every byte of a file to add it, so a run that
-  // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`
-  // (6.8). On the plan's Linux machine git adds this much in about 2 seconds, and the views of a
+  // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`.
+  // On the plan's Linux machine git adds this much in about 2 seconds, and the views of a
   // year of daily use take about 1 MB.
   AGENT_FILES_MAX_BYTES: 100 * MB,
   // The most files and folders `views/` and `memory/` may hold together after a run. pi can make
   // hundreds of thousands in a run, and some of git's work grows faster than their number, such as
-  // taking them out of the index again, so a run that leaves more fails before git reads anything
-  // (6.8). A year of daily use makes about 380, a day page and a month's folder at a time, and git
+  // taking them out of the index again, so a run that leaves more fails before git reads anything.
+  // A year of daily use makes about 380, a day page and a month's folder at a time, and git
   // adds this many small files in about a tenth of a second on the plan's Linux machine.
   AGENT_FILES_MAX_COUNT: 20000,
   // The largest session file copied back from a run. pi wrote it, and the whole session goes to
@@ -234,7 +233,8 @@ const values = {
   },
 }
 
-// No names can be added or removed, so a misspelled name fails instead of reading `undefined`.
+// No name can be added or removed: a write to a misspelled name throws, and `overrideLimits`
+// refuses one, but a read of one gives `undefined`.
 export const limits = Object.seal(values)
 
 // Changes some constants and returns a function that puts the old values back. For tests.

@@ -18,8 +18,7 @@
 // where that user is there.
 //
 // What it checks of the runner, the config, the image, the accelerator and the VM's boot is the
-// runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`
-// (ARCHITECTURE.md 4.2).
+// runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -36,8 +35,7 @@ export const ZDR_ENDPOINTS_URL = 'https://openrouter.ai/api/v1/endpoints/zdr'
 const octal = mode => `0${(mode & 0o7777).toString(8)}`
 
 // How to make KVM usable, for an error code from `kvmProblem`, natively or in Docker, where the
-// runner runs as scooter-runner in every case, and compose.yaml's two KVM files give it the device
-// (8.3; D217, D222).
+// runner runs as scooter-runner in every case, and compose.yaml's two KVM files give it the device.
 export function kvmFix(problem, { docker = false, runnerUser = USERS.runner } = {}) {
   if (problem === 'ENOENT') {
     return docker
@@ -254,8 +252,8 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
 
   checks.push(envFileCheck(envDir))
 
-  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too (the review of
-  // milestone 14, smaller point 6): `runDoctor`'s handlers have taken the signals' own ending away.
+  // A stop while it waits for OpenRouter, up to `DOCTOR_TIMEOUT`, ends the wait too:
+  // `runDoctor`'s handlers have taken the signals' own ending away.
   const zdr = await fetchZdrEndpoints({ fetch, stop: signal })
   if (signal?.aborted) return checks
   checks.push(...openRouterChecks(zdr, { model, zdrOn: settings.zdr }))
@@ -297,8 +295,7 @@ export async function runDoctor({ settings, env = process.env, stdout = process.
   }
   const envDir = env[ENV_DIR_VARIABLE] || DEFAULT_ENV_DIR
   // Stopped, by a signal of the terminal's or a `kill`, it closes the VM its boot check started
-  // before it ends: nothing else stops a VM of Gondolin's whose starter was killed (6.6; the review
-  // of milestone 13, smaller point 2).
+  // before it ends: nothing else stops a VM of Gondolin's whose starter was killed.
   const stopping = new AbortController()
   let stoppedBy = null
   const handlers = ['SIGTERM', 'SIGINT', 'SIGHUP'].map(name => {

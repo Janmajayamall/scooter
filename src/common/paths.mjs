@@ -1,5 +1,4 @@
-// Every path under the data folder and the config folder, in one place (3.2, 4.1, 6.2 of
-// DESIGN.md).
+// Every path under the data folder and the config folder, in one place.
 //
 // `DATA_DIR` is `/data` in Docker and `/var/lib/scooter` natively; `CONFIG_DIR` is `/config` or
 // `/etc/scooter/config`. Code takes the paths from here and doesn't build them by hand. What a

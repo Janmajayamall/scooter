@@ -1,4 +1,4 @@
-// The bridge's service, `scooter bridge` (section 5 of DESIGN.md; ARCHITECTURE.md 4.4).
+// The bridge's service, `scooter bridge`.
 //
 // It opens the datastore and the bridge's state, starts the channels, and connects each to intake,
 // which writes through the store. Then it runs until it is told to stop.
@@ -62,14 +62,14 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   // Root's, with the runner's group, so the runner can read it and only root can write it.
   const storeOwner = runnerUser ? { uid: 0, gid: runnerUser.gid } : null
 
-  // The data folder holds only the folders of 3.2, each with its owner and mode, and every service
+  // The data folder holds only Scooter's own folders, each with its owner and mode, and every service
   // user passes through it to reach its own. `setup` makes it natively; this is for
   // development.
   ensureDir(paths.dataDir, { mode: 0o755 })
   ensureDir(paths.bridge, { mode: 0o700 })
   // The exchange is the runner's: the bridge takes the runner's entries from the outbox
-  // there, and writes its `backup.lock` into `locks/`; its own replies go to `bridge/outbox/`
-  // (D205). Made here, if they are missing, with the runner's owner, so that a bridge that starts
+  // there, and writes its `backup.lock` into `locks/`; its own replies go to `bridge/outbox/`.
+  // Made here, if they are missing, with the runner's owner, so that a bridge that starts
   // first doesn't leave the runner a folder it can't write.
   for (const folder of [paths.exchange, paths.outbox, paths.locks]) ensureDir(folder, { mode: 0o700, owner: runnerUser })
   const instance = await holdInstance(paths.bridgeSocket, 'bridge')

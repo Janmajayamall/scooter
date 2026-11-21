@@ -66,8 +66,8 @@ export function pendingCommands(state, index) {
 }
 
 // The scheduled task that is due at `now`, as `{ at, date, task }`, or null. `date` is the owner's
-// date of the occurrence that came due: the runner records it in `scheduled` once the task has run
-// (6.3). An `at` the state has no date for is never due; `startupState` gives every one a date.
+// date of the occurrence that came due: the runner records it in `scheduled` once the task has run.
+// An `at` the state has no date for is never due; `startupState` gives every one a date.
 export function dueScheduled(agent, state, { now, timeZone }) {
   for (const { at, schedule, task } of agent.run.scheduled) {
     const done = state.scheduled[at]

@@ -132,7 +132,7 @@ export function createGit({ proc, dir, discardDir, log, clock = systemClock }) {
 
     // Stages everything in `folders` (`git add -A`), and returns null, or the first path git
     // wouldn't add: a name it refuses, such as `git~1`. Such a path is something git wouldn't
-    // record, so this is the last step of the check in 6.8, after `unexpectedFile`, which must
+    // record, so this is the last step of the check of the files pi left, after `unexpectedFile`, which must
     // have passed. git goes on past it (`--ignore-errors`) and leaves it unstaged, which is how it
     // is found. A failure that leaves nothing unstaged isn't a name's, and throws.
     //

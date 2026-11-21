@@ -13,7 +13,7 @@ import { SettingsError, loadSettings } from './common/settings.mjs'
 // - `side`: whose settings it loads. `bridge` reads `bridge.env`, and `runner` reads `runner.env`.
 //   `host` is for the two commands root runs on the machine itself, which load neither here.
 // - `usage` and `summary`: for the help text.
-// - `where`: where it runs, as 8.4 puts it. Natively a command runs as its service's user.
+// - `where`: where it runs, which the help text shows beside the command. Natively a command runs as its service's user.
 // - `load`: returns the function that carries the command out. It imports the command's code
 //   only when the command is run. A command without one isn't built yet.
 //
@@ -56,7 +56,7 @@ export const COMMANDS = {
     where: 'runner',
     summary: 'Check what the runner needs, and change nothing',
     // Its checks of the config, the image, the accelerator and a VM's boot are the runner's own
-    // code, which `src/ops` doesn't import (ARCHITECTURE.md 4.2).
+    // code, which `src/ops` doesn't import.
     load: async () => {
       const [{ runDoctor }, config, image, accel, gondolin] = await Promise.all([
         import('./ops/doctor.mjs'),

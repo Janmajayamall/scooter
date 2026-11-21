@@ -4,16 +4,16 @@
 //
 // - `firstStart`: when the bridge first started. WhatsApp's catch-up never reaches back before it,
 //   so the chat's earlier history is never imported.
-// - `ownerChat`: the chat of the owner's newest message, and that message's time. Replies go to it
-//   (5.2 step 5). Null before the owner has written.
+// - `ownerChat`: the chat of the owner's newest message, and that message's time. Replies go to it.
+//   Null before the owner has written.
 // - `lastBackup`: the last backup that ran to its end: `{ at, ok, snapshot, reason }`, when it
 //   started, whether it worked, the snapshot it saved or null, and, when it failed, why, in words
 //   for the owner, restic's among them, which no log holds. Null before the first.
 // - `commandSeq`: the `seq` of the newest command line the bridge has handled, as the runner
 //   keeps its own in `state.json`. A state written before the bridge handled commands has
 //   none, and gets the newest line's, so commands sent before that are never answered.
-// - `catchUp`: where WhatsApp's catch-up has got to in each of the owner's chats (5.2 step 7;
-//   D179): `{ "<chat JID>": "<UTC time>" }`, the time of the newest of the owner's rows it has
+// - `catchUp`: where WhatsApp's catch-up has got to in each of the owner's chats:
+//   `{ "<chat JID>": "<UTC time>" }`, the time of the newest of the owner's rows it has
 //   listed there with every row before it handled. The next catch-up of that chat starts
 //   `CATCHUP_OVERLAP` before it. A state an older bridge wrote has none until the channel first
 //   saves one.

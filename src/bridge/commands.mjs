@@ -16,7 +16,7 @@
 // over (`backup.mjs`), which may be minutes later, after a run has finished. Commands are answered
 // one at a time, so waiting for it here would hold back a `/status` sent after it. The command
 // counts as handled once the backup has started: a bridge that crashes during the backup doesn't
-// answer it (docs/DECISIONS.md, milestone 10).
+// answer it.
 
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
@@ -36,7 +36,7 @@ export const HELP_TEXT = [
 // Returns the commands' handler. Options:
 // - `store`: the open store, whose index holds the command lines.
 // - `state`: the bridge's state (`state.mjs`), which keeps `commandSeq`.
-// - `paths`, `ids`: for the bridge's own outbox (`writeOutboxEntry`, D205); `ids` is the bridge's
+// - `paths`, `ids`: for the bridge's own outbox (`writeOutboxEntry`); `ids` is the bridge's
 //   one generator.
 // - `status()`: the reply to `/status` (`status.mjs`).
 // - `backup(seq)`: what `/backup`, the command line `seq`, does (`createBackups().ask`): the reply

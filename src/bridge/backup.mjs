@@ -1,21 +1,21 @@
 // Backups: nightly, encrypted, with restic, and the commands that look after
 // the repository and restore from it.
 //
-// This is the only module that runs restic (ARCHITECTURE.md 4.2). It runs it directly, with the
+// This is the only module that runs restic. It runs it directly, with the
 // arguments as a list and the settings in its environment, never through a shell, and never with
 // the password on its command line. restic's environment holds the repository, the password, the
 // bucket's credentials, a temporary folder and `TZ`, and nothing else of the bridge's.
 //
-// The operations, which the commands of 8.4 and the bridge call:
+// The operations, which the CLI commands and the bridge call:
 // - `init` (`scooter backup-init`): makes the repository, unless `restic cat config` finds it there.
-// - `run`: the nightly backup, `restic backup` of the folders of 5.5, then `restic forget --prune`
+// - `run`: the nightly backup, `restic backup` of the folders `backupSources` gives, then `restic forget --prune`
 //   with the retention of `RESTIC_KEEP_*`, then `restic check` on Sundays or with `FORCE_CHECK=1`.
 // - `snapshots`, `check`: restic's own, for the owner at a terminal.
 // - `restore [snapshot] [--force]`: a snapshot back into `RESTORE_TARGET`, `/` by default, which
 //   puts every file back at the path it was backed up from.
 //
 // The bridge's side (`createBackups`): the schedule, `/backup` and `SIGUSR1`; the consistency steps
-// of 5.5, which keep a backup from seeing half a run or half a message; the result in the bridge's
+// that keep a backup from seeing half a run or half a message; the result in the bridge's
 // state; and the reply, or the notice when a backup the owner didn't ask for by message fails.
 
 import fs from 'node:fs'
@@ -75,7 +75,7 @@ const cut = text => {
 
 // A step of restic that failed. `reason` is for the owner: restic's own words when it gave any, in
 // the reply or the notice and the bridge's state, and never in the log, which has the step and the
-// exit code (D82 does the same with OpenRouter's). `snapshot` is the one saved before it failed.
+// exit code, as the runner does with OpenRouter's. `snapshot` is the one saved before it failed.
 export class ResticError extends Error {
   constructor(step, result, { snapshot = null, reason = null } = {}) {
     super(`restic ${step} failed`)
@@ -137,7 +137,7 @@ export async function initRepository({ backup, paths, proc }) {
   return { created: true, said: made.stdout }
 }
 
-// `run`, restic's part of the nightly backup: `restic backup` of the folders of 5.5 that exist,
+// `run`, restic's part of the nightly backup: `restic backup` of the folders of `backupSources` that exist,
 // `restic forget --prune` with the retention, and `restic check` on `RESTIC_CHECK_WEEKDAY` in the
 // owner's time zone, or with `FORCE_CHECK=1`. Each step may take `RESTIC_TIMEOUT`, and `signal`
 // stops it. Resolves with `{ snapshot, checked }`, the ID restic printed in its line `snapshot <id>
@@ -379,10 +379,10 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     return { deadline: parseIsoSeconds(lock?.deadline) }
   }
 
-  // Step 2 of 5.5: waits for `run.lock` to go. Until `BACKUP_LOCK_EXTRA` past the time it holds,
+  // Step 2 of a backup: waits for `run.lock` to go. Until `BACKUP_LOCK_EXTRA` past the time it holds,
   // its run may still be going. Past that, a runner that still holds `runner/runner.sock` is still
-  // at work, packing its repository or freeing what pi wrote, neither of which has a time limit
-  // (D96, D88), and the backup waits on; when none does, the runner that took the lock is gone, and
+  // at work, packing its repository or freeing what pi wrote, neither of which has a time limit,
+  // and the backup waits on; when none does, the runner that took the lock is gone, and
   // the backup goes ahead. A lock with no time it can read is past its time. Resolves with false
   // when the bridge stops first.
   async function waitForRun(job) {
@@ -412,7 +412,7 @@ export function createBackups({ settings, paths, proc, log, clock = systemClock,
     return true
   }
 
-  // One backup, in the steps of 5.5. Resolves with `{ ok, snapshot, checked }`, `{ ok: false,
+  // One backup, in five steps. Resolves with `{ ok, snapshot, checked }`, `{ ok: false,
   // reason, snapshot }`, or `{ stopped: true }` when the bridge stopped first. Never rejects.
   async function perform(job) {
     let locked = false
