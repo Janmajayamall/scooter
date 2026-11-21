@@ -460,7 +460,7 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19 
   ```
   It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 775 tests, 709 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
 
-**The live checks** in `test/live/` are run by hand, with the network. `openrouter.mjs` runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
+**The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 
 ## Check on the first real run
 

@@ -10,7 +10,7 @@ Scooter keeps a log of its owner's life from what they send it: receipts, run sc
 2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), whole: what Scooter does, the map of its components with their documents and files, the boundaries, the contracts, the glossary, and what to look at for each kind of change.
 3. The document of the component you change, in `docs/architecture/`, which the map names, and that of any component whose contract you touch.
 
-Each fact is stated in one place, and a document refers to another by a link to the file and the heading. [`README.md`](README.md) is the operator's guide: installing, running, the known limits, and what was never run for real. `docs/plans/active/` holds the plans of work in progress; `docs/plans/completed/` is the record of earlier work, left as it was.
+[`README.md`](README.md) is the operator's guide: installing, running, the known limits, and what was never run for real. `docs/plans/active/` holds the plans of work in progress; `docs/plans/completed/` is the record of earlier work, left as it was.
 
 ## Running it, and checking a change
 
@@ -22,7 +22,7 @@ The rules of [The code's layers](docs/ARCHITECTURE.md#the-codes-layers), [Runnin
 
 - **Keep macOS cheap to add** ([Deferred and out of scope](docs/ARCHITECTURE.md#deferred-and-out-of-scope)). Don't depend on what only Linux has: no `/proc`, no `fs.watch` (poll instead), and no GNU-only flags of a program, such as `sed -i`, `date -d`, `stat -c` or `readlink -f`. Never make two files whose names differ only in case, which macOS's file systems usually don't tell apart. The suite needn't pass on a Mac until macOS is built.
 - **An invisible character,** such as the byte-order mark, is written in code as its escape, `\uFEFF`, never as itself.
-- **Tests** use `node:test`, in files named `*.test.mjs`, which are all `npm test` runs. So the helpers in `test/support/`, the capture script in `test/tools/` and the live checks in `test/live/`, which need the network, never run with the suite.
+- **Tests** use `node:test`, in files named `*.test.mjs`, which are all `npm test` runs. So the helpers in `test/support/`, the capture script in `test/tools/` and the live checks in `test/live/`, which are run by hand, never run with the suite.
   - A test uses no real credentials and no network. It works in a folder of its own, with `TMPDIR` inside it, which restic needs (`makeTestDir`, in `test/support/tmp.mjs`).
   - Time comes from the clock that code is given, which a test fakes ([Time](docs/architecture/shared-code.md#time)), and a test changes a constant only through `overrideLimits` ([Constants](docs/architecture/configuration.md#constants)).
   - The services run in the tests in-process, with the fake clock and paths of their own, or as real processes, against folders that stand for the data folder and the config folder.

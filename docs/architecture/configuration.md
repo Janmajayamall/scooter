@@ -65,7 +65,7 @@ Each service reads its own env file, as [Secrets](../ARCHITECTURE.md#secrets) sa
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SCOOTER_TZ` | `Asia/Kolkata` | The owner's IANA time zone, written as the tz database writes it ([Time](shared-code.md#time)), and used only for what the owner sees or sets ([The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices)). Each service reads its own, so the owner keeps the two the same |
+| `SCOOTER_TZ` | `Asia/Kolkata` | The owner's IANA time zone, written as the tz database writes it ([Time](shared-code.md#time)), used where [The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices) say. Each service reads its own, so the owner keeps the two the same |
 | `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` | The data folder and the config folder, the roots of every path ([Paths](shared-code.md#paths)), each an absolute path. Docker uses the defaults, a native install sets its own in both files ([setup](install.md#setup)), and development and the tests give their own |
 
 The other settings are in the documents of the components that read them: [WhatsApp](whatsapp.md#settings), [email](email.md#settings), [delivery](delivery.md#settings), [backups](backups.md#settings), [the runner](runner.md#settings), [the network policy](network-policy.md#settings) and [the sandbox](sandbox.md#settings). Those of email and of backups say when each is on, and what it then needs.
