@@ -499,6 +499,11 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
     RESTIC_REPOSITORY: path.join(root, 'repository'),
     RESTIC_PASSWORD: 'correct horse',
     BACKUP_TIME: 'off',
+    // A backup checks the repository on Sundays in SCOOTER_TZ, and this bridge reads the real
+    // clock, which the test can't fake. With FORCE_CHECK=1 it checks after every backup, so restic
+    // is asked the same on every day, in any zone. The Sunday rule is backup.test.mjs's, with a
+    // fake clock.
+    FORCE_CHECK: '1',
   }
   const child = spawn(process.execPath, [CLI, 'bridge'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })))
@@ -532,7 +537,7 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   // A backup now: WhatsApp stops while restic runs, and starts again.
   child.kill('SIGUSR1')
   await waitFor(() => events().includes('backup.finished'), 'the backup')
-  assert.deepEqual(restic.commands(), ['backup', 'forget'])
+  assert.deepEqual(restic.commands(), ['backup', 'forget', 'check'])
   if (await portTakenBefore(() => stub.callsOf('sync').length === 2, 'sync to start again')) {
     return t.skip(`port ${limits.WEBHOOK_PORT} was taken while the backup had the webhook closed`)
   }
@@ -543,8 +548,10 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   assert.deepEqual(events().slice(-2), ['whatsapp.stopped', 'bridge.stopped'])
   // Every log line is JSON, and none holds what the owner wrote.
   assert.ok(!stderr.includes('coffee') && !stderr.includes('caught up'))
-  const day = fs.readdirSync(log, { recursive: true }).find(name => name.endsWith('log.jsonl'))
-  const texts = fs.readFileSync(path.join(log, day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).text)
+  // Each line is in the folder of the UTC day it was stored on: two folders, when a UTC midnight
+  // came between the two.
+  const days = fs.readdirSync(log, { recursive: true }).filter(name => name.endsWith('log.jsonl'))
+  const texts = days.flatMap(day => fs.readFileSync(path.join(log, day), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).text))
   assert.deepEqual(texts.sort(), ['caught up', 'coffee 150'])
   assert.equal(fs.existsSync(path.join(dataDir, 'bridge', 'bridge.sock')), false)
 })
