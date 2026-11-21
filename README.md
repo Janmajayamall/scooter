@@ -433,24 +433,34 @@ docker compose up -d
 
 ## Development
 
-The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19 and `npm ci`. Switching users and setting owners is then skipped, with one warning. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own.
+The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19 and `npm ci`. Switching users and setting owners is then skipped, with one warning. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
 
-```sh
-npm ci && npm test
-```
+**The suite** runs three ways. Every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-21, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
 
-- **The tests** use `node:test`, stubs for wacli, pi and restic, a fake sandbox, fake mailboxes and a fake clock: no credentials and no network. Each works in its own temporary folder.
-- **As root**, in a container, for the paths only root takes; the tests that create users run only with `SCOOTER_ROOT_TESTS=1`:
+- **Plain**, as an ordinary user:
   ```sh
-  docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
+  npm ci && npm test
   ```
-- **The sandbox tests** need QEMU and a built image, and skip themselves without them. Build one with Docker or Podman, then run the suite with KVM:
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 775 tests, 720 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+- **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-- **The live checks** in `test/live/` are run by hand, with the network. `openrouter.mjs` runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
-- **The layout:** `src/bridge/` and `src/runner/` never import each other; both use `src/common/`. `src/ops/` holds `setup` and `doctor`, `src/mail/` the email reader. Every tuning number is in `src/common/limits.mjs`. The plan the code was built by is in `docs/plans/`.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 777 tests, 759 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+
+  Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
+  ```sh
+  SCOOTER_TEST_IMAGE=~/scooter-test-image GONDOLIN_CPU=max,sgx=off sg kvm -c 'npm test'
+  ```
+  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, 18 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
+- **As root, in a container**, for what only root does: giving files away and running programs as other users, and, with `SCOOTER_ROOT_TESTS=1`, making users, as `setup`'s own test does. It needs Docker:
+  ```sh
+  docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
+  ```
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 775 tests, 709 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+
+**The live checks** in `test/live/` are run by hand, with the network. `openrouter.mjs` runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 
 ## Check on the first real run
 
