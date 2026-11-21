@@ -486,7 +486,11 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   if (!(await portIsFree(limits.WEBHOOK_PORT))) return t.skip(`port ${limits.WEBHOOK_PORT} is in use`)
   const root = makeTestDir(t)
   const stub = createWacliStub(t, root)
-  stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: '2099-01-01T00:00:00Z', Text: 'caught up' })] })
+  // The messages' times, to the second: an hour after now, and the second after. Catch-up lists a
+  // chat from the bridge's first start on, which this process takes from the real clock, so any
+  // fixed time would be passed one day, and catch-up would then list nothing.
+  const later = seconds => new Date((Math.floor(Date.now() / 1000) + 3600 + seconds) * 1000).toISOString().replace('.000Z', 'Z')
+  stub.fixtures({ paired: true, messages: [listRow({ MsgID: 'CU1', Timestamp: later(0), Text: 'caught up' })] })
   const restic = createResticStub(t, root)
   const dataDir = path.join(root, 'data')
   const env = {
@@ -530,7 +534,7 @@ test('bridge: `scooter bridge` runs as a process until SIGTERM, backs up on SIGU
   if (await portTakenBefore(() => events().includes('whatsapp.caught_up') && stub.callsOf('sync').length > 0, 'the bridge to start')) {
     return t.skip(`port ${limits.WEBHOOK_PORT} was taken`)
   }
-  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: '2099-01-01T00:00:01Z' })), 200)
+  assert.equal(await stub.postWebhook(webhookPayload({ ID: 'WH1', Text: 'coffee 150', Timestamp: later(1) })), 200)
   const log = path.join(dataDir, 'datastore')
   await waitFor(() => events().filter(event => event === 'intake.stored').length === 2, 'two lines')
 
