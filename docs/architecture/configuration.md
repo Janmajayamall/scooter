@@ -51,7 +51,7 @@ Each service reads its own env file, as [Secrets](../ARCHITECTURE.md#secrets) sa
 - **A variable in a file that isn't one of its service's** is a fault that names it, and says which file it belongs in when it is the other service's. Unknown variables in the environment itself are ignored, as they have to be. *Why:* a misspelled name would otherwise be ignored without a word: `EMAIL_IMAP_HOTS` would leave email off. And the runner's key in `bridge.env` would sit where the bridge can read it. *Cost:* the env files hold Scooter's settings and nothing else. Under Compose there is no file to read, only the environment, so this check does nothing there.
 - **The examples**, `bridge.env.example` and `runner.env.example`, explain every variable of their service, each default given as a comment, `# NAME=default`, and say that a value holding `$` goes in single quotes. `test/settings.test.mjs` holds them to the loader: every variable explained, in its format, with the loader's defaults.
 
-**The format** is the part that Scooter's loader, systemd's `EnvironmentFile` and Compose's `env_file` all read the same way. Every other line is a fault that names the file, the line and the variable:
+**The format** is the part that Scooter's loader, systemd's `EnvironmentFile` and Compose's `env_file` all read the same way. Every other line is a fault that names the file, the line, and the variable when the line names one:
 
 - a comment is a line of its own, starting with `#`, indented or not; blank lines are passed over;
 - a setting is `NAME=value`: a name of letters, digits and `_`, not starting with a digit, with nothing before it and no space between it and the `=`;

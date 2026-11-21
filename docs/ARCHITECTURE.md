@@ -101,14 +101,14 @@ The exchange, the folder the two services coordinate through, is a component of 
 | wacli | `scooter-wacli` | the bridge | `wacli/` |
 | Email reader | `scooter-mail` | the bridge | `mail/` |
 | restic | root | the bridge | The folders it backs up |
-| Runner | `scooter-runner`, group `kvm` | systemd, or Docker | `agents/`, `exchange/`, `runner/`; `datastore/` and `config/` read-only |
+| Runner | `scooter-runner`, with the `kvm` group where it is given | systemd, or Docker | `agents/`, `exchange/`, `runner/`; `datastore/` and `config/` read-only |
 | QEMU | `scooter-runner` | the runner, through Gondolin | What the runner mounts |
 | pi | the VM's own root | the runner | The mounts |
 
 Scooter has four users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user (uid 8 on Ubuntu 24.04, whose group can write the system's mail spool, `/var/mail`), and Debian 12's and Alpine 3.24's images have one too; the `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account. Sharing an account would share its files and its environment.
 - Natively, `setup` makes them as system users, which the system numbers, and everything refers to them by name ([setup](architecture/install.md#setup)).
 - In Docker, the image gives them the uids 10001, 10002 and 10003, so the data volume's files are theirs in every container. The runner runs as `scooter-runner` in every Docker setup, rootless Docker included.
-- `scooter-runner` is also in the host's `kvm` group.
+- Natively, `scooter-runner` is also in the `kvm` group. How it reaches `/dev/kvm` in Docker is in [KVM](architecture/install.md#kvm).
 
 ### Folders and their owners
 

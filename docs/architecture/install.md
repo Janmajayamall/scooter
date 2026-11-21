@@ -127,7 +127,7 @@ The services:
 - **`runner`:** `command: [runner]`, with `user: scooter-runner` ([Processes and users](../ARCHITECTURE.md#processes-and-users)); `read_only: true`, a read-only root file system, with a `tmpfs` at `/tmp`; and `./config` read-only at `/config`. Alone, `compose.yaml` runs pi's VMs under emulation.
 - **`build-image`,** a third, which only `docker compose run` starts ([The build-image container](#the-build-image-container)).
 
-**CLI commands** run with `docker compose run --rm <service> <command>`. `restore` runs as natively, in a container of the bridge's with both services stopped ([Restore](backups.md#restore)), and gives each file its owner by name, which the image's users make the same uid in every container.
+`restore`, in a one-off container of the bridge's ([The CLI](configuration.md#the-cli)), gives each file its owner by name ([Restore](backups.md#restore)), which the image's users make the same uid in every container.
 
 *Cost of the one volume:* a bind mount of a host folder in its place starts empty, not as a copy of the image's `/data`, and the runner can't make its folders in a `/data` of root's, so the README says to keep the named volume ([Install with Docker](../../README.md#install-with-docker)).
 
