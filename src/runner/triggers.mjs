@@ -15,15 +15,17 @@
 //    backfill finishes.
 // 5. Otherwise, nothing.
 
+import { isKnown } from '../common/datastore/line.mjs'
 import { previousLocalTime, localDate, parseIsoSeconds } from '../common/time.mjs'
 
 // The kinds of line that are work for the agent. Everything else is context or skipped.
 const WORK_KINDS = ['message', 'edit', 'delete']
 
 // Whether a line is a work item for an agent that reads `reads`: an incoming message, edit or
-// deletion from one of those sources.
+// deletion from one of those sources. A line this version doesn't know (`isKnown`), of a kind or
+// a channel it doesn't have or without a field its kind needs, is never one: it is passed over.
 export function isWorkItem(line, reads) {
-  return line.dir === 'in' && WORK_KINDS.includes(line.kind) && reads.includes(line.source)
+  return isKnown(line) && line.dir === 'in' && WORK_KINDS.includes(line.kind) && reads.includes(line.source)
 }
 
 // The `seq` of each work item after `after`, up to `upTo` (the newest line by default), in order.

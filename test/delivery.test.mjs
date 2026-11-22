@@ -118,7 +118,7 @@ test('delivery: entries go out in order, one message every SEND_INTERVAL, each l
   const base = { dir: 'out', source: 'whatsapp' }
   assert.deepEqual(out(), [
     { seq: 4, kind: 'message', ...base, at: '2026-11-09T15:50:01Z', sourceId: 'WHATSAPP-OUT-1', by: 'lifelog', replyTo: 1, text: 'Blue Tokai, ₹450: work or personal?' },
-    { seq: 5, kind: 'reaction', ...base, at: '2026-11-09T15:50:06Z', sourceId: 'WHATSAPP-OUT-2', by: 'lifelog', target: 2, emoji: '✅' },
+    { seq: 5, kind: 'reaction', ...base, at: '2026-11-09T15:50:06Z', sourceId: 'WHATSAPP-OUT-2', by: 'lifelog', target: 2, data: { emoji: '✅' } },
     { seq: 6, kind: 'message', ...base, at: '2026-11-09T15:50:11Z', sourceId: 'WHATSAPP-OUT-3', by: 'lifelog', text: 'Logged the lunch.' },
     { seq: 7, kind: 'message', ...base, at: '2026-11-09T15:50:16Z', sourceId: 'WHATSAPP-OUT-4', by: 'runner', text: "⚠️ I couldn't process your last messages (timed out). I'll try again." },
   ].map(fields => {
@@ -643,7 +643,7 @@ test('delivery: a message whose ID the store already holds is logged without one
   await write({ type: 'text', by: 'lifelog', text: 'and one more', about: 2 })
   await drain()
   assert.deepEqual(
-    out().map(line => [line.kind, line.sourceId, line.text ?? line.emoji]),
+    out().map(line => [line.kind, line.sourceId, line.text ?? line.data.emoji]),
     [
       ['reaction', undefined, '✅'],
       ['message', undefined, 'about the lunch'],

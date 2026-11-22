@@ -15,8 +15,9 @@ import { startBridge } from '../src/bridge/main.mjs'
 import { readBridgeStatus, readIndex, runStatus, statusText } from '../src/bridge/status.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
-import { listHandOffs } from '../src/common/files.mjs'
+import { createIds, listHandOffs } from '../src/common/files.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
+import { writeOutboxEntry } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { createFakeClock } from './support/clock.mjs'
@@ -25,6 +26,7 @@ import { createMailReaderStub } from './support/mail-reader.mjs'
 import { AUTHSERV, OWNER_ADDRESSES, appleMailAudio, gmailPlain } from './support/mail-samples.mjs'
 import { createResticStub } from './support/restic.mjs'
 import { isRoot } from './support/root.mjs'
+import { handWrittenLines, writeDatastore } from './support/runner.mjs'
 import { SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
 import { OWNER, OWNER_NUMBER, createWacliStub, listRow, waitFor, webhookPayload } from './support/wacli.mjs'
@@ -110,8 +112,8 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
       { seq: 1, kind: 'message', ...base, at: at(30), sourceId: 'IMG1', text: 'Blue Tokai, coffee', files: [{ path: '1.jpg', mime: 'image/jpeg', bytes: 23 }] },
       { seq: 2, kind: 'message', ...base, at: at(31), sourceId: 'TXT1', text: 'coffee 150' },
       { seq: 3, kind: 'message', ...base, at: at(32), sourceId: 'DOC1', text: '', files: [{ path: '3.pdf', mime: 'application/pdf', name: 'Ticket.pdf', bytes: 23 }] },
-      { seq: 4, kind: 'message', ...base, at: at(33), sourceId: 'REP1', replyTo: 1, quoted: 'Blue Tokai, coffee', text: 'work' },
-      { seq: 5, kind: 'reaction', ...base, at: at(34), sourceId: 'REA1', target: 2, emoji: '👍' },
+      { seq: 4, kind: 'message', ...base, at: at(33), sourceId: 'REP1', replyTo: 1, text: 'work', data: { quoted: 'Blue Tokai, coffee' } },
+      { seq: 5, kind: 'reaction', ...base, at: at(34), sourceId: 'REA1', target: 2, data: { emoji: '👍' } },
       { seq: 6, kind: 'edit', ...base, at: at(35), sourceId: 'TXT1', target: 2, text: 'coffee 120' },
       { seq: 7, kind: 'delete', ...base, at: at(36), sourceId: 'REP1', target: 4 },
       { seq: 8, kind: 'message', ...base, at: at(37), sourceId: 'TXT2', text: '/status' },
@@ -133,8 +135,9 @@ test('bridge: signed webhook posts end up as the right datastore lines and attac
 
 // The runner of `test/support/test-runner.mjs`, with the fake sandbox and the pi stub, and the
 // bridge with the wacli stub, on one data folder and one fake clock.
-async function startBoth(t, { fixtures = { paired: true, messages: [] }, email = false } = {}) {
+async function startBoth(t, { fixtures = { paired: true, messages: [] }, email = false, handWritten = [] } = {}) {
   const prepared = prepareTestRunner(t, { start: '2026-11-09T15:50:30Z' })
+  writeDatastore(prepared.paths, handWritten, { check: false })
   const stub = createWacliStub(t, prepared.root)
   stub.fixtures(fixtures)
   const reader = email ? createMailReaderStub(prepared.root) : null
@@ -223,8 +226,8 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
     'the two emails to be stored',
   )
   const [receipt, memo] = both.lines()
-  assert.deepEqual([receipt.source, receipt.subject, receipt.files.map(file => file.path)], ['email', 'Dinner at Bombay Canteen', ['1.eml']])
-  assert.deepEqual([memo.source, memo.subject, memo.files.map(file => file.path)], ['email', 'Call with Sam', ['2.eml', '2-2.m4a']])
+  assert.deepEqual([receipt.source, receipt.data, receipt.files.map(file => file.path)], ['email', { subject: 'Dinner at Bombay Canteen' }, ['1.eml']])
+  assert.deepEqual([memo.source, memo.data, memo.files.map(file => file.path)], ['email', { subject: 'Call with Sam' }, ['2.eml', '2-2.m4a']])
 
   assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
   // The agent read the whole emails and the recording from the datastore.
@@ -267,6 +270,62 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   )
   assert.deepEqual([both.state().cursor, both.state().retry], [2, []])
   assert.match(email.status(), /; 2 stored and 0 skipped since the bridge started, /)
+})
+
+test('bridge: both services start on a datastore that holds lines this version doesn\'t know, the runner passes them over, and a reply about each goes out', async t => {
+  const both = await startBoth(t, { email: false, handWritten: handWrittenLines() })
+  // The runner gives the agent the messages it knows, and passes over the rest: the old command,
+  // the gone channel's message and the message without its text. The emails' odd data is no
+  // matter, and neither are the fields it doesn't know.
+  assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
+  assert.deepEqual(both.state().lastRun.seqs, [1, 4, 6, 7, 8])
+  assert.deepEqual([both.state().cursor, both.state().retry, both.state().failed], [9, [], []])
+  const [seen] = both.sandbox.seen()
+  assert.ok(seen.prompt.includes('#6 21:05 email "": "receipt"'), seen.prompt)
+  assert.ok(seen.prompt.includes('#9 21:08 the owner reacted to #1'), seen.prompt)
+  assert.ok(!/#2 |#3 |#5 |\/status|"hi"/.test(seen.prompt), seen.prompt)
+  await both.deliver()
+  // Its ✅s: reactions on WhatsApp, and a text for each email, whose subject isn't a string.
+  assert.deepEqual(both.stub.callsOf('send react').map(call => call.args[call.args.indexOf('--id') + 1]), ['W1', 'W4', 'W8'])
+  assert.deepEqual(both.sent().map(messageOf), ['✅ Email: (no subject)', '✅ Email: (no subject)'])
+
+  // A reply about each line, and a reaction to each.
+  const ids = createIds(both.clock)
+  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'text', by: 'lifelog', text: `about #${seq}`, replyTo: seq } })
+  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'react', by: 'lifelog', target: seq, emoji: '👀' } })
+  await both.deliver()
+  const replies = both.sent().slice(2)
+  const quotedOf = args => (args.includes('--reply-to') ? args[args.indexOf('--reply-to') + 1] : null)
+  // Each went out on WhatsApp, quoted only where the line is a message this version knows on it;
+  // the gone channel's, and the emails', on DEFAULT_CHANNEL.
+  assert.deepEqual(
+    replies.slice(0, 9).map(args => [messageOf(args), quotedOf(args)]),
+    [
+      ['about #1', 'W1'],
+      ['about #2', null],
+      ['about #3', null],
+      ['about #4', 'W4'],
+      ['about #5', null],
+      ['about #6', null],
+      ['about #7', null],
+      ['about #8', 'W8'],
+      ['about #9', null],
+    ],
+  )
+  // A reaction goes only to a message this version knows; the emails' become texts.
+  assert.deepEqual(both.stub.callsOf('send react').slice(3).map(call => call.args[call.args.indexOf('--id') + 1]), ['W1', 'W4', 'W8'])
+  assert.deepEqual(replies.slice(9).map(messageOf), ['👀 Email: (no subject)', '👀 Email: (no subject)'])
+  assert.deepEqual(
+    both.bridgeEvents().filter(event => event === 'outbox.dropped').length,
+    4,
+  )
+  // Both go on: a new message is stored after them, and given to the agent.
+  assert.equal(both.bridge.store.broken, false)
+  await both.post(webhookPayload({ ID: 'NEW1', Timestamp: '2026-11-09T15:55:00Z', Text: 'after them' }))
+  const after = both.lines().at(-1)
+  assert.deepEqual([after.sourceId, after.text], ['NEW1', 'after them'])
+  assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
+  assert.deepEqual(both.state().lastRun.seqs, [after.seq])
 })
 
 test('bridge: a text such as /status is filed as any message, and nothing answers it; scooter status says how the bridge and the runner are doing', async t => {

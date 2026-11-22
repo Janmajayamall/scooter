@@ -8,15 +8,37 @@ import { createIndex } from '../../src/common/datastore/index.mjs'
 import { dayOfDate } from '../../src/common/paths.mjs'
 
 // Writes datastore lines into their day folders, as the bridge would have. A line's day folder is
-// its `day` (`2026/11/09`), or else the UTC date of its `at`. Lines must be complete and in order.
-export function writeDatastore(paths, lines) {
+// its `day` (`2026/11/09`), or else the UTC date of its `at`. Lines must be complete and in order,
+// and pass the store's own check, but with `check: false`, for a datastore written by hand.
+export function writeDatastore(paths, lines, { check = true } = {}) {
   for (const { day, ...line } of lines) {
-    const problems = checkLine(line)
+    const problems = check ? checkLine(line) : []
     if (problems.length > 0) throw new Error(`fixture line ${line.seq}: ${problems.join('; ')}`)
     const folder = day ?? dayOfDate(line.at.slice(0, 10))
     fs.mkdirSync(paths.dayDir(folder), { recursive: true })
     fs.appendFileSync(paths.dayLog(folder), `${JSON.stringify(line)}\n`)
   }
+}
+
+// A datastore written by hand, as no version of the store writes it, among ordinary lines: one of a
+// kind this version doesn't know (`command`, which an earlier version wrote), one of a channel that
+// is gone, one with top-level fields this version doesn't know (the four that moved into `data`
+// among them), a message without its text, and `data` of several wrong kinds. All on 9 November,
+// before the runner's start in its tests. `writeDatastore` with `check: false` writes them.
+export function handWrittenLines() {
+  const at = minute => `2026-11-09T15:${String(minute).padStart(2, '0')}:00Z`
+  const base = { dir: 'in', trust: 'owner' }
+  return [
+    { seq: 1, kind: 'message', ...base, at: at(30), source: 'whatsapp', sourceId: 'W1', text: 'coffee 150' },
+    { seq: 2, kind: 'command', ...base, at: at(31), source: 'whatsapp', sourceId: 'C2', text: '/status' },
+    { seq: 3, kind: 'message', ...base, at: at(32), source: 'telegram', sourceId: 'T3', text: 'hi' },
+    { seq: 4, kind: 'message', ...base, at: at(33), source: 'whatsapp', sourceId: 'W4', note: 'later', quoted: 'top', forwarded: true, subject: 'x', emoji: '👍', text: 'lunch 300' },
+    { seq: 5, kind: 'message', ...base, at: at(34), source: 'whatsapp', sourceId: 'W5' },
+    { seq: 6, kind: 'message', ...base, at: at(35), source: 'email', sourceId: 'E6@mail.example', text: 'receipt', data: [] },
+    { seq: 7, kind: 'message', ...base, at: at(36), source: 'email', sourceId: 'E7@mail.example', text: 'ticket', data: { subject: 7 } },
+    { seq: 8, kind: 'message', ...base, at: at(37), source: 'whatsapp', sourceId: 'W8', text: 'tea', data: 'a string' },
+    { seq: 9, kind: 'reaction', ...base, at: at(38), source: 'whatsapp', sourceId: 'R9', target: 1, data: null },
+  ]
 }
 
 // An index of the lines, without files: for tests of pure functions.
@@ -49,8 +71,8 @@ export const line = {
   sent: (seq, at, text, extra = {}) => ({ seq, kind: 'message', dir: 'out', at, source: 'whatsapp', sourceId: sourceId(), by: 'lifelog', text, ...extra }),
   edit: (seq, at, target, text) => ({ seq, kind: 'edit', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target, text }),
   delete: (seq, at, target) => ({ seq, kind: 'delete', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target }),
-  reaction: (seq, at, target, emoji, extra = {}) => ({ seq, kind: 'reaction', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target, emoji, ...extra }),
-  email: (seq, at, subject, text, extra = {}) => ({ seq, kind: 'message', dir: 'in', at, source: 'email', sourceId: `${sourceId()}@mail.example`, trust: 'owner', subject, text, ...extra }),
+  reaction: (seq, at, target, emoji, extra = {}) => ({ seq, kind: 'reaction', dir: 'in', at, source: 'whatsapp', sourceId: sourceId(), trust: 'owner', target, data: { emoji }, ...extra }),
+  email: (seq, at, subject, text, extra = {}) => ({ seq, kind: 'message', dir: 'in', at, source: 'email', sourceId: `${sourceId()}@mail.example`, trust: 'owner', text, data: { subject }, ...extra }),
 }
 
 // The skills of the default config.
@@ -119,7 +141,7 @@ export function exampleLines() {
     line.text(1050, '2026-11-09T15:43:00Z', 'lunch with sam', { files: [{ path: '1050.jpg', mime: 'image/jpeg', bytes: 391022 }] }),
     line.text(1051, '2026-11-09T15:44:00Z', 'coffee 120'),
     line.text(1052, '2026-11-09T15:45:00Z', '', { files: [{ path: '1052.pdf', mime: 'application/pdf', name: 'ticket.pdf', bytes: 88123 }] }),
-    line.text(1053, '2026-11-09T15:50:00Z', 'work', { replyTo: 1043, quoted: 'Blue Tokai, ₹450 at 12:40: work or personal?' }),
+    line.text(1053, '2026-11-09T15:50:00Z', 'work', { replyTo: 1043, data: { quoted: 'Blue Tokai, ₹450 at 12:40: work or personal?' } }),
     line.edit(1054, '2026-11-09T15:52:00Z', 1051, 'coffee 150'),
   ].map(fixture => JSON.parse(JSON.stringify(fixture)))
 }

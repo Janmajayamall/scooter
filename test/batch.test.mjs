@@ -182,7 +182,7 @@ test('batch: whatever the texts, the prompt keeps within its limit and has an it
         const kind = random()
         if (kind < 0.25) lines.push(line.sent(seq, '2026-11-09T15:00:00Z', text(length + 1)))
         else if (kind < 0.35) lines.push(line.email(seq, '2026-11-09T15:00:00Z', text(30), text(length), { files: [{ path: `${seq}.eml`, mime: 'message/rfc822', bytes: 10 }] }))
-        else lines.push(line.text(seq, '2026-11-09T15:00:00Z', text(length), seq > 3 && random() < 0.3 ? { replyTo: seq - 1, quoted: text(length) } : {}))
+        else lines.push(line.text(seq, '2026-11-09T15:00:00Z', text(length), seq > 3 && random() < 0.3 ? { replyTo: seq - 1, data: { quoted: text(length) } } : {}))
         seq += 1
       }
       if (!lines.some(entry => entry.dir === 'in' && entry.seq > 2)) lines.push(line.text(seq, '2026-11-09T15:00:00Z', text(4000)))
@@ -239,12 +239,12 @@ test('batch: context lines and reply labels', () => {
     line.text(6, '2026-11-09T14:03:00Z', 'gone'),
     line.delete(7, '2026-11-09T14:04:00Z', 6),
     // From here on, after the cursor.
-    line.text(8, '2026-11-09T15:00:00Z', 'Blue Tokai', { replyTo: 3, quoted: 'Which café?' }),
-    line.text(9, '2026-11-09T15:01:00Z', 'what?', { replyTo: 4, quoted: '⚠️ I couldn…' }),
+    line.text(8, '2026-11-09T15:00:00Z', 'Blue Tokai', { replyTo: 3, data: { quoted: 'Which café?' } }),
+    line.text(9, '2026-11-09T15:01:00Z', 'what?', { replyTo: 4, data: { quoted: '⚠️ I couldn…' } }),
     line.text(10, '2026-11-09T15:02:00Z', 'that was lunch', { replyTo: 5 }),
-    line.text(11, '2026-11-09T15:03:00Z', 'never mind', { replyTo: 6, quoted: 'gone' }),
-    line.text(12, '2026-11-09T15:04:00Z', 'about my old message', { quoted: 'from before Scooter' }),
-    line.text(13, '2026-11-09T15:05:00Z', 'read this', { forwarded: true }),
+    line.text(11, '2026-11-09T15:03:00Z', 'never mind', { replyTo: 6, data: { quoted: 'gone' } }),
+    line.text(12, '2026-11-09T15:04:00Z', 'about my old message', { data: { quoted: 'from before Scooter' } }),
+    line.text(13, '2026-11-09T15:05:00Z', 'read this', { data: { forwarded: true } }),
     line.reaction(14, '2026-11-09T15:06:00Z', 3, '❤️'),
     line.reaction(15, '2026-11-09T15:07:00Z', 3, ''),
     { ...line.reaction(16, '2026-11-09T15:08:00Z', 8, '✅'), dir: 'out', trust: undefined, by: 'lifelog' },
@@ -252,10 +252,10 @@ test('batch: context lines and reply labels', () => {
     // A text such as /new is a message like any other, and so is what a reply quotes of it.
     line.text(18, '2026-11-09T15:10:00Z', '/new'),
     line.text(19, '2026-11-09T15:11:00Z', 'after it'),
-    line.text(20, '2026-11-09T15:12:00Z', 'that one', { replyTo: 18, quoted: '/new' }),
+    line.text(20, '2026-11-09T15:12:00Z', 'that one', { replyTo: 18, data: { quoted: '/new' } }),
     // A reply to a line that isn't a message, which only a damaged datastore has, shows the
     // channel's preview if it has one.
-    line.text(21, '2026-11-09T15:13:00Z', 'odd', { replyTo: 14, quoted: 'a heart' }),
+    line.text(21, '2026-11-09T15:13:00Z', 'odd', { replyTo: 14, data: { quoted: 'a heart' } }),
     line.text(22, '2026-11-09T15:14:00Z', 'odder', { replyTo: 15 }),
   ].map(entry => JSON.parse(JSON.stringify(entry)))
   const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 7 } })
@@ -288,6 +288,56 @@ For context only (no action, no DONE):
 #16 20:38 you reacted ✅ to #8
 #15 20:37 the owner removed their reaction to #3
 #14 20:36 the owner reacted ❤️ to #3`,
+  )
+})
+
+test('batch: a line this version doesn\'t know is passed over, and what the prompt takes from data it checks first', () => {
+  const at = minute => `2026-11-09T15:${String(minute).padStart(2, '0')}:00Z`
+  const base = { dir: 'in', trust: 'owner' }
+  const lines = [
+    ...fillerLines(1),
+    line.text(2, at(0), 'coffee 120'),
+    // A kind an earlier version wrote, a channel that is gone, and a message without its text.
+    { seq: 3, kind: 'command', ...base, at: at(1), source: 'whatsapp', sourceId: 'C3', text: '/status' },
+    { seq: 4, kind: 'message', ...base, at: at(2), source: 'telegram', sourceId: 'T4', text: 'hi' },
+    { seq: 5, kind: 'message', ...base, at: at(3), source: 'whatsapp', sourceId: 'W5' },
+    // Fields this version doesn't know are ignored; a reply to a line it doesn't know shows the
+    // preview in its data.
+    line.text(6, at(4), 'lunch 300', { replyTo: 4, quoted: 'top-level', forwarded: true, subject: 'x', data: { quoted: 'hi there' } }),
+    // `data` that isn't what a channel writes.
+    line.email(7, at(5), 'unused', 'a list for data', { data: ['Call with Sam'] }),
+    line.email(8, at(6), 'unused', 'a subject that is a number', { data: { subject: 7 } }),
+    line.text(9, at(7), 'forwarded, or not', { data: { forwarded: 'yes' } }),
+    line.text(10, at(8), 'a reply', { replyTo: 3, data: { quoted: 7 } }),
+    { ...line.reaction(11, at(9), 2, 'x'), data: { emoji: 7 } },
+    { ...line.reaction(12, at(10), 2, 'x'), dir: 'out', trust: undefined, by: 'lifelog', data: undefined },
+    // An `out` line of a kind this version doesn't know is no context.
+    { seq: 13, kind: 'typing', dir: 'out', at: at(11), source: 'whatsapp', by: 'lifelog' },
+    // An edit of the old command, and a deletion of the gone channel's message, are work of their own.
+    line.edit(14, at(12), 3, '/help'),
+    line.delete(15, at(13), 4),
+  ].map(entry => JSON.parse(JSON.stringify(entry)))
+  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 1 } })
+  assert.deepEqual(seqsOf(batch), [2, 6, 7, 8, 9, 10, 14, 15])
+  assert.deepEqual(batch.context, [11, 12])
+  assert.equal(batch.covered, 15)
+  assert.equal(
+    body(prompt),
+    `New messages:
+#2 20:30 text: "coffee 120"
+#6 20:34 text: "lunch 300"
+      ↳ reply to #4: "hi there"
+#7 20:35 email "": "a list for data"
+#8 20:36 email "": "a subject that is a number"
+#9 20:37 text: "forwarded, or not"
+#10 20:38 text: "a reply"
+      ↳ reply to #3
+#14 20:42 edit of #3, now: "/help"
+#15 20:43 deletion of #4
+
+For context only (no action, no DONE):
+#12 20:40 you reacted to #2
+#11 20:39 the owner reacted to #2`,
   )
 })
 

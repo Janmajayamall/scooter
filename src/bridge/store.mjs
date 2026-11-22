@@ -4,8 +4,9 @@
 // order of the lines in the files. This is the only module that writes to the datastore: nothing
 // else appends a line, stores an attachment, or truncates.
 //
-// - At startup it reads every line, removes part of a line left at the very end by a crash,
-//   and rebuilds the index.
+// - At startup it reads every line, as a reader does, removes part of a line left at the very end
+//   by a crash, and rebuilds the index.
+// - It writes only what passes the strict check of a line (`checkLine`), whatever it can read.
 // - For each line it takes the next `seq`, copies the attachments into the day folder, and then
 //   appends the line with one `write` call and an `fsync`.
 // - It never rewrites or deletes a line.
@@ -105,7 +106,8 @@ function fsyncPath(target) {
 // - `owner` is `{ uid, gid }` for everything the store creates: root and the runner's group. Leave
 //   it out when not running as root, and owners are left alone. Modes are set either way.
 // - It throws a `DatastoreError` if the datastore's contents are damaged: a complete line that
-//   isn't a line, or `seq` numbers out of order.
+//   isn't JSON or fails a reader's check, or `seq` numbers out of order. A line of a kind, a
+//   channel or a field this version doesn't know is no damage: it is read, and passed over.
 export function openStore({ paths, clock = systemClock, log, owner = null }) {
   const dir = paths.datastore
   ensureDir(dir, { mode: DIR_MODE, owner })
@@ -217,8 +219,9 @@ export function openStore({ paths, clock = systemClock, log, owner = null }) {
     if (attachments.length > 0 && draft.kind !== 'message') {
       throw new DatastoreError('only a message has attachments')
     }
-    // An edit, a deletion or a reaction refers to a message. Intake skips the ones whose target it
-    // doesn't know, so one that reaches the store pointing anywhere else is a bug in its writer.
+    // An edit, a deletion or a reaction refers to a message, one this version knows. Intake skips
+    // the ones whose target it doesn't know, and delivery drops them, so one that reaches the store
+    // pointing anywhere else is a bug in its writer.
     if (['edit', 'delete', 'reaction'].includes(draft.kind) && index.current(draft.target) === undefined) {
       throw new DatastoreError(`a ${draft.kind} must point at a message, and seq ${draft.target} isn't one`)
     }

@@ -56,6 +56,27 @@ test('triggers: what is a work item', () => {
   // A source the agent doesn't read.
   assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), reads), false)
   assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), ['email']), true)
+  // A line this version doesn't know: a kind or a channel it doesn't have, or without a field its
+  // kind needs. A reads list naming such a channel changes nothing.
+  const base = { dir: 'in', at: '2026-11-09T15:00:00Z', trust: 'owner' }
+  assert.equal(isWorkItem({ seq: 8, kind: 'command', ...base, source: 'whatsapp', text: '/status' }, reads), false)
+  assert.equal(isWorkItem({ seq: 9, kind: 'message', ...base, source: 'telegram', text: 'hi' }, ['telegram']), false)
+  assert.equal(isWorkItem({ seq: 10, kind: 'message', ...base, source: 'whatsapp' }, reads), false)
+  assert.equal(isWorkItem({ seq: 11, kind: 'edit', ...base, source: 'whatsapp', text: 'y' }, reads), false)
+  assert.equal(isWorkItem({ seq: 12, kind: 'delete', ...base, source: 'whatsapp' }, reads), false)
+})
+
+test('triggers: a line this version doesn\'t know starts no batch, and a retry of one is never due', () => {
+  const base = { dir: 'in', at: '2026-11-09T15:50:00Z', trust: 'owner' }
+  const lines = [
+    ...EARLIER,
+    { seq: 4, kind: 'command', ...base, source: 'whatsapp', sourceId: 'C4', text: '/status' },
+    { seq: 5, kind: 'message', ...base, source: 'telegram', sourceId: 'T5', text: 'hi' },
+    { seq: 6, kind: 'message', ...base, source: 'whatsapp', sourceId: 'W6' },
+  ]
+  assert.deepEqual(ask({ state: HANDLED, lines }), { kind: 'idle', reason: 'nothing' })
+  const retry = [4, 5, 6].map(seq => ({ seq, attempts: 1, due: '2026-11-09T15:00:00Z', reason: 'x' }))
+  assert.deepEqual(ask({ state: { ...HANDLED, cursor: 6, retry }, lines }), { kind: 'idle', reason: 'nothing' })
 })
 
 test('triggers: new messages wait until the owner has been quiet for BATCH_SECONDS', () => {

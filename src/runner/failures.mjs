@@ -23,6 +23,7 @@
 //
 // Everything here is a pure function, apart from reading the log.
 
+import { dataText } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { scanNetworkLog } from '../common/netlog.mjs'
@@ -322,7 +323,8 @@ export function describeItem(index, seq) {
     const cut = chars.length > limits.NOTICE_QUOTE_CHARS ? `${chars.slice(0, limits.NOTICE_QUOTE_CHARS - 1).join('')}…` : chars.join('')
     return `"${cut}"`
   }
-  if (line.source === 'email') return `email ${quote(line.subject ?? '')}`
+  // The subject is the email channel's, in the line's `data`, and is used only when it is a string.
+  if (line.source === 'email') return `email ${quote(dataText(line, 'subject') ?? '')}`
   if (current && current.text.trim() !== '') return quote(current.text)
   const mime = line.files?.[0]?.mime ?? line.media?.mime ?? ''
   if (line.media?.type === 'image' || mime.startsWith('image/')) return 'a photo'

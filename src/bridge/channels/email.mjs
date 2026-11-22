@@ -373,6 +373,8 @@ function kindOf(mime) {
 // - `at` is the `Date` header's, or the time it arrived when that can't be read.
 // - The text is cut at `EMAIL_TEXT_MAX_CHARS`, and the subject at `EMAIL_SUBJECT_MAX_CHARS`, each
 //   with a note that says so.
+// - Its `data` always holds the subject, "" when it had none: an email has a subject, which is this
+//   channel's rule, not the datastore's.
 // - An email that couldn't be parsed keeps its `.eml`, and a `media` object says so. One fetched
 //   without its body, which the reader does only for one over `ATTACHMENT_MAX_BYTES`, has none.
 export function emailRecord({ parsed, lines, size }) {
@@ -387,15 +389,12 @@ export function emailRecord({ parsed, lines, size }) {
     id: messageIdOf(lines) ?? `imap-${parsed.uidValidity}-${parsed.uid}`,
     at: dateOf(lines) ?? parsed.arrivedAt,
     text: cut(parsed.text, limits.EMAIL_TEXT_MAX_CHARS, TEXT_CUT_NOTE),
-    subject: cut(parsed.subject, limits.EMAIL_SUBJECT_MAX_CHARS, SUBJECT_CUT_NOTE),
     attachments,
     replyToId: null,
-    replyToPreview: null,
     reactionToId: null,
-    reactionEmoji: null,
     edited: false,
     revoked: false,
-    forwarded: false,
+    data: { subject: cut(parsed.subject, limits.EMAIL_SUBJECT_MAX_CHARS, SUBJECT_CUT_NOTE) },
   }
 }
 

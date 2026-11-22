@@ -43,13 +43,15 @@ test('log: a datastore line passed whole gives away no content', () => {
     seq: 1071,
     kind: 'message',
     source: 'email',
-    subject: 'Call with Sam',
     text: 'Recording from today\'s call.',
-    quoted: 'see you at 5',
     files: [{ path: '1071.eml', mime: 'message/rfc822', name: 'secret plans.eml', bytes: 19262388 }],
     media: { type: 'image', error: 'download failed' },
+    data: { subject: 'Call with Sam', quoted: 'see you at 5' },
   }
   log.info('intake.stored', line)
+  // `data` is withheld whatever it is: a reader's line can hold anything there, a list of plain
+  // values among them, which would otherwise be logged as it is.
+  log.info('intake.stored', { seq: 1072, data: ['Sam', 'see you at 5'] })
 
   const entry = JSON.parse(lines[0])
   assert.deepEqual(entry, {
@@ -60,13 +62,13 @@ test('log: a datastore line passed whole gives away no content', () => {
     seq: 1071,
     kind: 'message',
     source: 'email',
-    subject: '[withheld]',
     text: '[withheld]',
-    quoted: '[withheld]',
     files: '[array]',
     media: '[object]',
+    data: '[withheld]',
   })
-  for (const secret of ['Sam', 'Recording', 'see you', 'secret plans']) assert.ok(!lines[0].includes(secret), secret)
+  assert.equal(JSON.parse(lines[1]).data, '[withheld]')
+  for (const secret of ['Sam', 'Recording', 'see you', 'secret plans']) assert.ok(!lines.join('').includes(secret), secret)
 })
 
 test('log: fields are plain values, and the log\'s own fields can\'t be replaced', () => {

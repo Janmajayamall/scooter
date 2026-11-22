@@ -8,6 +8,9 @@
 // crash can leave part of a line at the very end. A reader leaves such a part where it is, for
 // its next poll: either the rest arrives, or the writer removes the part when it next starts.
 // A reader never changes anything.
+//
+// Each line is checked as a reader checks it (`checkReadLine`), not as the store checks what it
+// writes: a line of a kind, a channel or a field this version doesn't know is read all the same.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -72,8 +75,8 @@ function readFrom(file, offset) {
 //
 // - `poll()` returns the lines that are new, in order, each as `{ line, day, number }`, where
 //   `day` is the line's day folder and `number` its line number in that day's log, counting from
-//   1. It throws a `DatastoreError` if a complete line isn't a well-formed line, or if a day that
-//   isn't the newest ends in part of a line.
+//   1. It throws a `DatastoreError` if a complete line isn't JSON or doesn't pass the reading
+//   check, or if a day that isn't the newest ends in part of a line.
 // - `position` is where the reader is: `{ day, offset, lineNumber }`, the day folder it's in (null
 //   before there is one), the bytes of that day's log it has taken, and the lines.
 // - `pending()` returns what is left unread at the end of the newest day's log, the part of a

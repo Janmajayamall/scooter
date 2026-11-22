@@ -204,8 +204,17 @@ export function dropReason(message, owners) {
 }
 
 // The record the core takes (`./index.mjs`): the message without its chat, sender and `fromMe`.
+// What the core doesn't act on goes in its `data`, which becomes the line's: on a message, wacli's
+// preview of the message it quotes, `quoted`, when it has one, and `forwarded: true` when it was
+// forwarded; on a reaction, its `emoji`, "" when the reaction was removed.
 export function toRecord(message) {
+  // As intake reads the record: a deletion first, then a reaction, then an edit.
+  const isReaction = !message.revoked && message.reactionToId !== null
   const isMessage = !message.edited && !message.revoked && message.reactionToId === null
+  const data = {}
+  if (isMessage && message.replyToId !== null && message.replyToPreview) data.quoted = message.replyToPreview
+  if (isMessage && message.forwarded) data.forwarded = true
+  if (isReaction) data.emoji = message.reactionEmoji
   const attachments = []
   if (isMessage && message.media) {
     attachments.push({
@@ -223,12 +232,10 @@ export function toRecord(message) {
     text: message.text,
     attachments,
     replyToId: message.replyToId,
-    replyToPreview: message.replyToPreview,
     reactionToId: message.reactionToId,
-    reactionEmoji: message.reactionToId === null ? null : message.reactionEmoji,
     edited: message.edited,
     revoked: message.revoked,
-    forwarded: message.forwarded,
+    data,
   }
 }
 

@@ -311,16 +311,44 @@ test('status: the datastore is read without changing it, part of a line a crash 
   assert.match(statusText({ now: NOW, settings, paths, index }), /^Newest message: #5, 21:15, on email$/m)
 
   // A line that isn't one: the report says where, and goes on without the datastore.
-  fs.writeFileSync(paths.dayLog('2026/11/09'), `${before.toString('utf8').split('\n').slice(0, 1).join('\n')}\n{"seq":3,"kind":"command","text":"/status"}\n`)
+  fs.writeFileSync(paths.dayLog('2026/11/09'), `${before.toString('utf8').split('\n').slice(0, 1).join('\n')}\n{"seq":3,"kind":"Command!","dir":"in","at":"2026-11-09T14:00:00Z","source":"whatsapp","text":"/status"}\n`)
   const broken = readIndex(paths)
   assert.ok(broken instanceof Error)
   const log = paths.dayLog('2026/11/09')
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
   const text = statusText({ now: NOW, settings, paths, index: broken })
-  assert.ok(text.includes(`Newest message: the datastore can't be read (${log}, line 2: kind must be one of message, edit, delete, reaction; `), text)
+  assert.ok(text.includes(`Newest message: the datastore can't be read (${log}, line 2: kind must be a name).`), text)
   assert.match(text, /^Messages: 1 retrying, 2 failed; those pending can't be counted without the datastore\.$/m)
   assert.ok(!text.includes('/status'))
+})
+
+test('status: a line this version doesn\'t know is read, and is neither the newest message nor one pending', t => {
+  const { paths, write } = setup(t)
+  const base = { dir: 'in', trust: 'owner' }
+  const lines = [
+    line.text(1, '2026-11-09T14:00:00Z', 'ran 5k'),
+    // An email whose data isn't what the channel writes is a message all the same.
+    { ...line.email(2, '2026-11-09T14:10:00Z', 'x', 'Your train.'), data: ['Booking'] },
+    line.sent(3, '2026-11-09T14:11:00Z', 'Logged.'),
+    // The kind an earlier version wrote, a channel that is gone, and a message without its text.
+    { seq: 4, kind: 'command', ...base, at: '2026-11-09T15:40:00Z', source: 'whatsapp', sourceId: 'C4', text: '/status' },
+    { seq: 5, kind: 'message', ...base, at: '2026-11-09T15:41:00Z', source: 'telegram', sourceId: 'T5', text: 'hi' },
+    { seq: 6, kind: 'message', ...base, at: '2026-11-09T15:42:00Z', source: 'constructor', sourceId: 'X6', text: 'hi' },
+    { seq: 7, kind: 'message', ...base, at: '2026-11-09T15:43:00Z', source: 'whatsapp', sourceId: 'W7' },
+    { seq: 8, kind: 'edit', ...base, at: '2026-11-09T15:44:00Z', source: 'telegram', sourceId: 'T5', target: 5, text: 'hello' },
+  ]
+  fs.mkdirSync(paths.dayDir('2026/11/09'), { recursive: true })
+  fs.writeFileSync(paths.dayLog('2026/11/09'), lines.map(entry => `${JSON.stringify(entry)}\n`).join(''))
+  const index = readIndex(paths)
+  assert.equal(index.lastSeq, 8)
+  write(paths.runnerStatus, { ...STATUS, agents: { lifelog: { ...STATUS.agents.lifelog, reads: ['whatsapp', 'email'] } } })
+  const { backfill, ...state } = STATE
+  write(paths.agentState('lifelog'), { ...state, cursor: 1, retry: [], failed: [] })
+  const text = statusText({ now: NOW, settings: { timeZone: 'Asia/Kolkata' }, paths, index })
+  assert.match(text, /^Newest message: #2, 19:40, on email$/m)
+  assert.match(text, /^Messages: 1 pending, 0 retrying, 0 failed\.$/m)
+  assert.ok(!/telegram|constructor|\/status/.test(text), text)
 })
 
 // Every file and folder under `dir`, with what a change would show: its type, size, mode, owner,

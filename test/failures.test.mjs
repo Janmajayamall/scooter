@@ -431,3 +431,13 @@ test('notices: items given up on, each named by what it says now', t => {
   })
   assert.equal(givenUpNotice(index, [1, 3, 6]).text, '⚠️ I gave up on #1 ("coffee 150"), #3 (a photo) and #6 (email "Call with Sam") after 4 attempts. Send them again if they matter.')
 })
+
+test('notices: an email\'s subject is taken from its data only when it is a string there', () => {
+  const email = (seq, data) => ({ ...line.email(seq, '2026-11-09T15:00:00Z', 'x', 'text'), data })
+  const datas = [undefined, null, [], ['Call with Sam'], 'Call with Sam', 7, {}, { subject: 7 }, { subject: null }, { subject: ['Call'] }, { subject: { text: 'Call' } }, { subject: 'Call\nwith  Sam', other: 1 }]
+  const index = indexOf(datas.map((data, n) => email(n + 1, data)))
+  assert.deepEqual(
+    datas.map((_, n) => describeItem(index, n + 1)),
+    [...Array(datas.length - 1).fill('email ""'), 'email "Call with Sam"'],
+  )
+})

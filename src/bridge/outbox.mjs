@@ -13,8 +13,8 @@
 //   paragraph or line break where there is one (`splitText`). Only the first quotes.
 // - **Pacing.** At most one message every `SEND_INTERVAL`, reactions included, whatever channel.
 // - **Recording.** After each message that goes out, an `out` line is appended to the datastore,
-//   with the channel as `source` and the ID the channel gave it as `sourceId`. The entry is
-//   deleted once all of it has gone.
+//   with the channel as `source` and the ID the channel gave it as `sourceId`, and a reaction's
+//   emoji in its `data`. The entry is deleted once all of it has gone.
 // - **Two outboxes.** The runner writes its entries to `exchange/outbox/`, and the bridge its own,
 //   its backup notices, to `bridge/outbox/`, in the same form. The entries of both are
 //   taken together, in the order of their IDs.
@@ -61,6 +61,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { dataText, isKnown } from '../common/datastore/line.mjs'
 import { TMP_PREFIX, checkOwnFolder, ensureDir, isId, listHandOffs, readUntrustedFile, removeHandOff, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
@@ -117,14 +118,14 @@ export function splitText(text, max = limits.CHUNK_CHARS) {
 // Routing
 
 // The message a line is, or changes: a message is itself, and an edit or a deletion is the message
-// it changes. Null for anything else.
+// it changes. Null for anything else, and for a line of a kind or a channel this version doesn't
+// know (`isKnown`): what the index holds as a message is what the store takes as one, so a
+// reaction sent to it can be recorded.
 function messageOf(index, seq) {
   const line = index.get(seq)?.line
-  if (!line) return null
-  if (line.kind === 'message') return line
-  if (line.kind !== 'edit' && line.kind !== 'delete') return null
-  const target = index.get(line.target)?.line
-  return target?.kind === 'message' ? target : null
+  if (!line || !isKnown(line)) return null
+  const message = line.kind === 'edit' || line.kind === 'delete' ? line.target : seq
+  return index.current(message) === undefined ? null : index.get(message).line
 }
 
 // Where an entry goes, and what goes there. `index` is the datastore's, `channels` a Map from each
@@ -138,13 +139,15 @@ function messageOf(index, seq) {
 //
 // - A `text` goes to the channel of the line `replyTo` or `about` names, if that channel is running
 //   and can send, quoting the line when it is `replyTo`. An edit or a deletion is quoted as the
-//   message it changes, and a line with no channel ID isn't quoted. Otherwise, for an email, a line
-//   that doesn't exist, or a text with neither, it goes to `DEFAULT_CHANNEL`, unquoted.
+//   message it changes, and a line with no channel ID, or of a kind this version doesn't know,
+//   isn't quoted. Otherwise, for an email, a line of a channel that is gone, a line that doesn't
+//   exist, or a text with neither, it goes to `DEFAULT_CHANNEL`, unquoted.
 // - A `react` goes to its target's channel, if it can react: the message the target is or changes,
 //   by its channel ID. A reaction to an email becomes a text on `DEFAULT_CHANNEL`, such as
-//   `✅ Email: Call with Sam`, so the owner knows it arrived. Scooter reacts only to the owner's
-//   messages, so a reaction to a line it sent itself, to a reaction, or to a line that doesn't
-//   exist is dropped, and so is one whose channel can't react.
+//   `✅ Email: Call with Sam`, so the owner knows it arrived, with the subject the email channel
+//   keeps in the line's `data`, when it is a string there. Scooter reacts only to the owner's
+//   messages, so a reaction to a line it sent itself, to a reaction, to a line this version doesn't
+//   know, or to a line that doesn't exist is dropped, and so is one whose channel can't react.
 export function routeEntry(entry, { index, channels, defaultChannel }) {
   const fallback = channels.get(defaultChannel)
   if (entry.type === 'text') {
@@ -162,12 +165,13 @@ export function routeEntry(entry, { index, channels, defaultChannel }) {
 
   const line = index.get(entry.target)?.line
   if (!line) return { action: 'drop', reason: 'unknown target' }
+  if (!isKnown(line)) return { action: 'drop', reason: "a line this version doesn't know" }
   const message = messageOf(index, entry.target)
   if (message === null || message.dir !== 'in') return { action: 'drop', reason: "not one of the owner's messages" }
   if (message.source === 'email') {
     // Made here, after the entry was written, from a subject the datastore holds: cut as an entry's
     // text is. Intake already cuts a subject at `EMAIL_SUBJECT_MAX_CHARS`.
-    const subject = (message.subject ?? '').replace(/\s+/g, ' ').trim() || '(no subject)'
+    const subject = (dataText(message, 'subject') ?? '').replace(/\s+/g, ' ').trim() || '(no subject)'
     return { action: 'text', channel: fallback, text: cutText(`${entry.emoji} Email: ${subject}`), quote: null }
   }
   const channel = channels.get(message.source)
@@ -328,7 +332,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
   // The `out` line for a message that went out.
   function outLine(route, entry, parts, part, sourceId, quoted) {
     const base = { dir: 'out', at: isoSeconds(clock.now()), source: route.channel.name, ...(sourceId !== null ? { sourceId } : {}), by: entry.by }
-    if (route.action === 'react') return { ...base, kind: 'reaction', target: route.target, emoji: route.emoji }
+    if (route.action === 'react') return { ...base, kind: 'reaction', target: route.target, data: { emoji: route.emoji } }
     return { ...base, kind: 'message', ...(quoted ? { replyTo: route.quote.seq } : {}), text: parts[part - 1] }
   }
 

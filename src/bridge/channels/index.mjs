@@ -38,8 +38,8 @@
 //                     resolves with the reaction's channel ID, or null, as `sendText` does
 //
 // A record is the message as the channel received it, in a form that is the same for every
-// channel: the normalized message, without what only the channel needs (for
-// WhatsApp, the chat, the sender and whether the bot sent it), plus `subject` for email.
+// channel: what the core acts on, and the channel's own `data`, without what only the channel
+// needs (for WhatsApp, the chat, the sender and whether the bot sent it).
 //
 //   source           the channel's name
 //   id               the channel's own ID for it, which becomes `sourceId`. For an edit or a
@@ -47,20 +47,20 @@
 //   at               when it was sent, as a UTC time to the second, or null if the channel doesn't
 //                    know, in which case it arrived now
 //   text             its text, or a media caption: "" if none
-//   subject          an email's subject, "" if none. Only on email
 //   attachments      what it carries, each `{ type, mime, name, bytes, error }`: the kind of media
 //                    (`image`, `document`…), the MIME type, the original file name and the size if
 //                    the channel knows them (else null), and `error` when the core must not try to
 //                    download it, saying why (else null)
 //   replyToId        the ID of the message it quotes, or null
-//   replyToPreview   the channel's short text of the quoted message, or null
 //   reactionToId     for a reaction, the ID of the message reacted to; else null
-//   reactionEmoji    for a reaction, the emoji, "" when the reaction was removed; else null
 //   edited           true when it is an edit of the message `id`
 //   revoked          true when it deletes the message `id`
-//   forwarded        true when it was forwarded: someone else's words
+//   data             an object of JSON values, `{}` for none, which intake writes on the line as
+//                    its `data`. The channel owns what is in it, and the core doesn't look into it:
+//                    an email's subject, WhatsApp's preview of a quoted message, whether a message
+//                    was forwarded, and a reaction's emoji
 
-import { SOURCES } from '../../common/datastore/line.mjs'
+import { SOURCES, isData } from '../../common/datastore/line.mjs'
 import { parseIsoSeconds } from '../../common/time.mjs'
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -100,21 +100,7 @@ export function checkRecord(record) {
   const check = (field, ok, what) => {
     if (!ok(record[field])) problems.push(`${field} must be ${what}`)
   }
-  const known = [
-    'source',
-    'id',
-    'at',
-    'text',
-    'subject',
-    'attachments',
-    'replyToId',
-    'replyToPreview',
-    'reactionToId',
-    'reactionEmoji',
-    'edited',
-    'revoked',
-    'forwarded',
-  ]
+  const known = ['source', 'id', 'at', 'text', 'attachments', 'replyToId', 'reactionToId', 'edited', 'revoked', 'data']
   for (const field of Object.keys(record)) {
     if (!known.includes(field)) problems.push(`unknown field ${field}`)
   }
@@ -122,16 +108,10 @@ export function checkRecord(record) {
   check('id', isText, 'a string that isn\'t empty')
   check('at', orNull(value => parseIsoSeconds(value) !== null), 'a UTC time to the second, or null')
   check('text', isString, 'a string')
-  if (record.source === 'email') check('subject', isString, 'a string')
-  else check('subject', value => value === undefined, 'left out, except on an email')
   check('attachments', value => Array.isArray(value) && value.every(checkAttachment), 'a list of attachments')
   check('replyToId', orNull(isText), 'an ID or null')
-  check('replyToPreview', orNull(isString), 'a string or null')
   check('reactionToId', orNull(isText), 'an ID or null')
-  check('reactionEmoji', orNull(isString), 'a string or null')
-  for (const flag of ['edited', 'revoked', 'forwarded']) check(flag, value => typeof value === 'boolean', 'true or false')
-  if ((record.reactionToId === null) !== (record.reactionEmoji === null)) {
-    problems.push('reactionToId and reactionEmoji go together')
-  }
+  for (const flag of ['edited', 'revoked']) check(flag, value => typeof value === 'boolean', 'true or false')
+  check('data', isData, 'an object of JSON values')
   return problems
 }

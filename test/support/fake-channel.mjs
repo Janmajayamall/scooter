@@ -14,12 +14,10 @@ export function makeRecord(fields = {}) {
     text: '',
     attachments: [],
     replyToId: null,
-    replyToPreview: null,
     reactionToId: null,
-    reactionEmoji: null,
     edited: false,
     revoked: false,
-    forwarded: false,
+    data: {},
     ...fields,
   }
 }

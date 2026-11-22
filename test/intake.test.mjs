@@ -49,9 +49,9 @@ test('intake: a message becomes a message line, with its time and its ID', async
   assert.deepEqual(lines(), [
     { seq: 1, kind: 'message', dir: 'in', at: '2026-11-09T15:43:02Z', source: 'whatsapp', sourceId: 'A1', trust: 'owner', text: 'coffee 150' },
   ])
-  // A forwarded message is marked as someone else's words.
-  await whatsapp.deliver(makeRecord({ id: 'A2', text: 'the train leaves at 9', forwarded: true }))
-  assert.deepEqual(gist(lines()[1]), { seq: 2, kind: 'message', sourceId: 'A2', forwarded: true, text: 'the train leaves at 9' })
+  // The record's `data` is the channel's, and goes on the line as it is.
+  await whatsapp.deliver(makeRecord({ id: 'A2', text: 'the train leaves at 9', data: { forwarded: true, anything: [1, { at: null }] } }))
+  assert.deepEqual(gist(lines()[1]), { seq: 2, kind: 'message', sourceId: 'A2', text: 'the train leaves at 9', data: { forwarded: true, anything: [1, { at: null }] } })
 })
 
 test('intake: a message whose channel gives no time is dated when it arrives', async t => {
@@ -61,17 +61,17 @@ test('intake: a message whose channel gives no time is dated when it arrives', a
   assert.equal(lines()[0].at, '2026-11-09T16:00:07Z')
 })
 
-test('intake: a reply gets the seq of what it quotes when that is known, and the preview either way', async t => {
+test('intake: a reply gets the seq of what it quotes when that is known, and the channel\'s data either way', async t => {
   const { whatsapp, lines } = setup(t)
   await whatsapp.deliver(makeRecord({ id: 'Q1', text: 'Blue Tokai, ₹450 at 12:40' }))
-  await whatsapp.deliver(makeRecord({ id: 'R1', text: 'work', replyToId: 'Q1', replyToPreview: 'Blue Tokai, ₹450 at 12:40' }))
-  // Quoting a message from before the datastore: only the preview.
-  await whatsapp.deliver(makeRecord({ id: 'R2', text: 'that one', replyToId: 'OLD', replyToPreview: 'from last year' }))
-  // Quoting with no preview, as catch-up does.
+  await whatsapp.deliver(makeRecord({ id: 'R1', text: 'work', replyToId: 'Q1', data: { quoted: 'Blue Tokai, ₹450 at 12:40' } }))
+  // Quoting a message from before the datastore: only the channel's preview, in its data.
+  await whatsapp.deliver(makeRecord({ id: 'R2', text: 'that one', replyToId: 'OLD', data: { quoted: 'from last year' } }))
+  // Quoting with no preview, as catch-up does: no data, and none on the line.
   await whatsapp.deliver(makeRecord({ id: 'R3', text: 'and again', replyToId: 'Q1' }))
   assert.deepEqual(lines().slice(1).map(gist), [
-    { seq: 2, kind: 'message', sourceId: 'R1', replyTo: 1, quoted: 'Blue Tokai, ₹450 at 12:40', text: 'work' },
-    { seq: 3, kind: 'message', sourceId: 'R2', quoted: 'from last year', text: 'that one' },
+    { seq: 2, kind: 'message', sourceId: 'R1', replyTo: 1, text: 'work', data: { quoted: 'Blue Tokai, ₹450 at 12:40' } },
+    { seq: 3, kind: 'message', sourceId: 'R2', text: 'that one', data: { quoted: 'from last year' } },
     { seq: 4, kind: 'message', sourceId: 'R3', replyTo: 1, text: 'and again' },
   ])
 })
@@ -82,8 +82,8 @@ test('intake: a text such as /status is a message, as it was sent, from any chan
   const { lines } = setup(t, { channels: [whatsapp, email] })
   for (const text of ['/status', '  /backup\n', '/help', '/new']) await whatsapp.deliver(makeRecord({ text }))
   // A reply keeps what it quotes.
-  await whatsapp.deliver(makeRecord({ id: 'R1', text: '/status', replyToId: 'X', replyToPreview: 'what?' }))
-  await email.deliver(makeRecord({ source: 'email', id: 'abc@mail.example', subject: 'note', text: '/status' }))
+  await whatsapp.deliver(makeRecord({ id: 'R1', text: '/status', replyToId: 'X', data: { quoted: 'what?' } }))
+  await email.deliver(makeRecord({ source: 'email', id: 'abc@mail.example', text: '/status', data: { subject: 'note' } }))
   assert.deepEqual(
     lines().map(line => [line.kind, line.text]),
     [
@@ -95,8 +95,8 @@ test('intake: a text such as /status is a message, as it was sent, from any chan
       ['message', '/status'],
     ],
   )
-  assert.deepEqual(gist(lines()[4]), { seq: 5, kind: 'message', sourceId: 'R1', quoted: 'what?', text: '/status' })
-  assert.deepEqual(gist(lines()[5]), { seq: 6, kind: 'message', sourceId: 'abc@mail.example', subject: 'note', text: '/status' })
+  assert.deepEqual(gist(lines()[4]), { seq: 5, kind: 'message', sourceId: 'R1', text: '/status', data: { quoted: 'what?' } })
+  assert.deepEqual(gist(lines()[5]), { seq: 6, kind: 'message', sourceId: 'abc@mail.example', text: '/status', data: { subject: 'note' } })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -106,16 +106,19 @@ test('intake: reactions, edits and deletions point at the seq of their message',
   const { whatsapp, lines } = setup(t)
   await whatsapp.deliver(makeRecord({ id: 'M1', text: 'coffee 150' }))
   await whatsapp.deliver(makeRecord({ id: 'M2', text: 'lunch 400' }))
-  await whatsapp.deliver(makeRecord({ id: 'R1', reactionToId: 'M1', reactionEmoji: '👍' }))
-  await whatsapp.deliver(makeRecord({ id: 'R2', reactionToId: 'M1', reactionEmoji: '' }))
+  await whatsapp.deliver(makeRecord({ id: 'R1', reactionToId: 'M1', data: { emoji: '👍' } }))
+  await whatsapp.deliver(makeRecord({ id: 'R2', reactionToId: 'M1', data: { emoji: '' } }))
   await whatsapp.deliver(makeRecord({ id: 'M1', edited: true, text: 'coffee 120', at: '2026-11-09T15:44:00Z' }))
   await whatsapp.deliver(makeRecord({ id: 'M2', revoked: true, at: '2026-11-09T15:44:30Z' }))
+  // The channel's data goes on whatever line its record becomes.
+  await whatsapp.deliver(makeRecord({ id: 'M1', edited: true, text: 'coffee 130', data: { by: 'the channel' } }))
   assert.deepEqual(lines().slice(2).map(gist), [
-    { seq: 3, kind: 'reaction', sourceId: 'R1', target: 1, emoji: '👍' },
-    // A removed reaction is one with no emoji.
-    { seq: 4, kind: 'reaction', sourceId: 'R2', target: 1, emoji: '' },
+    { seq: 3, kind: 'reaction', sourceId: 'R1', target: 1, data: { emoji: '👍' } },
+    // A removed reaction is one whose emoji is "", which is the channel's to say.
+    { seq: 4, kind: 'reaction', sourceId: 'R2', target: 1, data: { emoji: '' } },
     { seq: 5, kind: 'edit', sourceId: 'M1', target: 1, text: 'coffee 120' },
     { seq: 6, kind: 'delete', sourceId: 'M2', target: 2 },
+    { seq: 7, kind: 'edit', sourceId: 'M1', target: 1, text: 'coffee 130', data: { by: 'the channel' } },
   ])
   assert.equal(lines()[4].at, '2026-11-09T15:44:00Z')
 })
@@ -123,13 +126,13 @@ test('intake: reactions, edits and deletions point at the seq of their message',
 test('intake: a reaction, an edit or a deletion of an unknown message is skipped', async t => {
   const { whatsapp, lines, events } = setup(t)
   await whatsapp.deliver(makeRecord({ id: 'M1', text: 'coffee 150' }))
-  await whatsapp.deliver(makeRecord({ id: 'R1', reactionToId: 'M1', reactionEmoji: '👍' }))
+  await whatsapp.deliver(makeRecord({ id: 'R1', reactionToId: 'M1', data: { emoji: '👍' } }))
   for (const record of [
-    makeRecord({ id: 'R2', reactionToId: 'NOWHERE', reactionEmoji: '👍' }),
+    makeRecord({ id: 'R2', reactionToId: 'NOWHERE', data: { emoji: '👍' } }),
     makeRecord({ id: 'NOWHERE', edited: true, text: 'new' }),
     makeRecord({ id: 'NOWHERE', revoked: true }),
     // A reaction is not a message: it can't be reacted to, edited or deleted.
-    makeRecord({ id: 'R3', reactionToId: 'R1', reactionEmoji: '❤️' }),
+    makeRecord({ id: 'R3', reactionToId: 'R1', data: { emoji: '❤️' } }),
     makeRecord({ id: 'R1', edited: true, text: 'new' }),
     makeRecord({ id: 'R1', revoked: true }),
   ]) {
@@ -142,7 +145,7 @@ test('intake: a reaction, an edit or a deletion of an unknown message is skipped
 test('intake: the same edit, deletion or reaction delivered twice is stored once', async t => {
   const { whatsapp, lines } = setup(t)
   const message = makeRecord({ id: 'M1', text: 'coffee 150' })
-  const reaction = makeRecord({ id: 'R1', reactionToId: 'M1', reactionEmoji: '👍' })
+  const reaction = makeRecord({ id: 'R1', reactionToId: 'M1', data: { emoji: '👍' } })
   const edit = makeRecord({ id: 'M1', edited: true, text: 'coffee 120' })
   const deletion = makeRecord({ id: 'M1', revoked: true })
   // The webhook delivers each, and catch-up delivers each again.
@@ -236,7 +239,7 @@ test('intake: a download its channel\'s stop cut short leaves the message unstor
   assert.ok(!entries.some(entry => entry.event === 'intake.download_failed'))
   assert.deepEqual(fs.readdirSync(paths.bridgeIncoming), [])
   // Another channel's are stored meanwhile.
-  assert.equal((await email.deliver(makeRecord({ source: 'email', id: 'E1@example.com', text: 'a booking', subject: 'Booking' }))).stored, true)
+  assert.equal((await email.deliver(makeRecord({ source: 'email', id: 'E1@example.com', text: 'a booking', data: { subject: 'Booking' } }))).stored, true)
   // Until the channel starts again, what it hands over is left.
   assert.equal((await intake.take(later)).stored, false)
 
@@ -326,16 +329,23 @@ test('intake: a record that isn\'t well formed is logged, and stores nothing', a
     makeRecord({ id: '' }),
     makeRecord({ at: '2026-11-09T15:43:02.000Z' }),
     makeRecord({ text: undefined }),
-    makeRecord({ reactionToId: 'M1' }),
+    makeRecord({ reactionToId: 7 }),
     makeRecord({ attachments: [{ type: 'image' }] }),
     makeRecord({ chat: 'leaked@s.whatsapp.net' }),
-    makeRecord({ subject: 'only on email' }),
+    // What a channel keeps of its own goes in `data`, an object of JSON values.
+    makeRecord({ subject: 'only in data' }),
+    makeRecord({ replyToPreview: 'only in data' }),
+    makeRecord({ data: undefined }),
+    makeRecord({ data: null }),
+    makeRecord({ data: ['quoted'] }),
+    makeRecord({ data: { at: new Date(0) } }),
+    makeRecord({ data: { n: NaN } }),
   ]) {
     assert.deepEqual(await whatsapp.deliver(bad), { stored: false, reason: 'not a record' })
   }
   assert.equal(lines().length, 0)
   const logged = entries.filter(entry => entry.event === 'intake.bad_record')
-  assert.equal(logged.length, 7)
+  assert.equal(logged.length, 13)
   assert.ok(logged.every(entry => Array.isArray(entry.problems) && entry.problems.length > 0))
 })
 
@@ -344,7 +354,7 @@ test('intake: logs say what was stored, never what it said', async t => {
   const record = makeRecord({ id: 'P1', text: 'coffee with Sam', attachments: [makeAttachment({ name: 'Sam at Blue Tokai.jpg' })] })
   whatsapp.willDownload(record, 1, 'photo of Sam')
   await whatsapp.deliver(record)
-  await whatsapp.deliver(makeRecord({ id: 'M2', text: 'Sam paid', replyToId: 'P1', replyToPreview: 'coffee with Sam' }))
+  await whatsapp.deliver(makeRecord({ id: 'M2', text: 'Sam paid', replyToId: 'P1', data: { quoted: 'coffee with Sam' } }))
   const text = JSON.stringify(entries)
   assert.ok(!text.includes('Sam'), text)
 })
@@ -383,7 +393,7 @@ test('intake: it knows the newest incoming line from each channel, from the data
   const { log } = createTestLog({ clock })
   let store = openStore({ paths, clock, log })
   await store.append({ kind: 'message', dir: 'in', at: '2026-11-09T15:00:00Z', source: 'whatsapp', sourceId: 'W1', trust: 'owner', text: 'a' })
-  await store.append({ kind: 'message', dir: 'in', at: '2026-11-09T15:10:00Z', source: 'email', sourceId: 'E1', trust: 'owner', subject: '', text: 'b' })
+  await store.append({ kind: 'message', dir: 'in', at: '2026-11-09T15:10:00Z', source: 'email', sourceId: 'E1', trust: 'owner', text: 'b', data: { subject: '' } })
   // Scooter's own messages don't count.
   await store.append({ kind: 'message', dir: 'out', at: '2026-11-09T15:20:00Z', source: 'whatsapp', by: 'lifelog', text: 'c' })
 

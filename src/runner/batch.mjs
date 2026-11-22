@@ -8,8 +8,9 @@
 //   that message waits in `retry` (due or not) or is in `failed`. It joins as a retry; one from
 //   `failed` starts again at attempt 1. Otherwise the edit could be handled before its message, and
 //   the retry would later file the old text. These can take the batch past `BATCH_MAX_ITEMS`.
-// - **Context:** the out lines and reactions from the oldest item to the end of what the batch
-//   covers, plus the message each reply quotes, shown under it.
+// - **Context:** the messages Scooter sent and the reactions, of the lines this version knows, from
+//   the oldest item to the end of what the batch covers, plus the message each reply quotes, shown
+//   under it.
 // - **Covered:** the lines up to the first work item left for a later batch. When the run succeeds,
 //   the cursor moves there: the context and the lines of other sources in that stretch are dealt
 //   with too.
@@ -24,11 +25,16 @@
 // keeps in memory. `upTo` is the last line a lane's work reaches: the newest line for live
 // runs, and the `seq` a replay stops at (`replay.mjs`).
 
+import { isKnown } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
 import { fitToLimit, promptHeader, renderBatchPrompt, renderTaskPrompt } from './prompt.mjs'
 import { dueRetries, isWorkItem, workItemsAfter } from './triggers.mjs'
 
 const fits = prompt => Buffer.byteLength(prompt) <= limits.PROMPT_MAX_BYTES
+
+// Whether a line is context: a message Scooter sent, or a reaction, either way, of the lines this
+// version knows. A line it doesn't know is passed over.
+const isContext = line => isKnown(line) && ((line.kind === 'message' && line.dir === 'out') || line.kind === 'reaction')
 
 // The largest whole number from `low` to `high` for which `ok` holds, given that it holds for
 // `low` and holds less the higher the number.
@@ -81,8 +87,8 @@ export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, cand
   const context = []
   for (let seq = sorted[0].seq; seq <= covered; seq++) {
     const entry = index.get(seq)
-    if (!entry || items.has(seq)) continue
-    if (entry.line.dir === 'out' || entry.line.kind === 'reaction') context.push(seq)
+    if (!entry || items.has(seq) || !isContext(entry.line)) continue
+    context.push(seq)
   }
   return { items: sorted, context, covered: Math.max(covered, lane.cursor), newest: sorted.at(-1).seq }
 }

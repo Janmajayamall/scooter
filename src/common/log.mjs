@@ -12,9 +12,11 @@
 
 import { isoSeconds, systemClock } from './time.mjs'
 
-// The fields of a datastore line that hold what was written. Its other content, `files` and
+// The fields of a datastore line that hold what was written: its text, and `data`, which holds
+// whatever its channel keeps, such as an email's subject. `data` is written so whatever it is, a
+// list of strings among them, which would otherwise be logged. Its other content, `files` and
 // `media`, is nested, and nothing nested is logged.
-const CONTENT_FIELDS = new Set(['text', 'subject', 'quoted'])
+const CONTENT_FIELDS = new Set(['text', 'data'])
 const RESERVED_FIELDS = new Set(['at', 'level', 'component', 'event'])
 
 function isPlain(value) {

@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { checkRecord } from '../src/bridge/channels/index.mjs'
 import { DEFAULT_READER, SUBJECT_CUT_NOTE, TEXT_CUT_NOTE, checkParsed, createEmail, dateOf, emailRecord, fromAddress, messageIdOf, readAuthResults, readHeaderBlock, readerEnv, runEmailCheck, senderCheck } from '../src/bridge/channels/email.mjs'
 import { BridgeConfigError, startBridge } from '../src/bridge/main.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
@@ -169,7 +170,7 @@ test('email: sourceId is the Message-ID without its brackets, and at is the Date
   }
 })
 
-test('email: the record of an email: the whole message first, then its attachments; cut text and subject', () => {
+test('email: the record of an email: the whole message first, then its attachments; cut text and subject, which is always in its data', () => {
   const lines = readHeaderBlock(appleMailAudio())
   const parsed = { uid: 7, uidValidity: 42, arrivedAt: '2026-11-09T16:12:40Z', size: 900, fetched: 'whole', parsed: true, subject: 'Call with Sam', text: 'Recording.', attachments: [{ name: 'Call with Sam.m4a', mime: 'audio/x-m4a', bytes: 36 }] }
   const record = emailRecord({ parsed, lines, size: 900 })
@@ -178,26 +179,29 @@ test('email: the record of an email: the whole message first, then its attachmen
     id: '5E4F3A2B-1C0D-4E9F-8A7B-6C5D4E3F2A1B@example.net',
     at: '2026-11-09T16:12:17Z',
     text: 'Recording.',
-    subject: 'Call with Sam',
     attachments: [
       { type: 'email', mime: 'message/rfc822', name: null, bytes: 900, error: null },
       { type: 'audio', mime: 'audio/x-m4a', name: 'Call with Sam.m4a', bytes: 36, error: null },
     ],
     replyToId: null,
-    replyToPreview: null,
     reactionToId: null,
-    reactionEmoji: null,
     edited: false,
     revoked: false,
-    forwarded: false,
+    data: { subject: 'Call with Sam' },
   })
+  assert.deepEqual(checkRecord(record), [])
+  // An email has a subject, "" when it had none, also when it couldn't be parsed or was fetched
+  // without its body: the channel's rule, which the datastore doesn't know.
+  for (const other of [{ ...parsed, subject: '' }, { ...parsed, parsed: false, subject: '', text: '', attachments: [] }, { ...parsed, fetched: 'headers', subject: '', text: '', attachments: [] }]) {
+    assert.deepEqual(emailRecord({ parsed: other, lines, size: 900 }).data, { subject: '' })
+  }
   // No Message-ID or Date that can be read: the UID, and the time it arrived.
   const bare = readHeaderBlock(replaceHeader(replaceHeader(appleMailAudio(), 'Message-Id', null), 'Date', null))
   assert.deepEqual([emailRecord({ parsed, lines: bare, size: 900 }).id, emailRecord({ parsed, lines: bare, size: 900 }).at], ['imap-42-7', '2026-11-09T16:12:40Z'])
   // The text cut at 20,000 characters, and the subject at 1,000, each with a note.
   const long = emailRecord({ parsed: { ...parsed, text: `${'é'.repeat(20000)}x`, subject: `${'s'.repeat(1000)}t` }, lines, size: 900 })
   assert.equal(long.text, `${'é'.repeat(20000)}${TEXT_CUT_NOTE}`)
-  assert.equal(long.subject, `${'s'.repeat(1000)}${SUBJECT_CUT_NOTE}`)
+  assert.equal(long.data.subject, `${'s'.repeat(1000)}${SUBJECT_CUT_NOTE}`)
   assert.equal(emailRecord({ parsed: { ...parsed, text: 'é'.repeat(20000) }, lines, size: 900 }).text, 'é'.repeat(20000))
 })
 
@@ -326,12 +330,12 @@ test('email: emails from the spool become the right lines and attachments: the w
       source: 'email',
       sourceId: '5E4F3A2B-1C0D-4E9F-8A7B-6C5D4E3F2A1B@example.net',
       trust: 'owner',
-      subject: 'Call with Sam',
       text: "Recording from today's call.",
       files: [
         { path: '1.eml', mime: 'message/rfc822', bytes: memo.length },
         { path: '1-2.m4a', mime: 'audio/x-m4a', name: 'Call with Sam.m4a', bytes: M4A.length },
       ],
+      data: { subject: 'Call with Sam' },
     },
     {
       seq: 2,
@@ -341,12 +345,12 @@ test('email: emails from the spool become the right lines and attachments: the w
       source: 'email',
       sourceId: 'CAF3x9qR2pZ8mWk1y=fwd@mail.gmail.com',
       trust: 'owner',
-      subject: 'Fwd: Your booking is confirmed: PNR X7Y2KQ',
       text: 'Work trip.',
       files: [
         { path: '2.eml', mime: 'message/rfc822', bytes: booking.length },
         { path: '2-2.pdf', mime: 'application/pdf', name: 'E-ticket X7Y2KQ.pdf', bytes: PDF.length },
       ],
+      data: { subject: 'Fwd: Your booking is confirmed: PNR X7Y2KQ' },
     },
     {
       seq: 3,
@@ -356,9 +360,9 @@ test('email: emails from the spool become the right lines and attachments: the w
       source: 'email',
       sourceId: 'PN3P287MB1234A1B2C3D4E5F6A7B8C9D0E1F2A@PN3P287MB1234.INDP287.PROD.OUTLOOK.COM',
       trust: 'owner',
-      subject: 'Taxi receipt',
       text: 'Taxi from the airport, ₹850.',
       files: [{ path: '3.eml', mime: 'message/rfc822', bytes: outlookHtmlOnly().length }],
+      data: { subject: 'Taxi receipt' },
     },
   ])
   assert.deepEqual(fs.readFileSync(path.join(context.dayDir, '1.eml')), memo)
@@ -457,8 +461,8 @@ test('email: an email that couldn\'t be parsed is stored with its .eml and an er
   await context.take()
   const [broken, next] = context.lines()
   assert.deepEqual(
-    { files: broken.files, media: broken.media, subject: broken.subject, text: broken.text },
-    { files: [{ path: '1.eml', mime: 'message/rfc822', bytes: raw.length }], media: { type: 'email', error: 'could not be parsed' }, subject: '', text: '' },
+    { files: broken.files, media: broken.media, data: broken.data, text: broken.text },
+    { files: [{ path: '1.eml', mime: 'message/rfc822', bytes: raw.length }], media: { type: 'email', error: 'could not be parsed' }, data: { subject: '' }, text: '' },
   )
   assert.equal(next.text, 'next')
 })
@@ -471,8 +475,8 @@ test('email: one too large to fetch, from the owner, is stored without its body,
   await context.take()
   const [line] = context.lines()
   assert.deepEqual(
-    { subject: line.subject, text: line.text, files: line.files, media: line.media },
-    { subject: 'Call with Sam', text: '', files: undefined, media: { type: 'email', mime: 'message/rfc822', error: 'too large, not downloaded' } },
+    { data: line.data, text: line.text, files: line.files, media: line.media },
+    { data: { subject: 'Call with Sam' }, text: '', files: undefined, media: { type: 'email', mime: 'message/rfc822', error: 'too large, not downloaded' } },
   )
 })
 
