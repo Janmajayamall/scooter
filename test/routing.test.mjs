@@ -99,6 +99,52 @@ test('routing: the ✅ Email: text is cut as an entry\'s text is, whatever subje
   assert.ok(text.endsWith(CUT_NOTE))
 })
 
+test('routing: a ✅ Email: text takes the subject from the line\'s data only when it is a string there', () => {
+  const email = (seq, data) => ({ ...line.email(seq, AT, '', 'text', { sourceId: `mail-${seq}@example.com` }), data })
+  const lines = [
+    ...LINES,
+    email(9, undefined),
+    email(10, ['Call with Sam']),
+    email(11, 'Call with Sam'),
+    email(12, { subject: 7 }),
+    email(13, { subject: { text: 'Call with Sam' } }),
+    email(14, null),
+    email(15, { subject: ' Call\nwith\tSam ', other: 'kept' }),
+  ].map(fixture => JSON.parse(JSON.stringify(fixture)))
+  for (const seq of [9, 10, 11, 12, 13, 14]) assert.deepEqual(route(react(seq), { lines }), ['whatsapp', null, '✅ Email: (no subject)'], `#${seq}`)
+  assert.deepEqual(route(react(15), { lines }), ['whatsapp', null, '✅ Email: Call with Sam'])
+})
+
+test('routing: a line of a kind or a channel this version doesn\'t know: a reply about one of a channel that is gone goes to DEFAULT_CHANNEL, and a reaction to one is dropped', () => {
+  const base = { dir: 'in', at: AT, trust: 'owner' }
+  const lines = [
+    ...LINES,
+    // The kind an earlier version wrote for /status, from WhatsApp.
+    { seq: 9, kind: 'command', ...base, source: 'whatsapp', sourceId: 'WA9', text: '/status' },
+    // A channel that is gone.
+    { seq: 10, kind: 'message', ...base, source: 'telegram', sourceId: 'TG10', text: 'hi' },
+    // A WhatsApp message without the text a message needs.
+    { seq: 11, kind: 'message', ...base, source: 'whatsapp', sourceId: 'WA11' },
+    // An edit of the old command, and one of the gone channel's message.
+    { seq: 12, kind: 'edit', ...base, source: 'whatsapp', sourceId: 'WA9', target: 9, text: '/help' },
+    { seq: 13, kind: 'edit', ...base, source: 'telegram', sourceId: 'TG10', target: 10, text: 'hello' },
+    { seq: 14, kind: 'message', ...base, source: 'constructor', sourceId: 'X14', text: 'hi' },
+  ]
+  // A gone channel's line, or an edit of one: to DEFAULT_CHANNEL, unquoted.
+  for (const seq of [10, 13, 14]) {
+    assert.deepEqual(route(text({ replyTo: seq }), { lines }), ['whatsapp', null, 'hello'], `replyTo #${seq}`)
+    assert.deepEqual(route(text({ about: seq }), { lines }), ['whatsapp', null, 'hello'], `about #${seq}`)
+  }
+  // A line of WhatsApp's that this version doesn't know, or an edit of one: to WhatsApp, unquoted.
+  for (const seq of [9, 11, 12]) {
+    assert.deepEqual(route(text({ replyTo: seq }), { lines }), ['whatsapp', null, 'hello'], `replyTo #${seq}`)
+  }
+  // A reaction to any of them is dropped: none is a message this version knows.
+  for (const seq of [9, 10, 11, 14]) assert.deepEqual(route(react(seq), { lines }), ['drop', "a line this version doesn't know"], `#${seq}`)
+  for (const seq of [12]) assert.deepEqual(route(react(seq), { lines }), ['drop', "not one of the owner's messages"], `#${seq}`)
+  assert.deepEqual(route(react(13), { lines }), ['drop', "a line this version doesn't know"])
+})
+
 test('routing: a reaction to an unknown line, to what Scooter sent, or to a reaction is dropped', () => {
   assert.deepEqual(route(react(999)), ['drop', 'unknown target'])
   assert.deepEqual(route(react(5)), ['drop', "not one of the owner's messages"])

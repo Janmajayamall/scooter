@@ -25,6 +25,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { dataFlag, dataText } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
 import { parseIsoSeconds, shortLocalTime, toLocal } from '../common/time.mjs'
 
@@ -154,12 +155,12 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
     const where = isEmail && line.files ? `the whole email is ${filePath(entry, line.files[0])}` : `the whole text is ${lineRef(current.editedIn ?? line.seq)}`
     const text = quote(current.text, textCap, where)
     const edited = current.editedIn !== null ? ` (edited in #${current.editedIn})` : ''
-    const forwarded = line.forwarded ? 'forwarded ' : ''
+    const forwarded = dataFlag(line, 'forwarded') ? 'forwarded ' : ''
     const extra = []
     const files = line.files ?? []
     let head
     if (isEmail) {
-      head = `${forwarded}email ${quote(line.subject ?? '', textCap, where)}: ${text}`
+      head = `${forwarded}email ${quote(dataText(line, 'subject') ?? '', textCap, where)}: ${text}`
       for (const file of files.slice(1)) extra.push(`attachment ${fileText(entry, file)}`)
       if (files.length > 0) extra.push(`whole email ${filePath(entry, files[0])}`)
     } else if (files.length > 0) {
@@ -175,18 +176,19 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
   }
 
   // The line under a reply: what it quotes, and who sent that. A reply to a line the index can't
-  // show as a message, which only a damaged datastore gives, shows the channel's preview if there
-  // is one.
+  // show as a message, a line of a kind or a channel this version doesn't know, shows the channel's
+  // preview, `quoted` in the line's `data`, if there is one.
   function replyLine(line) {
-    const preview = () => quote(line.quoted, cap, `the whole text is ${lineRef(line.seq)}`)
+    const quoted = dataText(line, 'quoted')
+    const preview = () => quote(quoted, cap, `the whole text is ${lineRef(line.seq)}`)
     if (line.replyTo !== undefined) {
       const target = index.get(line.replyTo)
       if (!target || index.current(line.replyTo) === undefined) {
-        return line.quoted === undefined ? `↳ reply to #${line.replyTo}` : `↳ reply to #${line.replyTo}: ${preview()}`
+        return quoted === undefined ? `↳ reply to #${line.replyTo}` : `↳ reply to #${line.replyTo}: ${preview()}`
       }
       return `↳ reply to #${line.replyTo}, which ${who(target.line)} sent: ${message(target, { bare: true }).head}`
     }
-    if (line.quoted !== undefined) return `↳ reply to an earlier message: ${preview()}`
+    if (quoted !== undefined) return `↳ reply to an earlier message: ${preview()}`
     return null
   }
 
@@ -211,8 +213,10 @@ function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = (
     const { line } = entry
     const start = `#${seq} ${timeOf(entry)} ${who(line)}`
     if (line.kind === 'reaction') {
-      if (line.emoji === '') return `${start} removed ${line.dir === 'in' ? 'their' : 'your'} reaction to #${line.target}`
-      return `${start} reacted ${token(line.emoji)} to #${line.target}`
+      // The emoji is in the line's `data`, "" for a reaction removed; without one, it isn't shown.
+      const emoji = dataText(line, 'emoji')
+      if (emoji === '') return `${start} removed ${line.dir === 'in' ? 'their' : 'your'} reaction to #${line.target}`
+      return `${start} reacted ${emoji === undefined ? '' : `${token(emoji)} `}to #${line.target}`
     }
     const inReply = line.replyTo !== undefined ? `, in reply to #${line.replyTo}` : ''
     const { head, extra } = message(entry, { bare: true, textCap: Infinity })

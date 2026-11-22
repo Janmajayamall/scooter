@@ -10,7 +10,9 @@
 //   `seq` of the message it refers to as `target`. One whose message isn't in the datastore is
 //   skipped: there is nothing for it to change.
 // - Anything else becomes a `message`, whatever its text. A reply gets `replyTo`, the `seq` of the
-//   message it quotes when that is in the datastore, and `quoted`, the channel's preview of it.
+//   message it quotes when that is in the datastore.
+// - The record's `data`, the channel's own, goes on the line as it is, and is left out when it
+//   holds nothing. Intake doesn't look into it.
 // - Each attachment is downloaded, with `MEDIA_DOWNLOAD_RETRIES` more tries if that fails, and
 //   handed to the store, which copies it into the day folder. An attachment that can't be stored
 //   leaves a `media` object on the line saying why: too large, not a file, a failed download, or a
@@ -138,10 +140,7 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     if (record.replyToId !== null) {
       const replyTo = store.index.seqOf(record.source, record.replyToId)
       if (replyTo !== undefined) fields.replyTo = replyTo
-      if (record.replyToPreview) fields.quoted = record.replyToPreview
     }
-    if (record.forwarded) fields.forwarded = true
-    if (record.source === 'email') fields.subject = record.subject
     fields.text = record.text
 
     // Catch-up lists the last two minutes again every time, so this is common, and the
@@ -199,23 +198,25 @@ export function createIntake({ store, channels, paths, log, clock = systemClock,
     if (!channel) return skip(record, null, 'no such channel')
     if (left.has(record.source)) return leave(record, null, 'its channel stopped during a download before it')
     const base = { dir: 'in', at: record.at ?? isoSeconds(clock.now()), source: record.source, trust: 'owner' }
+    // The channel's own, on whatever line the record becomes.
+    const data = Object.keys(record.data).length > 0 ? { data: record.data } : {}
 
     if (record.revoked) {
       const target = targetOf(record.source, record.id)
       if (target === undefined) return skip(record, 'delete', 'unknown target')
-      return append({ ...base, kind: 'delete', sourceId: record.id, target })
+      return append({ ...base, kind: 'delete', sourceId: record.id, target, ...data })
     }
     if (record.reactionToId !== null) {
       const target = targetOf(record.source, record.reactionToId)
       if (target === undefined) return skip(record, 'reaction', 'unknown target')
-      return append({ ...base, kind: 'reaction', sourceId: record.id, target, emoji: record.reactionEmoji })
+      return append({ ...base, kind: 'reaction', sourceId: record.id, target, ...data })
     }
     if (record.edited) {
       const target = targetOf(record.source, record.id)
       if (target === undefined) return skip(record, 'edit', 'unknown target')
-      return append({ ...base, kind: 'edit', sourceId: record.id, target, text: record.text })
+      return append({ ...base, kind: 'edit', sourceId: record.id, target, text: record.text, ...data })
     }
-    return message(record, base)
+    return message(record, { ...base, ...data })
   }
 
   async function take(record) {

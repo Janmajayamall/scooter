@@ -7,9 +7,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { inspect } from 'node:util'
 import { attachmentName, openStore } from '../src/bridge/store.mjs'
 import { createIndex } from '../src/common/datastore/index.mjs'
-import { DatastoreError, checkLine, decodeLine, encodeLine } from '../src/common/datastore/line.mjs'
+import { DatastoreError, checkLine, checkReadLine, dataFlag, dataText, decodeLine, encodeLine, isKnown } from '../src/common/datastore/line.mjs'
 import { createReader, listDays } from '../src/common/datastore/reader.mjs'
 import { overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
@@ -24,9 +25,9 @@ import { atEnd, makeTestDir } from './support/tmp.mjs'
 const EXAMPLES = [
   '{"seq":1042,"kind":"message","dir":"in","at":"2026-11-09T15:43:02Z","source":"whatsapp","sourceId":"3EB0A1B2C3D4E5F6A7B8","trust":"owner","text":"","files":[{"path":"1042.jpg","mime":"image/jpeg","bytes":482113}]}',
   '{"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T15:43:40Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}',
-  '{"seq":1044,"kind":"message","dir":"in","at":"2026-11-09T15:50:11Z","source":"whatsapp","sourceId":"3EB0A1C9D8E7F6A5B4C3","trust":"owner","replyTo":1043,"quoted":"Blue Tokai, ₹450 at 12:40: work or personal?","text":"work"}',
-  '{"seq":1045,"kind":"reaction","dir":"out","at":"2026-11-09T15:50:30Z","source":"whatsapp","sourceId":"3EB0FF02A3B4C5D6E7F8","by":"lifelog","target":1044,"emoji":"✅"}',
-  '{"seq":1071,"kind":"message","dir":"in","at":"2026-11-09T16:12:40Z","source":"email","sourceId":"CAF3x9qR2-example@mail.gmail.com","trust":"owner","subject":"Call with Sam","text":"Recording from today\'s call.","files":[{"path":"1071.eml","mime":"message/rfc822","bytes":19262388},{"path":"1071-2.m4a","mime":"audio/mp4","name":"Call with Sam.m4a","bytes":14206977}]}',
+  '{"seq":1044,"kind":"message","dir":"in","at":"2026-11-09T15:50:11Z","source":"whatsapp","sourceId":"3EB0A1C9D8E7F6A5B4C3","trust":"owner","replyTo":1043,"text":"work","data":{"quoted":"Blue Tokai, ₹450 at 12:40: work or personal?"}}',
+  '{"seq":1045,"kind":"reaction","dir":"out","at":"2026-11-09T15:50:30Z","source":"whatsapp","sourceId":"3EB0FF02A3B4C5D6E7F8","by":"lifelog","target":1044,"data":{"emoji":"✅"}}',
+  '{"seq":1071,"kind":"message","dir":"in","at":"2026-11-09T16:12:40Z","source":"email","sourceId":"CAF3x9qR2-example@mail.gmail.com","trust":"owner","text":"Recording from today\'s call.","files":[{"path":"1071.eml","mime":"message/rfc822","bytes":19262388},{"path":"1071-2.m4a","mime":"audio/mp4","name":"Call with Sam.m4a","bytes":14206977}],"data":{"subject":"Call with Sam"}}',
 ]
 
 const modeOf = file => fs.statSync(file).mode & 0o7777
@@ -75,21 +76,26 @@ test('datastore: every kind of line', () => {
   const lines = [
     { ...base, kind: 'message', text: 'coffee 150' },
     { ...base, kind: 'message', text: '', media: { type: 'image', mime: 'image/jpeg', error: 'download failed' } },
-    { ...base, kind: 'message', text: 'see this', forwarded: true, replyTo: 3, quoted: 'from before the datastore' },
+    { ...base, kind: 'message', text: 'see this', replyTo: 3, data: { forwarded: true, quoted: 'from before the datastore' } },
     { ...base, kind: 'edit', target: 4, text: 'coffee 120' },
     { ...base, kind: 'delete', target: 4 },
-    { ...base, kind: 'reaction', target: 4, emoji: '👍' },
-    { ...base, kind: 'reaction', target: 4, emoji: '' },
+    { ...base, kind: 'reaction', target: 4, data: { emoji: '👍' } },
+    { ...base, kind: 'reaction', target: 4, data: { emoji: '' } },
+    // `data` is the channel's: any JSON it likes, on any line.
+    { ...base, kind: 'edit', target: 4, text: '', data: { list: [1, 'two', null, { three: [true] }], n: -0.5 } },
     { ...base, kind: 'message', text: '', trust: 'external' },
     { seq: 9, kind: 'message', dir: 'out', at: base.at, source: 'whatsapp', by: 'bridge', text: 'Backup failed.' },
   ]
   for (const line of lines) {
     assert.deepEqual(checkLine(line), [], JSON.stringify(line))
     assert.deepEqual(decodeLine(encodeLine(line).trimEnd()), line)
+    // What the store writes, a reader takes, and this version knows.
+    assert.deepEqual(checkReadLine(line), [], JSON.stringify(line))
+    assert.equal(isKnown(line), true, JSON.stringify(line))
   }
 })
 
-test('datastore: what is not a line, and why', () => {
+test('datastore: what the store refuses to write, and why', () => {
   const good = decodeLine(EXAMPLES[2])
   const bad = [
     [{ ...good, seq: 0 }, /seq must be/],
@@ -110,11 +116,26 @@ test('datastore: what is not a line, and why', () => {
     [{ ...good, text: 7 }, /text must be a string/],
     [{ ...good, replyTo: 'x' }, /replyTo must be a seq/],
     [{ ...good, replyTo: 1044 }, /replyTo must be a seq before/],
-    [{ ...good, forwarded: false }, /forwarded must be true/],
-    [{ ...good, subject: 'not an email' }, /subject doesn't belong/],
     [{ ...good, target: 3 }, /target doesn't belong/],
-    [{ ...good, emoji: '✅' }, /emoji doesn't belong/],
     [{ ...good, note: 'extra' }, /unknown field note/],
+    // The four fields that moved into `data` are no fields of a line the store writes.
+    [{ ...good, quoted: 'Blue Tokai' }, /unknown field quoted/],
+    [{ ...good, forwarded: true }, /unknown field forwarded/],
+    [{ ...good, subject: 'Call with Sam' }, /unknown field subject/],
+    [{ ...good, emoji: '✅' }, /unknown field emoji/],
+    // `data` is an object of JSON values with something in it, or left out.
+    [{ ...good, data: {} }, /data must be an object of JSON values/],
+    [{ ...good, data: null }, /data must be/],
+    [{ ...good, data: ['quoted'] }, /data must be/],
+    [{ ...good, data: 'quoted' }, /data must be/],
+    [{ ...good, data: { n: NaN } }, /data must be/],
+    [{ ...good, data: { n: Infinity } }, /data must be/],
+    [{ ...good, data: { n: 1n } }, /data must be/],
+    [{ ...good, data: { gone: undefined } }, /data must be/],
+    [{ ...good, data: { when: new Date(0) } }, /data must be/],
+    [{ ...good, data: { f() {} } }, /data must be/],
+    [{ ...good, data: { holes: [1, , 3] } }, /data must be/],
+    [{ ...good, data: (() => { const loop = { a: 1 }; loop.self = loop; return loop })() }, /data must be/],
     [{ ...good, files: [] }, /files must be/],
     [{ ...good, files: [{ path: '../../etc/passwd', mime: 'text/plain', bytes: 1 }] }, /files must be/],
     [{ ...good, files: [{ path: '.hidden', mime: 'text/plain', bytes: 1 }] }, /files must be/],
@@ -125,23 +146,143 @@ test('datastore: what is not a line, and why', () => {
     [{ ...decodeLine(EXAMPLES[1]), trust: 'owner' }, /trust doesn't belong/],
     [{ ...decodeLine(EXAMPLES[3]), target: undefined }, /target is missing/],
     [{ ...decodeLine(EXAMPLES[3]), target: 1045 }, /target must be a seq before/],
-    [{ ...decodeLine(EXAMPLES[3]), emoji: undefined }, /emoji is missing/],
     [{ ...decodeLine(EXAMPLES[3]), text: 'hi' }, /text doesn't belong/],
     [{ ...decodeLine(EXAMPLES[3]), files: [{ path: 'a.jpg', mime: 'image/jpeg', bytes: 1 }] }, /files doesn't belong/],
-    // An email's message has its subject, "" when it had none.
-    [{ ...decodeLine(EXAMPLES[4]), subject: undefined }, /subject is missing/],
-    [{ ...decodeLine(EXAMPLES[4]), subject: null }, /subject must be a string/],
     // There is no kind `command`: a text such as /status is a message.
-    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: '/status' }, /^kind must be one of message, edit, delete, reaction; text doesn't belong on this line$/],
+    [{ ...good, kind: 'command', replyTo: undefined, data: undefined, text: '/status' }, /^kind must be one of message, edit, delete, reaction; text doesn't belong on this line$/],
     [[], /not an object/],
     [null, /not an object/],
   ]
   for (const [line, pattern] of bad) {
-    assert.match(checkLine(line).join('; '), pattern, JSON.stringify(line))
+    assert.match(checkLine(line).join('; '), pattern, inspect(line))
     assert.throws(() => encodeLine(line), DatastoreError)
   }
   assert.throws(() => decodeLine('{"seq":1,'), /not JSON/)
   assert.throws(() => decodeLine(''), /not JSON/)
+})
+
+test('datastore: a reader checks only what every reader depends on, and ignores what it doesn\'t know', () => {
+  const good = decodeLine(EXAMPLES[2])
+  // Read, though the store wouldn't write them: a kind, a channel and a field this version doesn't
+  // have, such as the kind `command` an earlier version wrote, and anything at all in `data`.
+  const read = [
+    { ...good, kind: 'command', text: '/status' },
+    { ...good, source: 'telegram' },
+    { ...good, source: 'bank-alerts-2' },
+    { ...good, note: 'a field of a later version' },
+    { ...good, quoted: 7, forwarded: 'yes', subject: null, emoji: ['✅'] },
+    { ...good, trust: 'stranger' },
+    { ...good, trust: undefined },
+    { ...good, dir: 'out' },
+    { ...good, text: undefined },
+    { ...good, data: null },
+    { ...good, data: [] },
+    { ...good, data: 'not an object' },
+    { ...good, data: { subject: 7, quoted: { text: 'x' }, forwarded: 'true', emoji: null } },
+    { ...good, data: {} },
+    // A file is read by its path, MIME type and name; what else it holds is passed over.
+    { ...good, files: [{ path: '1044.jpg', mime: 'image/jpeg' }] },
+    { ...good, files: [{ path: '1044.jpg', mime: 'image/jpeg', bytes: 'many', sha256: 'abc' }] },
+    { ...good, media: { type: 'image', error: 'download failed', size: 3 } },
+    // An edit, a deletion or a reaction without its target, and a message without its text.
+    { ...good, kind: 'edit' },
+    { ...good, kind: 'reaction', text: undefined },
+  ]
+  for (const line of read) {
+    assert.deepEqual(checkReadLine(line), [], JSON.stringify(line))
+    assert.deepEqual(decodeLine(JSON.stringify(line)), JSON.parse(JSON.stringify(line)))
+  }
+  // Refused as damage: what every reader depends on, and a field this version acts on that isn't
+  // of its type.
+  const refused = [
+    [{ ...good, seq: 0 }, /seq must be/],
+    [{ ...good, seq: '1044' }, /seq must be/],
+    [{ ...good, seq: undefined }, /seq is missing/],
+    [{ ...good, kind: undefined }, /kind is missing/],
+    [{ ...good, kind: 'Memo' }, /kind must be a name/],
+    [{ ...good, kind: 'a note' }, /kind must be a name/],
+    [{ ...good, kind: '' }, /kind must be a name/],
+    [{ ...good, kind: 7 }, /kind must be a name/],
+    [{ ...good, kind: '-x' }, /kind must be a name/],
+    [{ ...good, source: 'Telegram' }, /source must be a name/],
+    [{ ...good, source: '\u001b[2J' }, /source must be a name/],
+    [{ ...good, source: undefined }, /source is missing/],
+    [{ ...good, dir: 'sideways' }, /dir must be one of in, out/],
+    [{ ...good, dir: undefined }, /dir is missing/],
+    [{ ...good, at: '2026-11-09T21:20:11+05:30' }, /at must be a UTC time/],
+    [{ ...good, at: undefined }, /at is missing/],
+    [{ ...good, sourceId: '' }, /sourceId must be/],
+    [{ ...good, sourceId: 7 }, /sourceId must be/],
+    [{ ...good, by: 7 }, /by must be/],
+    [{ ...good, text: 7 }, /text must be a string/],
+    [{ ...good, text: null }, /text must be a string/],
+    [{ ...good, replyTo: 'x' }, /replyTo must be a seq/],
+    [{ ...good, replyTo: 1044 }, /replyTo must be a seq before/],
+    [{ ...good, target: 1.5 }, /target must be a seq/],
+    [{ ...good, kind: 'edit', target: 2000 }, /target must be a seq before/],
+    [{ ...good, files: [] }, /files must be/],
+    [{ ...good, files: {} }, /files must be/],
+    [{ ...good, files: [{ path: '../../etc/passwd', mime: 'text/plain' }] }, /files must be/],
+    [{ ...good, files: [{ path: '.hidden', mime: 'text/plain' }] }, /files must be/],
+    [{ ...good, files: [{ path: '1044.jpg' }] }, /files must be/],
+    [{ ...good, files: [{ path: '1044.jpg', mime: 'image/jpeg', name: 7 }] }, /files must be/],
+    [{ ...good, media: { type: 'image' } }, /media must be/],
+    [{ ...good, media: { type: 'image', error: 'x', mime: 7 } }, /media must be/],
+    [{ ...good, media: 'download failed' }, /media must be/],
+    [[], /not an object/],
+    [null, /not an object/],
+    ['a line', /not an object/],
+  ]
+  for (const [line, pattern] of refused) {
+    assert.match(checkReadLine(line).join('; '), pattern, JSON.stringify(line))
+    assert.throws(() => decodeLine(JSON.stringify(line)), error => error instanceof DatastoreError && pattern.test(error.message))
+  }
+  assert.throws(() => decodeLine('{"seq":1,'), /not JSON/)
+})
+
+test('datastore: this version knows a line of its kinds and channels with the fields its kind needs, and nothing in data', () => {
+  const at = '2026-11-09T15:43:02Z'
+  const base = { seq: 9, dir: 'in', at, source: 'whatsapp', trust: 'owner' }
+  for (const line of [
+    { ...base, kind: 'message', text: '' },
+    { ...base, kind: 'edit', target: 4, text: 'x' },
+    { ...base, kind: 'delete', target: 4 },
+    { ...base, kind: 'reaction', target: 4 },
+    { ...base, kind: 'reaction', target: 4, data: 'not even an object' },
+    { ...base, source: 'email', kind: 'message', text: '' },
+    { ...base, kind: 'message', text: '', trust: undefined, note: 'ignored' },
+  ]) {
+    assert.equal(isKnown(line), true, JSON.stringify(line))
+  }
+  for (const line of [
+    { ...base, kind: 'command', text: '/status' },
+    { ...base, kind: 'message', text: 'hi', source: 'telegram' },
+    { ...base, kind: 'message' },
+    { ...base, kind: 'edit', text: 'x' },
+    { ...base, kind: 'edit', target: 4 },
+    { ...base, kind: 'delete' },
+    { ...base, kind: 'reaction' },
+    { ...base, kind: 'constructor', text: '' },
+    { ...base, kind: 'message', source: 'constructor', text: '' },
+  ]) {
+    assert.equal(isKnown(line), false, JSON.stringify(line))
+  }
+})
+
+test('datastore: what a reader takes from data, it checks first', () => {
+  const line = data => ({ seq: 1, kind: 'message', dir: 'in', at: '2026-11-09T15:43:02Z', source: 'email', trust: 'owner', text: '', data })
+  assert.equal(dataText(line({ subject: 'Call with Sam' }), 'subject'), 'Call with Sam')
+  assert.equal(dataText(line({ subject: '' }), 'subject'), '')
+  for (const data of [undefined, null, [], ['subject'], 'subject', 7, true, {}, { subject: 7 }, { subject: null }, { subject: ['x'] }, { subject: { text: 'x' } }, { Subject: 'x' }]) {
+    assert.equal(dataText(line(data), 'subject'), undefined, JSON.stringify(data))
+  }
+  // Only its own: nothing an object inherits.
+  assert.equal(dataText(line({}), 'constructor'), undefined)
+  assert.equal(dataText(line(JSON.parse('{"__proto__":{"subject":"x"}}')), 'subject'), undefined)
+  assert.equal(dataFlag(line({ forwarded: true }), 'forwarded'), true)
+  for (const data of [undefined, null, [true], { forwarded: 'true' }, { forwarded: 1 }, { forwarded: false }, {}]) {
+    assert.equal(dataFlag(line(data), 'forwarded'), false, JSON.stringify(data))
+  }
 })
 
 test('datastore: an error about a line never quotes the line', () => {
@@ -152,13 +293,18 @@ test('datastore: an error about a line never quotes the line', () => {
       assert.fail('should not decode')
     } catch (error) {
       assert.ok(error instanceof DatastoreError)
-      assert.ok(!error.message.includes('Sam') || /unknown field/.test(error.message))
-      assert.ok(!error.message.includes(`"text":"${secret}"`))
+      assert.ok(!error.message.includes('Sam'), error.message)
     }
   }
   // The value of a field is never repeated, whatever is wrong with it.
-  const problems = checkLine({ ...decodeLine(EXAMPLES[2]), quoted: 7, text: [secret], at: secret })
+  const problems = checkLine({ ...decodeLine(EXAMPLES[2]), data: [secret], text: [secret], at: secret })
   assert.ok(!problems.join(' ').includes('Sam'))
+  // A reader names no field it doesn't know, so not even a field's name is repeated.
+  for (const line of [{ seq: 1, kind: 'message', text: secret, [secret]: secret }, { ...decodeLine(EXAMPLES[2]), [secret]: secret, text: [secret], data: secret }]) {
+    const read = checkReadLine(line).join(' ')
+    assert.notEqual(read, '')
+    assert.ok(!read.includes('Sam'), read)
+  }
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -365,8 +511,8 @@ test('datastore: the index is rebuilt on restart', async t => {
   await store.append({ kind: 'message', dir: 'out', at: '2026-11-09T15:44:00Z', source: 'whatsapp', sourceId: 'OUT-1', by: 'lifelog', replyTo: 1, text: 'Work or personal?' })
   clock.set('2026-11-10T08:00:00Z')
   await store.append(incoming('', { kind: 'edit', target: 1, text: 'coffee 120', sourceId: 'MSG-1' }))
-  await store.append({ kind: 'reaction', dir: 'in', at: '2026-11-10T08:01:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 2, emoji: '👍' })
-  await store.append({ kind: 'message', dir: 'in', at: '2026-11-10T08:02:00Z', source: 'email', sourceId: 'mail-1@example.com', trust: 'owner', subject: 'Receipt', text: 'attached' })
+  await store.append({ kind: 'reaction', dir: 'in', at: '2026-11-10T08:01:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 2, data: { emoji: '👍' } })
+  await store.append({ kind: 'message', dir: 'in', at: '2026-11-10T08:02:00Z', source: 'email', sourceId: 'mail-1@example.com', trust: 'owner', text: 'attached', data: { subject: 'Receipt' } })
   await store.append(incoming('lunch 300', { sourceId: 'MSG-3' }))
   await store.append({ kind: 'delete', dir: 'in', at: '2026-11-10T08:03:00Z', source: 'whatsapp', trust: 'owner', target: 5 })
 
@@ -434,7 +580,8 @@ test('datastore: a damaged datastore stops the store, and the error says where',
   const damage = [
     // A complete line that isn't a line.
     [`${one}\nsecret words that are not JSON\n`, day2, /2026\/11\/09\/log\.jsonl, line 2: not JSON/],
-    [`${one}\n${two.replace('"kind":"message"', '"kind":"memo"')}\n`, day2, /log\.jsonl, line 2: kind must be one of/],
+    [`${one}\n${two.replace('"kind":"message"', '"kind":"Memo"')}\n`, day2, /log\.jsonl, line 2: kind must be a name/],
+    [`${one}\n${two.replace('"text":"two"', '"text":2')}\n`, day2, /log\.jsonl, line 2: text must be a string/],
     // A line missing, or there twice. The error names the file and the line.
     [`${one}\n`, day2, /2026\/11\/10\/log\.jsonl, line 1: seq 3 follows seq 1/],
     [`${one}\n${two}\n${two}\n`, day2, /2026\/11\/09\/log\.jsonl, line 3: seq 2 follows seq 2/],
@@ -513,7 +660,7 @@ test('datastore: a message or a reaction whose ID is stored is ignored', async t
   let store = open()
   const message = incoming('coffee 150', { sourceId: 'MSG-1' })
   const other = incoming('lunch 300', { sourceId: 'MSG-3' })
-  const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 1, emoji: '👍' }
+  const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 1, data: { emoji: '👍' } }
   for (const line of [message, other, reaction]) assert.equal((await store.append(line)).stored, true)
 
   // The webhook and catch-up both deliver the same event.
@@ -524,9 +671,9 @@ test('datastore: a message or a reaction whose ID is stored is ignored', async t
   assert.equal((await store.append({ ...message, text: 'something else' })).stored, false)
   assert.equal((await store.append({ ...message, sourceId: 'MSG-2' })).seq, 4)
   // A reaction that changes is a new reaction with its own ID.
-  assert.equal((await store.append({ ...reaction, sourceId: 'REACT-2', emoji: '' })).seq, 5)
+  assert.equal((await store.append({ ...reaction, sourceId: 'REACT-2', data: { emoji: '' } })).seq, 5)
   // The same ID on the other channel is not the same message.
-  assert.equal((await store.append({ ...message, source: 'email', subject: 'coffee' })).seq, 6)
+  assert.equal((await store.append({ ...message, source: 'email', data: { subject: 'coffee' } })).seq, 6)
   // Without an ID there is nothing to compare, and the line is stored.
   const noId = { kind: 'message', dir: 'out', at: '2026-11-09T15:46:00Z', source: 'whatsapp', by: 'bridge', text: 'Backup failed.' }
   assert.equal((await store.append(noId)).seq, 7)
@@ -707,12 +854,76 @@ test('datastore: an attachment left by a crash, whose seq has no line, is remove
   assert.deepEqual(fs.readdirSync(path.join(dir, '2026/11/10')), [])
 })
 
+test('datastore: a line of a kind, a channel or a field this version doesn\'t know is kept in the index, and passed over', async t => {
+  const { open, logFile, linesOf, dir } = setup(t)
+  const at = '2026-11-09T15:43:02Z'
+  const base = { dir: 'in', at, trust: 'owner' }
+  const lines = [
+    { seq: 1, kind: 'message', ...base, source: 'whatsapp', sourceId: 'A1', text: 'coffee 150' },
+    // The kind an earlier version wrote for /status.
+    { seq: 2, kind: 'command', ...base, source: 'whatsapp', sourceId: 'C1', text: '/status' },
+    // A channel that is gone.
+    { seq: 3, kind: 'message', ...base, source: 'telegram', sourceId: 'T1', text: 'hi' },
+    // Fields this version doesn't know, the four that moved into `data` among them.
+    { seq: 4, kind: 'message', ...base, source: 'whatsapp', sourceId: 'A2', note: 'later', quoted: 'x', forwarded: true, text: 'lunch 300' },
+    // A message without the text its kind needs.
+    { seq: 5, kind: 'message', ...base, source: 'whatsapp', sourceId: 'A3' },
+    // `data` that isn't what a channel writes.
+    { seq: 6, kind: 'message', ...base, source: 'email', sourceId: 'E1', text: 'a', data: [] },
+    { seq: 7, kind: 'message', ...base, source: 'email', sourceId: 'E2', text: 'b', data: { subject: 7 } },
+    // An edit and a reaction that point at lines this version doesn't know.
+    { seq: 8, kind: 'edit', ...base, source: 'whatsapp', sourceId: 'C1', target: 2, text: '/help' },
+    { seq: 9, kind: 'reaction', ...base, source: 'telegram', sourceId: 'T2', target: 3, data: { emoji: '👍' } },
+  ]
+  fs.mkdirSync(path.join(dir, '2026/11/09'), { recursive: true })
+  fs.writeFileSync(logFile('2026/11/09'), lines.map(line => `${JSON.stringify(line)}\n`).join(''))
+
+  let store = open()
+  assert.equal(store.index.lastSeq, 9)
+  for (const line of lines) assert.deepEqual(store.index.get(line.seq).line, line)
+  // Only what this version knows is a message to it.
+  assert.deepEqual(
+    lines.map(line => store.index.current(line.seq) !== undefined),
+    [true, false, false, true, false, true, true, false, false],
+  )
+  // The edit of the old command changed nothing this version knows of.
+  assert.deepEqual(store.index.current(4), { text: 'lunch 300', editedIn: null, deletedIn: null })
+  // A line of a kind this version doesn't know keeps its own ID, so the same message caught up again
+  // isn't stored a second time; an edit, which carries its message's, never takes one.
+  assert.equal(store.index.seqOf('whatsapp', 'C1'), 2)
+  assert.equal(store.index.seqOf('whatsapp', 'A3'), 5)
+  assert.equal(store.index.seqOf('telegram', 'T1'), 3)
+  assert.deepEqual(await store.append({ kind: 'message', ...base, source: 'whatsapp', sourceId: 'C1', text: '/status' }), { stored: false, reason: 'duplicate' })
+  // Nothing can point at what isn't a message this version knows.
+  for (const [target, kind] of [[2, 'edit'], [3, 'reaction'], [5, 'delete'], [9, 'reaction']]) {
+    const line = { kind, ...base, source: 'whatsapp', target, ...(kind === 'edit' ? { text: 'x' } : {}), ...(kind === 'reaction' ? { sourceId: `R${target}`, data: { emoji: '👍' } } : {}) }
+    await assert.rejects(store.append(line), new RegExp(`a ${kind} must point at a message, and seq ${target} isn't one`))
+  }
+  // The writer stays as strict: none of what it read is something it writes.
+  for (const [line, pattern] of [
+    [{ kind: 'command', ...base, source: 'whatsapp', text: '/status' }, /kind must be one of/],
+    [{ kind: 'message', ...base, source: 'telegram', text: 'hi' }, /source must be one of/],
+    [{ kind: 'message', ...base, source: 'whatsapp', note: 'later', text: 'x' }, /unknown field note/],
+    [{ kind: 'message', ...base, source: 'whatsapp', quoted: 'x', text: 'x' }, /unknown field quoted/],
+    [{ kind: 'message', ...base, source: 'whatsapp' }, /text is missing/],
+    [{ kind: 'message', ...base, source: 'email', text: 'a', data: [] }, /data must be/],
+  ]) {
+    await assert.rejects(store.append(line), error => error instanceof DatastoreError && pattern.test(error.message))
+  }
+  assert.equal((await store.append({ kind: 'edit', ...base, source: 'whatsapp', sourceId: 'A2', target: 4, text: 'lunch 350' })).seq, 10)
+  store = open()
+  assert.equal((await store.append({ kind: 'message', ...base, source: 'whatsapp', sourceId: 'A4', text: 'next' })).seq, 11)
+  assert.deepEqual(store.index.current(4), { text: 'lunch 350', editedIn: 10, deletedIn: null })
+  // What it read is left as it was.
+  assert.deepEqual(linesOf('2026/11/09').slice(0, 9), lines)
+})
+
 test('datastore: an edit, a deletion or a reaction points at a message', async t => {
   const { open } = setup(t)
   const store = open()
   await store.append(incoming('coffee 150'))
   await store.append(incoming('lunch 300'))
-  const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'R1', trust: 'owner', target: 1, emoji: '👍' }
+  const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'R1', trust: 'owner', target: 1, data: { emoji: '👍' } }
   assert.equal((await store.append(reaction)).seq, 3)
   assert.equal((await store.append({ ...reaction, sourceId: 'R2', target: 2 })).seq, 4)
   // A reaction is not something to edit, delete or react to.

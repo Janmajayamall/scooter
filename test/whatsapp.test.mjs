@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import test from 'node:test'
+import { checkRecord } from '../src/bridge/channels/index.mjs'
 import {
   NOT_A_FILE,
   canonicalJid,
@@ -136,12 +137,10 @@ test('whatsapp: a record is the message without its chat, sender and fromMe', ()
     text: 'receipt',
     attachments: [{ type: 'image', mime: 'image/jpeg', name: null, bytes: null, error: null }],
     replyToId: null,
-    replyToPreview: null,
     reactionToId: null,
-    reactionEmoji: null,
     edited: false,
     revoked: false,
-    forwarded: false,
+    data: {},
   })
   // A location has no file.
   const location = fromWebhook(webhookPayload({ Media: { Type: 'location', Caption: 'Blue Tokai', Filename: '', MimeType: '', FileLength: 0 } }))
@@ -149,8 +148,24 @@ test('whatsapp: a record is the message without its chat, sender and fromMe', ()
   // An edit, a deletion or a reaction carries no attachment to download.
   const edit = fromWebhook(webhookPayload({ Edited: true, Media: { Type: 'image', Caption: 'new caption', Filename: '', MimeType: 'image/jpeg', FileLength: 9 } }))
   assert.deepEqual([toRecord(edit).attachments, toRecord(edit).text], [[], 'new caption'])
+  // What the core doesn't act on is in the record's data, which becomes the line's: a reaction's
+  // emoji, "" for one removed.
+  const reaction = fromWebhook(webhookPayload({ ReactionToID: 'M1', ReactionEmoji: '👍' }))
+  assert.deepEqual([toRecord(reaction).reactionToId, toRecord(reaction).data], ['M1', { emoji: '👍' }])
   const removed = fromWebhook(webhookPayload({ ReactionToID: 'M1', ReactionEmoji: '' }))
-  assert.deepEqual([toRecord(removed).reactionToId, toRecord(removed).reactionEmoji], ['M1', ''])
+  assert.deepEqual([toRecord(removed).reactionToId, toRecord(removed).data], ['M1', { emoji: '' }])
+  // A message's preview of what it quotes, and whether it was forwarded.
+  const reply = fromWebhook(webhookPayload({ Text: 'work', ReplyToID: 'Q1', ReplyToDisplay: 'work or personal?', IsForwarded: true }))
+  assert.deepEqual(toRecord(reply).data, { quoted: 'work or personal?', forwarded: true })
+  // Catch-up's rows have no preview, and a message that isn't forwarded says nothing of it.
+  assert.deepEqual(toRecord(fromListRow(listRow({ Text: 'work', quoted_msg_id: 'Q1' }))[0]).data, {})
+  // An edit or a deletion keeps none of them: what intake writes them as has no use for them.
+  for (const fields of [{ Edited: true }, { Revoked: true }, { Revoked: true, ReactionToID: 'M1', ReactionEmoji: '👍' }]) {
+    const changed = fromWebhook(webhookPayload({ Text: 'x', ReplyToID: 'Q1', ReplyToDisplay: 'quoted', IsForwarded: true, ...fields }))
+    assert.deepEqual(toRecord(changed).data, {}, JSON.stringify(fields))
+  }
+  // Every record is one the core takes.
+  for (const message of [reaction, removed, reply, edit, location]) assert.deepEqual(checkRecord(toRecord(message)), [])
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -665,7 +680,7 @@ test('whatsapp: catch-up after a gap, for a state an older bridge wrote, starts 
   const seed = seedLines([
     incoming('2026-11-09T10:00:00Z', 'W1', 'last before wacli went down'),
     // An email arrived while wacli was down. It says nothing about WhatsApp.
-    { kind: 'message', dir: 'in', at: '2026-11-09T11:00:00Z', source: 'email', sourceId: 'e@x', trust: 'owner', subject: '', text: 'mail' },
+    { kind: 'message', dir: 'in', at: '2026-11-09T11:00:00Z', source: 'email', sourceId: 'e@x', trust: 'owner', text: 'mail', data: { subject: '' } },
     // So did a reply of Scooter's own.
     { kind: 'message', dir: 'out', at: '2026-11-09T11:10:00Z', source: 'whatsapp', sourceId: 'BOT', by: 'lifelog', text: 'a reply' },
   ])

@@ -41,7 +41,7 @@
 
 import { AgentStateError, readAgentState } from '../common/agentstate.mjs'
 import { createIndex } from '../common/datastore/index.mjs'
-import { DatastoreError, SOURCES } from '../common/datastore/line.mjs'
+import { DatastoreError, SOURCES, isKnown } from '../common/datastore/line.mjs'
 import { createReader } from '../common/datastore/reader.mjs'
 import { checkOwnFolder, ensureDir, readUntrustedFile, writeFileAtomic } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
@@ -55,7 +55,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const CHANNEL_NAMES = { whatsapp: 'WhatsApp', email: 'email' }
 
-// The kinds of line that are work for an agent.
+// The kinds of line that are work for an agent, as the runner has them (`src/runner/triggers.mjs`).
 const WORK = ['message', 'edit', 'delete']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -238,12 +238,13 @@ export function readIndex(paths) {
 }
 
 // What the agent's state says it has waiting: work items after its cursor, from the sources it
-// reads, and the lengths of its retry and failed lists.
+// reads, and the lengths of its retry and failed lists. A line this version doesn't know is no
+// work item, as the runner passes it over.
 function counts(index, state, reads) {
   let pending = 0
   for (let seq = state.cursor + 1; seq <= index.lastSeq; seq++) {
     const line = index.get(seq)?.line
-    if (line && line.dir === 'in' && WORK.includes(line.kind) && reads.includes(line.source)) pending += 1
+    if (line && isKnown(line) && line.dir === 'in' && WORK.includes(line.kind) && reads.includes(line.source)) pending += 1
   }
   return { pending, retrying: state.retry.length, failed: state.failed.length }
 }
@@ -285,11 +286,12 @@ function agentState(paths, name) {
   return readAgentState(paths.agentState(name), { maxBytes: limits.STATUS_FILE_MAX_BYTES })
 }
 
-// The newest message the owner sent: the `in` message with the highest `seq`.
+// The newest message the owner sent: the `in` message with the highest `seq`, of the lines this
+// version knows.
 function newestMessage(index) {
   for (let seq = index.lastSeq; seq >= 1; seq--) {
     const line = index.get(seq)?.line
-    if (line?.dir === 'in' && line.kind === 'message') return line
+    if (line && isKnown(line) && line.dir === 'in' && line.kind === 'message') return line
   }
   return null
 }
