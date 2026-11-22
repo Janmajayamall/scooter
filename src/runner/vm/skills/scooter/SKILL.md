@@ -51,7 +51,7 @@ $ show 99999
 
 ## The index file
 
-`run/index.txt`, in your folder, is the index `show` reads: one line for each line of the datastore when your run started, in order, with where the line is, its kind, and the number of the line it points at, if any:
+`run/index.txt`, in your folder, is the index `show` reads: one line for each line of the datastore, in order, as Scooter had read it when your run started, with where the line is, its kind, and the number of the line it points at, if any:
 
 ```text
 1051 /data/datastore/2026/11/09/log.jsonl:213 message
