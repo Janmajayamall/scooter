@@ -17,7 +17,7 @@ import {
   GUEST_PATH,
   PI,
   SESSIONS_DIR,
-  designMounts,
+  designFiles,
   makeDataDir,
   onPath,
   runIn,
@@ -97,7 +97,7 @@ test('image: it holds Alpine, Node, pi and the tools the build file asks for', o
   assert.equal(await output(['node', '-p', 'new Date(0).getTimezoneOffset()'], { TZ: 'Asia/Kolkata' }), '-330')
 })
 
-test("VM 1: mounts sit at the host's own paths, read-only except the three writable folders", options, async t => {
+test("VM 1: what a run sees sits at the host's own paths, read-only except what writes names and run/session", options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
   const { agent, datastore } = data
@@ -106,15 +106,15 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
   fs.writeFileSync(path.join(dir, 'outside.txt'), 'outside the data folder\n')
   // An older session, kept by the runner.
   fs.writeFileSync(`${agent}/sessions/lifelog-2026-11-08.jsonl`, '{"type":"session"}\n')
-  const vm = await startVm(t, { mounts: designMounts(data) })
+  const vm = await startVm(t, { files: designFiles(data) })
 
-  // Reading works under the two mounts, at the same paths as on the host.
+  // Reading works in what reads names, at the same paths as on the host.
   for (const file of [`${agent}/memory/preferences.md`, `${datastore}/2026/11/09/log.jsonl`, `${data.skill}/SKILL.md`]) {
     assert.equal((await sh(vm, `cat ${file}`)).stdout, fs.readFileSync(file, 'utf8'))
   }
 
   // That goes for the runner's state too. Of the agent's folder only `sessions/` is missing: the
-  // mounts hide it, and the next test says how well.
+  // run hides it, and the next test says how well.
   assert.equal((await sh(vm, `cat ${agent}/state.json`)).stdout, '{"cursor":1049}\n')
   assert.equal((await sh(vm, `ls ${agent}`)).stdout, 'memory\nrun\nstate.json\nviews\n')
 
@@ -152,8 +152,8 @@ test("VM 1: mounts sit at the host's own paths, read-only except the three writa
   assert.deepEqual(fs.readdirSync(`${agent}/sessions`), ['lifelog-2026-11-08.jsonl'])
   assert.deepEqual(fs.readdirSync(datastore), ['2026'])
 
-  // The three writable folders take files, and the host sees them at once. One of the three is
-  // two levels down, inside the read-only `run/`.
+  // The three folders the run may change take files, and the host sees them at once. One of the
+  // three is two levels down, inside the read-only `run/`.
   const writable = [
     'views/expenses.csv',
     'views/books/2026/11/dune.md',
@@ -182,19 +182,17 @@ test('VM 1: sessions/ is hidden from the VM, which could read it otherwise', opt
   const name = 'lifelog-2026-11-08.jsonl'
   fs.writeFileSync(`${agent}/sessions/${name}`, '{"type":"session"}\n')
 
-  // A read-only mount of the agent's folder shows all of it, the older sessions included. That is
-  // why a run's mounts hide the folder.
-  const unhidden = designMounts(data)
-  unhidden[agent] = { host: agent }
-  const open = await startVm(t, { mounts: unhidden })
+  // The agent's folder, shown read-only, shows all of it, the older sessions included. That is why
+  // a run hides the folder.
+  const open = await startVm(t, { files: { ...designFiles(data), hide: [] } })
   assert.equal((await sh(open, `ls ${agent}`)).stdout, 'memory\nrun\nsessions\nstate.json\nviews\n')
   assert.equal((await sh(open, `cat ${agent}/sessions/${name}`)).stdout, '{"type":"session"}\n')
   assert.match((await sh(open, `echo x > ${agent}/sessions/lifelog-2026-11-10.jsonl`)).stderr, READ_ONLY)
   await open.close()
 
-  // With a run's mounts the folder is not there, at either of the two paths the mount has, and
-  // the rest is.
-  const vm = await startVm(t, { mounts: designMounts(data) })
+  // As a run has it, the folder is not there, at either of the two paths the mount has, and the
+  // rest is.
+  const vm = await startVm(t, { files: designFiles(data) })
   assert.equal((await sh(vm, `ls ${agent}`)).stdout, 'memory\nrun\nstate.json\nviews\n')
   assert.equal((await sh(vm, `find ${agent} -name '*.jsonl'`)).stdout, '')
   for (const root of [agent, `${FUSE_MOUNT}${agent}`]) {
@@ -225,11 +223,10 @@ test('VM 1: sessions/ is hidden from the VM, which could read it otherwise', opt
   assert.equal(fs.readFileSync(`${agent}/sessions/${name}`, 'utf8'), '{"type":"session"}\n')
 })
 
-test('VM 1: the same mounts work under /data, as in Docker, once the mount point is moved', options, async t => {
+test('VM 1: the same works with the data folder at /data, as in Docker, once the mount point is moved', options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  const guest = { agent: '/data/agents/lifelog', datastore: '/data/datastore' }
-  const vm = await startVm(t, { mounts: designMounts(data, guest) })
+  const vm = await startVm(t, { files: designFiles(data), at: '/data' })
 
   assert.equal((await sh(vm, 'ls /data')).stdout, 'agents\ndatastore\n')
   assert.equal((await sh(vm, 'ls /data/agents/lifelog')).stdout, 'memory\nrun\nstate.json\nviews\n')
@@ -243,13 +240,13 @@ test('VM 1: the same mounts work under /data, as in Docker, once the mount point
   }
 })
 
-test("VM 1: with Gondolin's default mount point, mounts under /data keep the VM from starting", options, async t => {
+test("VM 1: with Gondolin's default mount point, a mount at /data keeps the VM from starting", options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  const guest = { agent: '/data/agents/lifelog', datastore: '/data/datastore' }
-  // A healthy VM is ready in about 2 seconds with KVM and about 7 under emulation.
-  const start = startVm(t, { mounts: designMounts(data, guest), fuseMount: null, startTimeoutMs: 45_000 })
-  await assert.rejects(start, /startup timed out/)
+  // A healthy VM is ready in about 2 seconds with KVM and about 7 under emulation. With mounts
+  // under /data, as before the data folder was mounted whole, the VM's start timed out instead.
+  const start = startVm(t, { files: designFiles(data), at: '/data', fuseMount: null, startTimeoutMs: 45_000 })
+  await assert.rejects(start, /vfs mount \/etc\/gondolin not ready/)
 })
 
 // Every name under `dir`, with its kind, mode, links and contents: what a refused change must
@@ -427,7 +424,7 @@ test("VM 6: the sandbox's provider lets the VM change what writes names, files a
 test('VM 2: a command runs from an argument list, in a given folder, with no shell in between', options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  const vm = await startVm(t, { mounts: designMounts(data) })
+  const vm = await startVm(t, { files: designFiles(data) })
   // A program that reports what it was started with.
   const report = 'process.stdout.write(JSON.stringify({ argv: process.argv.slice(1), cwd: process.cwd(), env: process.env }))'
   const echo = ['/usr/bin/node', '-e', report, '--']
@@ -505,7 +502,7 @@ test('VM 3: closing the VM while pi runs ends the run and leaves no QEMU and no 
     { tool: 'bash', args: { command: `echo started > ${started}; sleep 600` } },
     { text: 'never reached' },
   ])
-  const vm = await startVm(t, { model, mounts: designMounts(data) })
+  const vm = await startVm(t, { model, files: designFiles(data) })
   const qemu = vm.getHostPid()
   assert.ok(isAlive(qemu))
   // While it runs, the VM keeps a disk overlay and five sockets in the temporary folder, and a
@@ -610,7 +607,7 @@ test('VM 5: git log works on the read-only agent folder', needsGit, async t => {
   git('commit', '--quiet', '--no-gpg-sign', '--message', 'lifelog: #1040')
   const head = git('rev-parse', 'HEAD').trim()
 
-  const vm = await startVm(t, { mounts: designMounts(data) })
+  const vm = await startVm(t, { files: designFiles(data) })
   const inAgent = (argv, env = {}) => runIn(vm, argv, { cwd: data.agent, env: { PATH: GUEST_PATH, HOME: '/root', ...env } })
 
   const log = await inAgent(['git', 'log', '--format=%H %an <%ae> %s'])

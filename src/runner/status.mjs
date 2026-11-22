@@ -3,7 +3,7 @@
 //
 // At startup the runner writes what `scooter status` needs to know about its settings: how its VMs
 // run, whether ZDR and the agent's internet access are on, when the VM image was built, and each
-// agent's model, timeout and sources. The file it replaces says how the VMs ran before, which is how the
+// agent's model, timeout and the channels its triggers name. The file it replaces says how the VMs ran before, which is how the
 // runner knows whether the accelerator has just changed to emulation.
 
 import { writeFileAtomic } from '../common/files.mjs'
@@ -24,7 +24,7 @@ export function runnerStatus({ settings, agents, sandbox, now, restarts = null }
     agents: {},
     restart: waits ? { stops: restarts.record.stops, until: isoSeconds(restarts.until), reason: restarts.record.reason } : null,
   }
-  for (const agent of agents) status.agents[agent.name] = { model: agent.model, timeoutMinutes: agent.timeoutMinutes, reads: [...agent.reads] }
+  for (const agent of agents) status.agents[agent.name] = { model: agent.model, timeoutMinutes: agent.timeoutMinutes, channels: [...agent.channels] }
   return status
 }
 

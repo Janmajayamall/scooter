@@ -6,13 +6,12 @@
 //
 // 1. **Paused**: nothing until the next try.
 // 2. **New messages:** work items after the cursor, or retries that are due, once the owner has
-//    been quiet for `BATCH_SECONDS`. Only with `on: new-messages`.
+//    been quiet for `BATCH_SECONDS`. A work item is of a channel a trigger `on: new-messages`
+//    names in its `channels`, so without such a trigger there is none.
 // 3. **Scheduled tasks** whose time has come since they were last dealt with. One that comes due
 //    during a run or a pause waits, and runs afterwards.
 // 4. **A backfill batch**, only when nothing live is waiting: no work items after the cursor, quiet
-//    or not, and no due retries. Messages are live work only with `on: new-messages`;
-//    without it they wait for good, and don't hold a backfill back. When its work is done, the
-//    backfill finishes.
+//    or not, and no due retries. When its work is done, the backfill finishes.
 // 5. Otherwise, nothing.
 
 import { isKnown } from '../common/datastore/line.mjs'
@@ -21,38 +20,39 @@ import { previousLocalTime, localDate, parseIsoSeconds } from '../common/time.mj
 // The kinds of line that are work for the agent. Everything else is context or skipped.
 const WORK_KINDS = ['message', 'edit', 'delete']
 
-// Whether a line is a work item for an agent that reads `reads`: an incoming message, edit or
-// deletion from one of those sources. A line this version doesn't know (`isKnown`), of a kind or
-// a channel it doesn't have or without a field its kind needs, is never one: it is passed over.
-export function isWorkItem(line, reads) {
-  return isKnown(line) && line.dir === 'in' && WORK_KINDS.includes(line.kind) && reads.includes(line.source)
+// Whether a line is a work item for an agent whose triggers name `channels`: an incoming message,
+// edit or deletion from one of those channels. A line this version doesn't know (`isKnown`), of a
+// kind or a channel it doesn't have or without a field its kind needs, is never one: it is passed
+// over.
+export function isWorkItem(line, channels) {
+  return isKnown(line) && line.dir === 'in' && WORK_KINDS.includes(line.kind) && channels.includes(line.source)
 }
 
 // The `seq` of each work item after `after`, up to `upTo` (the newest line by default), in order.
-export function workItemsAfter(index, reads, after, upTo = index.lastSeq) {
+export function workItemsAfter(index, channels, after, upTo = index.lastSeq) {
   const seqs = []
   for (let seq = after + 1; seq <= upTo; seq++) {
     const entry = index.get(seq)
-    if (entry && isWorkItem(entry.line, reads)) seqs.push(seq)
+    if (entry && isWorkItem(entry.line, channels)) seqs.push(seq)
   }
   return seqs
 }
 
 // Whether there is a work item after `after`, up to `upTo`.
-export function hasWorkAfter(index, reads, after, upTo = index.lastSeq) {
+export function hasWorkAfter(index, channels, after, upTo = index.lastSeq) {
   for (let seq = after + 1; seq <= upTo; seq++) {
     const entry = index.get(seq)
-    if (entry && isWorkItem(entry.line, reads)) return true
+    if (entry && isWorkItem(entry.line, channels)) return true
   }
   return false
 }
 
 // The entries of a retry list that are due at `now`, by `seq`. An entry whose line isn't a work
-// item of this agent, which only a changed `reads` or a damaged state would give, is never due:
+// item of this agent, which only a changed `channels` or a damaged state would give, is never due:
 // it would start runs with nothing in them.
-export function dueRetries(retry, index, reads, now) {
+export function dueRetries(retry, index, channels, now) {
   return retry
-    .filter(entry => parseIsoSeconds(entry.due) <= now && index.get(entry.seq) && isWorkItem(index.get(entry.seq).line, reads))
+    .filter(entry => parseIsoSeconds(entry.due) <= now && index.get(entry.seq) && isWorkItem(index.get(entry.seq).line, channels))
     .sort((a, b) => a.seq - b.seq)
 }
 
@@ -85,9 +85,8 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 export function nextAction({ agent, state, index, now, timeZone, batchSeconds, incomingSeenAt }) {
   if (state.paused && now < parseIsoSeconds(state.paused.next)) return { kind: 'idle', reason: 'paused' }
 
-  // Messages are live work only for an agent that runs on them. Without `on: new-messages` they
-  // wait for good, and must not hold a backfill back.
-  const live = agent.run.newMessages && (hasWorkAfter(index, agent.reads, state.cursor) || dueRetries(state.retry, index, agent.reads, now).length > 0)
+  // Only a line of a channel a trigger names is work: a line of any other holds nothing back.
+  const live = hasWorkAfter(index, agent.channels, state.cursor) || dueRetries(state.retry, index, agent.channels, now).length > 0
   const quiet = incomingSeenAt === null || now - incomingSeenAt >= batchSeconds * 1000
   if (live && quiet) return { kind: 'messages' }
 
@@ -99,7 +98,7 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
   const backfill = state.backfill
   if (backfill && agent.run.backfill.some(entry => entry.id === backfill.id)) {
     const upTo = Math.min(backfill.until, index.lastSeq)
-    if (hasWorkAfter(index, agent.reads, backfill.cursor, upTo) || dueRetries(backfill.retry, index, agent.reads, now).length > 0) {
+    if (hasWorkAfter(index, agent.channels, backfill.cursor, upTo) || dueRetries(backfill.retry, index, agent.channels, now).length > 0) {
       return { kind: 'backfill', id: backfill.id }
     }
     if (backfill.retry.length === 0) return { kind: 'backfill-finished', id: backfill.id }

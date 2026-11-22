@@ -7,36 +7,47 @@
 //     lifelog:
 //       model: anthropic/claude-sonnet-5.5
 //       thinking: low                        # optional
-//       prompt: prompts/lifelog.md           # paths are relative to the config folder
+//       prompt: prompts/lifelog.md           # relative to the config folder
 //       skills: [skills/expenses, skills/people]
-//       reads: [whatsapp, email]
+//       reads: [datastore/, agents/lifelog/] # optional; relative to the data folder
+//       writes: [agents/lifelog/views/, agents/lifelog/memory/]
+//       sends: [whatsapp]
 //       session: daily                       # daily or none
 //       reply_mode: quiet                    # quiet or confirm
 //       ack_reaction: "✅"                   # "" for none
-//       can_message: true
 //       timeout_minutes: 10
 //       run:
 //         - on: new-messages
+//           channels: [whatsapp, email]
 //         - at: "21:30"                      # or "Sun 18:00"
 //           task: Evening check-in.
 //         - backfill: people-1
 //           skill: people
-//           writes: [views/people.csv]
+//           writes: [agents/lifelog/views/people.csv]
 //
-// Every field is required except `thinking`. A key the format doesn't have is a fault, so that a
-// misspelled one isn't ignored without a word.
+// Every field is required except `thinking` and `reads`. A key the format doesn't have is a fault,
+// so that a misspelled one isn't ignored without a word.
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { LineCounter, parseDocument } from 'yaml'
 import { SOURCES } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
+import { OWN_AUTHORS } from '../common/outbox.mjs'
 import { parseLocalTime } from '../common/time.mjs'
 
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 export const SESSIONS = ['daily', 'none']
 export const REPLY_MODES = ['quiet', 'confirm']
 export const TRIGGER_KINDS = ['on', 'at', 'backfill']
+
+// The names in an agent's folder that the runner keeps for itself, besides the names that start
+// with a dot, `.git` and `.gitignore` among them: its state, the sessions and `run/`. `writes`
+// can't name them, or hold the folder: a run that could change them could stop the runner, or
+// rewrite its record, and the clean-up and the commit work on what `writes` names in the folder,
+// which can't be the folder that holds them.
+export const RUNNER_NAMES = ['state.json', 'sessions', 'run']
+
 
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 // A backfill's ID goes into session names, commit messages and the state.
@@ -45,13 +56,43 @@ const BACKFILL_ID = /^[a-z0-9][a-z0-9-]*$/
 // or `google/gemma-3-4b-it:free`. Every model in pi's catalog has this form (milestone 0, pi 6).
 const MODEL_ID = /^~?[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/
 
-const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'session', 'reply_mode', 'ack_reaction', 'can_message', 'timeout_minutes', 'run']
-const TRIGGER_KEYS = { on: ['on'], at: ['at', 'task'], backfill: ['backfill', 'skill', 'writes'] }
+const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'writes', 'sends', 'session', 'reply_mode', 'ack_reaction', 'timeout_minutes', 'run']
+const OPTIONAL_KEYS = ['thinking', 'reads']
+const TRIGGER_KEYS = { on: ['on', 'channels'], at: ['at', 'task'], backfill: ['backfill', 'skill', 'writes'] }
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value) && !Buffer.isBuffer(value)
 
 function list(names) {
   return names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} or ${names.at(-1)}`
+}
+
+// Paths of `reads` and `writes`, as the config keeps them: relative to the data folder, cleaned,
+// a folder ending in `/`, such as `agents/lifelog/views/`.
+export const isFolder = entry => entry.endsWith('/')
+const bare = entry => entry.replace(/\/$/, '')
+
+// Whether the entry `inner` is in the entry `outer`: the same, or, for a folder, in it.
+export function isWithin(inner, outer) {
+  const [p, folder] = [bare(inner), bare(outer)]
+  return inner === outer || (isFolder(outer) && p.startsWith(`${folder}/`))
+}
+
+// A path of `reads` or `writes` as written, cleaned: relative to the data folder, with no `.`,
+// `..` or empty part and no `\`, a folder ending in `/`. Null when it isn't one.
+function dataPath(value) {
+  if (typeof value !== 'string' || value.includes('\\') || value.includes('\0') || value.startsWith('/')) return null
+  const folder = value.endsWith('/')
+  const parts = value.split('/').slice(0, folder ? -1 : undefined)
+  if (parts.length === 0 || parts.some(part => part === '' || part === '.' || part === '..')) return null
+  return `${parts.join('/')}${folder ? '/' : ''}`
+}
+
+// What the agent's repository keeps: the entries of `writes` in the agent's own folder, as paths
+// from it, a folder ending in `/`, in their order, without an entry that lies in another.
+export function repositoryPaths(agentName, writes) {
+  const own = `agents/${agentName}/`
+  const inside = writes.filter(write => write.startsWith(own) && write !== own).map(write => write.slice(own.length))
+  return inside.filter(entry => !inside.some(other => other !== entry && isWithin(entry, other)))
 }
 
 // What is wrong with `agents.yaml`. `problems` lists every fault, each as `{ field, line, message }`,
@@ -81,13 +122,17 @@ function isInside(dir, target) {
 //
 // where each agent is
 //
-//   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }], reads,
-//     session, replyMode, ackReaction, canMessage, timeoutMinutes,
-//     run: { newMessages, scheduled: [{ at, schedule, task }], backfill: [{ id, skill, writes }] } }
+//   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }],
+//     reads, writes, repository, sends, channels, session, replyMode, ackReaction, timeoutMinutes,
+//     run: { newMessages: [{ channels }], scheduled: [{ at, schedule, task }], backfill: [{ id, skill, writes }] } }
 //
-// `thinking` is null when it isn't given. A path is kept as written, cleaned (`path`), and as the
-// file or folder it names (`file`, `dir`). A skill's `name` is its folder's name. `schedule` is
-// what `parseLocalTime` returns. Throws a `ConfigError` that lists every fault.
+// `thinking` is null when it isn't given. A path of the config folder is kept as written, cleaned
+// (`path`), and as the file or folder it names (`file`, `dir`). A skill's `name` is its folder's
+// name. `reads` and `writes` are paths from the data folder, cleaned, a folder ending in `/`;
+// `reads` is the datastore and the agent's own folder when it isn't given. `repository` is what
+// the agent's repository keeps (`repositoryPaths`). `channels` is every channel the triggers for
+// new messages name, in order. `schedule` is what `parseLocalTime` returns. Throws a `ConfigError`
+// that lists every fault.
 export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
   const problems = []
   const lineCounter = new LineCounter()
@@ -115,6 +160,8 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
   }
 
   const top = doc.toJS({ maxAliasCount: 100 })
+  // Where each trigger for new messages is, for a fault that names it.
+  const fieldOf = new Map()
   const configReal = (() => {
     try {
       return fs.realpathSync(configDir)
@@ -193,6 +240,37 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
     return null
   }
 
+  // A list of paths in the data folder, each cleaned (`dataPath`), none twice, and none in a file
+  // another names, which holds nothing. Returns the list, with null in the place of a fault.
+  function dataPaths(parts, value, example) {
+    if (!Array.isArray(value)) {
+      fault(parts, `must be a list of paths in the data folder, such as [${example}]`)
+      return []
+    }
+    const found = []
+    value.forEach((item, n) => {
+      const entry = dataPath(item)
+      const twice = entry === null ? -1 : found.findIndex(other => other !== null && bare(other) === bare(entry))
+      if (entry === null) fault([...parts, n], `must be a path in the data folder, such as ${example}: relative to it, without a ., .. or empty part, and a folder ending in /`)
+      else if (twice !== -1) fault([...parts, n], `is ${entry}, which ${parts.at(-1)}[${twice}] names too`)
+      found.push(entry === null || twice !== -1 ? null : entry)
+    })
+    found.forEach((entry, n) => {
+      const file = entry === null ? undefined : found.find(other => other !== null && !isFolder(other) && bare(entry).startsWith(`${other}/`))
+      if (file === undefined) return
+      fault([...parts, n], `is ${entry}, which lies in ${file}, a file`)
+      found[n] = null
+    })
+    return found
+  }
+
+  // A list of channels, each once: one at least, or, with `empty`, none at all.
+  function channelList(parts, value, { empty = false } = {}) {
+    const valid = Array.isArray(value) && (empty || value.length > 0) && value.every(source => SOURCES.includes(source)) && new Set(value).size === value.length
+    if (!valid) fault(parts, `must list ${list(SOURCES)}, or both, once each${empty ? ', or be [] for none' : ''}`)
+    return valid ? [...value] : []
+  }
+
   function nonEmptyString(parts, value, what) {
     if (typeof value === 'string' && value.trim() !== '') return value
     fault(parts, `must be ${what}`)
@@ -209,7 +287,7 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       if (!AGENT_KEYS.includes(key)) fault(at(key), 'is not a setting of an agent')
     }
     for (const key of AGENT_KEYS) {
-      if (key !== 'thinking' && raw[key] === undefined) fault(at(key), 'is missing')
+      if (!OPTIONAL_KEYS.includes(key) && raw[key] === undefined) fault(at(key), 'is missing')
     }
 
     const agent = { name }
@@ -263,12 +341,32 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       if (outer) fault(at('prompt'), `names ${agent.prompt.path}, which is inside the skill ${outer.path}: the prompt is a file of its own`)
     }
 
-    if (raw.reads !== undefined) {
-      const valid =
-        Array.isArray(raw.reads) && raw.reads.length > 0 && raw.reads.every(source => SOURCES.includes(source)) && new Set(raw.reads).size === raw.reads.length
-      if (!valid) fault(at('reads'), `must list ${list(SOURCES)}, or both, once each`)
-      agent.reads = valid ? [...raw.reads] : []
-    }
+    // What the agent's VM sees, and what it may change. No list limits what they may name: a
+    // mistake there is the owner's. The owner, on 2026-11-21: "I understand that the user can
+    // make mistakes and give write permission to `datastore`. But that is their problem, not
+    // system's problem". What the runner keeps for itself in the agent's folder is the exception.
+    agent.reads = raw.reads === undefined ? ['datastore/', `agents/${name}/`] : dataPaths(at('reads'), raw.reads, 'datastore/').filter(Boolean)
+    const writes = raw.writes === undefined ? [] : dataPaths(at('writes'), raw.writes, `agents/${name}/views/`)
+    const own = `agents/${name}`
+    writes.forEach((write, n) => {
+      if (write === null) return
+      const where = at('writes', n)
+      // The folder itself, or one that holds it, as a file or a folder: as a file it could still
+      // be moved, with everything in it.
+      if (bare(write) === own || own.startsWith(`${bare(write)}/`)) {
+        fault(where, `is ${write}, which holds ${own}/, the agent's folder, where the runner keeps its state, its repository, run/ and the sessions: name what the agent may write in it, such as ${own}/views/`)
+        return
+      }
+      if (!write.startsWith(`${own}/`)) return
+      const parts = bare(write).slice(own.length + 1).split('/')
+      if (RUNNER_NAMES.includes(parts[0]) || parts.some(part => part.startsWith('.'))) {
+        fault(where, `is ${write}, which the agent can't write: in its folder the runner keeps state.json, run/, sessions/ and its repository's .git, and the commit refuses a name that starts with a dot`)
+      }
+    })
+    agent.writes = writes.filter(Boolean)
+    agent.repository = repositoryPaths(name, agent.writes)
+
+    if (raw.sends !== undefined) agent.sends = channelList(at('sends'), raw.sends, { empty: true })
     if (raw.session !== undefined) agent.session = oneOf(at('session'), raw.session, SESSIONS)
     if (raw.reply_mode !== undefined) agent.replyMode = oneOf(at('reply_mode'), raw.reply_mode, REPLY_MODES)
 
@@ -283,10 +381,6 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       }
       agent.ackReaction = value
     }
-    if (raw.can_message !== undefined) {
-      if (typeof raw.can_message !== 'boolean') fault(at('can_message'), 'must be true or false')
-      agent.canMessage = raw.can_message
-    }
     if (raw.timeout_minutes !== undefined) {
       const [lowest, highest] = limits.CONFIG_RANGES.timeout_minutes
       const value = raw.timeout_minutes
@@ -296,11 +390,12 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       agent.timeoutMinutes = value
     }
 
-    agent.run = { newMessages: false, scheduled: [], backfill: [] }
+    agent.run = { newMessages: [], scheduled: [], backfill: [] }
     if (raw.run !== undefined) {
-      if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages}]')
+      if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages, channels: [whatsapp]}]')
       else raw.run.forEach((entry, n) => triggerOf(agent, at('run', n), entry))
     }
+    agent.channels = agent.run.newMessages.flatMap(trigger => trigger.channels)
     return agent
   }
 
@@ -319,8 +414,17 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
 
     if (kind === 'on') {
       if (entry.on !== 'new-messages') return fault([...parts, 'on'], 'must be new-messages')
-      if (run.newMessages) return fault([...parts, 'on'], 'is given twice')
-      run.newMessages = true
+      if (entry.channels === undefined) return
+      const channels = channelList([...parts, 'channels'], entry.channels)
+      // A channel starts the runs of one trigger at most, so a line pending from it says which.
+      for (const channel of channels) {
+        const other = run.newMessages.find(trigger => trigger.channels.includes(channel))
+        if (other) return fault([...parts, 'channels'], `names ${channel}, which ${fieldName(fieldOf.get(other))}.channels names too: a channel starts the runs of one trigger at most`)
+      }
+      if (channels.length === 0) return
+      const trigger = { channels }
+      fieldOf.set(trigger, parts)
+      run.newMessages.push(trigger)
       return
     }
 
@@ -345,22 +449,21 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       fault([...parts, 'skill'], "must name one of the agent's skills, by its folder's name, such as people")
       ok = false
     }
-    const writes = []
+    // What the backfill may change, which narrows what the agent may: each path in the agent's own
+    // `writes`, as the sandbox enforces for its runs.
+    let writes = []
     if (entry.writes !== undefined) {
+      const example = `agents/${agent.name}/views/people.csv`
       if (!Array.isArray(entry.writes) || entry.writes.length === 0) {
-        fault([...parts, 'writes'], 'must be a list of what the backfill may change, such as [views/people.csv]')
+        fault([...parts, 'writes'], `must be a list of what the backfill may change, such as [${example}]`)
         ok = false
       } else {
-        entry.writes.forEach((value, n) => {
-          const write = viewPath(value)
-          if (write === null) {
-            fault([...parts, 'writes', n], 'must be a file, or a folder ending in /, inside views/')
+        writes = dataPaths([...parts, 'writes'], entry.writes, example)
+        writes.forEach((write, n) => {
+          if (write === null) ok = false
+          else if (!agent.writes.some(own => isWithin(write, own))) {
+            fault([...parts, 'writes', n], `is ${write}, which isn't in the agent's writes: a backfill may change only what the agent may`)
             ok = false
-          } else if (writes.includes(write)) {
-            fault([...parts, 'writes', n], `is ${write}, which is listed twice`)
-            ok = false
-          } else {
-            writes.push(write)
           }
         })
       }
@@ -386,24 +489,18 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
         fault(['agents', name], 'is not a name for an agent: lowercase letters, digits and hyphens, starting with a letter')
         continue
       }
+      // An entry is the runner's or the bridge's own by its `by`, which goes out whatever `sends`
+      // says, so an agent can't take either name.
+      if (OWN_AUTHORS.includes(name)) {
+        fault(['agents', name], `is not a name for an agent: ${list(OWN_AUTHORS)} is the name of Scooter's own messages`)
+        continue
+      }
       const agent = agentOf(name, top.agents[name])
       if (agent) agents.push(agent)
     }
   }
   if (problems.length > 0) throw new ConfigError(problems)
   return { agents }
-}
-
-// A path a backfill may change: a file, or a folder ending in `/`, inside `views/`. Returns it
-// cleaned, or null when it isn't one.
-function viewPath(value) {
-  if (typeof value !== 'string' || value.includes('\\')) return null
-  const folder = value.endsWith('/')
-  const parts = value.split('/').slice(0, folder ? -1 : undefined)
-  if (parts.length < 2 || parts[0] !== 'views') return null
-  // No `.`, `..` or empty parts, and no name the file check would refuse.
-  if (parts.some(part => part === '' || part.startsWith('.'))) return null
-  return `${parts.join('/')}${folder ? '/' : ''}`
 }
 
 // What pi 1.5.2 takes as a skill's `name` and `description`: the limits of the Agent Skills format,

@@ -1,14 +1,14 @@
 // An agent's folder, and `run/`, which the runner builds again before each run.
 //
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
-//     views/                   the agent's views, in git
-//     memory/                  preferences.md and needs-review.md, in git
+//     views/, memory/          what `writes` names in the folder, in git (`agent.repository`)
 //     sessions/                pi's sessions, not in git; hidden from the VM
 //     run/                     not in git: system.md, config/ and session/
 //     state.json               the runner's state, not in git, 0600
 //
-// pi sees the folder through its VM's mounts: `views/`, `memory/` and `run/session/` writable,
-// `sessions/` hidden, and the rest read-only. Everything in it belongs to the runner's user.
+// What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
+// with `run/` read-only but for `run/session/`, and never `sessions/` (`piFiles` in `run.mjs`).
+// Everything in it belongs to the runner's user.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -17,8 +17,8 @@ import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
-// What git leaves out, anchored with `/` so that the names can't match anything inside `views/`
-// or `memory/`.
+// What git leaves out, anchored with `/` so that the names can't match anything inside what
+// `writes` names.
 export const GITIGNORE = '/sessions/\n/run/\n/state.json\n'
 
 const FOLDER_MODE = 0o700
@@ -26,14 +26,16 @@ const FILE_MODE = 0o600
 
 // Creates the agent's folder the first time, and finishes what a crash left half done: the
 // folders, `git init`, the `.gitignore`, and a first commit with the `.gitignore` alone. A folder
-// that is complete is left as it is. `git` is what `createGit` returns, for this folder.
+// that is complete is left as it is. `git` is what `createGit` returns, for this folder. What
+// `writes` names in the folder is made by the clean-up that follows at a start, once it has freed
+// what pi wrote there (`discardChanges` in `git.mjs`).
 //
 // First it frees what pi wrote that a crash or a stop may have left taking room: what a clean-up
 // set aside and couldn't remove, in `agents/.discarded/<agent>/`, and `run/session/`. pi could have
 // filled the disk, and on a full disk no folder can be made, so this comes before any is. The
-// clean-up that follows at a start frees `views/` and `memory/`. `agents/.discarded/<agent>/`
-// is made here, while there is room, and kept, so a clean-up makes nothing before it has freed
-// what it set aside.
+// clean-up that follows at a start frees what `writes` names. `agents/.discarded/<agent>/` is made
+// here, while there is room, and kept, so a clean-up makes nothing before it has freed what it set
+// aside.
 //
 // `git init` runs whenever the folder has no commit: a start killed during `git init` can leave an
 // empty `.git`, and running it again on a repository is safe. A git killed while it held the
@@ -47,7 +49,7 @@ export async function ensureAgentDir({ paths, name, git, log }) {
     log.warn('agent.discarded_left', { folder: name, ...errorFields(error) })
   }
   emptyRunSession({ paths, name, log })
-  for (const folder of [dir, paths.agentViews(name), paths.agentMemory(name), paths.agentSessions(name), paths.agentRun(name), paths.agentDiscarded(name)]) {
+  for (const folder of [dir, paths.agentSessions(name), paths.agentRun(name), paths.agentDiscarded(name)]) {
     ensureDir(folder, { mode: FOLDER_MODE })
   }
   const locks = git.removeLeftoverLocks()

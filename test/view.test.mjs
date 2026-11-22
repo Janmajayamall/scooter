@@ -19,7 +19,7 @@ import { gondolin } from './support/vm.mjs'
 function layOut(t) {
   const dir = makeTestDir(t)
   const root = path.join(dir, 'root')
-  for (const folder of ['allowed/sub', 'empty', 'ro/secret']) fs.mkdirSync(path.join(root, folder), { recursive: true })
+  for (const folder of ['allowed/sub', 'empty', 'ro/secret', 'folder.txt/inside']) fs.mkdirSync(path.join(root, folder), { recursive: true })
   for (const [file, text] of [
     ['allowed/old.txt', 'old\n'],
     ['ro/keep.txt', 'keep\n'],
@@ -43,6 +43,7 @@ function layOut(t) {
       { path: `${root}/empty`, folder: true },
       { path: `${root}/file.txt`, folder: false },
       { path: `${root}/new.txt`, folder: false },
+      { path: `${root}/folder.txt`, folder: false },
     ],
     hide: [`${root}/ro/secret`],
   }
@@ -190,11 +191,18 @@ test('view: inside writes every change is allowed; a folder of writes keeps its 
   await refusedWith('EROFS', provider.rename('/empty', '/allowed/empty'), 'a folder of writes moved into another')
   assert.equal(fs.lstatSync(path.join(root, 'empty')).isDirectory(), true)
   assert.equal(fs.lstatSync(path.join(root, 'allowed')).isDirectory(), true)
+
+  // A file of writes that is a folder on the host can't be moved, with what it holds, or changed.
+  await refusedWith('EROFS', provider.rename('/folder.txt', '/allowed/folder'), 'a folder named as a file, moved')
+  await refusedWith('EROFS', provider.rename('/allowed/old.txt', '/folder.txt'), 'a file moved onto a folder named as a file')
+  await refusedWith('EROFS', provider.chmod('/folder.txt', 0o700), 'a folder named as a file, given a mode')
+  await refusedWith('EROFS', provider.open('/folder.txt/inside/x.txt', 'w'), 'a file made in a folder named as a file')
+  assert.equal(fs.lstatSync(path.join(root, 'folder.txt', 'inside')).isDirectory(), true)
 })
 
 test('view: what nothing names, and what is hidden, the VM neither sees nor lists', async t => {
   const { provider } = layOut(t)
-  assert.deepEqual((await provider.readdir('/')).sort(), ['allowed', 'empty', 'file.txt', 'ro'])
+  assert.deepEqual((await provider.readdir('/')).sort(), ['allowed', 'empty', 'file.txt', 'folder.txt', 'ro'])
   assert.deepEqual((await provider.readdir('/ro')).sort(), ['keep.txt'])
   for (const p of ['/unnamed.txt', '/ro/secret', '/ro/secret/hidden.txt']) {
     await refusedWith('ENOENT', provider.stat(p), p)

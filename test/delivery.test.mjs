@@ -95,11 +95,40 @@ const recordOf = (paths, id) => JSON.parse(fs.readFileSync(path.join(paths.bridg
 // What a fake channel was asked to send, without the times.
 const sendsOf = channel => channel.sends.map(({ at: _, aborted: __, ...rest }) => rest)
 
+test("delivery: an agent's entry whose channel its sends doesn't name is dropped and logged, and the entries after it go", async t => {
+  const { paths, write, drain, whatsapp, out, entries } = setup(t)
+  const reply = await write({ type: 'text', by: 'lifelog', channels: ['email'], text: 'Work or personal?', replyTo: 1 })
+  const ack = await write({ type: 'react', by: 'lifelog', channels: ['email'], target: 3, emoji: '✅' })
+  await write({ type: 'text', by: 'runner', text: 'A notice.' })
+  await write({ type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 2, emoji: '✅' })
+  // An entry of a runner of before agents had sends, which carries no channels: no entry at all.
+  const old = await write({ type: 'text', by: 'runner', text: 'stands in for an old entry' })
+  fs.writeFileSync(path.join(paths.outbox, old, ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'From an older runner.', about: 1 }))
+  await drain()
+
+  assert.deepEqual(sendsOf(whatsapp), [
+    { type: 'text', text: 'A notice.', quoteId: null },
+    { type: 'react', id: 'WA2', emoji: '✅' },
+  ])
+  assert.deepEqual(out().map(line => line.by), ['runner', 'lifelog'])
+  const dropped = entries.filter(entry => entry.event === 'outbox.dropped')
+  assert.deepEqual(
+    dropped.map(({ entry, channel, reason }) => ({ entry, channel, reason })),
+    [
+      { entry: reply, channel: 'whatsapp', reason: "whatsapp isn't among the channels its agent sends on" },
+      { entry: ack, channel: 'whatsapp', reason: "whatsapp isn't among the channels its agent sends on" },
+    ],
+  )
+  const refused = entries.find(entry => entry.event === 'outbox.refused')
+  assert.equal(refused.entry, old)
+  assert.match(refused.reason, /entry.json: channels is missing/)
+})
+
 test('delivery: entries go out in order, one message every SEND_INTERVAL, each logged as an out line with the channel\'s ID', async t => {
   const { write, drain, whatsapp, out, waiting } = setup(t)
-  await write({ type: 'text', by: 'lifelog', text: 'Blue Tokai, ₹450: work or personal?', replyTo: 1 })
-  await write({ type: 'react', by: 'lifelog', target: 2, emoji: '✅' })
-  await write({ type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 2 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Blue Tokai, ₹450: work or personal?', replyTo: 1 })
+  await write({ type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 2, emoji: '✅' })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Logged the lunch.', about: 2 })
   await write({ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (timed out). I'll try again." })
   assert.equal(waiting().length, 4)
   await drain()
@@ -131,7 +160,7 @@ test('delivery: entries go out in order, one message every SEND_INTERVAL, each l
 test('delivery: a long text goes out in pieces cut at paragraph breaks, and only the first quotes', async t => {
   const { write, drain, whatsapp, out } = setup(t)
   const paragraphs = ['a'.repeat(3000), 'b'.repeat(3000), 'c'.repeat(1000)]
-  await write({ type: 'text', by: 'lifelog', text: paragraphs.join('\n\n'), replyTo: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: paragraphs.join('\n\n'), replyTo: 1 })
   await drain()
   assert.deepEqual(
     sendsOf(whatsapp).map(send => [send.text, send.quoteId]),
@@ -187,7 +216,7 @@ test('delivery: after a crash, only the messages the record doesn\'t count as se
   const context = setup(t)
   const { write, whatsapp, clock, paths, waiting, out } = context
   const parts = ['first '.repeat(500).trim(), 'second '.repeat(500).trim(), 'third '.repeat(500).trim()]
-  const id = await write({ type: 'text', by: 'lifelog', text: parts.join('\n\n'), replyTo: 1 })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: parts.join('\n\n'), replyTo: 1 })
   // The first goes out; the second fails, and the bridge stops before it tries again, as a crash
   // would leave it.
   whatsapp.failNext(null, { code: 'EWACLI' })
@@ -195,7 +224,7 @@ test('delivery: after a crash, only the messages the record doesn\'t count as se
   await clock.advance(limits.SEND_INTERVAL)
   await context.outbox.stop()
   assert.deepEqual(recordOf(paths, id), {
-    entry: { type: 'text', by: 'lifelog', text: parts.join('\n\n'), replyTo: 1 },
+    entry: { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: parts.join('\n\n'), replyTo: 1 },
     sent: 1,
   })
   // The bridge wrote nothing in the runner's outbox: the entry is as the runner left it.
@@ -232,11 +261,11 @@ test('delivery: a record left by a crash is sent from where it counts, a reactio
     if (!folder) return
     fs.mkdirSync(path.join(paths.outbox, id), { recursive: true })
     // What the runner's user may have put there since: the record wins.
-    fs.writeFileSync(path.join(paths.outbox, id, ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'changed since' }))
+    fs.writeFileSync(path.join(paths.outbox, id, ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'changed since' }))
   }
   const text = ['one', 'two', 'three'].map(word => `${word} `.repeat(500).trim()).join('\n\n')
-  leave('20261109T154000000-0001', { entry: { type: 'text', by: 'lifelog', text, about: 2 }, sent: 2 })
-  leave('20261109T154000000-0002', { entry: { type: 'react', by: 'lifelog', target: 1, emoji: '✅' }, sent: 0 })
+  leave('20261109T154000000-0001', { entry: { type: 'text', by: 'lifelog', channels: ['whatsapp'], text, about: 2 }, sent: 2 })
+  leave('20261109T154000000-0002', { entry: { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' }, sent: 0 })
   // All of it was sent and recorded; the folder was removed, and the record left.
   leave('20261109T154000000-0003', { entry: { type: 'text', by: 'runner', text: 'done already' }, sent: 1 }, { folder: false })
   // All of it was sent and recorded; only the folder was left.
@@ -261,9 +290,9 @@ test('delivery: a record left by a crash is sent from where it counts, a reactio
 
 test('delivery: the bridge\'s own entries go out from its own outbox, in order with the runner\'s', async t => {
   const { write, writeOwn, drain, whatsapp, paths } = setup(t)
-  await write({ type: 'text', by: 'lifelog', text: 'first, from the runner', about: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'first, from the runner', about: 1 })
   const own = await writeOwn({ type: 'text', by: 'bridge', text: 'second, from the bridge', about: 2 })
-  await write({ type: 'text', by: 'lifelog', text: 'third, from the runner', about: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'third, from the runner', about: 1 })
   assert.deepEqual(fs.readdirSync(paths.bridgeOutbox), [own])
   await drain()
   assert.deepEqual(
@@ -282,7 +311,7 @@ test('delivery: an entry the runner\'s user swaps for a link once the bridge has
   fs.mkdirSync(elsewhere, { mode: 0o700 })
   fs.writeFileSync(path.join(elsewhere, 'kept'), 'kept')
   const parts = ['first '.repeat(500).trim(), 'second '.repeat(500).trim()]
-  const id = await write({ type: 'text', by: 'lifelog', text: parts.join('\n\n'), about: 1 })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: parts.join('\n\n'), about: 1 })
   // The first message goes out; then the entry's folder is swapped for a link to that folder.
   await clock.advance(SECOND)
   assert.equal(whatsapp.sends.length, 1)
@@ -302,7 +331,7 @@ test('delivery: an entry the runner\'s user swaps for a link once the bridge has
 test('delivery: entries wait while their channel isn\'t ready, and so do the ones after them', async t => {
   const { write, drain, whatsapp, clock, waiting, events } = setup(t)
   whatsapp.setReady(false)
-  await write({ type: 'text', by: 'lifelog', text: 'first', about: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'first', about: 1 })
   await write({ type: 'text', by: 'runner', text: 'second' })
   for (let n = 0; n < 60; n++) await clock.advance(SECOND)
   assert.deepEqual(whatsapp.sends, [])
@@ -321,7 +350,7 @@ test('delivery: a failed send is tried again after waits that double, without it
   const { write, drain, whatsapp, entries, out } = setup(t)
   // Eight failures, then one that works, then the last try of the first entry fails too.
   whatsapp.failNext(...Array.from({ length: limits.SEND_ATTEMPTS }, () => ({ code: 'EWACLI' })), null, { code: 'EWACLI' })
-  const failing = await write({ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 })
+  const failing = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Work or personal?', replyTo: 1 })
   await write({ type: 'text', by: 'runner', text: 'the next one' })
   await drain()
 
@@ -359,7 +388,7 @@ test('delivery: a failed send is tried again after waits that double, without it
 test('delivery: an outage gives up on nothing: entries passed over wait, and all go, in order, once sends work again', async t => {
   const { write, drain, whatsapp, clock, entries, out, waiting } = setup(t)
   whatsapp.failAll({ code: 'EWACLI' })
-  for (const text of ['one', 'two', 'three', 'four', 'five', 'six']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+  for (const text of ['one', 'two', 'three', 'four', 'five', 'six']) await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text, about: 1 })
   // The case of the review of milestone 5: every send fails for an hour, the channel ready.
   for (let n = 0; n < 3600; n++) await clock.advance(SECOND)
   assert.equal(waiting().length, 6)
@@ -396,7 +425,7 @@ test('delivery: after an outage of any length the entries go in order: those pas
     await t.test(`${minutes} minutes`, async t => {
       const { write, drain, whatsapp, clock, entries, out, outbox } = setup(t)
       whatsapp.failAll({ code: 'EWACLI' })
-      for (const text of ['one', 'two', 'three', 'four']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+      for (const text of ['one', 'two', 'three', 'four']) await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text, about: 1 })
       for (let n = 0; n < minutes * 60; n++) await clock.advance(SECOND)
       // Sends work again from a moment when no look is trying an entry (the next test has one
       // that is).
@@ -415,7 +444,7 @@ test('delivery: after an outage of any length the entries go in order: those pas
 test('delivery: when sends work again in the middle of a look, the entry tried then goes first, and nothing is given up', async t => {
   const { write, drain, whatsapp, clock, entries, out, outbox } = setup(t)
   whatsapp.failAll({ code: 'EWACLI' })
-  for (const text of ['one', 'two']) await write({ type: 'text', by: 'lifelog', text, about: 1 })
+  for (const text of ['one', 'two']) await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text, about: 1 })
   // Until both are passed over, and a look has tried `one` and is waiting to try `two`.
   const passedOver = () => entries.filter(entry => entry.event === 'outbox.passed_over').length
   while (passedOver() < 2) await clock.advance(SECOND)
@@ -439,7 +468,7 @@ test('delivery: when sends work again in the middle of a look, the entry tried t
 test('delivery: an entry passed over with nothing behind it holds nothing back, and is tried again every five minutes', async t => {
   const { write, drain, whatsapp, clock, entries, out } = setup(t)
   whatsapp.failAll({ code: 'EWACLI' })
-  await write({ type: 'text', by: 'lifelog', text: 'alone', replyTo: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'alone', replyTo: 1 })
   for (let n = 0; n < 3600; n++) await clock.advance(SECOND)
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.given_up'), [])
   const tries = whatsapp.sends.length
@@ -456,7 +485,7 @@ test('delivery: an entry passed over with nothing behind it holds nothing back, 
 test('delivery: a failure that leaves the channel not ready isn\'t counted against the entry', async t => {
   const { write, drain, whatsapp, clock, entries } = setup(t)
   whatsapp.failNext({ code: 'EWACLI', unready: true })
-  await write({ type: 'text', by: 'lifelog', text: 'hello', about: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'hello', about: 1 })
   await clock.advance(SECOND)
   assert.deepEqual(
     entries.filter(entry => entry.event === 'outbox.send_failed').map(entry => entry.failures),
@@ -476,13 +505,13 @@ test('delivery: an entry that isn\'t one is logged and removed, and the next goe
   }
   fs.writeFileSync(path.join(folder('20261109T150000000-0001'), ENTRY_FILE), '{"type":')
   const secret = path.join(root, 'secret.json')
-  fs.writeFileSync(secret, JSON.stringify({ type: 'text', by: 'lifelog', text: 'a file the runner could not read' }))
+  fs.writeFileSync(secret, JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'a file the runner could not read' }))
   fs.symlinkSync(secret, path.join(folder('20261109T150000000-0002'), ENTRY_FILE))
-  fs.writeFileSync(path.join(folder('20261109T150000000-0003'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'x'.repeat(limits.OUTBOX_ENTRY_MAX_BYTES) }))
-  fs.writeFileSync(path.join(folder('20261109T150000000-0004'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'hi', to: 'someone else' }))
-  fs.writeFileSync(path.join(folder('20261109T150000000-0005'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'y'.repeat(limits.TEXT_MAX_CHARS + 1) }))
+  fs.writeFileSync(path.join(folder('20261109T150000000-0003'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'x'.repeat(limits.OUTBOX_ENTRY_MAX_BYTES) }))
+  fs.writeFileSync(path.join(folder('20261109T150000000-0004'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'hi', to: 'someone else' }))
+  fs.writeFileSync(path.join(folder('20261109T150000000-0005'), ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'y'.repeat(limits.TEXT_MAX_CHARS + 1) }))
   fs.mkdirSync(paths.bridgeSending, { recursive: true })
-  fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0006.json'), JSON.stringify({ entry: { type: 'react', by: 'lifelog', target: 1, emoji: '✅' }, sent: -1 }))
+  fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0006.json'), JSON.stringify({ entry: { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' }, sent: -1 }))
   folder('20261109T150000000-0007')
   fs.writeFileSync(path.join(paths.outbox, '20261109T150000000-0008'), 'a file, not a folder')
   await context.write({ type: 'text', by: 'runner', text: 'the real one' })
@@ -527,7 +556,7 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   // A record of a runner's entry, whose removal would reach through the link, and an entry of the
   // bridge's own, such as a backup's notice.
   fs.mkdirSync(paths.bridgeSending, { recursive: true })
-  fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0001.json'), JSON.stringify({ entry: { type: 'text', by: 'lifelog', text: 'from the record' }, sent: 0 }))
+  fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0001.json'), JSON.stringify({ entry: { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'from the record' }, sent: 0 }))
   await context.writeOwn({ type: 'text', by: 'bridge', text: 'the backup failed' })
   context.start()
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
@@ -553,12 +582,12 @@ test("delivery: a name in the runner's outbox that isn't an entry's ID is left, 
   const { paths, whatsapp, entries, clock } = context
   // A valid entry in a folder whose name is too long
   // for the bridge's record once `.json` and a temporary prefix are added.
-  const entry = JSON.stringify({ type: 'text', by: 'lifelog', text: 'not taken', about: 1 })
+  const entry = JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'not taken', about: 1 })
   for (const name of ['x'.repeat(240), '20261109T150000000-0001-more', 'notes']) {
     fs.mkdirSync(path.join(paths.outbox, name), { recursive: true })
     fs.writeFileSync(path.join(paths.outbox, name, ENTRY_FILE), entry)
   }
-  await context.write({ type: 'text', by: 'lifelog', text: 'the real one', about: 1 })
+  await context.write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'the real one', about: 1 })
   context.start()
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the real one'])
@@ -574,7 +603,7 @@ test("delivery: a name in the runner's outbox that isn't an entry's ID is left, 
 test("delivery: in the runner's outbox the bridge removes only entry.json; in its own, also its sending.json", async t => {
   const { write, writeOwn, whatsapp, clock, paths, entries } = setup(t)
   // A runner's entry with what an older bridge left in it, and one of the bridge's own.
-  const id = await write({ type: 'text', by: 'lifelog', text: 'the runner\'s', about: 1 })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'the runner\'s', about: 1 })
   for (const name of [SENDING_FILE, `.tmp-${SENDING_FILE}-1`]) fs.writeFileSync(path.join(paths.outbox, id, name), '{}')
   const own = await writeOwn({ type: 'text', by: 'bridge', text: 'the bridge\'s', about: 2 })
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
@@ -586,9 +615,9 @@ test("delivery: in the runner's outbox the bridge removes only entry.json; in it
 
 test('delivery: an entry is removed by the names one holds; one holding anything else is left once sent, and said once', async t => {
   const { write, whatsapp, clock, paths, entries, waiting } = setup(t)
-  const id = await write({ type: 'text', by: 'lifelog', text: 'hello', about: 1 })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'hello', about: 1 })
   fs.writeFileSync(path.join(paths.outbox, id, 'notes.txt'), 'not a name an entry holds')
-  await write({ type: 'text', by: 'lifelog', text: 'and the next', about: 1 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'and the next', about: 1 })
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['hello', 'and the next'])
   assert.deepEqual(waiting(), [id])
@@ -598,7 +627,7 @@ test('delivery: an entry is removed by the names one holds; one holding anything
 
 test('delivery: pause stops it between two messages, until resume', async t => {
   const { write, drain, whatsapp, clock, outbox, paths } = setup(t)
-  const id = await write({ type: 'text', by: 'lifelog', text: ['one', 'two', 'three'].map(word => `${word} `.repeat(500).trim()).join('\n\n') })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: ['one', 'two', 'three'].map(word => `${word} `.repeat(500).trim()).join('\n\n') })
   await clock.advance(SECOND)
   assert.equal(whatsapp.sends.length, 1)
   // Paused while it waits to send the second.
@@ -615,7 +644,7 @@ test('delivery: pause stops it between two messages, until resume', async t => {
 
 test('delivery: a text over TEXT_MAX_CHARS is cut when it is written, and goes out in a few messages', async t => {
   const { write, drain, whatsapp, paths, out } = setup(t)
-  const id = await write({ type: 'text', by: 'lifelog', text: 'word '.repeat(200_000) })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'word '.repeat(200_000) })
   const written = JSON.parse(fs.readFileSync(path.join(paths.outbox, id, ENTRY_FILE), 'utf8'))
   assert.ok(textLength(written.text) <= limits.TEXT_MAX_CHARS && textLength(written.text) > limits.TEXT_MAX_CHARS - 10)
   assert.ok(written.text.endsWith(CUT_NOTE))
@@ -627,7 +656,7 @@ test('delivery: a text over TEXT_MAX_CHARS is cut when it is written, and goes o
 test('delivery: a message the channel gives no ID for is logged without one', async t => {
   const { write, drain, whatsapp, out, events } = setup(t)
   whatsapp.noIdNext()
-  await write({ type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
+  await write({ type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' })
   await drain()
   assert.equal(out()[0].sourceId, undefined)
   assert.ok(events().includes('outbox.no_id'))
@@ -638,9 +667,9 @@ test('delivery: a message whose ID the store already holds is logged without one
   // As a channel that answered with the ID of the message it reacted to:
   // the reaction went out, and is recorded.
   whatsapp.idsNext('WA1', 'WA2')
-  await write({ type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
-  await write({ type: 'text', by: 'lifelog', text: 'about the lunch', about: 2 })
-  await write({ type: 'text', by: 'lifelog', text: 'and one more', about: 2 })
+  await write({ type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'about the lunch', about: 2 })
+  await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'and one more', about: 2 })
   await drain()
   assert.deepEqual(
     out().map(line => [line.kind, line.sourceId, line.text ?? line.data.emoji]),
@@ -660,7 +689,7 @@ test('delivery: an entry with U+0000 in its text is refused at once, not tried S
   const context = setup(t, { started: false })
   const { paths, whatsapp, entries } = context
   fs.mkdirSync(path.join(paths.outbox, '20261109T150000000-0001'), { recursive: true })
-  fs.writeFileSync(path.join(paths.outbox, '20261109T150000000-0001', ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', text: 'a\u0000b' }))
+  fs.writeFileSync(path.join(paths.outbox, '20261109T150000000-0001', ENTRY_FILE), JSON.stringify({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'a\u0000b' }))
   await context.write({ type: 'text', by: 'runner', text: 'the next one' })
   context.start()
   await context.drain(10)
@@ -681,7 +710,7 @@ test('delivery: when the store takes no more lines, the message counts as sent a
   store.append = async () => {
     throw Object.assign(new Error('no space'), { code: 'ENOSPC' })
   }
-  const id = await write({ type: 'text', by: 'lifelog', text: ['one', 'two'].map(word => `${word} `.repeat(500).trim()).join('\n\n') })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: ['one', 'two'].map(word => `${word} `.repeat(500).trim()).join('\n\n') })
   await clock.advance(SECOND)
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   assert.equal(whatsapp.sends.length, 1)
@@ -695,7 +724,7 @@ const notAsRoot = { skip: isRoot ? 'root writes a folder whatever its mode' : fa
 test('delivery: nothing goes out that the record can\'t hold, and the look is tried again after waits that grow', notAsRoot, async t => {
   const context = setup(t)
   const { write, whatsapp, clock, paths, entries } = context
-  const id = await write({ type: 'text', by: 'lifelog', text: 'hello', about: 1 })
+  const id = await write({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'hello', about: 1 })
   // The bridge's folder of records can't be written, as a full disk can't.
   fs.mkdirSync(paths.bridgeSending, { recursive: true })
   fs.chmodSync(paths.bridgeSending, 0o500)

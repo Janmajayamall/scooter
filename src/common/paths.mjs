@@ -29,7 +29,7 @@ export function makePaths({ dataDir, configDir }) {
     // The agents' folders.
     agents: data('agents'),
     agentDir: agent,
-    agentViews: name => path.join(agent(name), 'views'),
+    // The folder of the memory files that the runner puts in the system prompt.
     agentMemory: name => path.join(agent(name), 'memory'),
     agentSessions: name => path.join(agent(name), 'sessions'),
     agentRun: name => path.join(agent(name), 'run'),
@@ -37,7 +37,7 @@ export function makePaths({ dataDir, configDir }) {
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
     agentState: name => path.join(agent(name), 'state.json'),
-    // Where the clean-up sets an agent's `views/` and `memory/` aside before it removes them:
+    // Where the clean-up sets aside what an agent's `writes` names in its folder before it removes it:
     // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
     // Backups leave the whole of `agents/.discarded/` out: it holds what is being removed.
     agentDiscarded: name => data('agents', '.discarded', name),

@@ -4,7 +4,8 @@
 //    If a backup holds it, let go of `run.lock` and wait.
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, and a copy of the
 //    current session.
-// 3. **Run** pi in the sandbox, with its command, mounts, environment and network policy.
+// 3. **Run** pi in the sandbox, with its command, what it sees and may change, its environment and
+//    the network policy.
 // 4. **After a successful run,** in this order: check the files pi left, staging them as the
 //    check's last step; commit; copy its session back; write the outbox entries; update the state.
 //    A crash part-way through only means the batch runs again.
@@ -15,14 +16,14 @@
 // Everything from the check to the commit reads what pi left, so an error there, such as a git
 // command that times out, fails the run like an unexpected file, and counts an attempt: it never
 // stops the runner, which would run the same batch again at its next start without counting one.
-// `run/session/` is emptied before the run is recorded, and on a failure `views/` and `memory/`
-// are cleaned up after it, so nothing pi left takes room the clean-up or the state needs: pi may
-// have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
+// `run/session/` is emptied before the run is recorded, and on a failure what `writes` names in
+// the agent's folder is cleaned up after it, so nothing pi left takes room the clean-up or the
+// state needs: pi may have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
 //
 // A replayed batch, of a rebuild or a backfill (`replay.mjs`), is a run like the
 // others, with its own session, skills and commit message, and three differences: it sends
-// nothing, neither texts, reactions nor notices; a backfill's batch fails if it changed anything
-// but what the backfill may change; and each settles its own lane of the state.
+// nothing, neither texts, reactions nor notices; a backfill's batch may change only what the
+// backfill may, which the sandbox holds it to; and each settles its own lane of the state.
 
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
@@ -31,7 +32,7 @@ import { errorFields } from '../common/log.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
 import { clearRunSession, keepSession, prepareRun } from './agentdir.mjs'
 import { answerEntries, droppedTexts, parseAnswer, reportsOf, shortReason } from './answer.mjs'
-import { mayChange, settleBackfill } from './backfill.mjs'
+import { settleBackfill } from './backfill.mjs'
 import { failureNotice, givenUpNotice, isFirstFailure, readFailureCause, settleBatch, settleTask } from './failures.mjs'
 import { GUEST_HOME, GUEST_PATH, OPENROUTER_HOST, PI_PROGRAM } from './sandbox/index.mjs'
 import { saveState, sessionId } from './state.mjs'
@@ -44,17 +45,18 @@ export const PI_TOOLS = 'read,bash,edit,write,grep,find,ls'
 // ---------------------------------------------------------------------------------------------
 // What the sandbox is given
 
-// The mounts, at the host's own paths: the agent's folder read-only, with `sessions/` hidden and
-// `views/`, `memory/` and `run/session/` writable; and the datastore read-only.
-export function piMounts(paths, agentName) {
-  const dir = paths.agentDir(agentName)
-  return [
-    { path: dir, writable: false, hide: [path.relative(dir, paths.agentSessions(agentName))] },
-    { path: paths.agentViews(agentName), writable: true, hide: [] },
-    { path: paths.agentMemory(agentName), writable: true, hide: [] },
-    { path: paths.agentRunSession(agentName), writable: true, hide: [] },
-    { path: paths.datastore, writable: false, hide: [] },
-  ]
+// What the VM sees of the data folder, mounted at its own path, and what it may change (`files`,
+// `sandbox/index.mjs`): what the agent's `reads` and `writes` name, and `run/`, which a run needs
+// whatever they say; changes only to `writes`, the run's own unless given, and to `run/session/`;
+// and never `sessions/`.
+export function piFiles(paths, agent, writes = agent.writes) {
+  const full = entry => path.join(paths.dataDir, entry.replace(/\/$/, ''))
+  return {
+    root: paths.dataDir,
+    reads: [...agent.reads, ...agent.writes].map(full).concat(paths.agentRun(agent.name)),
+    writes: [...writes.map(entry => ({ path: full(entry), folder: entry.endsWith('/') })), { path: paths.agentRunSession(agent.name), folder: true }],
+    hide: [paths.agentSessions(agent.name)],
+  }
 }
 
 // pi's environment, apart from the key's placeholder, which the sandbox sets from the policy.
@@ -110,13 +112,14 @@ export function piArgs({ agent, prepared, sessionId: id, prompt }) {
   ]
 }
 
-// The sandbox's spec for one run of pi.
-export function runSpec({ agent, settings, paths, prepared, sessionId: id, prompt }) {
+// The sandbox's spec for one run of pi. `writes` is what the run may change, when it is narrower
+// than the agent's own, as for a backfill's batch.
+export function runSpec({ agent, settings, paths, prepared, sessionId: id, prompt, writes }) {
   return {
     argv: [PI_PROGRAM, ...piArgs({ agent, prepared, sessionId: id, prompt })],
     cwd: paths.agentDir(agent.name),
     env: piEnv({ timeZone: settings.timeZone }),
-    mounts: piMounts(paths, agent.name),
+    files: piFiles(paths, agent, writes),
     timeoutMs: agent.timeoutMinutes * MINUTE,
     policy: piPolicy({ agent, settings }),
   }
@@ -178,7 +181,7 @@ function settleJob(job, state, outcome, timing) {
 //   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes }   from `backfillJob`
 //
 // A replayed batch names its session, null for none, and a backfill's the skills pi gets and what
-// it may change.
+// it may change, which the sandbox lets through in place of the agent's own `writes`.
 //
 // `outcome` is `waiting` (a backup or a rebuild holds the locks, and nothing ran), `stopped` (the
 // runner is stopping, `signal` aborted the run, and its changes were thrown away, as after a crash),
@@ -200,7 +203,7 @@ export async function performRun(context) {
         ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
     const prepared = prepareRun({ paths, agent, protocol, sessionId: id, skills: job.skills })
-    const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt })
+    const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
     const task = job.kind === 'scheduled' ? job.at : undefined
     log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, task, backfill: job.kind === 'backfill' ? job.id : undefined, session: id })
@@ -233,19 +236,14 @@ export async function performRun(context) {
 
 // After pi exited with 0: anything git wouldn't record fails the run, then what
 // was staged is committed. Staging is the check's last step, because only git knows every name it
-// refuses. A backfill's batch also fails when it changed a file it may not change, which only the
-// staged changes say. Returns `{ committed }`, whether there was a commit; `{ unexpected }`,
-// the path the check found; `{ outside }`, the first file a backfill may not change that it
-// changed; or `{ error }`, when a step failed. Everything here reads what pi left, so any error is
-// the run's, and fails it as an unexpected file would.
+// refuses. Returns `{ committed }`, whether there was a commit; `{ unexpected }`, the path the
+// check found; or `{ error }`, when a step failed. Everything here reads what pi left, so any error
+// is the run's, and fails it as an unexpected file would. What a run may change, the sandbox held
+// it to while it ran, so nothing here compares what changed with what it may change.
 async function commitFiles({ agent, git, log, job }) {
   try {
     const unexpected = (await git.unexpectedFile()) ?? (await git.stage())
     if (unexpected !== null) return { unexpected }
-    if (job.kind === 'backfill') {
-      const outside = (await git.stagedChanges()).find(file => !mayChange(file, job.writes))
-      if (outside !== undefined) return { outside }
-    }
     return { committed: await git.commitStaged(commitMessage(agent.name, job)) }
   } catch (error) {
     log.warn('runner.files_failed', { agent: agent.name, ...errorFields(error) })
@@ -322,9 +320,7 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     cleanup = error
   }
   const unexpected = files?.unexpected ?? null
-  const outside = files?.outside ?? null
-  const failure = readFailureCause({ paths, result, unexpected, outside, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now, log })
-  const file = unexpected ?? outside
+  const failure = readFailureCause({ paths, result, unexpected, filesError: files?.error ?? null, startedAt: timing.startedAt, endedAt: timing.now, log })
   log.warn('runner.run_failed', {
     agent: agent.name,
     job: job.kind,
@@ -335,8 +331,7 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     stdoutCut: result.stdoutCut || undefined,
     wroteTooMuch: result.wroteTooMuch || undefined,
     // A name pi chose, cut as the reason is: it could hold a message's words.
-    file: file === null ? undefined : shortReason(file),
-    outside: outside === null ? undefined : true,
+    file: unexpected === null ? undefined : shortReason(unexpected),
     ms: timing.durationMs,
   })
 

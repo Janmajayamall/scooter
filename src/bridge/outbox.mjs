@@ -135,7 +135,8 @@ function messageOf(index, seq) {
 //   { action: 'text', channel, text, quote }   `quote` is `{ seq, id }`, the line it quotes and
 //                                              that line's channel ID, or null
 //   { action: 'react', channel, target, id, emoji }
-//   { action: 'drop', reason }
+//   { action: 'drop', reason, channel }        `channel` the name of the one it would have gone
+//                                              out on, when one was chosen
 //
 // - A `text` goes to the channel of the line `replyTo` or `about` names, if that channel is running
 //   and can send, quoting the line when it is `replyTo`. An edit or a deletion is quoted as the
@@ -148,7 +149,20 @@ function messageOf(index, seq) {
 //   keeps in the line's `data`, when it is a string there. Scooter reacts only to the owner's
 //   messages, so a reaction to a line it sent itself, to a reaction, to a line this version doesn't
 //   know, or to a line that doesn't exist is dropped, and so is one whose channel can't react.
+// - An agent's entry carries the channels its `sends` names: one that would go out on any other,
+//   whichever way it was chosen, a reply about an email on `DEFAULT_CHANNEL` among them, is
+//   dropped. The runner can't tell which channel an entry will go out on: this is where it is
+//   chosen. The runner's and the bridge's own entries carry none.
 export function routeEntry(entry, { index, channels, defaultChannel }) {
+  const route = chooseRoute(entry, { index, channels, defaultChannel })
+  // An agent's entry goes out only on a channel its `sends` names, which it carries.
+  if (route.action !== 'drop' && entry.channels !== undefined && !entry.channels.includes(route.channel.name)) {
+    return { action: 'drop', reason: `${route.channel.name} isn't among the channels its agent sends on`, channel: route.channel.name }
+  }
+  return route
+}
+
+function chooseRoute(entry, { index, channels, defaultChannel }) {
   const fallback = channels.get(defaultChannel)
   if (entry.type === 'text') {
     const pointer = entry.replyTo ?? entry.about
@@ -385,7 +399,7 @@ export function createOutbox({ paths, store, channels, defaultChannel, log, cloc
     let { sent } = loaded
     const route = routeEntry(entry, { index: store.index, channels, defaultChannel })
     if (route.action === 'drop') {
-      log.warn('outbox.dropped', { entry: id, type: entry.type, target: entry.target, reason: route.reason })
+      log.warn('outbox.dropped', { entry: id, type: entry.type, target: entry.target, channel: route.channel, reason: route.reason })
       remove(target)
       return 'next'
     }

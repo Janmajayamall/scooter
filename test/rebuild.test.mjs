@@ -23,20 +23,21 @@ function rebuildYaml() {
     model: anthropic/claude-sonnet-5.5
     prompt: prompts/lifelog.md
     skills: [skills/expenses, skills/runs, skills/people]
-    reads: [whatsapp, email]
+    writes: [agents/lifelog/views/, agents/lifelog/memory/]
+    sends: [whatsapp]
     session: daily
     reply_mode: quiet
     ack_reaction: "✅"
-    can_message: true
     timeout_minutes: 10
     run:
       - on: new-messages
+        channels: [whatsapp, email]
       - backfill: people-1
         skill: people
-        writes: [views/people.csv]
+        writes: [agents/lifelog/views/people.csv]
       - backfill: runs-1
         skill: runs
-        writes: [views/runs.csv]
+        writes: [agents/lifelog/views/runs.csv]
 `
 }
 
@@ -63,7 +64,7 @@ async function prepare(t, { lines = HISTORY, state = HANDLED } = {}) {
   const { runner } = await startTestRunner(t, prepared)
   await runner.close()
   const { paths } = prepared
-  fs.writeFileSync(path.join(paths.agentViews('lifelog'), 'old.csv'), 'seq,text\n1,ran 5k\n')
+  fs.writeFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'old.csv'), 'seq,text\n1,ran 5k\n')
   fs.writeFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), '- 2026-11-01 (#0): an old rule.\n')
   commitByHand(paths, 'lifelog: #1 #4 #6')
   fs.writeFileSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
@@ -157,9 +158,9 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.equal(gitOf(paths, 'log', '-2', '--format=%s'), 'lifelog: rebuild\nlifelog: #1 #4 #6\n')
   assert.equal(gitOf(paths, 'rev-parse', 'HEAD^').trim(), before)
   assert.equal(gitOf(paths, 'status', '--porcelain'), '')
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), ['notes.csv'])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), ['notes.csv'])
   assert.equal(
-    fs.readFileSync(path.join(paths.agentViews('lifelog'), 'notes.csv'), 'utf8'),
+    fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8'),
     'seq,text\n1,"#1 21:30 text: \\"ran 5k\\""\n4,"#4 09:30 text: \\"start tracking coffee MEMORY\\""\n6,"#6 10:30 text: \\"coffee 120\\""\n',
   )
   assert.equal(fs.readFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), 'utf8'), '- 2026-11-09 (#1): Track coffee.\n')
@@ -191,7 +192,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   await clock.advance(8 * SECOND)
   assert.deepEqual(await runner.tick(), { action: { kind: 'messages' }, outcome: { ok: true, cause: null } })
   assert.deepEqual(sandbox.seen()[2].items, [7])
-  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 7 }])
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 7, channels: ['whatsapp'] }])
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
 })
 
@@ -224,7 +225,7 @@ test("rebuild: it doesn't start while a runner runs or run.lock is there, and no
   await running
   await assert.rejects(openRunner({ settings, openSandbox: async () => sandbox, clock, log, proc }), /another runner, rebuild or build-image is running on this data folder/)
   assert.equal(readLock(paths.runLock).pid, process.pid)
-  assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild, from empty views and memory\n')
+  assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild, from empty\n')
   open()
   assert.equal((await drive(prepared, done)).stopped, false)
   // Once it is over, a runner starts.
@@ -269,7 +270,7 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   assert.deepEqual(after.failed.map(entry => [entry.seq, entry.reason]), [[2, 'not handled after 4 attempts']])
   assert.deepEqual([after.cursor, after.retry, after.paused], [3, [], undefined])
   assert.equal(
-    fs.readFileSync(path.join(paths.agentViews('lifelog'), 'notes.csv'), 'utf8'),
+    fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8'),
     'seq,text\n1,"#1 09:30 text: \\"coffee 120\\" (attempt 1 of 4)"\n3,"#3 10:30 text: \\"lunch 300\\""\n',
   )
   assert.deepEqual(outboxOf(paths), [])
@@ -291,7 +292,7 @@ test('rebuild: its own steps take run.lock and give way to a backup, as its batc
       looks.push({
         tags: gitOf(paths, 'tag', '--list'),
         last: gitOf(paths, 'log', '-1', '--format=%s'),
-        views: fs.readdirSync(paths.agentViews('lifelog')).sort(),
+        views: fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')).sort(),
         runLock: lockExists(paths.runLock),
       }),
   })
@@ -364,7 +365,7 @@ test('rebuild: a closed terminal, SIGHUP, stops it as SIGTERM does, and lets go 
   let out = ''
   const code = await runRebuild({ args: ['lifelog'], settings, openSandbox: async () => sandbox, stdout: { write: text => (out += text) }, stderr: { write: () => {} }, clock: prepared.clock, log: prepared.log })
   assert.equal(code, 1)
-  assert.match(out, /Stopped at #0 of #6, with the views rebuilt only in part\. Run the rebuild again; it starts from the beginning\.\n$/)
+  assert.match(out, /Stopped at #0 of #6, with the agent's files rebuilt only in part\. Run the rebuild again; it starts from the beginning\.\n$/)
   assert.equal(lockExists(paths.runLock), false)
   assert.equal(process.listenerCount('SIGHUP'), 0)
   prepared.clock.set(Date.parse(START) + MINUTE)
@@ -381,7 +382,7 @@ test('rebuild: stopped, it throws the batch in progress away, and leaves a state
   const { done, said } = startRebuild(prepared, { signal: stopping.signal })
   const result = await drive(prepared, done)
   assert.deepEqual(result, { stopped: true, tag: TAG, until: 6, cursor: 3, batches: 1, failed: [] })
-  assert.equal(said.at(-1), 'Stopped at #3 of #6, with the views rebuilt only in part. Run the rebuild again; it starts from the beginning.')
+  assert.equal(said.at(-1), "Stopped at #3 of #6, with the agent's files rebuilt only in part. Run the rebuild again; it starts from the beginning.")
   // The first day is committed; the second thrown away.
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild #1\n')
   assert.equal(gitOf(paths, 'status', '--porcelain'), '')

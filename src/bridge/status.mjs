@@ -237,14 +237,14 @@ export function readIndex(paths) {
   return index
 }
 
-// What the agent's state says it has waiting: work items after its cursor, from the sources it
-// reads, and the lengths of its retry and failed lists. A line this version doesn't know is no
-// work item, as the runner passes it over.
-function counts(index, state, reads) {
+// What the agent's state says it has waiting: work items after its cursor, from the channels its
+// triggers name, and the lengths of its retry and failed lists. A line this version doesn't know
+// is no work item, as the runner passes it over.
+function counts(index, state, channels) {
   let pending = 0
   for (let seq = state.cursor + 1; seq <= index.lastSeq; seq++) {
     const line = index.get(seq)?.line
-    if (line && isKnown(line) && line.dir === 'in' && WORK.includes(line.kind) && reads.includes(line.source)) pending += 1
+    if (line && isKnown(line) && line.dir === 'in' && WORK.includes(line.kind) && channels.includes(line.source)) pending += 1
   }
   return { pending, retrying: state.retry.length, failed: state.failed.length }
 }
@@ -380,7 +380,7 @@ export function statusText({ now, settings, paths, index }) {
     if (index instanceof Error) {
       lines.push(`Messages: ${state.retry.length} retrying, ${state.failed.length} failed; those pending can't be counted without the datastore.`)
     } else {
-      const { pending, retrying, failed } = counts(index, state, agent.reads)
+      const { pending, retrying, failed } = counts(index, state, agent.channels)
       lines.push(`Messages: ${pending} pending, ${retrying} retrying, ${failed} failed.`)
     }
     if (state.backfill) lines.push(`Backfill ${state.backfill.id}: at #${state.backfill.cursor} of #${state.backfill.until}.`)

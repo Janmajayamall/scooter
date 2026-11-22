@@ -64,7 +64,7 @@ export async function holdRunnerFolder(paths) {
 // the changes of a run that a crash or a stop cut short, so the next run starts from the last
 // commit. Returns git for the folder (`createGit`). The caller holds `runner.sock`.
 export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
-  const git = createGit({ proc, dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock })
+  const git = createGit({ proc, dir: paths.agentDir(agent.name), entries: agent.repository, discardDir: paths.agentDiscarded(agent.name), log, clock })
   await ensureAgentDir({ paths, name: agent.name, git, log })
   await git.discardChanges()
   return git

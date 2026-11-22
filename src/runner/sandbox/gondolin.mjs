@@ -9,11 +9,12 @@
 //   knowing the owner's time zone (`image.mjs`);
 // - picks the accelerator (`accel.mjs`), and checks that QEMU is installed.
 //
-// `run(spec)` then boots a fresh VM from `runner/image/` for each run, with the spec's mounts at
-// the host's own paths, Gondolin's own mount point moved off `/data`, `sessions/` hidden
-// with `ShadowProvider`; runs the program from its argument list through `env -i`, so it gets the
-// spec's environment and nothing else; and closes the VM on every path: when the
-// program exits, at the timeout, when the runner stops, and when the run writes more than it may.
+// `run(spec)` then boots a fresh VM from `runner/image/` for each run, with the spec's `files`
+// mounted at the host's own path through the providers of `view.mjs`, which show the VM only what
+// the run may read and let it change only what it may write, and Gondolin's own mount point moved
+// off `/data`; runs the program from its argument list through `env -i`, so it gets the spec's
+// environment and nothing else; and closes the VM on every path: when the program exits, at the
+// timeout, when the runner stops, and when the run writes more than it may.
 // Closing is what stops the program: aborting the command in Gondolin 0.14.0 doesn't.
 //
 // The network is the policy's (`policy.mjs`): it checks and logs every request the VM makes,
@@ -38,6 +39,7 @@ import { pickAccelerator } from './accel.mjs'
 import { checkImage, machineArch, pinnedPiVersion, qemuProgram, readBuildFile } from './image.mjs'
 import { GUEST_PATH, SandboxSetupError, checkRunSpec, createOutput } from './index.mjs'
 import { policyNetwork } from './policy.mjs'
+import { viewProvider } from './view.mjs'
 
 // Where Gondolin's own file system goes in the VM, instead of `/data`, which is where Scooter's
 // folders are in Docker. `/run` is a temporary file system of the VM's boot.
@@ -89,7 +91,7 @@ function guestError(code, message) {
   return Object.assign(new Error(`${code}: ${message}`), { code, errno: 0 })
 }
 
-// What one run may still write through its writable mounts (`RUN_WRITE_MAX_BYTES`,
+// What one run may still write through what it may change (`RUN_WRITE_MAX_BYTES`,
 // `RUN_NAMES_MAX_COUNT`). Once either is passed, every later write or new name is refused with
 // ENOSPC, and `over` is called once.
 function createBudget(over) {
@@ -120,9 +122,10 @@ function createBudget(over) {
   }
 }
 
-// A writable mount of `host`, which counts what is written through it against `budget`. Gondolin's
-// hooks see every write and every open, folder and hard link; a symbolic link passes them by, so it
-// is counted here.
+// Gondolin's provider of `host`, which counts what is written through it against `budget`.
+// Gondolin's hooks see every write and every open, folder and hard link; a symbolic link passes
+// them by, so it is counted here. Only what the run may change reaches it to be counted
+// (`view.mjs`).
 function budgetedProvider(gondolin, host, budget) {
   const isNew = file => {
     try {
@@ -150,24 +153,10 @@ function budgetedProvider(gondolin, host, budget) {
   return new BudgetedProvider(new gondolin.RealFSProvider(host), { before })
 }
 
-// Gondolin's mounts for a spec's: at the host's paths; read-only unless writable; with the hidden
-// paths shadowed, so the VM finds nothing there and can't make anything.
-function mountsOf(gondolin, mounts, budget) {
-  const providers = {}
-  for (const mount of mounts) {
-    if (mount.writable) {
-      providers[mount.path] = budgetedProvider(gondolin, mount.path, budget)
-      continue
-    }
-    let provider = new gondolin.RealFSProvider(mount.path)
-    if (mount.hide.length > 0) {
-      provider = new gondolin.ShadowProvider(provider, {
-        shouldShadow: gondolin.createShadowPathPredicate(mount.hide.map(hidden => `/${hidden}`)),
-      })
-    }
-    providers[mount.path] = new gondolin.ReadonlyProvider(provider)
-  }
-  return providers
+// Gondolin's mounts for a spec's `files`: its root, at the host's own path, through the providers
+// that show and let through only what the run may read and write (`view.mjs`).
+function mountsOf(gondolin, files, budget) {
+  return { [files.root]: viewProvider(gondolin, files, budgetedProvider(gondolin, files.root, budget)) }
 }
 
 // A stream that hands what is written to it to `collect`, as the output arrives.
@@ -253,7 +242,7 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
         // A request's body is read whole by the policy for OpenRouter; Gondolin refuses a larger one
         // before it reaches the policy.
         maxHttpBodyBytes: limits.MODEL_REQUEST_MAX_BYTES,
-        vfs: { mounts: mountsOf(gondolin, spec.mounts, budget), fuseMount: FUSE_MOUNT },
+        vfs: { mounts: mountsOf(gondolin, spec.files, budget), fuseMount: FUSE_MOUNT },
         startTimeoutMs: Math.min(limits.VM_START_TIMEOUT, spec.timeoutMs),
         sessionLabel: 'scooter runner',
       })
@@ -375,7 +364,7 @@ export async function bootCheck({ paths, settings, clock = systemClock, signal =
         argv: ['true'],
         cwd: '/',
         env: { PATH: GUEST_PATH },
-        mounts: [{ path: empty, writable: false, hide: [] }],
+        files: { root: scratch, reads: [empty], writes: [], hide: [] },
         // The boot has its own limit, `VM_START_TIMEOUT`; `true` then takes no time.
         timeoutMs: 2 * limits.VM_START_TIMEOUT,
         policy: { model: 'none', internet: false, zdr: true, secrets: {} },

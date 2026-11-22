@@ -1,4 +1,4 @@
-// `scooter rebuild <agent>`: an agent's views and memory made again from the
+// `scooter rebuild <agent>`: what an agent's `writes` names in its folder made again from the
 // whole datastore, which is the record (principle 1).
 //
 // It runs as the runner's user, with the runner's service stopped; in Docker, as
@@ -14,8 +14,9 @@
 //    `before-rebuild-20261118T101500Z`.
 // 2. **Note the newest `seq`** in the datastore, `until`. The rebuild stops there: what comes after
 //    it is the runner's, which handles it with replies.
-// 3. **Empty** `views/`, `memory/` and `sessions/`, and commit the empty folders, so that a failed
-//    batch's clean-up comes back to them. **Reset `state.json`**: `cursor` is `until`, so a runner
+// 3. **Empty** what the agent's repository keeps (`agent.repository`) and `sessions/`, and commit
+//    that, so that a failed batch's clean-up comes back to it. A path of `writes` outside the
+//    agent's folder is left as it is. **Reset `state.json`**: `cursor` is `until`, so a runner
 //    started after a rebuild cut short goes on from there, rather than give the agent all of
 //    history again with replies;
 //    `backfillDone` is kept; and every backfill of the config counts as done, the one in progress,
@@ -36,14 +37,16 @@
 //    where an edit of the message brings it back; and remove its sessions.
 //
 // Steps 1 to 3, and 5, take `run.lock` and give way to `backup.lock`, as each batch does: they
-// change `views/`, `memory/` and `.git`, and a backup must not read those halfway.
+// change the agent's files and `.git`, and a backup must not read those halfway.
 //
 // Rules the owner sent as messages are learned again at the point they were sent. Rules in the
 // config apply to all of history.
 //
-// Cut short, by a stop, a closed terminal or a crash, it leaves the views rebuilt up to where it
-// got, and the commits of the batches so far. Run it again: it starts from the beginning.
+// Cut short, by a stop, a closed terminal or a crash, it leaves the agent's files rebuilt up to
+// where it got, and the commits of the batches so far. Run it again: it starts from the beginning.
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { createIds, emptyFolder } from '../common/files.mjs'
 import { initialAgentState } from '../common/agentstate.mjs'
 import { limits } from '../common/limits.mjs'
@@ -191,7 +194,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
     }
     const stopped = () => {
       log.info('rebuild.stopped', { agent: agent.name, until, cursor: state.cursor, batches })
-      say(`Stopped at #${state.cursor} of #${until}, with the views rebuilt only in part. Run the rebuild again; it starts from the beginning.`)
+      say(`Stopped at #${state.cursor} of #${until}, with the agent's files rebuilt only in part. Run the rebuild again; it starts from the beginning.`)
       return { stopped: true, tag, until, cursor: state.cursor, batches, failed: [...gaveUp] }
     }
 
@@ -203,10 +206,15 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
       log.info('rebuild.started', { agent: agent.name, until, tag, accel: sandbox.accel })
       say(`Rebuilding ${agent.name} from the datastore, up to #${until}. The last commit before the rebuild is tagged ${tag}.`)
       if (sandbox.accel === 'emulation') say("pi's VMs run under emulation here, because KVM isn't available, so each batch takes much longer.")
-      for (const folder of [paths.agentViews(agent.name), paths.agentMemory(agent.name), paths.agentSessions(agent.name)]) emptyFolder(folder)
+      for (const entry of agent.repository) {
+        const full = path.join(paths.agentDir(agent.name), entry)
+        if (entry.endsWith('/')) emptyFolder(full)
+        else fs.rmSync(full, { force: true })
+      }
+      emptyFolder(paths.agentSessions(agent.name))
       const refused = await git.stage()
-      if (refused !== null) throw new Error(`git wouldn't stage ${refused} once the views were emptied`)
-      await git.commitStaged(`${agent.name}: rebuild, from empty views and memory`)
+      if (refused !== null) throw new Error(`git wouldn't stage ${refused} once the agent's files were emptied`)
+      await git.commitStaged(`${agent.name}: rebuild, from empty`)
       saveState(stateFile, reset)
     })
     if (!started) {
@@ -287,7 +295,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
   }
 }
 
-// `scooter rebuild <agent>`: rebuilds the agent's views and memory, saying what it does on
+// `scooter rebuild <agent>`: rebuilds the agent's files, saying what it does on
 // stdout. Stops on SIGTERM, SIGINT or SIGHUP, which a terminal that is closed sends, throwing away
 // the batch in progress, and letting go of `run.lock`. Exits with 0 once it has rebuilt, 2 when it
 // can't start for how it was called or how things stand, and 1 when it fails or is stopped.

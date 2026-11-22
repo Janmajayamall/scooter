@@ -129,8 +129,8 @@ export function replyTarget(index, seq) {
 // The outbox entries an answer asks for, in order: its texts, then, in quiet mode, a
 // reaction for each message reported `DONE` that no `REPLY_TO` answered.
 //
-// - `agent`: its `name`, `canMessage`, `replyMode` and `ackReaction`. With `can_message: false`
-//   nothing is sent.
+// - `agent`: its `name`, `sends`, `replyMode` and `ackReaction`. Each entry carries the channels
+//   `sends` names, on which alone the bridge sends it; with `sends: []` nothing is written.
 // - `about`: what a plain text answers: the batch's newest item, or null for a scheduled task,
 //   whose text Scooter says on its own.
 // - `done`: the items reported `DONE`, from `reportsOf`; none for a task.
@@ -140,13 +140,14 @@ export function replyTarget(index, seq) {
 // texts are sent (`droppedTexts` counts the rest), and a message whose reply was dropped gets its
 // reaction.
 export function answerEntries({ answer, agent, index, about = null, done = new Set() }) {
-  if (!agent.canMessage) return []
+  if (agent.sends.length === 0) return []
+  const channels = [...agent.sends]
   const entries = []
   const answered = new Set()
   if (!answer.noReply) {
     for (const message of answer.messages.slice(0, limits.ANSWER_MAX_TEXTS)) {
       const target = message.replyTo === null ? null : replyTarget(index, message.replyTo)
-      const entry = { type: 'text', by: agent.name, text: message.text }
+      const entry = { type: 'text', by: agent.name, text: message.text, channels }
       if (target !== null) {
         entry.replyTo = target
         answered.add(target)
@@ -160,7 +161,7 @@ export function answerEntries({ answer, agent, index, about = null, done = new S
   if (agent.replyMode === 'quiet' && agent.ackReaction !== '') {
     for (const seq of [...done].sort((a, b) => a - b)) {
       if (answered.has(seq) || index.get(seq)?.line.kind !== 'message' || index.current(seq)?.deletedIn !== null) continue
-      entries.push({ type: 'react', by: agent.name, target: seq, emoji: agent.ackReaction })
+      entries.push({ type: 'react', by: agent.name, target: seq, emoji: agent.ackReaction, channels })
     }
   }
   return entries
@@ -168,6 +169,6 @@ export function answerEntries({ answer, agent, index, about = null, done = new S
 
 // How many of an answer's texts `answerEntries` leaves out for `ANSWER_MAX_TEXTS`.
 export function droppedTexts(answer, agent) {
-  if (!agent.canMessage || answer.noReply) return 0
+  if (agent.sends.length === 0 || answer.noReply) return 0
   return Math.max(0, answer.messages.length - limits.ANSWER_MAX_TEXTS)
 }

@@ -11,11 +11,15 @@
 // |                   | and reports the item `DONE`                                             |
 // | `SAY`             | files it, and says so in plain text                                     |
 // | `UNSURE`          | files it with a ❓ in its row                                           |
-// | `OUTSIDE`         | in a backfill's batch, also files it in `views/notes.csv`, which the    |
-// |                   | backfill may not change                                                 |
+// | `OUTSIDE`         | in a backfill's batch, also tries to file it in `views/notes.csv`,      |
+// |                   | which the backfill may not change                                       |
 //
-// A backfill's batch, whose prompt starts with `Backfill`, files each item in the first file
-// it may change instead of `views/notes.csv`.
+// A backfill's batch, whose prompt starts with `Backfill`, files each item in the first CSV file
+// its `writes` names instead of `views/notes.csv`.
+//
+// It writes only what the run's `writes` names (`PI_STUB_WRITES`), as the VM lets pi: a row or a
+// line it would write anywhere else is left out, and its path noted in `refused.txt` in its
+// control folder, as the VM refuses such a write and the run goes on.
 //
 // Anywhere in the items or the task, or in `behavior.json` in its control folder, which a test can
 // change between runs:
@@ -76,6 +80,7 @@ import { isoSeconds, utcDate, utcStamp } from '../../src/common/time.mjs'
 import { deepTree } from './deep-tree.mjs'
 
 const ROOT = process.env.PI_STUB_ROOT
+const WRITES = JSON.parse(process.env.PI_STUB_WRITES ?? '[]')
 const CONTROL = process.env.PI_STUB_CONTROL
 const NETLOG = process.env.PI_STUB_NETLOG
 const NOW = Number(process.env.PI_STUB_NOW)
@@ -123,8 +128,14 @@ for (const line of (prompt ?? '').split('\n')) {
 }
 const everything = [...items.map(item => item.text), task].join('\n')
 
-// A backfill's batch: what it may change, from its prompt's first line.
-const backfill = (prompt ?? '').startsWith('Backfill (from your configuration') ? /^.*Change only (.*)\.$/m.exec(prompt)[1].split(/, | and /) : null
+// Whether the run may write `guest`, a path in the VM: what its `writes` names, a folder with all
+// it holds. Otherwise the VM refuses the write, which is noted.
+const mayWrite = guest => WRITES.some(write => guest === write.path || (write.folder && guest.startsWith(`${write.path}/`)))
+const refuse = guest => fs.appendFileSync(path.join(CONTROL, 'refused.txt'), `${guest}\n`)
+
+// A backfill's batch, and the CSV file it files in.
+const backfill = (prompt ?? '').startsWith('Backfill (from your configuration')
+const backfillFile = backfill ? (WRITES.find(write => !write.folder && write.path.endsWith('.csv'))?.path ?? null) : null
 let behavior = {}
 try {
   behavior = JSON.parse(fs.readFileSync(path.join(CONTROL, 'behavior.json'), 'utf8'))
@@ -248,6 +259,15 @@ function act() {
   const agent = inVm(guestCwd)
   const views = path.join(agent, 'views')
   const memory = path.join(agent, 'memory')
+  const notesFile = path.join(guestCwd, 'views', 'notes.csv')
+  // Appends `text` to the file at `guest`, a path in the VM, if the run may write it.
+  const append = (guest, text, header = '') => {
+    if (!mayWrite(guest)) return refuse(guest)
+    const file = inVm(guest)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    if (header !== '' && !fs.existsSync(file)) fs.writeFileSync(file, header)
+    fs.appendFileSync(file, text)
+  }
   const done = []
   const failed = []
   const plain = []
@@ -261,21 +281,16 @@ function act() {
       continue
     }
     const row = `${item.seq},${JSON.stringify(`${word('UNSURE') ? '❓ ' : ''}${item.text.split('\n')[0]}`)}\n`
-    const files = backfill ? [...(backfill[0].endsWith('.csv') ? [backfill[0]] : []), ...(word('OUTSIDE') ? ['views/notes.csv'] : [])] : ['views/notes.csv']
-    for (const file of files) {
-      const notes = path.join(agent, file)
-      fs.mkdirSync(path.dirname(notes), { recursive: true })
-      if (!fs.existsSync(notes)) fs.writeFileSync(notes, 'seq,text\n')
-      fs.appendFileSync(notes, row)
-    }
+    const files = backfill ? [...(backfillFile ? [backfillFile] : []), ...(word('OUTSIDE') ? [notesFile] : [])] : [notesFile]
+    for (const file of files) append(file, row, 'seq,text\n')
     if (word('ASK')) {
-      fs.appendFileSync(path.join(memory, 'needs-review.md'), `- #${item.seq}: work or personal?\n`)
+      append(path.join(guestCwd, 'memory', 'needs-review.md'), `- #${item.seq}: work or personal?\n`)
       replies.push(`REPLY_TO: ${item.seq}\nWork or personal?`)
     }
     if (word('SAY')) plain.push(`Filed #${item.seq}.`)
     done.push(item.seq)
   }
-  if (has('MEMORY')) fs.appendFileSync(path.join(memory, 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
+  if (has('MEMORY')) append(path.join(guestCwd, 'memory', 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
   const leave =

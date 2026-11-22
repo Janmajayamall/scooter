@@ -36,7 +36,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
   assert.equal(git('status', '--porcelain'), '')
 
   // The ✅ reaction, in quiet mode, and the state.
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] }])
   const after = state()
   assert.equal(after.cursor, 1042)
   assert.deepEqual(after.retry, [])
@@ -69,7 +69,7 @@ async function runNext(runner, clock) {
   return runner.tick()
 }
 
-test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its environment and the network policy', async t => {
+test('run: the sandbox gets pi\'s command, what the VM sees and may change with sessions/ hidden, its environment and the network policy', async t => {
   const { runner, clock, sandbox, paths } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
   fs.writeFileSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
   await runNext(runner, clock)
@@ -79,13 +79,18 @@ test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its
 
   assert.equal(spec.cwd, agent)
   assert.equal(spec.timeoutMs, 10 * MINUTE)
-  assert.deepEqual(spec.mounts, [
-    { path: agent, writable: false, hide: ['sessions'] },
-    { path: path.join(agent, 'views'), writable: true, hide: [] },
-    { path: path.join(agent, 'memory'), writable: true, hide: [] },
-    { path: path.join(run, 'session'), writable: true, hide: [] },
-    { path: paths.datastore, writable: false, hide: [] },
-  ])
+  // The data folder, of which the VM sees what reads and writes name, and run/, and may change what
+  // writes names, and run/session/; never sessions/.
+  assert.deepEqual(spec.files, {
+    root: paths.dataDir,
+    reads: [paths.datastore, agent, path.join(agent, 'views'), path.join(agent, 'memory'), run],
+    writes: [
+      { path: path.join(agent, 'views'), folder: true },
+      { path: path.join(agent, 'memory'), folder: true },
+      { path: path.join(run, 'session'), folder: true },
+    ],
+    hide: [paths.agentSessions('lifelog')],
+  })
   assert.deepEqual(spec.argv.slice(0, -1), [
     'pi',
     '-p',
@@ -210,8 +215,8 @@ test('run: a text such as /new is a message the agent is given, and its batch go
   assert.match(argv.at(-1), /^#1042 21:20 text: "\/new"$/m)
   assert.deepEqual(state().lastRun.seqs, [1042, 1043])
   assert.deepEqual(outbox(), [
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 1043, emoji: '✅' },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1043, emoji: '✅', channels: ['whatsapp'] },
   ])
 })
 
@@ -232,7 +237,7 @@ test('run: a link, a FIFO, a dot name or a file git ignores fails the run; the c
       assert.deepEqual(after.retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: `unexpected file ${file}` }], keyword)
       assert.equal(after.cursor, 1042)
       // Everything the run wrote is gone, the file first.
-      assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [], keyword)
+      assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [], keyword)
       assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [], keyword)
       assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '', keyword)
       assert.equal(git('rev-list', '--count', 'HEAD'), '1\n', keyword)
@@ -268,7 +273,7 @@ test('run: a file or a folder the runner can\'t read, a name git refuses, a file
       if (file instanceof RegExp) assert.match(found, file)
       else assert.equal(found, file)
       // Everything the run wrote is gone, and nothing is staged; the session isn't kept.
-      assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+      assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
       assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
       assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
       assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
@@ -293,7 +298,7 @@ test('run: an answer longer than the sandbox keeps fails the run as pi\'s own fa
   const { runner, clock, paths, state, outbox, git } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 LONGANSWER')])
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: "pi's answer was too long" }])
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
   assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
   assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (pi's answer was too long). I'll try again." }])
 })
@@ -303,7 +308,7 @@ test('run: a run the sandbox stopped for writing too much fails as pi\'s own fai
   sandbox.wroteTooMuch = true
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'pi wrote more than a run may' }])
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
   assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
@@ -316,7 +321,7 @@ test('run: empty folders don\'t fail the run, and are removed, so views and memo
   const { runner, clock, paths, state, git, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 EMPTYDIRS')])
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.deepEqual(state().retry, [])
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] }])
   assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nviews/notes.csv\n')
   // Everything there, files and folders, against what the commit holds, with the folders above.
   const agent = paths.agentDir('lifelog')
@@ -343,7 +348,7 @@ test('run: the modes pi set, which git doesn\'t record, are put back after a run
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nviews/notes.csv\nviews/sub/later.csv\n')
   // The folder, a folder in it and a file, which pi left without write access: the runner's again.
-  const modeOf = file => fs.statSync(path.join(paths.agentViews('lifelog'), file)).mode & 0o7777
+  const modeOf = file => fs.statSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), file)).mode & 0o7777
   assert.deepEqual(['.', 'sub', 'notes.csv', 'sub/later.csv'].map(modeOf), [0o700, 0o700, 0o600, 0o600])
   assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
 
@@ -394,7 +399,7 @@ test('run: on a disk pi filled, a failed run frees what pi wrote before it makes
       const { runner, clock, paths, state, outbox, git, sandbox, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 FILLDISK')], {
         yaml: exampleYaml().replace('session: daily', `session: ${session}`),
       })
-      const folders = [paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentRunSession('lifelog'), paths.agentDiscarded('lifelog')]
+      const folders = [path.join(paths.agentDir('lifelog'), 'views'), paths.agentMemory('lifelog'), paths.agentRunSession('lifelog'), paths.agentDiscarded('lifelog')]
       // pi leaves fill.bin in views/ and in run/session/, and exits with 0. Until both are gone,
       // nothing can be made: neither the folders the clean-up makes again, nor the outbox entry,
       // nor the state.
@@ -435,10 +440,10 @@ test('run: replies, quoted or about the newest item, and a ✅ for the rest of w
   ])
   await runNext(runner, clock)
   assert.deepEqual(outbox(), [
-    { type: 'text', by: 'lifelog', text: 'Filed #1042.\nI couldn\'t read #1044.', about: 1045 },
-    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1043 },
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 1045, emoji: '✅' },
+    { type: 'text', by: 'lifelog', text: 'Filed #1042.\nI couldn\'t read #1044.', about: 1045, channels: ['whatsapp'] },
+    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1043, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1045, emoji: '✅', channels: ['whatsapp'] },
   ])
   // FAILED goes straight to failed, and the agent's own text explains it: no notice.
   assert.deepEqual(state().failed, [{ seq: 1044, at: '2026-11-09T15:50:38Z', reason: "can't read it" }])
@@ -449,8 +454,8 @@ test('run: a REPLY_TO a number that doesn\'t exist is sent without a quote, and 
   const { runner, clock, outbox, state, entries } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee REPLYTO=4242 UNKNOWN')])
   await runNext(runner, clock)
   assert.deepEqual(outbox(), [
-    { type: 'text', by: 'lifelog', text: 'About #4242.', about: 1042 },
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
+    { type: 'text', by: 'lifelog', text: 'About #4242.', about: 1042, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
   ])
   assert.deepEqual(state().failed, [])
   assert.deepEqual(
@@ -459,14 +464,14 @@ test('run: a REPLY_TO a number that doesn\'t exist is sent without a quote, and 
   )
 })
 
-test('run: confirm mode sends the text and no reactions; can_message: false sends nothing', async t => {
+test('run: confirm mode sends the text and no reactions; sends: [] sends nothing', async t => {
   const confirm = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY')], { yaml: exampleYaml().replace('reply_mode: quiet', 'reply_mode: confirm') })
   await runNext(confirm.runner, confirm.clock)
-  assert.deepEqual(confirm.outbox(), [{ type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042 }])
+  assert.deepEqual(confirm.outbox(), [{ type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042, channels: ['whatsapp'] }])
   assert.match(confirm.sandbox.runs[0].spec.argv.at(-1), /Reply mode: confirm\./)
 
   const silent = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY'), line.text(1043, '2026-11-09T15:50:01Z', 'tea ASK')], {
-    yaml: exampleYaml().replace('can_message: true', 'can_message: false'),
+    yaml: exampleYaml().replace('sends: [whatsapp]', 'sends: []'),
   })
   await runNext(silent.runner, silent.clock)
   assert.deepEqual(silent.outbox(), [])

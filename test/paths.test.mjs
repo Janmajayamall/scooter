@@ -17,7 +17,6 @@ test('paths: the data folder\'s folders, as they are in Docker', () => {
     dayLog: '/data/datastore/2026/11/09/log.jsonl',
     agents: '/data/agents',
     agentDir: '/data/agents/lifelog',
-    agentViews: '/data/agents/lifelog/views',
     agentMemory: '/data/agents/lifelog/memory',
     agentSessions: '/data/agents/lifelog/sessions',
     agentRun: '/data/agents/lifelog/run',

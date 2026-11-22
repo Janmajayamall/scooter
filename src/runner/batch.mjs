@@ -12,8 +12,8 @@
 //   the oldest item to the end of what the batch covers, plus the message each reply quotes, shown
 //   under it.
 // - **Covered:** the lines up to the first work item left for a later batch. When the run succeeds,
-//   the cursor moves there: the context and the lines of other sources in that stretch are dealt
-//   with too.
+//   the cursor moves there: the context, and the lines of channels no trigger names, in that
+//   stretch are dealt with too.
 //
 // When even one item makes the prompt too long, it is fitted, in this order: the oldest lines of
 // context are left out; if the item is too long on its own, its texts are cut, followed by where
@@ -52,8 +52,8 @@ function largest(low, high, ok) {
 // `attempt` is the attempt this run would be. Also returns `fresh`, every work item after the
 // cursor, up to `upTo`.
 export function selectCandidates({ agent, lane, index, now, upTo = index.lastSeq }) {
-  const retries = dueRetries(lane.retry, index, agent.reads, now).map(entry => ({ seq: entry.seq, origin: 'retry', attempt: entry.attempts + 1 }))
-  const fresh = workItemsAfter(index, agent.reads, lane.cursor, upTo)
+  const retries = dueRetries(lane.retry, index, agent.channels, now).map(entry => ({ seq: entry.seq, origin: 'retry', attempt: entry.attempts + 1 }))
+  const fresh = workItemsAfter(index, agent.channels, lane.cursor, upTo)
   const news = fresh.map(seq => ({ seq, origin: 'new', attempt: 1 }))
   return { candidates: [...retries, ...news].slice(0, limits.BATCH_MAX_ITEMS), fresh }
 }
@@ -72,7 +72,7 @@ export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, cand
     if (line.kind !== 'edit' && line.kind !== 'delete') continue
     const target = line.target
     const entry = index.get(target)
-    if (items.has(target) || !entry || !isWorkItem(entry.line, agent.reads)) continue
+    if (items.has(target) || !entry || !isWorkItem(entry.line, agent.channels)) continue
     const retry = lane.retry.find(other => other.seq === target)
     if (retry) {
       items.set(target, { seq: target, origin: 'retry', attempt: retry.attempts + 1 })

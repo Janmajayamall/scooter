@@ -10,7 +10,7 @@ import {
   CHAT_MODEL,
   MESSAGES_MODEL,
   PI,
-  designMounts,
+  designFiles,
   makeDataDir,
   piEnv,
   placeholderOf,
@@ -71,7 +71,7 @@ export async function captureSession(t, dir, route) {
   const data = makeDataDir(path.join(dir, route))
   fs.writeFileSync(path.join(data.day, '1051.png'), samplePng(8))
   const model = createFakeModel(SESSION_SCRIPT)
-  const vm = await startVm(t, { model, mounts: designMounts(data, GUEST) })
+  const vm = await startVm(t, { model, files: designFiles(data), at: '/data' })
   const result = await runPi(
     vm,
     {
@@ -121,7 +121,7 @@ const CATALOG_THINKING = ['unset', 'off', 'high']
 export async function captureCatalog(t, dir, piVersion, progress = () => {}) {
   const data = makeDataDir(path.join(dir, 'catalog'))
   const model = createFakeModel([{ text: 'ok' }])
-  const vm = await startVm(t, { model, mounts: designMounts(data) })
+  const vm = await startVm(t, { model, files: designFiles(data) })
 
   const listed = await runIn(vm, [PI, '--offline', '--list-models'], { cwd: data.agent, env: piEnv(vm) })
   if (listed.exitCode !== 0) throw new Error(`pi --list-models ended with ${listed.exitCode}: ${listed.stderr}`)

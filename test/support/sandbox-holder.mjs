@@ -25,7 +25,7 @@ await sandbox.run({
   argv: ['/bin/sleep', '600'],
   cwd: '/',
   env: { PATH: GUEST_PATH, HOME: GUEST_HOME },
-  mounts: [{ path: paths.datastore, writable: false, hide: [] }],
+  files: { root: paths.dataDir, reads: [paths.datastore], writes: [], hide: [] },
   timeoutMs: 600_000,
   policy: { model: 'anthropic/claude-sonnet-5.5', internet: false, zdr: true, secrets: {} },
 })

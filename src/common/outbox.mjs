@@ -5,12 +5,15 @@
 // counter, so entries sort in the order they were made. Two processes write entries: if a name is
 // taken when the folder is renamed, the entry takes the next ID (`handOff`).
 //
-//   {"type":"text","by":"lifelog","text":"Blue Tokai, ₹450 at 12:40: work or personal?","replyTo":1042}
-//   {"type":"text","by":"lifelog","text":"Logged the run and the coffee.","about":1061}
-//   {"type":"react","by":"lifelog","target":1044,"emoji":"✅"}
+//   {"type":"text","by":"lifelog","text":"Blue Tokai, ₹450 at 12:40: work or personal?","replyTo":1042,"channels":["whatsapp"]}
+//   {"type":"text","by":"lifelog","text":"Logged the run and the coffee.","about":1061,"channels":["whatsapp"]}
+//   {"type":"react","by":"lifelog","target":1044,"emoji":"✅","channels":["whatsapp"]}
+//   {"type":"text","by":"runner","text":"⚠️ I couldn't process your last messages (timed out). I'll try again."}
 //
 // There is no recipient: everything goes to the owner. Messages are named by `seq` only, and the
-// bridge picks the channel from the line an entry points at.
+// bridge picks the channel from the line an entry points at. An agent's entry carries the channels
+// its `sends` names, and the bridge drops it when the channel it picks isn't among them: only the
+// bridge knows which channel that is. The runner's and the bridge's own entries carry none.
 //
 // While the bridge sends an entry, it keeps a record of it: the entry, and how many of its messages
 // have gone out:
@@ -28,12 +31,18 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { SOURCES } from './datastore/line.mjs'
 import { ensureDir, handOff } from './files.mjs'
 import { limits } from './limits.mjs'
 
 export const ENTRY_FILE = 'entry.json'
 export const SENDING_FILE = 'sending.json'
 export const ENTRY_TYPES = ['text', 'react']
+
+// The authors of Scooter's own entries, in `by`: what the runner and the bridge send on their own,
+// such as a notice, which carries no `channels` and goes out whatever an agent's `sends` says. Any
+// other author is an agent's name, which `agents.yaml` keeps from being one of these.
+export const OWN_AUTHORS = ['runner', 'bridge']
 
 // What ends a text that was cut.
 export const CUT_NOTE = '\n\n[The rest of this message was too long to send.]'
@@ -69,8 +78,8 @@ const isName = value => typeof value === 'string' && value !== ''
 
 // The fields of each type of entry, in the order they are written.
 const FIELDS = {
-  text: ['type', 'by', 'text', 'replyTo', 'about'],
-  react: ['type', 'by', 'target', 'emoji'],
+  text: ['type', 'by', 'text', 'replyTo', 'about', 'channels'],
+  react: ['type', 'by', 'target', 'emoji', 'channels'],
 }
 
 // What is wrong with an entry, as a list of short statements that name fields and never repeat
@@ -80,6 +89,9 @@ const FIELDS = {
 //   at most one of `replyTo` (the message it answers, quoted) and `about` (the newest message it
 //   answers, not quoted). With neither, it is something Scooter says on its own.
 // - `react`: `by`, the `target` it reacts to, and an `emoji` that isn't empty, without U+0000.
+// - `channels`, on an agent's entry and only there: the channels it may go out on, at least one,
+//   each once. An entry of an agent's without it, such as one written before agents had `sends`,
+//   is refused, so nothing of an agent's goes out on a channel its `sends` doesn't name.
 //
 // A text or an emoji with U+0000 in it could never be sent: it would be tried `SEND_ATTEMPTS`
 // times, holding back the entries after it, so the bridge refuses it at once. `writeOutboxEntry`
@@ -99,6 +111,15 @@ export function checkOutboxEntry(entry) {
     if (entry[field] !== undefined && !ok(entry[field])) problems.push(`${field} must be ${what}`)
   }
   need('by', isName, "a string that isn't empty")
+  if (OWN_AUTHORS.includes(entry.by)) {
+    if (entry.channels !== undefined) problems.push(`channels doesn't belong on an entry of the ${entry.by}'s own`)
+  } else {
+    need(
+      'channels',
+      value => Array.isArray(value) && value.length > 0 && value.every(channel => SOURCES.includes(channel)) && new Set(value).size === value.length,
+      `a list of the channels it may go out on, ${SOURCES.join(' or ')}, each once`,
+    )
+  }
   if (entry.type === 'text') {
     need('text', value => typeof value === 'string' && value.trim() !== '', "a string that isn't empty")
     if (typeof entry.text === 'string' && textLength(entry.text) > limits.TEXT_MAX_CHARS) problems.push(`text must be at most ${limits.TEXT_MAX_CHARS} characters`)

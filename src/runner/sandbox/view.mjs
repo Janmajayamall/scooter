@@ -134,11 +134,21 @@ function writesProvider(gondolin, view, rootReal, backend) {
       return null
     }
   }
-  // Throws EROFS unless the run may do `op` at `given`, and at where it lands.
+  // Whether the host has a folder at `p`, not following a link there.
+  const isFolderOnHost = p => {
+    try {
+      return fs.lstatSync(path.join(rootReal, p)).isDirectory()
+    } catch {
+      return false
+    }
+  }
+  // Throws EROFS unless the run may do `op` at `given`, and at where it lands. A file of `writes`
+  // never acts on a folder that is there in its place, which a rename would move whole.
   const check = (op, given, { follow, syscall = op } = {}) => {
     const p = normalize(given)
     const landed = mayChange(view, op, p) ? landing(p, follow) : null
-    if (landed === null || !mayChange(view, op, landed)) throw errnoError('EROFS', syscall, given)
+    const allowed = landed !== null && mayChange(view, op, landed) && ![p, landed].some(at => writeRule(view, at) === 'file' && isFolderOnHost(at))
+    if (!allowed) throw errnoError('EROFS', syscall, given)
     return p
   }
 

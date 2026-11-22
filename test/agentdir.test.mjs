@@ -22,6 +22,9 @@ import { writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const modeOf = file => fs.statSync(file).mode & 0o7777
+
+// What the example config's `writes` names in the agent's folder (`agent.repository`).
+const REPOSITORY = ['views/', 'memory/']
 const git = (dir, ...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } })
 
 function setup(t) {
@@ -32,8 +35,12 @@ function setup(t) {
   const { log, events, entries } = createTestLog({ clock })
   const proc = createProc({ log, clock })
   const dir = paths.agentDir('lifelog')
-  const agentGit = createGit({ proc, dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
-  const ensure = () => ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+  const agentGit = createGit({ proc, dir, entries: REPOSITORY, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  // As a start readies the folder: then the clean-up makes what writes names.
+  const ensure = async () => {
+    await ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+    await agentGit.discardChanges()
+  }
   const agent = () => loadConfig({ paths }).agents[0]
   return { root, paths, clock, log, events, entries, dir, ensure, agent }
 }
@@ -42,7 +49,7 @@ test('agent folder: made on the first start, with git, a .gitignore and one comm
   const { paths, dir, ensure, events } = setup(t)
   await ensure()
   // With the folder a clean-up sets aside what it throws away in, made at the first start and kept.
-  for (const folder of [paths.agents, dir, paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
+  for (const folder of [paths.agents, dir, path.join(paths.agentDir('lifelog'), 'views'), paths.agentMemory('lifelog'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
     assert.equal(modeOf(folder), 0o700, folder)
   }
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), '/sessions/\n/run/\n/state.json\n')
@@ -272,7 +279,7 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   await ensure()
   const clock = createFakeClock('2026-11-09T15:43:02Z')
   const { log } = createTestLog({ clock })
-  const agentGit = createGit({ proc: createProc({ log, clock }), dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries: REPOSITORY, discardDir: paths.agentDiscarded('lifelog'), log, clock })
   const file = name => path.join(dir, name)
   fs.mkdirSync(file('views/books/2026/11'), { recursive: true })
   fs.writeFileSync(file('views/expenses.csv'), 'date,amount\n')
@@ -308,7 +315,7 @@ test('git: the clean-up puts views and memory back as they were committed, whate
   assert.deepEqual(fs.readdirSync(file('views/books/2026')), ['11'])
   assert.deepEqual(fs.readdirSync(file('memory')), [])
   assert.equal(git(dir, 'status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
-  // The folders stay, as the VM's mount points.
+  // The folders stay, for the agent to write in.
   fs.rmSync(file('memory'), { recursive: true })
   await agentGit.discardChanges()
   assert.equal(modeOf(file('memory')), 0o700)
@@ -320,7 +327,7 @@ async function agentRepository(t) {
   await ensure()
   const clock = createFakeClock('2026-11-09T15:43:02Z')
   const { log, events, entries } = createTestLog({ clock })
-  const agentGit = createGit({ proc: createProc({ log, clock }), dir, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries: REPOSITORY, discardDir: paths.agentDiscarded('lifelog'), log, clock })
   return { dir, paths, agentGit, events, entries, file: name => path.join(dir, name) }
 }
 

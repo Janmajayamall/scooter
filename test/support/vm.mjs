@@ -8,6 +8,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { makePaths } from '../../src/common/paths.mjs'
+import { piFiles } from '../../src/runner/run.mjs'
 import { viewProvider } from '../../src/runner/sandbox/view.mjs'
 import { OPENROUTER_HOST } from './fake-model.mjs'
 import { atEnd } from './tmp.mjs'
@@ -20,7 +22,7 @@ process.env.XDG_CACHE_HOME = cacheHome
 process.on('exit', () => fs.rmSync(cacheHome, { recursive: true, force: true }))
 // Gondolin's module, for the tests that build its providers themselves.
 export const gondolin = await import('@earendil-works/gondolin')
-const { VM, RealFSProvider, ReadonlyProvider, ShadowProvider, createHttpHooks, createShadowPathPredicate } = gondolin
+const { VM, RealFSProvider, createHttpHooks } = gondolin
 
 // Where Gondolin lists the VMs that are running.
 export const SESSIONS_DIR = path.join(cacheHome, 'gondolin', 'sessions')
@@ -77,13 +79,10 @@ export function onPath(program) {
 //
 // `files` is a run's `files`, as the runner gives the sandbox (`src/runner/sandbox/index.mjs`):
 // its root is mounted through the sandbox's own providers (`view.mjs`), at its own path, or at
-// `at` when that is given. `mounts` maps a path in the VM to `{ host, writable, hide }`, for a test
-// that shows what Gondolin's own providers do: a folder on the host, read-only unless `writable`
-// is true, without the paths listed in `hide`, which are given from the mount's own root, such as
-// `/sessions`. `model` is a fake model that answers pi's requests; without one the VM can reach no
-// host at all. `fuseMount` is Gondolin's own mount point; pass null for its default.
-// `startTimeoutMs` is how long to wait for the VM to boot.
-export async function startVm(t, { files, at, mounts = {}, model, fuseMount = FUSE_MOUNT, startTimeoutMs } = {}) {
+// `at` when that is given; without it the VM sees nothing of the host. `model` is a fake model that
+// answers pi's requests; without one the VM can reach no host at all. `fuseMount` is Gondolin's own
+// mount point; pass null for its default. `startTimeoutMs` is how long to wait for the VM to boot.
+export async function startVm(t, { files, at, model, fuseMount = FUSE_MOUNT, startTimeoutMs } = {}) {
   const hooks = createHttpHooks({
     allowedHosts: model ? [OPENROUTER_HOST] : [],
     secrets: model ? { OPENROUTER_API_KEY: { hosts: [OPENROUTER_HOST], value: FAKE_KEY } } : {},
@@ -91,11 +90,6 @@ export async function startVm(t, { files, at, mounts = {}, model, fuseMount = FU
   })
   const providers = {}
   if (files) providers[at ?? files.root] = viewProvider(gondolin, files, new RealFSProvider(files.root))
-  for (const [guestPath, { host, writable = false, hide = [] }] of Object.entries(mounts)) {
-    let provider = new RealFSProvider(host)
-    if (hide.length > 0) provider = new ShadowProvider(provider, { shouldShadow: createShadowPathPredicate(hide) })
-    providers[guestPath] = writable ? provider : new ReadonlyProvider(provider)
-  }
 
   const vm = await VM.create({
     sandbox: { imagePath: process.env.SCOOTER_TEST_IMAGE },
@@ -160,17 +154,13 @@ export function makeDataDir(dir) {
   }
 }
 
-// A run's mounts, as the runner gives them (`piMounts`): the agent's folder read-only, except `views/`, `memory/` and
-// `run/session/`, which are writable, and `sessions/`, which is hidden; and the datastore
-// read-only. `guest` gives the paths in the VM when they differ from the host's.
-export function designMounts(data, guest = data) {
-  return {
-    [guest.agent]: { host: data.agent, hide: ['/sessions'] },
-    [`${guest.agent}/views`]: { host: path.join(data.agent, 'views'), writable: true },
-    [`${guest.agent}/memory`]: { host: path.join(data.agent, 'memory'), writable: true },
-    [`${guest.agent}/run/session`]: { host: path.join(data.agent, 'run', 'session'), writable: true },
-    [guest.datastore]: { host: data.datastore },
-  }
+// What a run's VM sees and may change, as the runner gives it (`piFiles`) for the agent of the
+// example config: the data folder, of which it sees the datastore and the agent's folder, and may
+// change `views/`, `memory/` and `run/session/`; never `sessions/`. Mounted at `at` instead of
+// the data folder's own path by `startVm`, its paths in the VM are under `at`.
+export function designFiles(data) {
+  const paths = makePaths({ dataDir: path.dirname(path.dirname(data.agent)), configDir: '/config' })
+  return piFiles(paths, { name: 'lifelog', reads: ['datastore/', 'agents/lifelog/'], writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'] })
 }
 
 // pi's environment, as the runner gives it (`piEnv`), with the key's placeholder.

@@ -1,11 +1,14 @@
 // A fake sandbox, for the runner's tests: it runs the pi stub
-// (`pi-stub.mjs`) as a local process, in a temporary folder laid out like the VM's mounts.
+// (`pi-stub.mjs`) as a local process, in a temporary folder laid out like what the VM sees.
 //
 // It takes the same spec as the real sandbox (`src/runner/sandbox/index.mjs`) and checks it. For
-// each run it makes a folder that stands for the VM's root, and puts each mount at its path there:
-// a link to the host's folder, or, for a mount with hidden paths, a folder of links to everything
-// in it but those. So, as in the VM, the agent's `sessions/` isn't there at all. What it doesn't
-// do is make the read-only mounts read-only: the real VM's tests show that (milestone 7).
+// each run it makes a folder that stands for the VM's root, and puts each path the spec's `files`
+// shows at its path there: a link to the host's file or folder, or, for a folder that holds a
+// hidden path, a folder of links to everything in it but that. So, as in the VM, the agent's
+// `sessions/` isn't there at all. What it doesn't do is keep the stub from changing what `writes`
+// doesn't name: it gives the stub the run's `writes` (`PI_STUB_WRITES`), and the stub writes only
+// there, as the VM would let it, noting each write it leaves out. The real VM's tests show the
+// sandbox holding pi to them (`test/tools/vm.test.mjs`, `test/sandbox.test.mjs`).
 //
 // The stub gets the spec's environment, the secrets' placeholders, and a few `PI_STUB_*` variables
 // of its own, which it leaves out of what it records. Its output is kept as the real sandbox keeps
@@ -19,22 +22,30 @@ import { GUEST_HOME, checkRunSpec, createOutput } from '../../src/runner/sandbox
 
 const STUB = new URL('./pi-stub.mjs', import.meta.url).pathname
 
-// Puts each mount at its path under `root`.
-function layOut(root, mounts) {
-  for (const mount of [...mounts].sort((a, b) => a.path.length - b.path.length)) {
-    const target = path.join(root, mount.path)
-    // A mount inside one already laid out is reached through its link, at the same host folder.
-    if (fs.existsSync(target) && fs.realpathSync(target) === fs.realpathSync(mount.path)) continue
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    if (mount.hide.length === 0) {
-      fs.symlinkSync(mount.path, target)
-      continue
+// Whether the absolute path `inner` is `outer` or in it.
+const isIn = (inner, outer) => inner === outer || inner.startsWith(`${outer}/`)
+
+// Puts each path `files` shows at its path under `root`: what `reads` and `writes` name, with the
+// folders that lead there; never what `hide` names.
+function layOut(root, files) {
+  const shown = [...new Set([...files.reads, ...files.writes.map(write => write.path)])].sort((a, b) => a.length - b.length)
+  // A link to `host` at `target`, or, when `host` holds a hidden path, a folder of links to all
+  // it holds but that.
+  const place = (host, target) => {
+    if (files.hide.some(hidden => isIn(host, hidden))) return
+    if (!files.hide.some(hidden => isIn(hidden, host))) {
+      fs.symlinkSync(host, target)
+      return
     }
-    if (mount.hide.some(hidden => hidden.includes('/'))) throw new Error('the fake sandbox hides only names at the top of a mount')
     fs.mkdirSync(target)
-    for (const name of fs.readdirSync(mount.path)) {
-      if (!mount.hide.includes(name)) fs.symlinkSync(path.join(mount.path, name), path.join(target, name))
-    }
+    for (const name of fs.readdirSync(host)) place(path.join(host, name), path.join(target, name))
+  }
+  for (const entry of shown) {
+    // One in another is reached through it.
+    if (shown.some(other => other !== entry && isIn(entry, other))) continue
+    const target = path.join(root, entry)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    place(entry, target)
   }
 }
 
@@ -63,7 +74,7 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
       const vm = path.join(root, `vm-${++count}`)
       fs.mkdirSync(vm)
       try {
-        layOut(vm, spec.mounts)
+        layOut(vm, spec.files)
         fs.mkdirSync(path.join(vm, GUEST_HOME), { recursive: true })
         const placeholders = Object.fromEntries(Object.keys(spec.policy.secrets).map(name => [name, `placeholder-${randomUUID()}`]))
         const env = { ...spec.env, ...placeholders }
@@ -72,6 +83,7 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
           env: {
             ...env,
             PI_STUB_ROOT: vm,
+            PI_STUB_WRITES: JSON.stringify(spec.files.writes),
             PI_STUB_CONTROL: control,
             PI_STUB_NETLOG: paths.networkLogDir,
             PI_STUB_NOW: String(clock.now()),
@@ -108,6 +120,13 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
       const file = path.join(control, 'behavior.json')
       if (behavior === null) fs.rmSync(file, { force: true })
       else fs.writeFileSync(file, JSON.stringify(behavior))
+    },
+
+    // The writes the stub left out on each run, as the VM would have refused them: their paths in
+    // the VM, in order.
+    refused() {
+      const file = path.join(control, 'refused.txt')
+      return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
     },
 
     // What the stub saw on each run, in order.

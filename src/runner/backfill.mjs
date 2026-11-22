@@ -14,9 +14,8 @@
 //   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the
 //   backfill's skill alone, with the system prompt of live runs, so the owner's current
 //   preferences apply to all of history.
-// - **What it may change:** the paths in `writes`, and nothing else. After the check of the files
-//   pi left, a batch that changed anything else, `memory/` included, fails as pi's own failure, and
-//   the clean-up throws it away (`mayChange`, used in `run.mjs`).
+// - **What it may change:** the paths in `writes`, which lie in the agent's own `writes`, and
+//   nothing else: the sandbox lets its batches change only those (`runSpec` in `run.mjs`).
 // - **Silent:** nothing is sent per batch. Texts, `REPLY_TO` and `NO_REPLY` are ignored, and a
 //   failure sends no notice.
 // - **Its own retries,** handled like the live ones (`settleBackfill`): an item not
@@ -28,7 +27,7 @@
 // - **Commits:** `lifelog: backfill people-1 #812-#831` (`commitMessage` in `run.mjs`).
 // - **Finishing** (`finishBackfill`): once its cursor has reached `until` and its retries are
 //   done, the ID goes to `backfillDone`, and the owner gets one message, which counts the rows of
-//   each CSV in `writes`, and those marked ❓, and lists what was skipped.
+//   each CSV in `writes` in the agent's folder, and those marked ❓, and lists what was skipped.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -44,23 +43,18 @@ function listed(words) {
   return words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
 }
 
-// The line a backfill's prompt starts with, for the backfill `entry` of `agents.yaml`.
-export function backfillIntro(entry) {
+// The line a backfill's prompt starts with, for the backfill `entry` of `agents.yaml`: its paths
+// as the VM has them, in the data folder.
+export function backfillIntro(entry, paths) {
   return (
     `Backfill (from your configuration, not a message from the owner): file these messages for the ${entry.skill} skill only. ` +
-    `Change only ${listed(entry.writes)}.`
+    `Change only ${listed(entry.writes.map(write => path.join(paths.dataDir, write)))}.`
   )
 }
 
 // The skills pi gets for a backfill's batch: the backfill's own, alone.
 export function backfillSkills(agent, entry) {
   return agent.skills.filter(skill => skill.name === entry.skill)
-}
-
-// Whether a backfill that may change `writes` may change `file`, a path from the agent's folder: a
-// file `writes` names, or anything in a folder it names (ending in `/`).
-export function mayChange(file, writes) {
-  return writes.some(write => (write.endsWith('/') ? file.startsWith(write) : file === write))
 }
 
 // A backfill's lane, as `batch.mjs` draws batches from one: `skipped` takes the place of `failed`.
@@ -83,7 +77,7 @@ export function backfillJob({ agent, entry, state, index, paths, now, timeZone, 
     timeZone,
     homeCurrency,
     internet,
-    intro: backfillIntro(entry),
+    intro: backfillIntro(entry, paths),
   })
   if (built === null) return null
   return {
@@ -141,10 +135,11 @@ export function countRows(text) {
   return { rows: Math.max(0, records - 1), unsure: marked }
 }
 
-// The CSV files a backfill's `writes` name, as `{ name, file }`: `name` the path from `views/`,
-// `file` the path on disk. A folder in `writes` gives every CSV file in it, at any depth, in order;
-// a file that isn't a CSV gives none. Links aren't followed.
-function csvFilesOf(agentDir, writes) {
+// The CSV files a backfill's `writes` name in the agent's folder, as `{ name, file }`: `name` the
+// path from the agent's folder, `file` the path on disk. A folder in `writes` gives every CSV file
+// in it, at any depth, in order; a file that isn't a CSV gives none. Links aren't followed. A path
+// of `writes` outside the agent's folder gives none: the runner never reads there.
+function csvFilesOf(agentDir, own, writes) {
   const found = []
   const walk = (folder, relative) => {
     let entries
@@ -156,16 +151,16 @@ function csvFilesOf(agentDir, writes) {
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       const inner = `${relative}${entry.name}`
       if (entry.isDirectory()) walk(path.join(folder, entry.name), `${inner}/`)
-      else if (entry.isFile() && entry.name.endsWith('.csv')) found.push({ name: inner.slice('views/'.length), file: path.join(folder, entry.name) })
+      else if (entry.isFile() && entry.name.endsWith('.csv')) found.push({ name: inner, file: path.join(folder, entry.name) })
     }
   }
-  for (const write of writes) {
+  for (const write of writes.filter(entry => entry.startsWith(own)).map(entry => entry.slice(own.length))) {
     if (write.endsWith('/')) {
       const before = found.length
       walk(path.join(agentDir, write), write)
-      if (found.length === before) found.push({ name: write.slice('views/'.length), file: null })
+      if (found.length === before) found.push({ name: write, file: null })
     } else if (write.endsWith('.csv')) {
-      found.push({ name: write.slice('views/'.length), file: path.join(agentDir, write) })
+      found.push({ name: write, file: path.join(agentDir, write) })
     }
   }
   return found
@@ -178,7 +173,7 @@ function describeCsv({ name, file }) {
   if (file === null) return `${name} holds no CSV file`
   let text
   try {
-    // The views are the last commit's now, which the check of the files pi left let through: within its limits,
+    // The files are the last commit's now, which the check of the files pi left let through: within its limits,
     // and no link. Read with care all the same, as everything pi wrote is.
     text = readUntrustedFile(file, { maxBytes: limits.AGENT_FILES_MAX_BYTES })
   } catch (error) {
@@ -188,10 +183,10 @@ function describeCsv({ name, file }) {
   return `${name} has ${plural(rows, 'row')}, ${unsure === 0 ? 'none' : unsure} marked ❓`
 }
 
-// The message a backfill sends when it finishes: "Backfill people-1 finished: people.csv
+// The message a backfill sends when it finishes: "Backfill people-1 finished: views/people.csv
 // has 143 rows, 12 marked ❓. Skipped: #1031, #1207."
 export function backfillSummary({ paths, agent, entry, skipped }) {
-  const parts = csvFilesOf(paths.agentDir(agent.name), entry.writes).map(describeCsv)
+  const parts = csvFilesOf(paths.agentDir(agent.name), `agents/${agent.name}/`, entry.writes).map(describeCsv)
   const head = `Backfill ${entry.id} finished${parts.length > 0 ? `: ${parts.join('; ')}` : ''}.`
   const sorted = [...skipped].sort((a, b) => a - b)
   return sorted.length === 0 ? head : `${head} Skipped: ${sorted.map(seq => `#${seq}`).join(', ')}.`
@@ -201,8 +196,8 @@ export function backfillSummary({ paths, agent, entry, skipped }) {
 // the outbox, then moves its ID to `backfillDone` and saves the state, so a crash between the two
 // sends the summary twice and never loses it. Its sessions go. Returns the new state.
 //
-// The summary is the runner's, by `runner`, and goes to `DEFAULT_CHANNEL`, also with
-// `can_message: false`, as the notices do: that setting is about what the agent sends.
+// The summary is the runner's, by `runner`, and goes to `DEFAULT_CHANNEL`, also with `sends: []`,
+// as the notices do: that setting is about what the agent sends.
 export async function finishBackfill({ agent, entry, state, stateFile, paths, ids, log }) {
   const { backfill, ...rest } = state
   const text = backfillSummary({ paths, agent, entry, skipped: backfill.skipped })

@@ -94,7 +94,7 @@ export async function startTestRunner(t, prepared) {
     add: (...lines) => writeDatastore(paths, lines),
     outbox: options => outboxOf(paths, options),
     git: (...args) => gitOf(paths, ...args),
-    views: name => fs.readFileSync(path.join(paths.agentViews('lifelog'), name), 'utf8'),
+    views: name => fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), name), 'utf8'),
   }
 }
 
