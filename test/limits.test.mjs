@@ -48,7 +48,6 @@ test('limits: the values of the constants', () => {
     AGENT_FILES_MAX_BYTES: 100 * MB,
     // Milestone 4, after the owner's answer.
     AGENT_FILES_MAX_COUNT: 20000,
-    // The agent model, piece 6: ANSWER_MAX_TEXTS, renamed, at the same value.
     RUN_MAX_SENDS: 25,
     // Milestone 5.
     TEXT_MAX_CHARS: 14000,

@@ -428,7 +428,7 @@ test('run: a tree in run/session/ whose paths pass what the system takes is empt
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.ok(fs.existsSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-09.jsonl')))
   assert.deepEqual(fs.readdirSync(paths.agentRunSession('lifelog')), [])
-  assert.equal(events().includes('runner.run_session_left'), false)
+  assert.equal(events().includes('runner.run_left'), false)
 
   add(line.text(1043, '2026-11-09T15:51:00Z', 'lunch 300'))
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
