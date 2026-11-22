@@ -48,7 +48,6 @@ export const TRIGGER_KINDS = ['on', 'at', 'backfill']
 // which can't be the folder that holds them.
 export const RUNNER_NAMES = ['state.json', 'sessions', 'run']
 
-
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 // A backfill's ID goes into session names, commit messages and the state.
 const BACKFILL_ID = /^[a-z0-9][a-z0-9-]*$/
