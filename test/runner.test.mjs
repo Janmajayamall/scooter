@@ -112,7 +112,7 @@ test('failures: an error in checking or committing what pi left fails the run an
   assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (couldn't commit the run's files (git add: timed out)). I'll try again." }])
   assert.ok(events().includes('runner.files_failed'))
   // Thrown away, and the session not kept.
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
   assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
@@ -168,7 +168,7 @@ test('failures: a timeout closes the run, which counts an attempt; run.lock reco
   const lock = readLock(paths.runLock)
   assert.equal(lock.deadline, Date.parse('2026-11-09T15:50:38Z') + 10 * MINUTE)
   assert.equal(lock.pid, process.pid)
-  assert.ok(fs.existsSync(path.join(paths.agentViews('lifelog'), 'notes.csv')))
+  assert.ok(fs.existsSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv')))
 
   await clock.advance(10 * MINUTE)
   assert.deepEqual((await running).outcome, { ok: false, cause: 'other' })
@@ -380,8 +380,8 @@ test('tasks: the evening check-in runs at 21:30 with its task, sends its text on
   assert.equal(action.kind, 'scheduled')
   assert.deepEqual(outcome, { ok: true, cause: null })
   assert.match(sandbox.runs[0].spec.argv.at(-1), /\n\nScheduled task \(from your configuration, not a message from the owner\):\nEvening check-in\./)
-  // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL.
-  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.' }])
+  // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL, if sends names it.
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.', channels: ['whatsapp'] }])
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
   assert.deepEqual(state().lastRun.seqs, [])
   assert.equal(state().cursor, 1041)
@@ -478,7 +478,7 @@ test('status: status.json holds what scooter status shows of the runner\'s setti
     zdr: false,
     internet: true,
     imageBuiltAt: '2026-11-09T10:00:00Z',
-    agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, reads: ['whatsapp', 'email'] } },
+    agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, channels: ['whatsapp', 'email'] } },
     restart: null,
   })
   assert.equal(fs.statSync(paths.runnerStatus).mode & 0o777, 0o600)
@@ -518,10 +518,10 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   first.runner.close()
   // A runner killed during a run leaves its lock and pi's changes.
   fs.writeFileSync(prepared.paths.runLock, '{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}\n')
-  fs.writeFileSync(path.join(prepared.paths.agentViews('lifelog'), 'half.csv'), 'x\n')
+  fs.writeFileSync(path.join(path.join(prepared.paths.agentDir('lifelog'), 'views'), 'half.csv'), 'x\n')
   fs.symlinkSync('/etc/hostname', path.join(prepared.paths.agentMemory('lifelog'), 'link.md'))
   // A folder pi took the runner's access away from, with another inside.
-  const locked = path.join(prepared.paths.agentViews('lifelog'), 'locked')
+  const locked = path.join(path.join(prepared.paths.agentDir('lifelog'), 'views'), 'locked')
   fs.mkdirSync(path.join(locked, 'deep'), { recursive: true })
   fs.writeFileSync(path.join(locked, 'deep', 'notes.csv'), 'x\n')
   fs.chmodSync(path.join(locked, 'deep'), 0o000)
@@ -532,7 +532,7 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   fs.writeFileSync(path.join(gitDir, 'refs', 'heads', 'main.lock'), '')
   const second = await startTestRunner(t, prepared)
   assert.equal(fs.existsSync(prepared.paths.runLock), false)
-  assert.deepEqual(fs.readdirSync(prepared.paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(prepared.paths.agentDir('lifelog'), 'views')), [])
   assert.deepEqual(fs.readdirSync(prepared.paths.agentMemory('lifelog')), [])
   assert.ok(prepared.events().includes('runner.lock_removed'))
   assert.ok(prepared.events().includes('agent.git_lock_removed'))
@@ -552,10 +552,10 @@ test('startup: trees whose paths pass what the system takes, in views/, run/sess
   const { paths } = prepared
   const discarded = paths.agentDiscarded('lifelog')
   fs.mkdirSync(path.join(discarded, 'views-1'), { recursive: true })
-  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), path.join(discarded, 'views-1')]) deepTree(dir)
+  for (const dir of [path.join(paths.agentDir('lifelog'), 'views'), paths.agentRunSession('lifelog'), path.join(discarded, 'views-1')]) deepTree(dir)
 
   const second = await startTestRunner(t, prepared)
-  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
+  for (const dir of [path.join(paths.agentDir('lifelog'), 'views'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
   assert.deepEqual(prepared.events().filter(event => event.endsWith('_left')), [])
   second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
   assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
@@ -570,7 +570,7 @@ test('startup: on a disk pi filled, the start frees what pi wrote before it make
   const { paths } = prepared
   const discarded = paths.agentDiscarded('lifelog')
   fs.mkdirSync(discarded, { recursive: true })
-  fs.renameSync(paths.agentViews('lifelog'), path.join(discarded, 'views-1'))
+  fs.renameSync(path.join(paths.agentDir('lifelog'), 'views'), path.join(discarded, 'views-1'))
   fs.mkdirSync(paths.agentRunSession('lifelog'))
   for (const file of [path.join(discarded, 'views-1', 'fill.bin'), path.join(paths.agentRunSession('lifelog'), 'fill.bin')]) {
     fs.writeFileSync(file, '')
@@ -583,8 +583,32 @@ test('startup: on a disk pi filled, the start frees what pi wrote before it make
   } finally {
     restore()
   }
-  assert.equal(fs.statSync(paths.agentViews('lifelog')).isDirectory(), true)
-  for (const dir of [paths.agentViews('lifelog'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
+  assert.equal(fs.statSync(path.join(paths.agentDir('lifelog'), 'views')).isDirectory(), true)
+  for (const dir of [path.join(paths.agentDir('lifelog'), 'views'), paths.agentRunSession('lifelog'), discarded]) assert.deepEqual(fs.readdirSync(dir), [], dir)
+  second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
+  assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
+})
+
+test('startup: on a disk pi filled, a folder of writes that pi removed is made again only once what pi wrote is freed', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  first.runner.close()
+  // pi removed views/, which the VM allows of a folder writes names, and filled the disk in
+  // memory/; then a crash, before the clean-up.
+  const { paths } = prepared
+  const agent = paths.agentDir('lifelog')
+  fs.rmdirSync(path.join(agent, 'views'))
+  const fill = path.join(agent, 'memory', 'fill.bin')
+  fs.writeFileSync(fill, '')
+  fs.truncateSync(fill, 1024 ** 3)
+  const restore = actFull(() => holds([path.join(agent, 'memory'), paths.agentDiscarded('lifelog')], 'fill.bin'))
+  let second
+  try {
+    second = await startTestRunner(t, prepared)
+  } finally {
+    restore()
+  }
+  for (const folder of ['views', 'memory']) assert.deepEqual(fs.readdirSync(path.join(agent, folder)), [], folder)
   second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
   assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
 })
@@ -634,7 +658,7 @@ test('loop: the runner polls once a second, runs a batch when the owner is quiet
   await runner.stop()
   assert.equal(state().cursor, 1042)
   assert.equal(fs.existsSync(paths.runLock), false)
-  assert.equal(fs.readFileSync(path.join(paths.agentViews('lifelog'), 'notes.csv'), 'utf8').split('\n').length, 3)
+  assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8').split('\n').length, 3)
   assert.ok(prepared.events().includes('runner.run_stopped'))
   assert.ok(prepared.events().includes('runner.stopped'))
 })

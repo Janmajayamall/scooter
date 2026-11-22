@@ -242,6 +242,7 @@ A guess is marked ❓ at the start of a row's `note`, and the open questions are
 They are your files, in the config folder (`/etc/scooter/config` natively, `./config` in Docker): `agents.yaml`, the prompt `prompts/lifelog.md`, and a folder for each skill under `skills/`, each with a `SKILL.md`. The agent can't change them. Restart the runner after a change; it checks the files at its start, and refuses to start, naming the field, when something is wrong.
 
 - **The default `agents.yaml`** sends an evening check-in at 21:30 (`- at: "21:30"`). Remove that entry for a quieter bot.
+- **What the agent sees, changes and sends** is in `agents.yaml` too, as paths of the data folder, a folder ending in `/`: `reads`, by default the datastore and the agent's own folder; `writes`, by default `agents/lifelog/views/` and `agents/lifelog/memory/`, which is what the agent's git repository keeps; and `sends`, the channels its messages may go out on, by default `[whatsapp]`. The trigger `on: new-messages` names the `channels` whose messages it works on, by default `[whatsapp, email]`. The agent's VM can't change anything `writes` doesn't name. Nothing limits what they may name but the runner's own files in the agent's folder: a path of the datastore, the outbox or the runner's folder in `writes` is yours to choose, with what it gives the agent. A path of `writes` outside the agent's folder isn't in git, a failed run's changes there aren't undone, and it is in a backup only when it lies in a folder a backup holds ([Backups and restore](#backups-and-restore)).
 - **To add a skill**, for a new view:
   1. Make a folder `skills/<name>/` with a `SKILL.md` whose frontmatter gives the folder's name as `name` and a `description` that says when to use it, then the instructions:
      ```markdown
@@ -305,7 +306,7 @@ docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look
 
 ### Rebuilds
 
-`rebuild` throws the views and memory away and files your whole history again, one of your days at a time, as it was then: rules you sent as messages are learned again where you sent them. Use it after changing the instructions in a way the old views should follow. It sends nothing to you while it works, and it spends on OpenRouter for every message ever sent.
+`rebuild` throws away what `writes` names in the agent's folder, the views and memory by default, and files your whole history again, one of your days at a time, as it was then: rules you sent as messages are learned again where you sent them. Use it after changing the instructions in a way the old views should follow. It sends nothing to you while it works, and it spends on OpenRouter for every message ever sent.
 
 1. **Stop the runner** first; the bridge may keep running, and stores what arrives. `rebuild` refuses while a runner runs.
 2. **Start the rebuild right after**: it stops at the newest message when it starts, so a message that waited for the stopped runner is filed with no reply or ✅.
@@ -325,7 +326,7 @@ docker compose start runner
 ```
 
 - It tags the last commit before it `before-rebuild-<UTC time>`, such as `before-rebuild-20261118T101500Z`. To go back to it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-rebuild-20261118T101500Z` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's state stays as the rebuild left it.
-- It throws away uncommitted changes in `views/` and `memory/`, as a start of the runner does.
+- It throws away uncommitted changes in what `writes` names in the agent's folder, `views/` and `memory/` by default, as a start of the runner does, and empties it.
 - A rebuild that finished commits as `lifelog: rebuild`. One that didn't leaves the last commit's message as `lifelog: rebuild #…`, and nothing else says so: look at it after a crash, a reboot or a restore (`git log -1`), and run the rebuild again if it reads so.
 
 ### Backfills
@@ -335,10 +336,10 @@ A backfill files the messages from before a skill was added, for that skill alon
 ```yaml
       - backfill: books-1           # an ID of your choosing, used once
         skill: books
-        writes: [views/books.csv]   # what it may change
+        writes: [agents/lifelog/views/books.csv]   # what it may change, in the agent's writes
 ```
 
-It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
+It works only while nothing live is waiting, and its VM can change only what its `writes` names. It sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
 
 ## When something goes wrong
 
@@ -368,7 +369,7 @@ The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker c
 What each part can reach, and what protects what ([The boundaries](docs/ARCHITECTURE.md#the-boundaries), [the sandbox](docs/architecture/sandbox.md) and [the network policy](docs/architecture/network-policy.md)):
 
 - **Strangers** can't reach the agent: the bridge keeps WhatsApp messages only from your number and IDs, never from groups, and email only from your addresses when it passes DMARC. Replies have no recipient field: they always go to you.
-- **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees the datastore read-only, and can write only its views, its memory and its copy of the current session. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
+- **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees what `reads` names, by default the datastore and its own folder, read-only, and can write only what `writes` names, by default its views and its memory, and its copy of the current session; it never sees the other sessions. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
 - **The network policy** lets pi's VM reach only OpenRouter's two chat endpoints, with the configured model. It refuses anything that would make OpenRouter fetch from the web for the agent: its web plugin and server tools, `:online` models, and images given by URL. DNS is answered inside the runner, and private addresses, UDP and raw TCP are refused. Every request is logged (see below). A request whose log line can't be written doesn't go out.
 - **Internet access**, `AGENT_INTERNET=on` in `runner.env`, also lets pi reach public HTTPS websites, which the agent may use to look something up for a filing. A misled agent could then send your data to any public website, and even an ordinary lookup tells a website what was looked up. The log shows when, which host and path, and how much, never what. It is off by default.
 - **Third-party code that faces the outside**, wacli and the email reader, runs as its own user, with only its own settings and folder. Neither can read the key, the datastore, the agent's folder, the exchange or the bridge's state.
@@ -441,26 +442,26 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   npm ci && npm test
   ```
-  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 788 tests, 733 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 825 tests, 768 passed, 57 skipped: 39 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
 - **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 790 tests, 772 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 827 tests, 809 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
 
   Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
   ```sh
   SCOOTER_TEST_IMAGE=~/scooter-test-image GONDOLIN_CPU=max,sgx=off sg kvm -c 'npm test'
   ```
-  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, 18 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
+  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, all 19 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
 - **As root, in a container**, for what only root does: giving files away and running programs as other users, and, with `SCOOTER_ROOT_TESTS=1`, making users, as `setup`'s own test does. It needs Docker:
   ```sh
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
-  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 788 tests, 722 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 825 tests, 756 passed, 69 skipped: 39 for the image, 15 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
 
-**The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
+**The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks what a run sees and may change with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 
 ## Check on the first real run
 

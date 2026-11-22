@@ -14,14 +14,15 @@ const at = Date.parse
 const SECOND = 1000
 const MINUTE = 60 * SECOND
 
-function agentWith({ newMessages = true, scheduled = [], backfill = [], reads = ['whatsapp', 'email'] } = {}) {
+// An agent whose one trigger for new messages names `channels`, or with none when they are none.
+function agentWith({ scheduled = [], backfill = [], channels = ['whatsapp', 'email'] } = {}) {
   return {
     name: 'lifelog',
-    reads,
+    channels,
     run: {
-      newMessages,
+      newMessages: channels.length > 0 ? [{ channels }] : [],
       scheduled: scheduled.map(([time, task]) => ({ at: time, schedule: parseLocalTime(time), task })),
-      backfill: backfill.map(id => ({ id, skill: 'people', writes: ['views/people.csv'] })),
+      backfill: backfill.map(id => ({ id, skill: 'people', writes: ['agents/lifelog/views/people.csv'] })),
     },
   }
 }
@@ -44,26 +45,26 @@ const HANDLED = { ...initialAgentState(), cursor: 3 }
 const EARLIER = [line.text(1, '2026-11-09T15:00:00Z', 'coffee 120'), line.sent(2, '2026-11-09T15:00:10Z', 'Which café?'), line.text(3, '2026-11-09T15:01:00Z', 'Blue Tokai')]
 
 test('triggers: what is a work item', () => {
-  const reads = ['whatsapp']
-  assert.equal(isWorkItem(line.text(1, '2026-11-09T15:00:00Z', 'x'), reads), true)
-  assert.equal(isWorkItem(line.edit(2, '2026-11-09T15:00:00Z', 1, 'y'), reads), true)
-  assert.equal(isWorkItem(line.delete(3, '2026-11-09T15:00:00Z', 1), reads), true)
+  const channels = ['whatsapp']
+  assert.equal(isWorkItem(line.text(1, '2026-11-09T15:00:00Z', 'x'), channels), true)
+  assert.equal(isWorkItem(line.edit(2, '2026-11-09T15:00:00Z', 1, 'y'), channels), true)
+  assert.equal(isWorkItem(line.delete(3, '2026-11-09T15:00:00Z', 1), channels), true)
   // Context, or skipped.
-  assert.equal(isWorkItem(line.sent(4, '2026-11-09T15:00:00Z', 'x'), reads), false)
-  assert.equal(isWorkItem(line.reaction(5, '2026-11-09T15:00:00Z', 1, '👍'), reads), false)
+  assert.equal(isWorkItem(line.sent(4, '2026-11-09T15:00:00Z', 'x'), channels), false)
+  assert.equal(isWorkItem(line.reaction(5, '2026-11-09T15:00:00Z', 1, '👍'), channels), false)
   // A text such as /new is a message like any other.
-  assert.equal(isWorkItem(line.text(6, '2026-11-09T15:00:00Z', '/new'), reads), true)
-  // A source the agent doesn't read.
-  assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), reads), false)
+  assert.equal(isWorkItem(line.text(6, '2026-11-09T15:00:00Z', '/new'), channels), true)
+  // A channel no trigger of the agent's names.
+  assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), channels), false)
   assert.equal(isWorkItem(line.email(7, '2026-11-09T15:00:00Z', 'Hi', 'x'), ['email']), true)
   // A line this version doesn't know: a kind or a channel it doesn't have, or without a field its
-  // kind needs. A reads list naming such a channel changes nothing.
+  // kind needs. Channels naming such a channel change nothing.
   const base = { dir: 'in', at: '2026-11-09T15:00:00Z', trust: 'owner' }
-  assert.equal(isWorkItem({ seq: 8, kind: 'command', ...base, source: 'whatsapp', text: '/status' }, reads), false)
+  assert.equal(isWorkItem({ seq: 8, kind: 'command', ...base, source: 'whatsapp', text: '/status' }, channels), false)
   assert.equal(isWorkItem({ seq: 9, kind: 'message', ...base, source: 'telegram', text: 'hi' }, ['telegram']), false)
-  assert.equal(isWorkItem({ seq: 10, kind: 'message', ...base, source: 'whatsapp' }, reads), false)
-  assert.equal(isWorkItem({ seq: 11, kind: 'edit', ...base, source: 'whatsapp', text: 'y' }, reads), false)
-  assert.equal(isWorkItem({ seq: 12, kind: 'delete', ...base, source: 'whatsapp' }, reads), false)
+  assert.equal(isWorkItem({ seq: 10, kind: 'message', ...base, source: 'whatsapp' }, channels), false)
+  assert.equal(isWorkItem({ seq: 11, kind: 'edit', ...base, source: 'whatsapp', text: 'y' }, channels), false)
+  assert.equal(isWorkItem({ seq: 12, kind: 'delete', ...base, source: 'whatsapp' }, channels), false)
 })
 
 test('triggers: a line this version doesn\'t know starts no batch, and a retry of one is never due', () => {
@@ -87,12 +88,20 @@ test('triggers: new messages wait until the owner has been quiet for BATCH_SECON
   assert.deepEqual(ask({ state: HANDLED, lines, seenAgo: null }), { kind: 'messages' })
   // Only the cursor's side counts: everything here is dealt with.
   assert.deepEqual(ask({ state: { ...HANDLED, cursor: 4 }, lines }), { kind: 'idle', reason: 'nothing' })
-  // Lines that aren't work don't start a batch: context, and sources not read.
+  // Lines that aren't work don't start a batch: context, and channels no trigger names.
   const other = [...EARLIER, line.sent(4, '2026-11-09T15:50:00Z', 'Noted.'), line.reaction(5, '2026-11-09T15:50:00Z', 3, '👍'), line.email(6, '2026-11-09T15:50:00Z', 'Hi', 'x')]
-  assert.deepEqual(ask({ agent: agentWith({ reads: ['whatsapp'] }), state: HANDLED, lines: other }), { kind: 'idle', reason: 'nothing' })
-  assert.deepEqual(ask({ agent: agentWith({ reads: ['email'] }), state: HANDLED, lines: other }), { kind: 'messages' })
-  // Without `on: new-messages`, messages wait for nothing.
-  assert.deepEqual(ask({ agent: agentWith({ newMessages: false }), state: HANDLED, lines }), { kind: 'idle', reason: 'nothing' })
+  assert.deepEqual(ask({ agent: agentWith({ channels: ['whatsapp'] }), state: HANDLED, lines: other }), { kind: 'idle', reason: 'nothing' })
+  assert.deepEqual(ask({ agent: agentWith({ channels: ['email'] }), state: HANDLED, lines: other }), { kind: 'messages' })
+  // Without a trigger `on: new-messages`, no channel's lines are work.
+  assert.deepEqual(ask({ agent: agentWith({ channels: [] }), state: HANDLED, lines }), { kind: 'idle', reason: 'nothing' })
+})
+
+test("triggers: the channels of every trigger for new messages are the agent's work, whichever trigger names them", () => {
+  const lines = [...EARLIER, line.email(4, '2026-11-09T15:50:00Z', 'Hi', 'x'), line.text(5, '2026-11-09T15:50:00Z', 'lunch')]
+  const agent = { ...agentWith(), run: { ...agentWith().run, newMessages: [{ channels: ['email'] }, { channels: ['whatsapp'] }] } }
+  assert.deepEqual(ask({ agent, state: HANDLED, lines }), { kind: 'messages' })
+  assert.deepEqual(ask({ agent, state: { ...HANDLED, cursor: 4 }, lines }), { kind: 'messages' })
+  assert.deepEqual(ask({ agent, state: { ...HANDLED, cursor: 5 }, lines }), { kind: 'idle', reason: 'nothing' })
 })
 
 test('triggers: retries start a batch when they are due', () => {
@@ -246,9 +255,10 @@ test('triggers: a backfill batch runs only when nothing live is waiting, and fin
   // One whose entry left the config is left alone until the next start drops it.
   assert.deepEqual(ask({ agent: agentWith(), state: { ...state, cursor: 5 }, lines }), { kind: 'idle', reason: 'nothing' })
 
-  // An agent that doesn't run on new messages leaves them waiting for good, and they don't hold
-  // its backfill back.
-  const noMessages = agentWith({ newMessages: false, backfill: ['people-1'] })
-  assert.deepEqual(ask({ agent: noMessages, state, lines }), { kind: 'backfill', id: 'people-1' })
-  assert.deepEqual(ask({ agent: noMessages, state: { ...state, cursor: 5, retry }, lines }), { kind: 'backfill', id: 'people-1' })
+  // A channel no trigger names is no work, live or a backfill's: its lines don't hold the backfill
+  // back, and aren't its to take.
+  const onEmail = agentWith({ channels: ['email'], backfill: ['people-1'] })
+  assert.deepEqual(ask({ agent: onEmail, state, lines }), { kind: 'backfill-finished', id: 'people-1' })
+  const withEmail = [...lines, { ...line.email(6, '2026-11-09T15:30:00Z', 'Hi', 'x'), day: undefined }]
+  assert.deepEqual(ask({ agent: onEmail, state: { ...state, cursor: 6, backfill: { ...backfill, until: 6 } }, lines: withEmail }), { kind: 'backfill', id: 'people-1' })
 })

@@ -91,19 +91,23 @@ export function exampleYaml({ backfill = false } = {}) {
       - skills/meals
       - skills/travel
       - skills/people
-    reads: [whatsapp, email]             # the sources this agent works on
+    # What the agent's VM sees, and what it may change: paths relative to the data folder, a
+    # folder ending in /. reads is optional, and is this when left out.
+    reads: [datastore/, agents/lifelog/]
+    writes: [agents/lifelog/views/, agents/lifelog/memory/]
+    sends: [whatsapp]                    # the channels its messages may go out on; [] for none
     session: daily                       # daily or none
     reply_mode: quiet                    # quiet or confirm
     ack_reaction: "✅"                   # reaction on handled messages in quiet mode; "" for none
-    can_message: true                    # false: the agent never sends anything
     timeout_minutes: 10
     run:
       - on: new-messages                 # every batch of new messages
+        channels: [whatsapp, email]      # from these channels
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
         task: >-
           Evening check-in. List in a few lines what you filed today,
           mention anything that looks missing, and list the open questions.
-${backfill ? '      - backfill: people-1\n        skill: people\n        writes: [views/people.csv]\n' : ''}`
+${backfill ? '      - backfill: people-1\n        skill: people\n        writes: [agents/lifelog/views/people.csv]\n' : ''}`
 }
 
 // Makes a config folder: `agents.yaml`, `prompts/lifelog.md`, and a folder with a `SKILL.md` for

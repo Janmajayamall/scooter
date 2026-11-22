@@ -20,7 +20,8 @@ import { readNetworkLog } from '../../src/common/netlog.mjs'
 import { makePaths } from '../../src/common/paths.mjs'
 import { systemClock } from '../../src/common/time.mjs'
 import { openRunner } from '../../src/runner/main.mjs'
-import { piEnv, piMounts } from '../../src/runner/run.mjs'
+import { loadConfig } from '../../src/runner/config.mjs'
+import { piEnv, piFiles } from '../../src/runner/run.mjs'
 import { openGondolinSandbox } from '../../src/runner/sandbox/gondolin.mjs'
 import { line, writeDatastore } from '../support/runner.mjs'
 import { linkTestImage, sandboxSkipReason } from '../support/sandbox.mjs'
@@ -98,7 +99,7 @@ for (const [route, model, routePath] of ROUTES) {
         argv: ['/bin/sh', '-c', 'curl -sS -f -m 20 https://example.com/ >/dev/null 2>&1; echo "curl: $?"'],
         cwd: paths.agentDir('lifelog'),
         env: piEnv({ timeZone: settings.timeZone }),
-        mounts: piMounts(paths, 'lifelog'),
+        files: piFiles(paths, loadConfig({ paths }).agents[0]),
         timeoutMs: 120_000,
         policy: { model: agent.model, internet: false, zdr: true, secrets: { OPENROUTER_API_KEY: { hosts: ['openrouter.ai'], value: DUMMY_KEY } } },
       })

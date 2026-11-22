@@ -17,15 +17,18 @@
 //     argv: ['pi', '-p', …],          the program and its arguments; no shell reads them
 //     cwd: '/data/agents/lifelog',    the folder it runs in
 //     env: { PATH, HOME, … },         its whole environment, apart from the secrets below
-//     mounts: [{ path, writable, hide }],
+//     files: { root, reads, writes: [{ path, folder }], hide },
 //     timeoutMs,                      after this long the VM is closed
 //     policy: { model, internet, zdr, secrets },
 //   }
 //
-// - `mounts`: each host folder `path`, at the same path inside the VM, read-only unless
-//   `writable`. `hide` lists paths inside a read-only mount, from its root, that the VM doesn't
-//   see at all and can't create, such as `sessions` in the agent's folder; a writable mount hides
-//   nothing. A mount inside another takes its place there. Nothing else of the host is visible.
+// - `files`: what the VM sees of the host, and may change, all of it absolute paths on the host,
+//   which the VM sees at the same paths. `root` is a folder, such as the data folder, of which the
+//   VM sees what `reads` and `writes` name, each a file or a folder with all it holds, and the
+//   folders that lead there; nothing else of the host is visible. The VM may change only what
+//   `writes` names: a `folder` and everything in it, or a file. `hide` names what the VM never
+//   sees, and can't make, whatever the others say, such as the agent's `sessions/`; no write lies
+//   in it, or holds it. How a sandbox holds the VM to this is its own (`view.mjs`).
 // - `policy`: the network policy for the run: the model OpenRouter may be asked for, whether
 //   the agent's internet access is on, and whether to ask for zero data retention. `secrets` maps
 //   a variable's name to `{ hosts, value }`: the program gets the variable holding a placeholder,
@@ -43,7 +46,7 @@
 //   error is, up to `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (`createOutput`).
 //   `stdoutCut` says the answer was cut, which fails the run as pi's own failure.
 // - **Writes.** The real sandbox stops a run that writes more than `RUN_WRITE_MAX_BYTES`, or makes
-//   more than `RUN_NAMES_MAX_COUNT` names, through its writable mounts: it refuses the write, closes
+//   more than `RUN_NAMES_MAX_COUNT` names, in what it may change: it refuses the write, closes
 //   the VM, and says `wroteTooMuch`, which fails the run as pi's own failure too.
 
 import path from 'node:path'
@@ -113,6 +116,31 @@ export const GUEST_HOME = '/root'
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 
+// Whether `inner` is `outer` or in it, both absolute paths.
+const isIn = (inner, outer) => outer === '/' || inner === outer || inner.startsWith(`${outer}/`)
+
+// What is wrong with a spec's `files`, as statements that name fields.
+function checkFiles(files) {
+  if (!isObject(files)) return ['files must be an object']
+  const problems = []
+  // An absolute path, cleaned, so that two paths compare as the VM would find them.
+  const clean = value => typeof value === 'string' && path.isAbsolute(value) && path.posix.normalize(value) === value && (value === '/' || !value.endsWith('/'))
+  if (!clean(files.root)) return ['files.root must be an absolute path, cleaned']
+  const inRoot = value => clean(value) && isIn(value, files.root) && value !== files.root
+  for (const name of ['reads', 'hide']) {
+    if (!Array.isArray(files[name]) || !files[name].every(inRoot)) problems.push(`files.${name} must list absolute paths, cleaned, inside files.root`)
+  }
+  if (!Array.isArray(files.writes) || !files.writes.every(write => isObject(write) && inRoot(write.path) && typeof write.folder === 'boolean')) {
+    problems.push('files.writes must list { path, folder }, each path absolute, cleaned and inside files.root')
+  } else if (Array.isArray(files.hide)) {
+    // The VM could make what is hidden, or see it, through what it may write.
+    for (const write of files.writes) {
+      if (files.hide.some(hidden => isIn(write.path, hidden) || isIn(hidden, write.path))) problems.push(`files.writes names ${write.path}, which holds or lies in what files.hide names`)
+    }
+  }
+  return problems
+}
+
 // What is wrong with a run's spec, as a list of statements that name fields. An empty list means
 // it is well formed. Both sandboxes check what they are given.
 export function checkRunSpec(spec) {
@@ -123,20 +151,7 @@ export function checkRunSpec(spec) {
   }
   if (typeof spec.cwd !== 'string' || !path.isAbsolute(spec.cwd)) problems.push('cwd must be an absolute path')
   if (!isObject(spec.env) || !Object.values(spec.env).every(value => typeof value === 'string')) problems.push('env must map names to strings')
-  if (!Array.isArray(spec.mounts) || spec.mounts.length === 0) {
-    problems.push('mounts must be a list')
-  } else {
-    spec.mounts.forEach((mount, n) => {
-      if (!isObject(mount) || typeof mount.path !== 'string' || !path.isAbsolute(mount.path)) problems.push(`mounts[${n}].path must be an absolute path`)
-      else if (typeof mount.writable !== 'boolean') problems.push(`mounts[${n}].writable must be true or false`)
-      else if (!Array.isArray(mount.hide) || !mount.hide.every(inner => typeof inner === 'string' && inner !== '' && !path.isAbsolute(inner) && !inner.split('/').includes('..'))) {
-        problems.push(`mounts[${n}].hide must list paths inside the mount`)
-      } else if (mount.writable && mount.hide.length > 0) {
-        // The VM could make what is hidden again, through the writable mount.
-        problems.push(`mounts[${n}].hide must be empty: only a read-only mount hides paths`)
-      }
-    })
-  }
+  problems.push(...checkFiles(spec.files))
   if (!Number.isSafeInteger(spec.timeoutMs) || spec.timeoutMs <= 0) problems.push('timeoutMs must be a whole number of milliseconds')
   const policy = spec.policy
   if (!isObject(policy)) {

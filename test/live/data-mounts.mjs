@@ -1,4 +1,4 @@
-// A live check (the plan's milestone 13): the mounts of a run, with the data folder where
+// A live check (the plan's milestone 13): what a run's VM sees, with the data folder where
 // Docker has it, at /data, which is also where Gondolin 0.14.0 puts its own file system unless told
 // otherwise. It is run by hand, in the runner's container, with the runner stopped, from a checkout
 // of this repository mounted at /app/test:
@@ -12,10 +12,12 @@
 // first, to reap it: `--entrypoint tini`, with `node …` as the command.
 //
 // It holds runner/runner.sock, as the runner does, so it refuses while a runner runs. It opens the
-// sandbox as the runner does, on the runner's own settings and data folder, and runs a shell in a
-// VM with the mounts of a run of `lifelog` (`piMounts`). What the VM sees is checked:
-// the agent's folder and the datastore at their paths under /data, read-only but for views/,
-// memory/ and run/session/; sessions/ not there; and nothing else of the data folder or the config.
+// sandbox as the runner does, on the runner's own settings, data folder and `agents.yaml`, and runs
+// a shell in a VM with what a run of `lifelog` sees and may change (`piFiles`). What the VM sees is
+// checked, with the default `reads` and `writes`: the agent's folder and the datastore at their
+// paths under /data, read-only but for views/, memory/ and run/session/; sessions/ not there;
+// nothing else of the data folder or the config; and Gondolin's own file system at
+// /run/gondolin-vfs, not at /data.
 // It writes one file, in run/session/, which every run empties, and removes it. It prints what it
 // found, and exits with 1 if anything wasn't so.
 
@@ -23,7 +25,8 @@ import { loadSettings } from '../../src/common/settings.mjs'
 import { makePaths } from '../../src/common/paths.mjs'
 import { createLog } from '../../src/common/log.mjs'
 import { holdRunnerFolder } from '../../src/runner/main.mjs'
-import { piMounts } from '../../src/runner/run.mjs'
+import { loadConfig } from '../../src/runner/config.mjs'
+import { piFiles } from '../../src/runner/run.mjs'
 import { openGondolinSandbox } from '../../src/runner/sandbox/gondolin.mjs'
 import { GUEST_PATH } from '../../src/runner/sandbox/index.mjs'
 
@@ -45,7 +48,7 @@ touch ${paths.datastore}/x 2>/dev/null && echo "datastore writable" || echo "dat
 touch ${agent}/x 2>/dev/null && echo "agent writable" || echo "agent read-only"
 echo check > run/session/mount-check && echo "run/session writable" || echo "run/session read-only"
 rm -f run/session/mount-check
-grep -q " /data " /proc/mounts && echo "/data a mount" || echo "/data not a mount"
+grep -q " /run/gondolin-vfs " /proc/mounts && echo "gondolin-vfs at-run" || echo "gondolin-vfs elsewhere"
 `
 
 const WANT = {
@@ -61,7 +64,7 @@ const WANT = {
   datastore: ['readable', 'read-only'],
   agent: 'read-only',
   'run/session': 'writable',
-  '/data': 'not a mount',
+  'gondolin-vfs': 'at-run',
 }
 
 const instance = await holdRunnerFolder(paths)
@@ -73,7 +76,7 @@ try {
     argv: ['/bin/sh', '-c', SCRIPT],
     cwd: '/',
     env: { PATH: GUEST_PATH },
-    mounts: piMounts(paths, 'lifelog'),
+    files: piFiles(paths, loadConfig({ paths }).agents.find(each => each.name === 'lifelog')),
     timeoutMs: 5 * 60_000,
     policy: { model: 'none', internet: false, zdr: true, secrets: {} },
   })

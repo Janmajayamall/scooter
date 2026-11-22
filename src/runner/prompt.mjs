@@ -276,14 +276,17 @@ export function loadProtocol() {
 // pi writes the memory folder. A run that leaves a link or anything but a file there fails, and is
 // cleaned up, but a runner stopped before the clean-up would find it at its next run. So the
 // file is opened without following a link, and must be a regular file: otherwise a link to the
-// runner's env file would put the OpenRouter key into the prompt.
+// runner's env file would put the OpenRouter key into the prompt. And `memory` itself can be a
+// file, which `writes` may name as one (`ENOTDIR`): then there is no memory file, as when there is
+// no folder, since a path that runs through a file names nothing. Thrown, that would stop every
+// run before pi, without counting an attempt.
 export function readMemoryFile(file) {
   const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
   let fd
   try {
     fd = fs.openSync(file, flags)
   } catch (error) {
-    if (error.code === 'ENOENT') return null
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
     if (error.code === 'ELOOP' || error.code === 'EMLINK') return { text: '(not a regular file, so not read)', cut: false }
     throw error
   }

@@ -113,14 +113,13 @@ export function openRouterMessage(stderr, status) {
 
 // Why a run failed. `result` is what the sandbox returned, or `{ error }` when it couldn't run
 // the command; `unexpected` the file a successful pi left that git wouldn't record, or null;
-// `outside` the file a backfill's batch changed that it may not change, or null;
 // `filesError` the error that checking or committing what a successful pi left met, or null;
 // `answer` what `lastOpenRouterAnswer` found. Returns `{ cause, reason, status }`: `cause` is
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
 // `status` OpenRouter's last status or null.
 //
-// An unexpected file, a change a backfill may not make, or an error in checking or committing the
-// files, is pi's own failure, whatever the log says: it is what pi left that failed the run.
+// An unexpected file, or an error in checking or committing the files, is pi's own failure,
+// whatever the log says: it is what pi left that failed the run.
 //
 // The reason is OpenRouter's error whenever its last answer was one, in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
@@ -129,7 +128,7 @@ export function openRouterMessage(stderr, status) {
 //
 // A sandbox that couldn't run pi at all, such as a VM that doesn't boot, is a setup error: it is
 // the machine's, not the message's, and trying every message four times wouldn't help.
-export function failureCause({ result, unexpected = null, outside = null, filesError = null, answer = null }) {
+export function failureCause({ result, unexpected = null, filesError = null, answer = null }) {
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
   // What pi did, whatever OpenRouter answered: its VM was closed for writing too much, or its
@@ -137,7 +136,6 @@ export function failureCause({ result, unexpected = null, outside = null, filesE
   if (result.wroteTooMuch) return { cause: 'other', reason: 'pi wrote more than a run may', status }
   if (result.code === 0 && result.stdoutCut) return { cause: 'other', reason: "pi's answer was too long", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
-  if (result.code === 0 && outside !== null) return { cause: 'other', reason: shortReason(`changed ${outside}, which the backfill may not change`), status }
   if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 
   // A request the network policy refused at OpenRouter: pi's first, which no try can mend, is a
@@ -165,7 +163,7 @@ export function failureCause({ result, unexpected = null, outside = null, filesE
 // A log that can't be read counts as one with no answer from OpenRouter in it, so the run is pi's
 // own failure: the run is still recorded and its attempt counted, which an error here would keep
 // from happening, and the runner, stopped, would run the batch again at its next start.
-export function readFailureCause({ paths, result, unexpected = null, outside = null, filesError = null, startedAt, endedAt, log }) {
+export function readFailureCause({ paths, result, unexpected = null, filesError = null, startedAt, endedAt, log }) {
   const answers = openRouterAnswers()
   let answer = null
   try {
@@ -174,7 +172,7 @@ export function readFailureCause({ paths, result, unexpected = null, outside = n
   } catch (error) {
     log?.warn('runner.netlog_unreadable', errorFields(error))
   }
-  return failureCause({ result, unexpected, outside, filesError, answer })
+  return failureCause({ result, unexpected, filesError, answer })
 }
 
 // ---------------------------------------------------------------------------------------------

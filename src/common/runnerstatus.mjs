@@ -9,7 +9,7 @@
 //     "internet": false,
 //     "imageBuiltAt": "2026-11-09T12:31:40Z",
 //     "agents": {
-//       "lifelog": {"model": "anthropic/claude-sonnet-5.5", "timeoutMinutes": 10, "reads": ["whatsapp", "email"]}
+//       "lifelog": {"model": "anthropic/claude-sonnet-5.5", "timeoutMinutes": 10, "channels": ["whatsapp", "email"]}
 //     },
 //     "restart": {"stops": 2, "until": "2026-11-09T15:06:31Z", "reason": "ENOSPC"}
 //   }
@@ -18,7 +18,8 @@
 // - `accel`: how pi's VMs run, `kvm` or `emulation`.
 // - `zdr`, `internet`: whether `OPENROUTER_ZDR` and `AGENT_INTERNET` are on.
 // - `imageBuiltAt`: when the VM image was built, or null when that isn't known.
-// - `agents`: each agent's model, `timeout_minutes` and `reads`.
+// - `agents`: each agent's model, `timeout_minutes`, and the `channels` its triggers for new
+//   messages name, whose lines are its work.
 // - `restart`: when the runner started after stopping on an error, and waits before it goes on,
 //   where its service manager doesn't wait: how many stops in a row, until when, and the
 //   error's code or name, or null when it couldn't record one. Null otherwise; a status an older
@@ -30,6 +31,7 @@
 import { SOURCES } from './datastore/line.mjs'
 import { readJsonFile, readUntrustedFile } from './files.mjs'
 import { limits } from './limits.mjs'
+import { OWN_AUTHORS } from './outbox.mjs'
 import { parseIsoSeconds } from './time.mjs'
 
 export const ACCELERATORS = ['kvm', 'emulation']
@@ -37,12 +39,14 @@ export const ACCELERATORS = ['kvm', 'emulation']
 const FIELDS = ['startedAt', 'accel', 'zdr', 'internet', 'imageBuiltAt', 'agents']
 // Fields a status may leave out.
 const OPTIONAL = ['restart']
-const AGENT_FIELDS = ['model', 'timeoutMinutes', 'reads']
+const AGENT_FIELDS = ['model', 'timeoutMinutes', 'channels']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isTime = value => parseIsoSeconds(value) !== null
-// An agent's name, as `agents.yaml` allows it. `scooter status` makes paths of it.
+// An agent's name, as `agents.yaml` allows it: not the name of Scooter's own messages either.
+// `scooter status` makes paths of it.
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
+const isAgentName = name => AGENT_NAME.test(name) && !OWN_AUTHORS.includes(name)
 
 // What is wrong with a status, as a list of statements that name fields. An empty list means it is
 // well formed.
@@ -83,7 +87,7 @@ export function checkRunnerStatus(status) {
     else {
       for (const [name, agent] of Object.entries(status.agents)) {
         const field = `agents.${name}`
-        if (!AGENT_NAME.test(name)) {
+        if (!isAgentName(name)) {
           problems.push('agents must be named as agents.yaml names them, such as lifelog')
           continue
         }
@@ -96,8 +100,8 @@ export function checkRunnerStatus(status) {
         }
         if (typeof agent.model !== 'string' || agent.model === '') problems.push(`${field}.model must be a model ID`)
         if (!Number.isSafeInteger(agent.timeoutMinutes) || agent.timeoutMinutes < 1) problems.push(`${field}.timeoutMinutes must be a whole number of minutes`)
-        if (!Array.isArray(agent.reads) || !agent.reads.every(source => SOURCES.includes(source))) {
-          problems.push(`${field}.reads must list sources such as ${SOURCES.join(' and ')}`)
+        if (!Array.isArray(agent.channels) || !agent.channels.every(source => SOURCES.includes(source))) {
+          problems.push(`${field}.channels must list channels such as ${SOURCES.join(' and ')}`)
         }
       }
     }

@@ -20,7 +20,9 @@ const LINES = [
   line.text(9, '2026-11-09T15:07:00Z', 'lunch 300'),
 ]
 const index = indexOf(LINES)
-const AGENT = { name: 'lifelog', canMessage: true, replyMode: 'quiet', ackReaction: '✅' }
+const AGENT = { name: 'lifelog', sends: ['whatsapp'], replyMode: 'quiet', ackReaction: '✅' }
+// Each entry of the agent's carries the channels its sends names.
+const SENDS = { channels: ['whatsapp'] }
 
 test('answer parsing: every instruction line', () => {
   const answer = parseAnswer(
@@ -139,43 +141,45 @@ test('answer: the texts in order, then a ✅ for each message done that no REPLY
   const answer = parseAnswer(['Logged the lunch.', 'REPLY_TO: 3', 'Blue Tokai it is.', 'REPLY_TO: 99', 'Which one?', 'DONE: 1 3 4 5 9'].join('\n'))
   const done = reportsOf(answer, [1, 3, 4, 5, 9]).done
   assert.deepEqual(answerEntries({ answer, agent: AGENT, index, about: 9, done }), [
-    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9 },
-    { type: 'text', by: 'lifelog', text: 'Blue Tokai it is.', replyTo: 3 },
+    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9, ...SENDS },
+    { type: 'text', by: 'lifelog', text: 'Blue Tokai it is.', replyTo: 3, ...SENDS },
     // #99 doesn't exist: no quote, and about the newest item, like plain text.
-    { type: 'text', by: 'lifelog', text: 'Which one?', about: 9 },
+    { type: 'text', by: 'lifelog', text: 'Which one?', about: 9, ...SENDS },
     // #3 got a reply instead; #4 is an edit, and #5 was deleted since.
-    { type: 'react', by: 'lifelog', target: 1, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 9, emoji: '✅' },
+    { type: 'react', by: 'lifelog', target: 1, emoji: '✅', ...SENDS },
+    { type: 'react', by: 'lifelog', target: 9, emoji: '✅', ...SENDS },
   ])
 
   // A reply to an edit quotes its message, which then gets no reaction.
   const toEdit = parseAnswer('REPLY_TO: 4\nNow ₹150.\nDONE: 1 4')
   assert.deepEqual(answerEntries({ answer: toEdit, agent: AGENT, index, about: 4, done: new Set([1, 4]) }), [
-    { type: 'text', by: 'lifelog', text: 'Now ₹150.', replyTo: 1 },
+    { type: 'text', by: 'lifelog', text: 'Now ₹150.', replyTo: 1, ...SENDS },
   ])
 
   // A scheduled task's text is Scooter's own: no `about`.
-  assert.deepEqual(answerEntries({ answer: parseAnswer('Evening: all filed.'), agent: AGENT, index }), [{ type: 'text', by: 'lifelog', text: 'Evening: all filed.' }])
+  assert.deepEqual(answerEntries({ answer: parseAnswer('Evening: all filed.'), agent: AGENT, index }), [{ type: 'text', by: 'lifelog', text: 'Evening: all filed.', ...SENDS }])
 })
 
 test('answer: NO_REPLY sends no text, and its items still get their reaction', () => {
   const answer = parseAnswer('REPLY_TO: 3\nOK?\nNO_REPLY\nDONE: 3 9')
   assert.deepEqual(answerEntries({ answer, agent: AGENT, index, about: 9, done: new Set([3, 9]) }), [
-    { type: 'react', by: 'lifelog', target: 3, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 9, emoji: '✅' },
+    { type: 'react', by: 'lifelog', target: 3, emoji: '✅', ...SENDS },
+    { type: 'react', by: 'lifelog', target: 9, emoji: '✅', ...SENDS },
   ])
 })
 
-test('answer: confirm mode reacts to nothing, "" reacts to nothing, and can_message: false sends nothing', () => {
+test('answer: confirm mode reacts to nothing, "" reacts to nothing, and sends: [] sends nothing', () => {
   const answer = parseAnswer('Logged the lunch.\nDONE: 9')
   const done = new Set([9])
   assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, replyMode: 'confirm' }, index, about: 9, done }), [
-    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9 },
+    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9, ...SENDS },
   ])
   assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, ackReaction: '' }, index, about: 9, done }), [
-    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9 },
+    { type: 'text', by: 'lifelog', text: 'Logged the lunch.', about: 9, ...SENDS },
   ])
-  assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, canMessage: false }, index, about: 9, done }), [])
+  assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, sends: [] }, index, about: 9, done }), [])
+  // Every channel sends names goes with each entry.
+  assert.deepEqual(answerEntries({ answer, agent: { ...AGENT, sends: ['email', 'whatsapp'] }, index, about: 9, done })[0].channels, ['email', 'whatsapp'])
 })
 
 test('answer: at most ANSWER_MAX_TEXTS texts are sent, and a message whose reply was dropped gets its reaction', () => {
@@ -188,11 +192,11 @@ test('answer: at most ANSWER_MAX_TEXTS texts are sent, and a message whose reply
   const entries = answerEntries({ answer, agent: AGENT, index, about: 9, done: new Set([1, 9]) })
   const texts = entries.filter(entry => entry.type === 'text')
   assert.equal(texts.length, 25)
-  assert.deepEqual(texts[0], { type: 'text', by: 'lifelog', text: 'Which café?', replyTo: 1 })
+  assert.deepEqual(texts[0], { type: 'text', by: 'lifelog', text: 'Which café?', replyTo: 1, ...SENDS })
   assert.equal(texts.at(-1).text, 'Text 23')
-  assert.deepEqual(entries.filter(entry => entry.type === 'react'), [{ type: 'react', by: 'lifelog', target: 9, emoji: '✅' }])
+  assert.deepEqual(entries.filter(entry => entry.type === 'react'), [{ type: 'react', by: 'lifelog', target: 9, emoji: '✅', ...SENDS }])
   assert.equal(droppedTexts(answer, AGENT), 5)
-  // NO_REPLY, or can_message: false, sends none, so drops none.
+  // NO_REPLY, or sends: [], sends none, so drops none.
   assert.equal(droppedTexts(parseAnswer(`${lines.join('\n')}\nNO_REPLY`), AGENT), 0)
-  assert.equal(droppedTexts(answer, { ...AGENT, canMessage: false }), 0)
+  assert.equal(droppedTexts(answer, { ...AGENT, sends: [] }), 0)
 })

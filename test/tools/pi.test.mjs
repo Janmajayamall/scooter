@@ -19,7 +19,7 @@ import {
   GUEST_PATH,
   MESSAGES_MODEL,
   PI,
-  designMounts,
+  designFiles,
   makeDataDir,
   piArgs,
   piEnv,
@@ -77,7 +77,7 @@ test('pi: it refuses a flag it does not know, and --no-context-files keeps AGENT
 
   async function run(args) {
     const model = createFakeModel([{ text: 'DONE: 1050' }])
-    const vm = await startVm(t, { model, mounts: designMounts(data) })
+    const vm = await startVm(t, { model, files: designFiles(data) })
     // A context file where pi looks for one, as an earlier run might leave it if the home folder
     // survived.
     await vm.fs.mkdir('/root/.pi/agent', { recursive: true })
@@ -111,7 +111,7 @@ test('pi 1: skills given with --skill load when --no-skills is set', options, as
 
   async function skillsSeen(without) {
     const model = createFakeModel([{ tool: 'read', args: { path: `${data.skill}/SKILL.md` } }, { text: 'DONE: 1050' }])
-    const vm = await startVm(t, { model, mounts: designMounts(data) })
+    const vm = await startVm(t, { model, files: designFiles(data) })
     // What a run would find if an earlier one could leave skills in the home folder.
     for (const [folder, name] of [
       ['/root/.agents/skills/planted-one', 'planted-one'],
@@ -150,7 +150,7 @@ test('pi 2: a session is one file, and a second run with the same ID continues i
   async function run(prompt, answer, { cwd = data.agent, memory, skills = [] } = {}) {
     if (memory) fs.writeFileSync(data.systemPrompt, `# Your memory\n\n${memory}\n`)
     const model = createFakeModel([{ text: answer }])
-    const vm = await startVm(t, { model, mounts: designMounts(data) })
+    const vm = await startVm(t, { model, files: designFiles(data) })
     const result = await runPi(vm, { prompt, session, systemPrompt: data.systemPrompt, skills }, { cwd })
     assert.equal(result.exitCode, 0, result.stderr)
     await vm.close()
@@ -218,7 +218,7 @@ test('pi 3: edit and write leave nothing beside the files they change', options,
     { tool: 'edit', args: { path: preferences, edits: [{ oldText: 'Track coffee.', newText: 'Track coffee and tea.' }] } },
     { text: 'NO_REPLY\nDONE: 1050' },
   ])
-  const vm = await startVm(t, { model, mounts: designMounts(data) })
+  const vm = await startVm(t, { model, files: designFiles(data) })
   const result = await runPi(vm, { prompt: 'file it', session: { dir: data.session, id: SESSION_ID } }, { cwd: agent })
   assert.equal(result.exitCode, 0, result.stderr)
   for (const toolResult of toolResults(model.modelRequests.at(-1).body)) {
@@ -248,7 +248,7 @@ test('pi 4: --no-mcp works together with -p', options, async t => {
 
   async function run(without) {
     const model = createFakeModel([{ tool: 'bash', args: { command: 'sleep 1' } }, { text: 'DONE: 1050' }])
-    const vm = await startVm(t, { model, mounts: designMounts(data) })
+    const vm = await startVm(t, { model, files: designFiles(data) })
     // An MCP server in pi's own config folder, as an earlier run might leave one if the home
     // folder survived. Starting it leaves a mark.
     const planted = { command: '/bin/sh', args: ['-c', `echo started > ${marker}; exec cat`] }
@@ -287,7 +287,7 @@ test('pi 5: stdout holds the last answer and nothing else, and a refusal ends wi
 
   async function run(model, script) {
     const fake = createFakeModel(script)
-    const vm = await startVm(t, { model: fake, mounts: designMounts(data) })
+    const vm = await startVm(t, { model: fake, files: designFiles(data) })
     const result = await runPi(vm, { prompt: 'file it', model }, { cwd: data.agent })
     await vm.close()
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, requests: fake.modelRequests.length }
@@ -369,7 +369,7 @@ test('pi 7: a 100 KB prompt argument works, and one of 128 KB fails', options, a
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
   const model = createFakeModel([{ text: 'DONE: 1050' }])
-  const vm = await startVm(t, { model, mounts: designMounts(data) })
+  const vm = await startVm(t, { model, files: designFiles(data) })
 
   // The largest single argument Linux takes is 128 KB less the byte that ends it.
   for (const bytes of [100_000, 131_071]) {
@@ -430,7 +430,7 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     { text: 'NO_REPLY\nDONE: 1050' },
   ]
   const model = createFakeModel(steps)
-  const vm = await startVm(t, { model, mounts: designMounts(data) })
+  const vm = await startVm(t, { model, files: designFiles(data) })
   const result = await runPi(vm, { prompt: 'file it' }, { cwd: agent })
   assert.equal(result.exitCode, 0, result.stderr)
   assert.equal(result.stdout, 'NO_REPLY\nDONE: 1050\n')
@@ -442,7 +442,7 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     assert.equal(worked.isError, false, worked.text)
   }
 
-  // pi's own tools see the agent's folder without `sessions/`, which the mounts hide.
+  // pi's own tools see the agent's folder without `sessions/`, which the sandbox hides.
   assert.equal(ls.text, 'memory/\nrun/\nstate.json\nviews/')
   assert.equal(find.text, 'expenses.csv')
   assert.equal(grep.text, 'preferences.md:1: - 2026-11-09 (#1040): Track coffee.')

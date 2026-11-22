@@ -194,7 +194,7 @@ test('bridge: a signed webhook goes through the runner and comes back as a quote
   await both.post(webhookPayload({ ID: 'IMG1', Timestamp: '2026-11-09T15:50:00Z', Text: 'Blue Tokai 450 ASK' }))
   assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
   // The runner asked for the reply; the bridge sends it.
-  assert.deepEqual(both.outbox(), [{ type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 }])
+  assert.deepEqual(both.outbox(), [{ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Work or personal?', replyTo: 1 }])
   await both.deliver()
 
   assert.deepEqual(both.sent(), [['--json', 'send', 'text', '--to', OWNER, '--message', 'Work or personal?', '--no-preview', '--reply-to', 'IMG1']])
@@ -248,8 +248,8 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   )
   // A question about the receipt, and a ✅ for the memo.
   assert.deepEqual(both.outbox(), [
-    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1 },
-    { type: 'react', by: 'lifelog', target: 2, emoji: '✅' },
+    { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Work or personal?', replyTo: 1 },
+    { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 2, emoji: '✅' },
   ])
   await both.deliver()
 
@@ -291,8 +291,8 @@ test('bridge: both services start on a datastore that holds lines this version d
 
   // A reply about each line, and a reaction to each.
   const ids = createIds(both.clock)
-  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'text', by: 'lifelog', text: `about #${seq}`, replyTo: seq } })
-  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'react', by: 'lifelog', target: seq, emoji: '👀' } })
+  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: `about #${seq}`, replyTo: seq } })
+  for (let seq = 1; seq <= 9; seq++) await writeOutboxEntry({ paths: both.paths, ids, entry: { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: seq, emoji: '👀' } })
   await both.deliver()
   const replies = both.sent().slice(2)
   const quotedOf = args => (args.includes('--reply-to') ? args[args.indexOf('--reply-to') + 1] : null)

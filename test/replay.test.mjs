@@ -14,7 +14,7 @@ import { indexOf, line } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', session: 'daily', run: { newMessages: true, scheduled: [], backfill: [] } }
+const AGENT = { name: 'lifelog', channels: ['whatsapp', 'email'], replyMode: 'quiet', session: 'daily', run: { newMessages: [{ channels: ['whatsapp', 'email'] }], scheduled: [], backfill: [] } }
 // When the replay looks at its retries: long after every message.
 const LATER = Date.parse('2026-11-18T10:00:00Z')
 

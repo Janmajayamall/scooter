@@ -12,16 +12,17 @@ The exchange is the folder the two services coordinate through, `exchange/` in t
 - **An entry** is a folder `outbox/<id>/` holding `entry.json`. It is written as `outbox/.tmp-<id>/` and renamed once complete, so the bridge never sees half of one; if the name is taken, it takes the next ID ([Atomic files and hand-offs](shared-code.md#atomic-files-and-hand-offs)). IDs are the UTC time of its making and a counter, so entries sort in the order they were made: `20261109T155015123-0001`.
 - **`entry.json`** is one of two types:
   ```json
-  {"type": "text", "by": "lifelog", "text": "Blue Tokai, ₹450 at 12:40: work or personal?", "replyTo": 1042}
-  {"type": "text", "by": "lifelog", "text": "Logged the run and the coffee.", "about": 1061}
+  {"type": "text", "by": "lifelog", "text": "Blue Tokai, ₹450 at 12:40: work or personal?", "replyTo": 1042, "channels": ["whatsapp"]}
+  {"type": "text", "by": "lifelog", "text": "Logged the run and the coffee.", "about": 1061, "channels": ["whatsapp"]}
   {"type": "text", "by": "runner", "text": "⚠️ I couldn't process your last messages (timeout). I'll try again."}
-  {"type": "react", "by": "lifelog", "target": 1044, "emoji": "✅"}
+  {"type": "react", "by": "lifelog", "target": 1044, "emoji": "✅", "channels": ["whatsapp"]}
   ```
   - There is no recipient field: everything goes to the owner. An entry names messages only by `seq`, and never a channel: the bridge picks the channel from the line it points at ([Choosing the channel](delivery.md#choosing-the-channel)).
   - `replyTo` is the message a text answers, quoted.
   - `about` is the newest message a text answers, not quoted: the runner sets it on an answer's text before the first `REPLY_TO`.
   - A text with neither is something Scooter says on its own.
-  - `by` is the agent's name, `runner` or `bridge`.
+  - `by` is the agent's name, `runner` or `bridge`. `agents.yaml` keeps an agent from taking either of the last two ([agents.yaml](configuration.md#agentsyaml)).
+  - `channels` is on an agent's entry, and only there: the channels its `sends` names, at least one, each once, on which alone the bridge sends it ([Choosing the channel](delivery.md#choosing-the-channel)). *Why the entry carries them:* the bridge chooses the channel, and doesn't read `agents.yaml`. *Why required:* an entry of the agent's without them, such as one a runner of before `sends` wrote, is refused, rather than sent on any channel. The runner's and the bridge's own entries carry none, and go out whatever an agent's `sends` says.
 - **The check.** `checkOutboxEntry` is this format as code, strict, as `checkLine` is for the lines the store writes ([The line format](datastore.md#the-line-format)). `writeOutboxEntry` writes every entry through it, and the bridge checks every entry it reads.
 - **A text is at most `TEXT_MAX_CHARS` characters**, a character being a Unicode code point, so an emoji counts once and is never split: four times `CHUNK_CHARS` ([Chunks](delivery.md#chunks)). `writeOutboxEntry` cuts a longer one, for the runner's entries and the bridge's alike, and ends it with `[The rest of this message was too long to send.]`; `checkOutboxEntry` refuses a longer one, so the bridge refuses an entry not written that way. *Why:* the agent's texts are its own to make as long as it likes, and one of a megabyte would take the bot's number half an hour to send. It is cut where it is written, not refused: a refusal would throw in the runner after a run that went well, and stop it. *Cost:* one answer can still send `ANSWER_MAX_TEXTS` texts of up to eight messages each.
 - **U+0000** in a text is written as U+FFFD by the same cut, which also keeps a text of nothing else from being empty; `checkOutboxEntry` refuses a text or an emoji that holds one, so the bridge drops such an entry at once. *Why:* the channel's program takes the text as a command-line argument, and no program takes one with U+0000 in it: the send could never start, and the entry would hold the outbox back for all its tries.

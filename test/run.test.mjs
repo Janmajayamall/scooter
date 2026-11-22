@@ -10,8 +10,8 @@ import { overrideLimits } from '../src/common/limits.mjs'
 import { readLock } from '../src/common/locks.mjs'
 import { actFull, holds } from './support/full-disk.mjs'
 import { skipIfRoot } from './support/root.mjs'
-import { exampleYaml, fillerLines, line } from './support/runner.mjs'
-import { KEY, MINUTE, SECOND, openTestRunner } from './support/test-runner.mjs'
+import { exampleYaml, fillerLines, line, writeConfig } from './support/runner.mjs'
+import { KEY, MINUTE, SECOND, openTestRunner, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
@@ -36,7 +36,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
   assert.equal(git('status', '--porcelain'), '')
 
   // The ✅ reaction, in quiet mode, and the state.
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] }])
   const after = state()
   assert.equal(after.cursor, 1042)
   assert.deepEqual(after.retry, [])
@@ -69,7 +69,7 @@ async function runNext(runner, clock) {
   return runner.tick()
 }
 
-test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its environment and the network policy', async t => {
+test('run: the sandbox gets pi\'s command, what the VM sees and may change with sessions/ hidden, its environment and the network policy', async t => {
   const { runner, clock, sandbox, paths } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
   fs.writeFileSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
   await runNext(runner, clock)
@@ -79,13 +79,18 @@ test('run: the sandbox gets pi\'s command, its mounts with sessions/ hidden, its
 
   assert.equal(spec.cwd, agent)
   assert.equal(spec.timeoutMs, 10 * MINUTE)
-  assert.deepEqual(spec.mounts, [
-    { path: agent, writable: false, hide: ['sessions'] },
-    { path: path.join(agent, 'views'), writable: true, hide: [] },
-    { path: path.join(agent, 'memory'), writable: true, hide: [] },
-    { path: path.join(run, 'session'), writable: true, hide: [] },
-    { path: paths.datastore, writable: false, hide: [] },
-  ])
+  // The data folder, of which the VM sees what reads and writes name, and run/, and may change what
+  // writes names, and run/session/; never sessions/.
+  assert.deepEqual(spec.files, {
+    root: paths.dataDir,
+    reads: [paths.datastore, agent, path.join(agent, 'views'), path.join(agent, 'memory'), run],
+    writes: [
+      { path: path.join(agent, 'views'), folder: true },
+      { path: path.join(agent, 'memory'), folder: true },
+      { path: path.join(run, 'session'), folder: true },
+    ],
+    hide: [paths.agentSessions('lifelog')],
+  })
   assert.deepEqual(spec.argv.slice(0, -1), [
     'pi',
     '-p',
@@ -210,8 +215,8 @@ test('run: a text such as /new is a message the agent is given, and its batch go
   assert.match(argv.at(-1), /^#1042 21:20 text: "\/new"$/m)
   assert.deepEqual(state().lastRun.seqs, [1042, 1043])
   assert.deepEqual(outbox(), [
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 1043, emoji: '✅' },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1043, emoji: '✅', channels: ['whatsapp'] },
   ])
 })
 
@@ -232,7 +237,7 @@ test('run: a link, a FIFO, a dot name or a file git ignores fails the run; the c
       assert.deepEqual(after.retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: `unexpected file ${file}` }], keyword)
       assert.equal(after.cursor, 1042)
       // Everything the run wrote is gone, the file first.
-      assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [], keyword)
+      assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [], keyword)
       assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [], keyword)
       assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '', keyword)
       assert.equal(git('rev-list', '--count', 'HEAD'), '1\n', keyword)
@@ -268,7 +273,7 @@ test('run: a file or a folder the runner can\'t read, a name git refuses, a file
       if (file instanceof RegExp) assert.match(found, file)
       else assert.equal(found, file)
       // Everything the run wrote is gone, and nothing is staged; the session isn't kept.
-      assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+      assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
       assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
       assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
       assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
@@ -293,7 +298,7 @@ test('run: an answer longer than the sandbox keeps fails the run as pi\'s own fa
   const { runner, clock, paths, state, outbox, git } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 LONGANSWER')])
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: "pi's answer was too long" }])
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
   assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
   assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't process your last messages (pi's answer was too long). I'll try again." }])
 })
@@ -303,7 +308,7 @@ test('run: a run the sandbox stopped for writing too much fails as pi\'s own fai
   sandbox.wroteTooMuch = true
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(state().retry, [{ seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'pi wrote more than a run may' }])
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
   assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
@@ -316,7 +321,7 @@ test('run: empty folders don\'t fail the run, and are removed, so views and memo
   const { runner, clock, paths, state, git, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 EMPTYDIRS')])
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.deepEqual(state().retry, [])
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] }])
   assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nviews/notes.csv\n')
   // Everything there, files and folders, against what the commit holds, with the folders above.
   const agent = paths.agentDir('lifelog')
@@ -343,7 +348,7 @@ test('run: the modes pi set, which git doesn\'t record, are put back after a run
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.equal(git('show', '--name-only', '--format=%s', 'HEAD'), 'lifelog: #1042\n\nviews/notes.csv\nviews/sub/later.csv\n')
   // The folder, a folder in it and a file, which pi left without write access: the runner's again.
-  const modeOf = file => fs.statSync(path.join(paths.agentViews('lifelog'), file)).mode & 0o7777
+  const modeOf = file => fs.statSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), file)).mode & 0o7777
   assert.deepEqual(['.', 'sub', 'notes.csv', 'sub/later.csv'].map(modeOf), [0o700, 0o700, 0o600, 0o600])
   assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
 
@@ -394,7 +399,7 @@ test('run: on a disk pi filled, a failed run frees what pi wrote before it makes
       const { runner, clock, paths, state, outbox, git, sandbox, events } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 FILLDISK')], {
         yaml: exampleYaml().replace('session: daily', `session: ${session}`),
       })
-      const folders = [paths.agentViews('lifelog'), paths.agentMemory('lifelog'), paths.agentRunSession('lifelog'), paths.agentDiscarded('lifelog')]
+      const folders = [path.join(paths.agentDir('lifelog'), 'views'), paths.agentMemory('lifelog'), paths.agentRunSession('lifelog'), paths.agentDiscarded('lifelog')]
       // pi leaves fill.bin in views/ and in run/session/, and exits with 0. Until both are gone,
       // nothing can be made: neither the folders the clean-up makes again, nor the outbox entry,
       // nor the state.
@@ -435,10 +440,10 @@ test('run: replies, quoted or about the newest item, and a ✅ for the rest of w
   ])
   await runNext(runner, clock)
   assert.deepEqual(outbox(), [
-    { type: 'text', by: 'lifelog', text: 'Filed #1042.\nI couldn\'t read #1044.', about: 1045 },
-    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1043 },
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
-    { type: 'react', by: 'lifelog', target: 1045, emoji: '✅' },
+    { type: 'text', by: 'lifelog', text: 'Filed #1042.\nI couldn\'t read #1044.', about: 1045, channels: ['whatsapp'] },
+    { type: 'text', by: 'lifelog', text: 'Work or personal?', replyTo: 1043, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1045, emoji: '✅', channels: ['whatsapp'] },
   ])
   // FAILED goes straight to failed, and the agent's own text explains it: no notice.
   assert.deepEqual(state().failed, [{ seq: 1044, at: '2026-11-09T15:50:38Z', reason: "can't read it" }])
@@ -449,8 +454,8 @@ test('run: a REPLY_TO a number that doesn\'t exist is sent without a quote, and 
   const { runner, clock, outbox, state, entries } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee REPLYTO=4242 UNKNOWN')])
   await runNext(runner, clock)
   assert.deepEqual(outbox(), [
-    { type: 'text', by: 'lifelog', text: 'About #4242.', about: 1042 },
-    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
+    { type: 'text', by: 'lifelog', text: 'About #4242.', about: 1042, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
   ])
   assert.deepEqual(state().failed, [])
   assert.deepEqual(
@@ -459,14 +464,210 @@ test('run: a REPLY_TO a number that doesn\'t exist is sent without a quote, and 
   )
 })
 
-test('run: confirm mode sends the text and no reactions; can_message: false sends nothing', async t => {
+// The example config with `writes` naming one file of views/, the memory folder and a folder in
+// it, and a folder outside the agent's folder.
+const SPLIT_WRITES = '[agents/lifelog/views/books.csv, agents/lifelog/memory/, agents/lifelog/memory/people/, shared/]'
+
+test("run: writes naming a file, a folder in another entry and a folder outside the agent's folder: the repository keeps what is in the agent's folder, and the rest is left alone", async t => {
+  const { runner, clock, add, git, paths, sandbox, state } = await openWith(t, [], { yaml: exampleYaml().replace(/writes: \[.*\]/, `writes: ${SPLIT_WRITES}`) })
+  const agent = paths.agentDir('lifelog')
+  const shared = path.join(paths.dataDir, 'shared')
+  fs.mkdirSync(shared)
+  // The folder the file is in is there for it, and nothing else of views/ is the repository's.
+  assert.equal(fs.statSync(path.join(agent, 'views')).isDirectory(), true)
+
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'book ASK SHARED'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  // The stub filed its row in the one file it may, asked in memory/, and wrote outside.
+  assert.equal(git('log', '-1', '--format=%s', '--name-only'), 'lifelog: #1042\n\nmemory/needs-review.md\nviews/books.csv\n')
+  assert.deepEqual(sandbox.refused(), [])
+  assert.equal(fs.readFileSync(path.join(shared, 'shared.txt'), 'utf8'), 'from the agent\n')
+  assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.deepEqual(sandbox.runs[0].spec.files.writes.map(write => [path.relative(paths.dataDir, write.path), write.folder]), [
+    ['agents/lifelog/views/books.csv', false],
+    ['agents/lifelog/memory', true],
+    ['agents/lifelog/memory/people', true],
+    ['shared', true],
+    ['agents/lifelog/run/session', true],
+  ])
+
+  // A run that fails: what it changed in the agent's folder is thrown away, its file made a link
+  // among it, and what it wrote outside is left as it is.
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'more FILELINK SHARED CRASH'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
+  assert.equal(fs.lstatSync(path.join(agent, 'views', 'books.csv')).isFile(), true)
+  assert.equal(fs.readFileSync(path.join(agent, 'views', 'books.csv'), 'utf8'), 'seq,text\n1042,"#1042 21:20 text: \\"book ASK SHARED\\""\n')
+  assert.equal(fs.readFileSync(path.join(shared, 'shared.txt'), 'utf8'), 'from the agent\nfrom the agent\n')
+  assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(state().retry[0].seq, 1043)
+})
+
+test('run: a file writes names, made a link, removed, or given a second name, fails the run or is committed, and never stops the runner', async t => {
+  const { runner, clock, add, git, paths, state, sandbox } = await openWith(t, [], { yaml: exampleYaml().replace(/writes: \[.*\]/, `writes: ${SPLIT_WRITES}`) })
+  const books = path.join(paths.agentDir('lifelog'), 'views', 'books.csv')
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'first'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  const committed = fs.readFileSync(books, 'utf8')
+
+  // A link, and a second name, fail the run, and the clean-up puts the file back.
+  for (const [n, word, reason] of [
+    [1043, 'FILELINK', 'unexpected file views/books.csv'],
+    [1044, 'FILEHARD', 'unexpected file views/books.csv'],
+  ]) {
+    add(line.text(n, `2026-11-09T15:5${n - 1040}:00Z`, 'again'))
+    sandbox.behave({ words: [word] })
+    await clock.advance(MINUTE)
+    assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' }, word)
+    assert.equal(state().retry.find(entry => entry.seq === n).reason, reason, word)
+    assert.equal(fs.readFileSync(books, 'utf8'), committed, word)
+    assert.equal(fs.lstatSync(books).nlink, 1, word)
+    assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '', word)
+  }
+
+  // Removing it is a change like any other, and is committed.
+  add(line.text(1045, '2026-11-09T15:55:00Z', 'gone'))
+  sandbox.behave({ words: ['FILEGONE'] })
+  await clock.advance(MINUTE)
+  const removed = await runNext(runner, clock)
+  assert.deepEqual(removed.outcome, { ok: true, cause: null })
+  assert.equal(git('show', '--stat', '--format=%s', 'HEAD').split('\n')[0], 'lifelog: #1043 #1044 #1045')
+  assert.equal(fs.existsSync(books), false)
+  assert.equal(git('ls-files', 'views'), '')
+
+  // A file the run's writes name that isn't there, and isn't in the last commit, is no fault.
+  sandbox.behave(null)
+  add(line.text(1046, '2026-11-09T15:56:00Z', 'nothing IGNORE'))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+})
+
+test('run: writes naming memory as a file, which a run makes, and then memory/ as a folder, never stop the runner, which reads no memory through a file', async t => {
+  // memory as a file: what writes gives with the / of the default left out.
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/memory]'),
+  })
+  const { runner, clock, add, git, paths, state, sandbox, entries } = await startTestRunner(t, prepared)
+  const memory = path.join(paths.agentDir('lifelog'), 'memory')
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'remember FILEWRITE'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(fs.readFileSync(memory, 'utf8'), '1042\n')
+  assert.equal(git('ls-files', 'memory'), 'memory\n')
+
+  // The next run reads no memory file through it, and goes on.
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'coffee'))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.match(sandbox.seen().at(-1).systemPrompt, /## memory\/preferences\.md\n\n\(empty\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/)
+  assert.deepEqual(state().retry, [])
+  assert.equal(state().cursor, 1043)
+
+  // writes now names memory/ as a folder again, with memory a file in the last commit: the start
+  // leaves the file out and makes the folder, the runs go on, and the next commit records it.
+  runner.close()
+  writeConfig(paths.configDir, { yaml: exampleYaml() })
+  const restarted = await startTestRunner(t, prepared)
+  assert.equal(fs.lstatSync(memory).isDirectory(), true)
+  restarted.add(line.text(1044, '2026-11-09T15:52:00Z', 'tea MEMORY'))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runNext(restarted.runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(git('ls-files', 'memory'), 'memory/preferences.md\n')
+  assert.equal(git('show', '--format=%s', '--name-status', 'HEAD'), 'lifelog: #1044\n\nD\tmemory\nA\tmemory/preferences.md\nM\tviews/notes.csv\n')
+  assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(restarted.state().cursor, 1044)
+  assert.deepEqual(entries.filter(entry => entry.level === 'error'), [])
+})
+
+test('run: a file left on the way to what writes names, after writes changed, is passed over at the start and by every run, and logged', async t => {
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/]'),
+  })
+  const { runner, clock, add, git, paths } = await startTestRunner(t, prepared)
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // What a run of this writes may leave, and commit: a file in notes/.
+  fs.writeFileSync(path.join(notes, '2026'), 'a file\n')
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(git('ls-files', 'notes'), 'notes/2026\n')
+
+  // writes now names a file and a folder under notes/2026, which is that file.
+  runner.close()
+  writeConfig(paths.configDir, { yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/2026/books.csv, agents/lifelog/notes/2026/books/]') })
+  const restarted = await startTestRunner(t, prepared)
+  for (const [seq, text] of [[1043, 'tea'], [1044, 'cake CRASH']]) {
+    restarted.add(line.text(seq, `2026-11-09T15:5${seq - 1042}:00Z`, text))
+    await clock.advance(MINUTE)
+    await runNext(restarted.runner, clock)
+  }
+  assert.equal(restarted.state().cursor, 1044)
+  assert.equal(restarted.state().retry[0].seq, 1044)
+  assert.equal(fs.readFileSync(path.join(notes, '2026'), 'utf8'), 'a file\n')
+  // The start's clean-up, and the failed run's, each say which entries they passed over.
+  assert.deepEqual(
+    prepared.entries.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry),
+    ['notes/2026/books.csv', 'notes/2026/books', 'notes/2026/books.csv', 'notes/2026/books'],
+  )
+})
+
+test('run: a link left on the way to what writes names, by a run the runner never cleaned up after, is passed over at the start and by every run, and nothing is done where it leads', async t => {
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/]'),
+  })
+  const { runner, clock, paths } = await startTestRunner(t, prepared)
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // What a run of this writes may make in notes/, which the clean-up after the run would set
+  // aside, and a runner killed while pi runs leaves, as closing it here does: a link to nothing,
+  // one to a folder outside every entry, and one to the agents' folder.
+  runner.close()
+  const kept = path.join(paths.exchange, 'kept')
+  fs.mkdirSync(kept)
+  fs.writeFileSync(path.join(kept, 'a.txt'), "not the agent's\n")
+  fs.symlinkSync('nowhere', path.join(notes, '2026'))
+  fs.symlinkSync('../../../exchange', path.join(notes, 'shared'))
+  fs.symlinkSync('../..', path.join(notes, 'up'))
+
+  // writes now names entries behind each.
+  const blocked = ['notes/2026/q1/books.csv', 'notes/2026/books', 'notes/shared/kept', 'notes/up/made']
+  writeConfig(paths.configDir, { yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/2026/q1/books.csv, agents/lifelog/notes/2026/books/, agents/lifelog/notes/shared/kept/, agents/lifelog/notes/up/made/]') })
+  const restarted = await startTestRunner(t, prepared)
+  const outcomes = []
+  for (const [seq, text] of [[1042, 'tea'], [1043, 'cake CRASH']]) {
+    restarted.add(line.text(seq, `2026-11-09T15:5${seq - 1040}:00Z`, text))
+    await clock.advance(MINUTE)
+    outcomes.push((await runNext(restarted.runner, clock)).outcome)
+  }
+  // The run that passed committed what it wrote in views/; the one that failed counted an attempt.
+  assert.deepEqual(outcomes, [{ ok: true, cause: null }, { ok: false, cause: 'other' }])
+  assert.equal(restarted.git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+  assert.equal(restarted.state().cursor, 1043)
+  assert.equal(restarted.state().retry[0].seq, 1043)
+  // Where the links lead, nothing was set aside, removed or made, and the links are as they were.
+  assert.deepEqual(fs.readdirSync(kept), ['a.txt'])
+  assert.equal(fs.readFileSync(path.join(kept, 'a.txt'), 'utf8'), "not the agent's\n")
+  assert.equal(fs.existsSync(path.join(paths.agents, 'made')), false)
+  assert.deepEqual(fs.readdirSync(notes).sort(), ['2026', 'shared', 'up'])
+  // The start's clean-up, and the failed run's, each say which entries they passed over.
+  assert.deepEqual(prepared.entries.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry), [...blocked, ...blocked])
+  assert.deepEqual(prepared.entries.filter(entry => entry.level === 'error'), [])
+})
+
+test('run: confirm mode sends the text and no reactions; sends: [] sends nothing', async t => {
   const confirm = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY')], { yaml: exampleYaml().replace('reply_mode: quiet', 'reply_mode: confirm') })
   await runNext(confirm.runner, confirm.clock)
-  assert.deepEqual(confirm.outbox(), [{ type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042 }])
+  assert.deepEqual(confirm.outbox(), [{ type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042, channels: ['whatsapp'] }])
   assert.match(confirm.sandbox.runs[0].spec.argv.at(-1), /Reply mode: confirm\./)
 
   const silent = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY'), line.text(1043, '2026-11-09T15:50:01Z', 'tea ASK')], {
-    yaml: exampleYaml().replace('can_message: true', 'can_message: false'),
+    yaml: exampleYaml().replace('sends: [whatsapp]', 'sends: []'),
   })
   await runNext(silent.runner, silent.clock)
   assert.deepEqual(silent.outbox(), [])

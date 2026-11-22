@@ -26,7 +26,7 @@ const EXAMPLE = {
 
 // An agent's config, with only what these functions read.
 function agentWith({ scheduled = [], backfill = [] } = {}) {
-  return { name: 'lifelog', run: { newMessages: true, scheduled, backfill } }
+  return { name: 'lifelog', run: { newMessages: [{ channels: ['whatsapp'] }], scheduled, backfill } }
 }
 
 test('state: an example state, and the state of an agent that has never run, are well formed', () => {
@@ -164,8 +164,8 @@ test('state: at startup during a pause, scheduled tasks keep their dates, so one
 test('state: at startup, the first backfill not done starts from the live cursor, and one removed from the config is dropped', () => {
   const options = { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' }
   const entries = [
-    { id: 'people-1', skill: 'people', writes: ['views/people.csv'] },
-    { id: 'runs-1', skill: 'runs', writes: ['views/runs.csv'] },
+    { id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv'] },
+    { id: 'runs-1', skill: 'runs', writes: ['agents/lifelog/views/runs.csv'] },
   ]
   const fresh = { ...initialAgentState(), cursor: 1890, backfillDone: ['people-1'] }
   const started = startupState(fresh, agentWith({ backfill: entries }), options)

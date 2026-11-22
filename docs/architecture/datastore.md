@@ -2,7 +2,7 @@
 
 The datastore is Scooter's source of truth: every message in and out, appended and never changed. Everything else, the views, the memory, the sessions and the runner's state, is derived from it and can be rebuilt ([Why it is built this way](../ARCHITECTURE.md#why-it-is-built-this-way)). This document covers its layout, the format of a line, how lines are written, and how they are read back.
 
-The bridge is its one writer, through the store. Two read it: the runner, and pi through a read-only mount. It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
+The bridge is its one writer, through the store. Two read it: the runner, and pi, whose VM may read it and change none of it ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
 
 Who owns its folders, and their modes, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners).
 
@@ -98,7 +98,7 @@ A field it doesn't know is ignored, at the top level or in a file or `media`, an
 **A line this version knows** (`isKnown`) is one of its kinds and channels, with the fields its kind needs: a message its `text`, an edit its `target` and `text`, a deletion and a reaction their `target`. Any other line is kept in the index by its `seq`, and passed over, as the runner passes over a line that isn't work ([The index](#the-index)):
 
 - it is no message to edit, delete, react to or quote, and the store refuses a line that points at it as its target ([Writing](#writing));
-- the runner gives it to the agent neither as work nor as context, and its cursor goes past it ([When the agent runs](runner.md#when-the-agent-runs));
+- the runner gives it to the agent neither as work nor as context, and its cursor goes past it ([State](runner.md#state));
 - `scooter status` counts it neither as the newest message nor as one pending ([scooter status](bridge.md#scooter-status));
 - a text that replies to it goes to its channel, or to `DEFAULT_CHANNEL` when that channel is gone, unquoted, and a reaction to it is dropped ([Choosing the channel](delivery.md#choosing-the-channel)).
 

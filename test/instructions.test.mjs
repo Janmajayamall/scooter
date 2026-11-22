@@ -165,7 +165,7 @@ test('protocol: its example answer is read as it says', () => {
   const index = indexOf([...fillerLines(1049), ...lines])
   const reports = reportsOf(answer, [1050, 1051, 1052, 1053])
   assert.deepEqual([...reports.done], [1050, 1051, 1052])
-  const agent = { name: 'lifelog', canMessage: true, replyMode: 'quiet', ackReaction: '✅' }
+  const agent = { name: 'lifelog', sends: ['whatsapp'], replyMode: 'quiet', ackReaction: '✅' }
   const entries = answerEntries({ answer, agent, index, about: 1053, done: reports.done })
   assert.deepEqual(
     entries.map(entry => (entry.type === 'text' ? `text ${entry.replyTo}` : `react ${entry.target}`)),
@@ -207,8 +207,10 @@ test('protocol: what it says of each line is what the parser does', () => {
   said('a `NO_REPLY` line anywhere in the answer sends none of its text')
   const quiet = parseAnswer('Filed the coffee.\nNO_REPLY\nDONE: 1050')
   const index = indexOf([...fillerLines(1049), line.text(1050, '2026-11-09T15:43:00Z', 'coffee 150')])
-  const agent = { name: 'lifelog', canMessage: true, replyMode: 'quiet', ackReaction: '✅' }
-  assert.deepEqual(answerEntries({ answer: quiet, agent, index, about: 1050, done: new Set([1050]) }), [{ type: 'react', by: 'lifelog', target: 1050, emoji: '✅' }])
+  const agent = { name: 'lifelog', sends: ['whatsapp'], replyMode: 'quiet', ackReaction: '✅' }
+  assert.deepEqual(answerEntries({ answer: quiet, agent, index, about: 1050, done: new Set([1050]) }), [
+    { type: 'react', by: 'lifelog', target: 1050, emoji: '✅', channels: ['whatsapp'] },
+  ])
 
   // Instructions are read at the start of a line, in capitals with their colon, after trimming.
   said('each at the start of its own line: the word in capitals, then its colon')

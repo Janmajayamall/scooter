@@ -50,8 +50,10 @@ function route(entry, { channelMap = channels(), lines = LINES } = {}) {
   return [result.channel.name, result.quote?.id ?? null, result.text]
 }
 
-const text = fields => ({ type: 'text', by: 'lifelog', text: 'hello', ...fields })
-const react = target => ({ type: 'react', by: 'lifelog', target, emoji: '✅' })
+const text = fields => ({ type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'hello', ...fields })
+// A text of the runner's or the bridge's own, which carries no channels.
+const own = by => ({ type: 'text', by, text: 'hello' })
+const react = target => ({ type: 'react', by: 'lifelog', channels: ['whatsapp'], target, emoji: '✅' })
 
 test('routing: replyTo and about follow their line\'s channel; only replyTo quotes', () => {
   assert.deepEqual(route(text({ replyTo: 1 })), ['whatsapp', 'WA1', 'hello'])
@@ -75,7 +77,27 @@ test('routing: a line that doesn\'t exist, or a text with neither replyTo nor ab
   assert.deepEqual(route(text({ replyTo: 999 })), ['whatsapp', null, 'hello'])
   assert.deepEqual(route(text({ about: 999 })), ['whatsapp', null, 'hello'])
   // Notices, scheduled tasks, the backfill summary and the bridge's own messages have neither.
-  for (const by of ['runner', 'lifelog', 'bridge']) assert.deepEqual(route(text({ by })), ['whatsapp', null, 'hello'])
+  assert.deepEqual(route(text()), ['whatsapp', null, 'hello'])
+  for (const by of ['runner', 'bridge']) assert.deepEqual(route(own(by)), ['whatsapp', null, 'hello'])
+})
+
+test("routing: an agent's entry goes out only on a channel its sends names, whichever way the channel was chosen", () => {
+  const dropped = ['drop', "whatsapp isn't among the channels its agent sends on"]
+  const onEmail = entry => ({ ...entry, channels: ['email'] })
+  // A reply, a text about a message, a reply about an email, a text that replies to nothing, and
+  // one about a line that doesn't exist: each would go out on WhatsApp.
+  for (const fields of [{ replyTo: 1 }, { about: 1 }, { replyTo: 2 }, { about: 2 }, {}, { replyTo: 999 }]) {
+    assert.deepEqual(route(onEmail(text(fields))), dropped, JSON.stringify(fields))
+  }
+  // A reaction, and a reaction to an email, which becomes a text on DEFAULT_CHANNEL.
+  assert.deepEqual(route(onEmail(react(1))), dropped)
+  assert.deepEqual(route(onEmail(react(2))), dropped)
+  // What would be dropped anyway is dropped for that reason.
+  assert.deepEqual(route(onEmail(react(5))), ['drop', "not one of the owner's messages"])
+  // Among the channels sends names, it goes as it would.
+  assert.deepEqual(route({ ...text({ replyTo: 1 }), channels: ['email', 'whatsapp'] }), ['whatsapp', 'WA1', 'hello'])
+  // Scooter's own entries carry none, and go as they did.
+  for (const by of ['runner', 'bridge']) assert.deepEqual(route({ ...own(by), about: 1 }), ['whatsapp', null, 'hello'])
 })
 
 test('routing: a reaction goes to its target\'s channel, as a reaction to the message it is or changes', () => {

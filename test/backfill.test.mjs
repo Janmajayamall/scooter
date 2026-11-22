@@ -8,7 +8,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { backfillIntro, backfillSummary, countRows, mayChange, settleBackfill } from '../src/runner/backfill.mjs'
+import { backfillIntro, backfillSummary, countRows, settleBackfill } from '../src/runner/backfill.mjs'
 import { line, writeConfig } from './support/runner.mjs'
 import { MINUTE, SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
@@ -16,20 +16,21 @@ import { makeTestDir } from './support/tmp.mjs'
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
 
-function backfillYaml({ backfill = true, writes = '[views/people.csv]' } = {}) {
+function backfillYaml({ backfill = true, writes = '[agents/lifelog/views/people.csv]' } = {}) {
   return `agents:
   lifelog:
     model: anthropic/claude-sonnet-5.5
     prompt: prompts/lifelog.md
     skills: [skills/expenses, skills/people]
-    reads: [whatsapp, email]
+    writes: [agents/lifelog/views/, agents/lifelog/memory/]
+    sends: [whatsapp]
     session: daily
     reply_mode: quiet
     ack_reaction: "✅"
-    can_message: true
     timeout_minutes: 10
     run:
       - on: new-messages
+        channels: [whatsapp, email]
 ${backfill ? `      - backfill: people-1\n        skill: people\n        writes: ${writes}\n` : ''}`
 }
 
@@ -70,7 +71,10 @@ test('backfills: until is the live cursor when it starts, every message up to it
   const [first] = sandbox.seen()
   assert.deepEqual(first.items, [1, 3])
   const prompt = first.prompt.split('\n')
-  assert.equal(prompt[0], 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv.')
+  assert.equal(
+    prompt[0],
+    `Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only ${paths.dataDir}/agents/lifelog/views/people.csv.`,
+  )
   assert.equal(prompt[1], '[scooter] Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.')
   assert.match(first.prompt, /^#2 12:31 you sent: "Logged."$/m)
   // Its own session for the day, the backfill's skill alone, and the live system prompt.
@@ -102,7 +106,7 @@ test('backfills: until is the live cursor when it starts, every message up to it
   // Its summary, and it is done.
   assert.deepEqual((await runner.tick()).action, { kind: 'backfill-finished', id: 'people-1' })
   assert.equal(views('people.csv').split('\n').filter(Boolean).length, 4)
-  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: people.csv has 3 rows, 1 marked ❓. Skipped: #5.' }])
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: views/people.csv has 3 rows, 1 marked ❓. Skipped: #5.' }])
   assert.equal(state().backfill, undefined)
   assert.deepEqual(state().backfillDone, ['people-1'])
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
@@ -114,15 +118,15 @@ test('backfills: until is the live cursor when it starts, every message up to it
   await clock.advance(8 * SECOND)
   assert.deepEqual(await runner.tick(), { action: { kind: 'messages' }, outcome: { ok: true, cause: null } })
   assert.deepEqual(sandbox.seen()[2].items, [6])
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 6, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 6, emoji: '✅', channels: ['whatsapp'] }])
 })
 
-test('backfills: with can_message: false, the batches send nothing and the summary still goes, as the runner\'s own', async t => {
-  const { runner, outbox } = await openBackfill(t, { words: { 4: 'SAY' }, yaml: backfillYaml().replace('can_message: true', 'can_message: false') })
+test('backfills: with sends: [], the batches send nothing and the summary still goes, as the runner\'s own', async t => {
+  const { runner, outbox } = await openBackfill(t, { words: { 4: 'SAY' }, yaml: backfillYaml().replace('sends: [whatsapp]', 'sends: []') })
   for (const kind of ['backfill', 'backfill']) assert.equal((await runner.tick()).action.kind, kind)
   assert.deepEqual(outbox(), [])
   assert.deepEqual((await runner.tick()).action, { kind: 'backfill-finished', id: 'people-1' })
-  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: people.csv has 4 rows, none marked ❓.' }])
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: views/people.csv has 4 rows, none marked ❓.' }])
 })
 
 test('backfills: its batches run only when nothing live is waiting, and a message that arrives during one is handled right after it', async t => {
@@ -147,67 +151,32 @@ test('backfills: its batches run only when nothing live is waiting, and a messag
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'quiet' })
   await clock.advance(8 * SECOND)
   assert.deepEqual((await runner.tick()).action, { kind: 'messages' })
-  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 7, emoji: '✅' }])
+  assert.deepEqual(outbox(), [{ type: 'react', by: 'lifelog', target: 7, emoji: '✅', channels: ['whatsapp'] }])
   assert.deepEqual((await runner.tick()).action, { kind: 'backfill', id: 'people-1' })
   assert.deepEqual(itemsSeen(sandbox), [[6], [1, 3], [7], [4, 5]])
   // The backfill's `until` stayed where it was: #6 and #7 were the live runs'.
   assert.deepEqual(state().backfill.until, 5)
 })
 
-test('backfills: a batch that changes anything outside its writes fails, is thrown away, and its items are skipped after 4 attempts', async t => {
-  const { runner, clock, state, outbox, git, views, paths, events } = await openBackfill(t, { words: { 3: 'OUTSIDE' } })
-  const failed = { ok: false, cause: 'other' }
-  assert.deepEqual((await runner.tick()).outcome, failed)
-  const reason = 'changed views/notes.csv, which the backfill may not change'
-  assert.deepEqual(state().backfill, {
-    id: 'people-1',
-    until: 5,
-    cursor: 3,
-    retry: [
-      { seq: 1, attempts: 1, due: '2026-11-09T15:51:30Z', reason },
-      { seq: 3, attempts: 1, due: '2026-11-09T15:51:30Z', reason },
-    ],
-    skipped: [],
-  })
-  // Thrown away: neither its view nor the one outside, and no commit.
-  assert.deepEqual(fs.readdirSync(paths.agentViews('lifelog')), [])
-  assert.equal(git('status', '--porcelain'), '')
-  assert.equal(git('log', '-1', '--format=%s'), 'lifelog: initial commit\n')
-  assert.ok(events().includes('runner.run_failed'))
-  // Silent, and the live runs' row of failures is untouched.
-  assert.deepEqual(outbox(), [])
-  assert.deepEqual(state().lastRun, LAST_RUN)
-  assert.equal(state().paused, undefined)
-
-  // Not before its time: Sunday's batch goes meanwhile.
+test("backfills: a batch's VM may change only the backfill's writes: a write anywhere else is refused, and the batch goes on", async t => {
+  const { runner, state, git, views, paths, sandbox } = await openBackfill(t, { words: { 1: 'MEMORY', 3: 'OUTSIDE' } })
   assert.deepEqual(await runner.tick(), { action: { kind: 'backfill', id: 'people-1' }, outcome: { ok: true, cause: null } })
-  assert.deepEqual(state().backfill.cursor, 5)
-  for (const attempts of [2, 3]) {
-    await clock.advance(MINUTE)
-    assert.deepEqual((await runner.tick()).outcome, failed)
-    assert.deepEqual(state().backfill.retry.map(entry => [entry.seq, entry.attempts]), [
-      [1, attempts],
-      [3, attempts],
-    ])
-  }
-  await clock.advance(MINUTE)
-  assert.deepEqual((await runner.tick()).outcome, failed)
-  assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 5, retry: [], skipped: [1, 3] })
-  assert.deepEqual(outbox(), [])
-
-  assert.deepEqual((await runner.tick()).action, { kind: 'backfill-finished', id: 'people-1' })
-  assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: 'Backfill people-1 finished: people.csv has 2 rows, none marked ❓. Skipped: #1, #3.' }])
-  assert.equal(views('people.csv'), 'seq,text\n4,"#4 09:30 text: \\"coffee 120\\""\n5,"#5 19:30 text: \\"dinner with sam and ana\\""\n')
-})
-
-test('backfills: a change to memory/ fails the batch too', async t => {
-  const { runner, state, paths } = await openBackfill(t, { words: { 1: 'MEMORY' } })
-  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
-  assert.deepEqual(state().backfill.retry.map(entry => entry.reason), [
-    'changed memory/preferences.md, which the backfill may not change',
-    'changed memory/preferences.md, which the backfill may not change',
+  // The sandbox was given the backfill's writes in place of the agent's, and shows the agent's.
+  const agent = paths.agentDir('lifelog')
+  const { files } = sandbox.runs[0].spec
+  assert.deepEqual(files.writes, [
+    { path: path.join(agent, 'views', 'people.csv'), folder: false },
+    { path: paths.agentRunSession('lifelog'), folder: true },
   ])
+  for (const folder of ['views', 'memory']) assert.ok(files.reads.includes(path.join(agent, folder)), folder)
+  // The VM refuses the writes anywhere else, which the stub stands for: the view outside them,
+  // and the memory.
+  assert.deepEqual(sandbox.refused(), [path.join(agent, 'views', 'notes.csv'), path.join(agent, 'memory', 'preferences.md')])
+  assert.equal(git('log', '-1', '--format=%s', '--name-only'), 'lifelog: backfill people-1 #1-#3\n\nviews/people.csv\n')
+  assert.deepEqual(fs.readdirSync(path.join(agent, 'views')), ['people.csv'])
   assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.equal(views('people.csv').split('\n').filter(Boolean).length, 3)
+  assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 3, retry: [], skipped: [] })
 })
 
 test('backfills: its progress survives a restart, and removing its entry drops it', async t => {
@@ -273,16 +242,14 @@ test('backfills: a setup error pauses every run without a notice, and the items 
 // ---------------------------------------------------------------------------------------------
 // The parts
 
-test('backfill: the prompt line, and what a batch may change', () => {
-  const entry = { id: 'people-1', skill: 'people', writes: ['views/people.csv', 'views/people/'] }
+test('backfill: the prompt line names what a batch may change, as the VM has it', () => {
+  const paths = makePaths({ dataDir: '/data', configDir: '/config' })
+  const entry = { id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] }
   assert.equal(
-    backfillIntro(entry),
-    'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv and views/people/.',
+    backfillIntro(entry, paths),
+    'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only /data/agents/lifelog/views/people.csv and /data/agents/lifelog/views/people/.',
   )
-  assert.equal(backfillIntro({ ...entry, writes: ['views/people.csv'] }).endsWith(' Change only views/people.csv.'), true)
-  // Only what `writes` names: a file it names, and anything in a folder it names.
-  for (const file of ['views/people.csv', 'views/people/2026.csv', 'views/people/a/b.md']) assert.equal(mayChange(file, entry.writes), true, file)
-  for (const file of ['views/people.csv.bak', 'views/peoples.csv', 'views/expenses.csv', 'views/trips/2026/goa.md', 'memory/preferences.md', 'views/people']) assert.equal(mayChange(file, entry.writes), false, file)
+  assert.equal(backfillIntro({ ...entry, writes: ['agents/lifelog/views/people.csv'] }, paths).endsWith(' Change only /data/agents/lifelog/views/people.csv.'), true)
 })
 
 test("backfill: counting a CSV's rows, and those marked ❓", () => {
@@ -296,7 +263,7 @@ test("backfill: counting a CSV's rows, and those marked ❓", () => {
 
 test("backfill: the summary counts each CSV in writes, a folder's included, and lists what was skipped", t => {
   const paths = makePaths({ dataDir: makeTestDir(t), configDir: '/config' })
-  const views = paths.agentViews('lifelog')
+  const views = path.join(paths.agentDir('lifelog'), 'views')
   fs.mkdirSync(path.join(views, 'people', 'b'), { recursive: true })
   fs.writeFileSync(path.join(views, 'people.csv'), 'a,b\n1,2\n')
   fs.writeFileSync(path.join(views, 'people', 'b', '2026.csv'), 'a,b\n1,❓\n2,3\n')
@@ -304,9 +271,30 @@ test("backfill: the summary counts each CSV in writes, a folder's included, and 
   fs.symlinkSync('/etc/hostname', path.join(views, 'people', 'link.csv'))
   const agent = { name: 'lifelog' }
   const summary = writes => backfillSummary({ paths, agent, entry: { id: 'people-1', skill: 'people', writes }, skipped: [1207, 1031] })
-  assert.equal(summary(['views/people.csv']), 'Backfill people-1 finished: people.csv has 1 row, none marked ❓. Skipped: #1031, #1207.')
-  assert.equal(summary(['views/people/', 'views/missing.csv', 'views/none/', 'views/notes.md']), "Backfill people-1 finished: people/b/2026.csv has 2 rows, 1 marked ❓; missing.csv isn't there; none/ holds no CSV file. Skipped: #1031, #1207.")
-  assert.equal(backfillSummary({ paths, agent, entry: { id: 'notes-1', skill: 'notes', writes: ['views/notes.md'] }, skipped: [] }), 'Backfill notes-1 finished.')
+  assert.equal(summary(['agents/lifelog/views/people.csv']), 'Backfill people-1 finished: views/people.csv has 1 row, none marked ❓. Skipped: #1031, #1207.')
+  assert.equal(
+    summary(['agents/lifelog/views/people/', 'agents/lifelog/views/missing.csv', 'agents/lifelog/views/none/', 'agents/lifelog/views/notes.md']),
+    "Backfill people-1 finished: views/people/b/2026.csv has 2 rows, 1 marked ❓; views/missing.csv isn't there; views/none/ holds no CSV file. Skipped: #1031, #1207.",
+  )
+  assert.equal(backfillSummary({ paths, agent, entry: { id: 'notes-1', skill: 'notes', writes: ['agents/lifelog/views/notes.md'] }, skipped: [] }), 'Backfill notes-1 finished.')
+  // A path of writes outside the agent's folder is never read, so nothing there is counted.
+  fs.mkdirSync(path.join(paths.dataDir, 'shared'), { recursive: true })
+  fs.writeFileSync(path.join(paths.dataDir, 'shared', 'people.csv'), 'a,b\n1,2\n')
+  assert.equal(summary(['shared/people.csv', 'shared/']), 'Backfill people-1 finished. Skipped: #1031, #1207.')
+})
+
+test('backfill: the summary reads nothing through a link a run left on the way to its writes, and takes what is behind it as not there', t => {
+  const paths = makePaths({ dataDir: makeTestDir(t), configDir: '/config' })
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // Where the link leads, outside every entry: CSV files with the names the backfill's writes give.
+  const outside = path.join(paths.dataDir, 'elsewhere')
+  fs.mkdirSync(path.join(outside, 'books'), { recursive: true })
+  fs.writeFileSync(path.join(outside, 'books.csv'), 'a\n1\n')
+  fs.writeFileSync(path.join(outside, 'books', 'x.csv'), 'a\n1\n2\n')
+  fs.mkdirSync(notes, { recursive: true })
+  fs.symlinkSync(outside, path.join(notes, '2026'))
+  const summary = backfillSummary({ paths, agent: { name: 'lifelog' }, entry: { id: 'books-1', skill: 'books', writes: ['agents/lifelog/notes/2026/books.csv', 'agents/lifelog/notes/2026/books/'] }, skipped: [] })
+  assert.equal(summary, "Backfill books-1 finished: notes/2026/books.csv isn't there; notes/2026/books/ holds no CSV file.")
 })
 
 test("backfill: a batch's outcome settles the backfill's lane, as a live batch's settles the live one", () => {

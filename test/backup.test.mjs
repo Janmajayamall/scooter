@@ -77,7 +77,7 @@ function fillDataFolder(paths) {
   const files = {
     [path.join(paths.datastore, '2026/11/09/log.jsonl')]: '{"seq":1,"text":"PLAINTEXT-RECEIPT-MARKER"}\n',
     [path.join(paths.datastore, '2026/11/09/1.jpg')]: 'jpeg bytes',
-    [path.join(paths.agentViews('lifelog'), 'expenses.csv')]: 'date,amount\n2026-11-09,450\n',
+    [path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv')]: 'date,amount\n2026-11-09,450\n',
     [path.join(paths.agentState('lifelog'))]: '{"cursor":1}\n',
     [path.join(paths.wacliStore, 'wacli.db')]: 'the WhatsApp session',
     [path.join(paths.wacliCache, 'thumbnail')]: 'a cache',
@@ -1202,8 +1202,8 @@ test('backups: as root, a restore gives each file its owner by name, on a machin
   const paths = makePaths(settings)
   fillDataFolder(paths)
   fs.chownSync(paths.agents, before.uid, before.gid)
-  fs.chownSync(paths.agentViews('lifelog'), before.uid, before.gid)
-  fs.chownSync(path.join(paths.agentViews('lifelog'), 'expenses.csv'), before.uid, before.gid)
+  fs.chownSync(path.join(paths.agentDir('lifelog'), 'views'), before.uid, before.gid)
+  fs.chownSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv'), before.uid, before.gid)
   const context = { settings, clock, log, proc, stdout: { write: () => {} }, stderr: { write: () => {} } }
   assert.equal(await runBackupInit({ ...context, args: [] }), 0)
   await backUp({ settings, paths, proc, log, clock })
@@ -1214,7 +1214,7 @@ test('backups: as root, a restore gives each file its owner by name, on a machin
   const after = await proc.lookupUser(name)
   assert.equal(await runRestore({ ...context, args: [] }), 0)
   const back = makePaths({ dataDir: path.join(settings.backup.restoreTarget, paths.dataDir), configDir: '/' })
-  for (const file of [back.agents, back.agentViews('lifelog'), path.join(back.agentViews('lifelog'), 'expenses.csv')]) {
+  for (const file of [back.agents, path.join(back.agentDir('lifelog'), 'views'), path.join(path.join(back.agentDir('lifelog'), 'views'), 'expenses.csv')]) {
     assert.equal(fs.statSync(file).uid, after.uid, file)
   }
   assert.equal(fs.statSync(back.datastore).uid, 0)

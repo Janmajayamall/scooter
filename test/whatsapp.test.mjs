@@ -1016,9 +1016,9 @@ test('whatsapp: every text goes out with --no-preview, a reply with --reply-to t
   const long = ['a'.repeat(3490), 'see https://example.com/x'].join('\n\n')
   await deliver(
     context,
-    { type: 'text', by: 'lifelog', text: 'Work or personal? https://example.com/receipt', replyTo: 1 },
-    { type: 'react', by: 'lifelog', target: 2, emoji: '✅' },
-    { type: 'text', by: 'lifelog', text: long, about: 2 },
+    { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Work or personal? https://example.com/receipt', replyTo: 1 },
+    { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 2, emoji: '✅' },
+    { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: long, about: 2 },
   )
 
   const sends = stub.calls().filter(call => call.command.startsWith('send '))
@@ -1052,7 +1052,7 @@ test('whatsapp: sends go to the chat the owner last wrote from', async t => {
   await synced()
   await caughtUp()
   await post(context, webhookPayload({ ID: 'L1', Chat: LID, SenderJID: LID, Text: 'from my lid' }))
-  await deliver(context, { type: 'text', by: 'runner', text: 'a notice' }, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
+  await deliver(context, { type: 'text', by: 'runner', text: 'a notice' }, { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' })
   const sends = stub.calls().filter(call => call.command.startsWith('send '))
   assert.deepEqual(
     sends.map(call => [call.args[call.args.indexOf('--to') + 1], call.args.includes('--sender') ? call.args[call.args.indexOf('--sender') + 1] : null]),
@@ -1110,7 +1110,7 @@ test('whatsapp: every wacli call gets only wacli\'s environment, and no secret b
   await synced()
   await caughtUp()
   await post(context, webhookPayload({ ID: 'P1', Media: { Type: 'image', Caption: '', Filename: '', MimeType: 'image/jpeg', FileLength: 5 } }))
-  await deliver(context, { type: 'text', by: 'lifelog', text: 'a photo of what?', replyTo: 1 }, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' })
+  await deliver(context, { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'a photo of what?', replyTo: 1 }, { type: 'react', by: 'lifelog', channels: ['whatsapp'], target: 1, emoji: '✅' })
 
   const calls = stub.calls()
   assert.deepEqual([...new Set(calls.map(call => call.command))].sort(), ['auth status', 'media download', 'messages list', 'send react', 'send text', 'sync'])

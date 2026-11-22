@@ -1,5 +1,5 @@
 // The real sandbox: a Gondolin VM for each run,
-// booted from the built image, with the mounts, the environment, the network and the limits of
+// booted from the built image, with what it sees and may change, the environment, the network and the limits of
 // `src/runner/sandbox/gondolin.mjs`. And the milestone's end to end: one batch through the real
 // sandbox, with the scripted fake model in place of OpenRouter.
 //
@@ -21,7 +21,7 @@ import { systemClock } from '../src/common/time.mjs'
 import { openRunner } from '../src/runner/main.mjs'
 import { rebuildAgent } from '../src/runner/rebuild.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
-import { piMounts } from '../src/runner/run.mjs'
+import { piFiles } from '../src/runner/run.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
 import { FUSE_MOUNT, bootCheck, gondolinFolders, machineType } from '../src/runner/sandbox/gondolin.mjs'
 import { GUEST_HOME, GUEST_PATH } from '../src/runner/sandbox/index.mjs'
@@ -71,13 +71,16 @@ function prepare(t, settings = {}) {
   return { root, paths, settings: config, log, entries, clock: systemClock }
 }
 
-// A spec for a command, with a run's mounts and the environment of `env`.
-function specOf(paths, argv, { env = {}, timeoutMs = 120_000, cwd = paths.agentDir('lifelog'), mounts = piMounts(paths, 'lifelog') } = {}) {
+// The agent of the example config, as far as what its VM sees and may change goes.
+const AGENT = { name: 'lifelog', reads: ['datastore/', 'agents/lifelog/'], writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'] }
+
+// A spec for a command, with what a run's VM sees and may change, and the environment of `env`.
+function specOf(paths, argv, { env = {}, timeoutMs = 120_000, cwd = paths.agentDir('lifelog'), files = piFiles(paths, AGENT) } = {}) {
   return {
     argv,
     cwd,
     env: { PATH: GUEST_PATH, HOME: GUEST_HOME, LANG: 'C.UTF-8', TZ: 'Asia/Kolkata', ...env },
-    mounts,
+    files,
     timeoutMs,
     policy: { model: 'anthropic/claude-sonnet-5.5', internet: false, zdr: true, secrets: { OPENROUTER_API_KEY: { hosts: ['openrouter.ai'], value: KEY } } },
   }
@@ -175,7 +178,7 @@ test("sandbox: doctor's boot check, stopped during the boot, closes its VM and r
   assert.deepEqual(scratch(long), [])
 })
 
-test("sandbox: the mounts: at the host's paths, read-only but for views, memory and run/session, with sessions/ not there, even through a link", options, async t => {
+test("sandbox: what a run's VM sees, at the host's paths, may be changed only where writes names and in run/session, with sessions/ not there, even through a link", options, async t => {
   const prepared = prepare(t)
   const { paths } = prepared
   const sandbox = await openTestSandbox(t, prepared)
@@ -236,6 +239,69 @@ test("sandbox: the mounts: at the host's paths, read-only but for views, memory 
   assert.ok(fs.existsSync(path.join(agent, 'run', 'session', 's.jsonl')))
   assert.deepEqual(fs.readdirSync(path.join(agent, 'sessions')), ['lifelog-2026-11-08.jsonl'])
   assert.equal(fs.readFileSync(path.join(agent, 'state.json'), 'utf8'), '{}\n')
+})
+
+test("sandbox: writes that name one file, a folder in another entry, and a path outside the agent's folder, each as the VM may change it; and a backfill's narrower writes", options, async t => {
+  const prepared = prepare(t)
+  const { paths } = prepared
+  const sandbox = await openTestSandbox(t, prepared)
+  const agent = paths.agentDir('lifelog')
+  fs.mkdirSync(path.join(paths.dataDir, 'notes'), { recursive: true })
+  fs.writeFileSync(path.join(paths.dataDir, 'notes', 'todo.md'), '- one\n')
+  fs.writeFileSync(path.join(agent, 'memory', 'preferences.md'), '- rule\n')
+  const try_ = 'try() { if "$@" 2>/dev/null; then echo "$*: ok"; else echo "$*: refused"; fi; }'
+  const outcomes = async (files, commands) => {
+    const result = await sandbox.run(sh(paths, `${try_}\n${commands.map(command => `try ${command}`).join('\n')}`, { files }))
+    assert.equal(result.code, 0, result.stderr)
+    return Object.fromEntries(result.stdout.trim().split('\n').map(line => line.split(': ').reverse()).map(([answer, ...command]) => [command.reverse().join(': '), answer]))
+  }
+
+  // reads names only the datastore; writes a file of views/, the memory folder, a folder in it,
+  // and a file outside the agent's folder.
+  const writes = ['agents/lifelog/views/books.csv', 'agents/lifelog/memory/', 'agents/lifelog/memory/people/', 'notes/todo.md']
+  const files = piFiles(paths, { name: 'lifelog', reads: ['datastore/'], writes })
+  const answers = await outcomes(files, [
+    `touch ${agent}/views/books.csv`,
+    `touch ${agent}/views/expenses.csv`,
+    `ls ${agent}/views/expenses.csv`,
+    `mkdir ${agent}/views/books.csv.d`,
+    `mkdir ${agent}/memory/people`,
+    `touch ${agent}/memory/people/sam.md`,
+    `sh -c 'echo x >> ${agent}/memory/preferences.md'`,
+    `sh -c 'echo x >> ${paths.dataDir}/notes/todo.md'`,
+    `touch ${paths.dataDir}/notes/other.md`,
+    `test -s ${agent}/state.json`,
+    `test -d ${agent}/run/session`,
+    `touch ${agent}/run/session/s.jsonl`,
+  ])
+  assert.deepEqual(answers, {
+    [`touch ${agent}/views/books.csv`]: 'ok',
+    [`touch ${agent}/views/expenses.csv`]: 'refused',
+    [`ls ${agent}/views/expenses.csv`]: 'refused',
+    [`mkdir ${agent}/views/books.csv.d`]: 'refused',
+    [`mkdir ${agent}/memory/people`]: 'ok',
+    [`touch ${agent}/memory/people/sam.md`]: 'ok',
+    [`sh -c echo x >> ${agent}/memory/preferences.md`]: 'ok',
+    [`sh -c echo x >> ${paths.dataDir}/notes/todo.md`]: 'ok',
+    [`touch ${paths.dataDir}/notes/other.md`]: 'refused',
+    // The agent's folder isn't in reads, but for what writes names and run/.
+    [`test -s ${agent}/state.json`]: 'refused',
+    [`test -d ${agent}/run/session`]: 'ok',
+    [`touch ${agent}/run/session/s.jsonl`]: 'ok',
+  })
+  assert.equal(fs.readFileSync(path.join(paths.dataDir, 'notes', 'todo.md'), 'utf8'), '- one\nx\n')
+  assert.equal(fs.existsSync(path.join(agent, 'views', 'expenses.csv')), true)
+
+  // A backfill's batch: the agent's writes are seen, and only the backfill's changed.
+  const narrow = piFiles(paths, AGENT, ['agents/lifelog/views/people.csv'])
+  const backfill = await outcomes(narrow, [`touch ${agent}/views/people.csv`, `sh -c 'echo x >> ${agent}/views/expenses.csv'`, `test -s ${agent}/views/expenses.csv`, `touch ${agent}/memory/new.md`])
+  assert.deepEqual(backfill, {
+    [`touch ${agent}/views/people.csv`]: 'ok',
+    [`sh -c echo x >> ${agent}/views/expenses.csv`]: 'refused',
+    [`test -s ${agent}/views/expenses.csv`]: 'ok',
+    [`touch ${agent}/memory/new.md`]: 'refused',
+  })
+  assert.equal(fs.readFileSync(path.join(agent, 'views', 'expenses.csv'), 'utf8'), 'date,amount\n')
 })
 
 test('sandbox: nothing survives between runs, neither files outside the mounts nor background processes', options, async t => {
@@ -412,7 +478,7 @@ test('sandbox: a run that writes more, or makes more names, than a run may is st
   const { paths } = prepared
   const sandbox = await openTestSandbox(t, prepared)
   t.after(overrideLimits({ RUN_WRITE_MAX_BYTES: 1024 * 1024, RUN_NAMES_MAX_COUNT: 40 }))
-  const views = paths.agentViews('lifelog')
+  const views = path.join(paths.agentDir('lifelog'), 'views')
   const memory = paths.agentMemory('lifelog')
 
   // Within both, nothing is stopped.
@@ -546,14 +612,14 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   }
   assert.deepEqual(outcome, { ok: true, cause: null })
 
-  // pi read the message's line in the datastore, through its read-only mount: the tool's result,
+  // pi read the message's line in the datastore, which its VM sees read-only: the tool's result,
   // which the model got with the next request, holds what only the file has, its WhatsApp ID.
   const [first, second] = model.modelRequests
   assert.match(JSON.stringify(first.body), /New messages:\\n#1 [^"]* text: \\"coffee 150 at Blue Tokai\\"/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000001/)
   assert.doesNotMatch(JSON.stringify(first.body), /3EB0E2E0000000000001/)
   // The view, committed by Scooter with the batch's number.
-  assert.equal(fs.readFileSync(path.join(paths.agentViews('lifelog'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-09,21:20,Blue Tokai,150,INR,#1\n')
+  assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-09,21:20,Blue Tokai,150,INR,#1\n')
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
   assert.equal(await git('log', '-1', '--format=%an%n%s'), 'Scooter\nlifelog: #1\n')
   assert.equal(await git('status', '--porcelain'), '')
@@ -564,7 +630,7 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
   // Under emulation the runner's first start also told the owner its VMs fell back to it.
   const notices = runner.sandbox.accel === 'emulation' ? [{ type: 'text', by: 'runner', text: EMULATION_NOTICE }] : []
-  assert.deepEqual(outbox, [...notices, { type: 'react', by: 'lifelog', target: 1, emoji: '✅' }])
+  assert.deepEqual(outbox, [...notices, { type: 'react', by: 'lifelog', target: 1, emoji: '✅', channels: ['whatsapp'] }])
   assert.equal(fs.readdirSync(paths.agentSessions('lifelog')).length, 1)
   // The VM is closed, and the request went to the fake model with the placeholder, not the key.
   assert.ok(entries.some(entry => entry.event === 'sandbox.vm_closed'))
@@ -643,7 +709,7 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   assert.equal(await git('log', '-1', '--format=%s', '--name-only'), 'lifelog: #1\n\nviews/expenses.csv\n')
   assert.equal(await git('status', '--porcelain'), '')
   const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
-  assert.deepEqual(outbox.filter(entry => entry.by === 'lifelog'), [{ type: 'react', by: 'lifelog', target: 1, emoji: '✅' }])
+  assert.deepEqual(outbox.filter(entry => entry.by === 'lifelog'), [{ type: 'react', by: 'lifelog', target: 1, emoji: '✅', channels: ['whatsapp'] }])
 })
 
 test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
@@ -671,7 +737,7 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   assert.deepEqual({ ...result, tag: undefined }, { stopped: false, tag: undefined, until: 1, cursor: 1, batches: 1, failed: [] })
   assert.match(result.tag, /^before-rebuild-\d{8}T\d{6}Z$/)
 
-  // The prompt has the message's own time, and pi read its line through the read-only mount.
+  // The prompt has the message's own time, and pi read its line, which its VM sees read-only.
   const [first, second] = model.modelRequests
   assert.match(JSON.stringify(first.body), /\[scooter\] Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
   assert.match(JSON.stringify(first.body), /New messages:\\n#1 10:30 text: \\"coffee 120 at Blue Tokai\\"/)
@@ -680,7 +746,7 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
   assert.equal(await git('log', '--format=%s'), 'lifelog: rebuild\nlifelog: initial commit\n')
   assert.equal(await git('rev-parse', 'HEAD^'), await git('rev-parse', result.tag))
-  assert.equal(fs.readFileSync(path.join(paths.agentViews('lifelog'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n')
+  assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n')
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
   assert.ok(!fs.existsSync(paths.outbox) || fs.readdirSync(paths.outbox).length === 0)
   const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))

@@ -53,7 +53,7 @@ const STATUS = {
   zdr: true,
   internet: false,
   imageBuiltAt: '2026-11-08T12:31:40Z',
-  agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, reads: ['whatsapp'] } },
+  agents: { lifelog: { model: 'anthropic/claude-sonnet-5.5', timeoutMinutes: 10, channels: ['whatsapp'] } },
 }
 
 const STATE = {
@@ -342,7 +342,7 @@ test('status: a line this version doesn\'t know is read, and is neither the newe
   fs.writeFileSync(paths.dayLog('2026/11/09'), lines.map(entry => `${JSON.stringify(entry)}\n`).join(''))
   const index = readIndex(paths)
   assert.equal(index.lastSeq, 8)
-  write(paths.runnerStatus, { ...STATUS, agents: { lifelog: { ...STATUS.agents.lifelog, reads: ['whatsapp', 'email'] } } })
+  write(paths.runnerStatus, { ...STATUS, agents: { lifelog: { ...STATUS.agents.lifelog, channels: ['whatsapp', 'email'] } } })
   const { backfill, ...state } = STATE
   write(paths.agentState('lifelog'), { ...state, cursor: 1, retry: [], failed: [] })
   const text = statusText({ now: NOW, settings: { timeZone: 'Asia/Kolkata' }, paths, index })

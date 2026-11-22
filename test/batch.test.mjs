@@ -11,7 +11,7 @@ import { cutText, renderBatchPrompt } from '../src/runner/prompt.mjs'
 import { EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, fillerLines, indexOf, line } from './support/runner.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', reads: ['whatsapp', 'email'], replyMode: 'quiet', run: { newMessages: true, scheduled: [], backfill: [] } }
+const AGENT = { name: 'lifelog', channels: ['whatsapp', 'email'], replyMode: 'quiet', run: { newMessages: [{ channels: ['whatsapp', 'email'] }], scheduled: [], backfill: [] } }
 const HEADER = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
 Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).`
 
@@ -64,7 +64,7 @@ test('batch: at most 20 items, retries first, and the cursor stops before the fi
     else lines.push(line.text(seq, '2026-11-09T15:00:00Z', `item ${seq}`))
   }
   const retry = [3, 1, 2].map(seq => ({ seq, attempts: 2, due: '2026-11-09T15:00:00Z', reason: 'not reported' }))
-  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, reads: ['whatsapp'] } })
+  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, channels: ['whatsapp'] } })
   assert.equal(batch.items.length, limits.BATCH_MAX_ITEMS)
   assert.deepEqual(seqsOf(batch).slice(0, 3), [1, 2, 3])
   assert.deepEqual(batch.items.slice(0, 3).map(item => [item.origin, item.attempt]), [['retry', 3], ['retry', 3], ['retry', 3]])

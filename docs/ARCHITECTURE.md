@@ -15,7 +15,7 @@ The principles, which hold everywhere:
 1. **The datastore is the source of truth.** Every message in and out is appended to it and never changed. Everything else is derived from it and can be rebuilt.
 2. **Only Scooter's own code talks to the outside world.** The bridge holds the WhatsApp session, the mailbox and the backup credentials; the runner holds the OpenRouter key. The agent reaches nothing directly: everything it sends goes through the runner, which checks and logs it.
 3. **The model does the judgment; code does the bookkeeping.** The runner decides what the agent works on, tracks progress, retries and commits. The agent reads messages, updates files and reports what it handled. So progress never depends on the model remembering anything.
-4. **The agent is sandboxed.** pi runs in a fresh virtual machine for every batch, with no secrets, and can write only its own views, memory and session. It can reach OpenRouter and nothing else, unless the owner turns its internet access on. The runner checks and logs every request, and nothing pi does survives the VM.
+4. **The agent is sandboxed.** pi runs in a fresh virtual machine for every batch, with no secrets, and can write only what the owner's `writes` names, by default its own views and memory, and its session. It can reach OpenRouter and nothing else, unless the owner turns its internet access on. The runner checks and logs every request, and nothing pi does survives the VM.
 5. **The configuration belongs to the owner.** The agent can't change its config, prompt or skills.
 6. **Quiet by default.** The bot speaks when it has a question or is asked something. Otherwise it reacts ✅.
 
@@ -41,7 +41,7 @@ The principles, which hold everywhere:
                                                            │ └──────────────┬───────────────┘ │
                                                            └────────────────┼─────────────────┘
                                                                             ▼
-                                                                views and memory, in git
+                                                                the agent's files, in git
 ```
 
 1. The owner sends a receipt photo to the bot. wacli, a linked device of the bot's number, receives it and posts a signed webhook to the bridge on loopback ([The webhook](architecture/whatsapp.md#the-webhook)).
@@ -70,7 +70,7 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | The runner | [runner.md](architecture/runner.md) | `src/runner/main.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
 | A run, and the agent's folder | [run.md](architecture/run.md) | `src/runner/run.mjs`, `src/runner/answer.mjs`, `src/runner/failures.mjs`, `src/runner/agentdir.mjs`, `src/runner/git.mjs` |
 | Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
-| The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
+| The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/view.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
 | The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
 | The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
 | Configuration and the CLI | [configuration.md](architecture/configuration.md) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
@@ -88,7 +88,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 | Scooter's own code | The bridge and the runner | Holds the secrets. The bridge's process loads no third-party library; the runner's loads `yaml` and Gondolin |
 | Third-party programs that face the outside | wacli; the email reader, with `imapflow` and `postal-mime` | Their own users, their own folders, only their own settings. What they hand over is validated |
 | A third-party program with the bridge's privileges | restic | Pinned and checksummed ([Running restic](architecture/backups.md#running-restic)) |
-| The agent | pi, and the model behind it | No secrets, no network of its own, and only three writable folders. Its output passes the file check, git and the answer parser |
+| The agent | pi, and the model behind it | No secrets, no network of its own, and only what `writes` names, and its session, to write. Its output passes the file check, git and the answer parser |
 | Content | Text in images, PDFs, documents, forwarded messages, quoted email and web pages | Data, never instructions. The protocol tells the model so; the sandbox limits what a misled model can do |
 
 *Cost of the programs that face the outside:* wacli and the email reader can reach the internet. A malicious version of either, or of a library the reader uses, could send out what it holds, the WhatsApp session and the messages it handles, or the mailbox's password and the emails, and could hand the bridge fake messages from the owner.
@@ -102,8 +102,8 @@ The exchange, the folder the two services coordinate through, is a component of 
 | Email reader | `scooter-mail` | the bridge | `mail/` |
 | restic | root | the bridge | The folders it backs up |
 | Runner | `scooter-runner`, with the `kvm` group where it is given | systemd, or Docker | `agents/`, `exchange/`, `runner/`; `datastore/` and `config/` read-only |
-| QEMU | `scooter-runner` | the runner, through Gondolin | What the runner mounts |
-| pi | the VM's own root | the runner | The mounts |
+| QEMU | `scooter-runner` | the runner, through Gondolin | What the runner shows the VM |
+| pi | the VM's own root | the runner | What the runner shows the VM, and changes only what `writes` names and its session |
 
 Scooter has four users: root for the bridge, `scooter-wacli`, `scooter-runner` and `scooter-mail`. The prefix keeps them apart from accounts a system already has: Debian and Ubuntu ship a `mail` user (uid 8 on Ubuntu 24.04, whose group can write the system's mail spool, `/var/mail`), and Debian 12's and Alpine 3.24's images have one too; the `node:24-trixie-slim` image wasn't pulled to check, but Debian's base system defines the account. Sharing an account would share its files and its environment.
 - Natively, `setup` makes them as system users, which the system numbers, and everything refers to them by name ([setup](architecture/install.md#setup)).
@@ -116,8 +116,8 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 
 | Folder | Owner and mode | Bridge | Runner | pi | wacli | Email reader |
 |---|---|---|---|---|---|---|
-| `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | writes | reads | reads | no | no |
-| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | reads, except `sessions/`; writes `views/`, `memory/`, `run/session/` | no | no |
+| `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | writes | reads | reads, as the default `reads` names it | no | no |
+| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | what `reads` names, by default its own folder, never `sessions/`; writes what `writes` names, by default `views/` and `memory/`, and `run/session/` | no | no |
 | `exchange` | `scooter-runner`, 0700 | takes entries, and keeps a sending file of each in `bridge/`; writes `backup.lock` | writes entries and `run.lock` | no | no | no |
 | `runner` | `scooter-runner`, 0700 | reads the network log and `status.json`; connects to `runner.sock` | writes | no | no | no |
 | `bridge` | root, 0700 | writes | no | no | no | no |
@@ -127,7 +127,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 
 What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json` in a folder of its own, `status/`, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
 
-The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner mounts into its VM.
+The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner shows its VM: what the agent's `reads` and `writes` name, which the owner may set to name any of these folders ([agents.yaml](architecture/configuration.md#agentsyaml)), and the table gives what the default names.
 
 **In Docker** one named volume holds the whole data folder, at `/data` in every container, so that `build-image` and `restore` work in it as natively, and the bridge reaches `runner/runner.sock`. What each service reads and writes is then kept by the owners and modes above, as natively, and a new volume starts as a copy of the image's `/data`, whose folders have them. *Cost:* read-only mounts were a second wall, and are gone: the bridge, as root, could write `runner/`, which it only reads, as it can natively, and the runner's container sees the names of the bridge's, wacli's and the email reader's folders, not what they hold.
 
@@ -144,7 +144,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 
 *Cost, accepted:* Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a user who controls one of these folders can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, which nothing else of Scooter's or the system's has, and empty folders, which are all a folder's removal takes; and where the bridge makes `backup.lock`, under that name. Only the runner's user controls `exchange/`, and an escape from pi's VM is needed to reach it.
 
-`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules, the first without the check of the owner, and the second but for a day of the log, which it reads as a stream, opened without following a link and only if it is a regular file: it uses each of those folders only while it is a folder and not a link. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
+`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules. The first without the check of the owner: it uses each of those folders only while it is a folder and not a link. The second but for a day of the log, which it reads as a stream, opened without following a link and only if it is a regular file. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
 
 `build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [build-image](architecture/sandbox.md#build-image).
 
@@ -275,7 +275,7 @@ The project's own names, each used one way in these documents.
 | core | The bridge apart from its channels: the store, intake, delivery and the backups |
 | record | A message as a channel hands it to the core, the same for every channel |
 | line | One JSON object in the datastore, for one message, edit, deletion or reaction, in or out |
-| `data` | The object on a line that holds what its channel keeps and only the agent reads, such as an email's subject |
+| `data` | The object on a line that holds what its channel keeps and Scooter's code doesn't act on, such as an email's subject |
 | known line | A line of a kind and a channel this version has, with the fields its kind needs; any other is kept, and passed over |
 | `seq` | A line's permanent number, and the only name a message has outside the bridge |
 | datastore | The append-only log of lines, a `log.jsonl` per day folder with the attachments beside it |
@@ -303,11 +303,14 @@ The project's own names, each used one way in these documents.
 | config folder | `CONFIG_DIR`: the owner's `agents.yaml`, prompt, skills and the VM image's build file |
 | env file | `bridge.env` or `runner.env`: a service's settings |
 | owner's day | A date in `SCOOTER_TZ` |
-| work item | An `in` line from a source the agent reads, of kind `message`, `edit` or `delete`, that this version knows |
+| work item | An `in` line from a channel the agent's triggers for new messages name, of kind `message`, `edit` or `delete`, that this version knows |
 | batch | The work items one run is given |
 | run | One run of pi, in one VM, on one batch or task |
-| view | A file the agent keeps in `views/`, such as `expenses.csv` |
-| memory | The agent's `memory/`: the owner's standing instructions and the open questions |
+| view | A file lifelog keeps in its `views/`, such as `expenses.csv`, which its `writes` names. The runner doesn't know views: they are the agent's prompt's and skills' |
+| memory | Lifelog's `memory/`: the owner's standing instructions and the open questions. The runner reads its two files into the system prompt |
+| `reads`, `writes` | What `agents.yaml` lets an agent's VM see, and change: files and folders of the data folder ([agents.yaml](architecture/configuration.md#agentsyaml)) |
+| repository | The agent's folder as git keeps it: what its `writes` names there ([The agent's folder](architecture/run.md#the-agents-folder)) |
+| `sends` | The channels an agent's messages may go out on |
 | session | pi's conversation, kept by the runner for each of the owner's days |
 | network policy | The runner's rules for what pi's VM may send |
 | network log | The runner's log of every request pi's VM made |
@@ -337,9 +340,9 @@ The project's own names, each used one way in these documents.
 | `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
 | The runner's start, loop and restarts | `src/runner/main.mjs`, `src/runner/restarts.mjs`, `src/runner/status.mjs` | `test/runner.test.mjs`, `test/restarts.test.mjs`, `test/runnerfiles.test.mjs` | [the runner](architecture/runner.md) |
 | When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) |
-| Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
+| Reading the answer, after a run, failures | `src/runner/answer.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/answer.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs`, `test/tools/git.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
 | Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) |
-| The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
+| The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/view.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
 | The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) |
 | The agent's instructions | `src/runner/protocol.md`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
 | pi's version | `config/image/build.json`, `src/runner/sandbox/policy.mjs`, `test/fixtures/pi-requests/` (`test/tools/capture-pi-requests.mjs`) | `test/tools/pi.test.mjs`, `test/tools/fixtures.test.mjs`, `test/policy.test.mjs`, `test/image.test.mjs` | [Facts about pi 1.5.2](architecture/agent.md#facts-about-pi-152), [What pi sends](architecture/network-policy.md#what-pi-sends), [The VM image](architecture/sandbox.md#the-vm-image) |
@@ -369,6 +372,6 @@ The project's own names, each used one way in these documents.
 | Later | Plugs in at | Already there |
 |---|---|---|
 | Telegram, or another channel | A module in `src/bridge/channels/` | The channel's members; `source` on every line; routing by the line an entry points at |
-| Bank feeds and other data that isn't the owner's words | A channel that writes lines with `trust: "external"` | The `trust` field; `reads` per agent |
-| More agents | `agents.yaml` | The map of agents; `reads`; `by` on `out` lines; one folder per agent |
+| Bank feeds and other data that isn't the owner's words | A channel that writes lines with `trust: "external"` | The `trust` field; `channels` per trigger |
+| More agents | `agents.yaml` | The map of agents; `reads`, `writes` and `sends`; `by` on `out` lines and entries; one folder per agent |
 | The assistant | A reader of the views | Views in git, written only by Scooter |
