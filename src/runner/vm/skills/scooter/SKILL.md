@@ -15,13 +15,13 @@ The paths below are those of a data folder at `/data`; `show` and the index file
 
 ```text
 $ show 1054
-1054  Mon 9 Nov 2026 21:22  /data/datastore/2026/11/09/log.jsonl:216
+1054  Mon 9 Nov 2026 21:22 +05:30  /data/datastore/2026/11/09/log.jsonl:216
 {"seq":1054,"kind":"edit","dir":"in","at":"2026-11-09T15:52:00Z","source":"whatsapp","sourceId":"3EB0B7C6D5E4F3A2B1C0","trust":"owner","target":1051,"text":"coffee 150"}
-  points at 1051  Mon 9 Nov 2026 21:14  /data/datastore/2026/11/09/log.jsonl:213
+  points at 1051  Mon 9 Nov 2026 21:14 +05:30  /data/datastore/2026/11/09/log.jsonl:213
   {"seq":1051,"kind":"message","dir":"in","at":"2026-11-09T15:44:00Z","source":"whatsapp","sourceId":"3EB0B7C6D5E4F3A2B1C0","trust":"owner","text":"coffee 120"}
 ```
 
-- The first line of each is its header: the `seq`, when it was sent in the owner's time zone, and where the line is, its log and its line number there.
+- The first line of each is its header: the `seq`; when it was sent, in the owner's time zone, ending with the zone's offset from UTC then, as `+05:30`, which is `+00:00` for UTC itself and has seconds for some old dates, as `+05:53:28`; and where the line is, its log and its line number there.
 - Then the line exactly as it is stored.
 - Then each of its attachments, by its full path, as `  file /data/datastore/2026/11/09/1042.jpg`. Read it with your tools.
 - Then, indented, the one line it points at, if it points at one: the message an edit, a deletion or a reaction is of (`target`), or the message it replies to (`replyTo`), in the same way.
@@ -32,14 +32,14 @@ Several numbers print one after another, each after an empty line:
 
 ```text
 $ show 1053 1043
-1053  Mon 9 Nov 2026 21:20  /data/datastore/2026/11/09/log.jsonl:215
+1053  Mon 9 Nov 2026 21:20 +05:30  /data/datastore/2026/11/09/log.jsonl:215
 {"seq":1053,"kind":"message","dir":"in","at":"2026-11-09T15:50:00Z","source":"whatsapp","sourceId":"3EB0A1C9D8E7F6A5B4C3","trust":"owner","replyTo":1043,"text":"work","data":{"quoted":"Blue Tokai, ₹450 at 12:40: work or personal?"}}
-  points at 1043  Mon 9 Nov 2026 12:43  /data/datastore/2026/11/09/log.jsonl:205
+  points at 1043  Mon 9 Nov 2026 12:43 +05:30  /data/datastore/2026/11/09/log.jsonl:205
   {"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T07:13:00Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}
 
-1043  Mon 9 Nov 2026 12:43  /data/datastore/2026/11/09/log.jsonl:205
+1043  Mon 9 Nov 2026 12:43 +05:30  /data/datastore/2026/11/09/log.jsonl:205
 {"seq":1043,"kind":"message","dir":"out","at":"2026-11-09T07:13:00Z","source":"whatsapp","sourceId":"3EB0FF01A2B3C4D5E6F7","by":"lifelog","replyTo":1042,"text":"Blue Tokai, ₹450 at 12:40: work or personal?"}
-  points at 1042  Mon 9 Nov 2026 12:42  /data/datastore/2026/11/09/log.jsonl:204
+  points at 1042  Mon 9 Nov 2026 12:42 +05:30  /data/datastore/2026/11/09/log.jsonl:204
   {"seq":1042,"kind":"message","dir":"in","at":"2026-11-09T07:12:00Z","source":"whatsapp","sourceId":"3EB0A1B2C3D4E5F6A7B8","trust":"owner","text":"","files":[{"path":"1042.jpg","mime":"image/jpeg","bytes":482113}]}
     file /data/datastore/2026/11/09/1042.jpg
 ```
@@ -70,7 +70,7 @@ A line holds these fields, in this order, each only where the table says:
 | `seq` | The line's number |
 | `kind` | `message`, `edit`, `delete` or `reaction` |
 | `dir` | `in`, from the owner, or `out`, sent by Scooter |
-| `at` | When it was sent, in UTC, to the second: `2026-11-09T15:43:02Z`. `show`'s header gives it in the owner's time zone |
+| `at` | When it was sent, in UTC, to the second: `2026-11-09T15:43:02Z`. `show`'s header gives it in the owner's time zone, with the zone's offset from UTC then |
 | `source` | The channel: `whatsapp` or `email` |
 | `sourceId` | The channel's own ID for it, when the channel has one |
 | `trust` | On an `in` line: `owner`, the owner's own words, or `external`, data that isn't |

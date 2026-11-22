@@ -163,12 +163,12 @@ test("run: the agent finds show on its PATH, and it prints the batch's lines fro
   assert.equal(
     seen.show.stdout,
     [
-      `1042  Mon 9 Nov 2026 21:14  ${log}:1`,
+      `1042  Mon 9 Nov 2026 21:14 +05:30  ${log}:1`,
       stored[0],
       '',
-      `1043  Mon 9 Nov 2026 21:20  ${log}:2`,
+      `1043  Mon 9 Nov 2026 21:20 +05:30  ${log}:2`,
       stored[1],
-      `  points at 1042  Mon 9 Nov 2026 21:14  ${log}:1`,
+      `  points at 1042  Mon 9 Nov 2026 21:14 +05:30  ${log}:1`,
       `  ${stored[0]}`,
       '',
     ].join('\n'),

@@ -3,7 +3,7 @@
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
 //    If a backup holds it, let go of `run.lock` and wait.
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, the runner's own skill
-//    and programs, the index file, and a copy of the current session.
+//    and programs, the index file and the offsets file, and a copy of the current session.
 // 3. **Run** pi in the sandbox, with its command, what it sees and may change, its environment and
 //    the network policy.
 // 4. **After a successful run,** in this order: check the files pi left, staging them as the
@@ -206,7 +206,7 @@ export async function performRun(context) {
       : agent.session === 'daily'
         ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
-    const prepared = prepareRun({ paths, agent, protocol, index, sessionId: id, skills: job.skills })
+    const prepared = prepareRun({ paths, agent, protocol, index, timeZone: settings.timeZone, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
     const task = job.kind === 'scheduled' ? job.at : undefined

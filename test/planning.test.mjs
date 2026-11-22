@@ -86,7 +86,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
   // The run's folder, for the day's session.
   const session = sessionId(agent.name, { now: clock.now(), timeZone: SETTINGS.timeZone, rolloverHour: SETTINGS.sessionRolloverHour })
   assert.equal(session, 'lifelog-2026-11-09')
-  const run = prepareRun({ paths, agent, protocol: loadProtocol(), index: datastore.index, sessionId: session })
+  const run = prepareRun({ paths, timeZone: 'Asia/Kolkata', agent, protocol: loadProtocol(), index: datastore.index, sessionId: session })
   const system = fs.readFileSync(run.systemFile, 'utf8')
   assert.ok(system.startsWith(loadProtocol().trimEnd()))
   assert.ok(system.endsWith('\n\nYou are lifelog.\n\n# Your memory\n\n## memory/preferences.md\n\n(empty)\n\n## memory/needs-review.md\n\n(empty)\n'))

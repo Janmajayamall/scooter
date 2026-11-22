@@ -145,7 +145,7 @@ test("instructions: a run's system prompt is the protocol, then the prompt, then
   const [agent] = loadConfig({ paths }).agents
   fs.mkdirSync(paths.agentMemory('lifelog'), { recursive: true })
   fs.writeFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), '- 2026-11-09 (#1060): Track coffee and tea in meals.csv as "drink".\n')
-  const prepared = prepareRun({ paths, agent, protocol: loadProtocol(), index: createIndex(), sessionId: 'lifelog-2026-11-09' })
+  const prepared = prepareRun({ paths, timeZone: 'Asia/Kolkata', agent, protocol: loadProtocol(), index: createIndex(), sessionId: 'lifelog-2026-11-09' })
   const system = fs.readFileSync(prepared.systemFile, 'utf8')
   const protocolAt = system.indexOf('# How you work with Scooter')
   const promptAt = system.indexOf('# You are lifelog')
@@ -236,10 +236,10 @@ test("runner's skill: its examples of show and of the index file are what show p
   fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
   fs.mkdirSync(paths.agentDir('lifelog'), { recursive: true })
   const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }
-  prepareRun({ paths, agent, protocol: '', index: datastore.index })
+  prepareRun({ paths, timeZone: 'Asia/Kolkata', agent, protocol: '', index: datastore.index })
 
   for (const { args, output } of examples) {
-    const result = spawnSync(process.execPath, [path.join(paths.agentRunBin('lifelog'), 'show'), ...args], { env: { TZ: 'Asia/Kolkata' }, encoding: 'utf8' })
+    const result = spawnSync(process.execPath, [path.join(paths.agentRunBin('lifelog'), 'show'), ...args], { env: {}, encoding: 'utf8' })
     assert.equal(asInDocker(result.stdout), output, args.join(' '))
     assert.equal(result.status, output.includes('no such line') ? 1 : 0, args.join(' '))
   }

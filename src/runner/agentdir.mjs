@@ -3,8 +3,8 @@
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
 //     views/, memory/          what `writes` names in the folder, in git (`agent.repository`)
 //     sessions/                pi's sessions, not in git; hidden from the VM
-//     run/                     not in git: system.md, config/, session/, index.txt, bin/ and
-//                              skills/
+//     run/                     not in git: system.md, config/, session/, index.txt, offsets.txt,
+//                              bin/ and skills/
 //     state.json               the runner's state, not in git, 0600
 //
 // What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { copyUntrustedFile, emptyFolder, ensureDir, removeTree } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
+import { isTimeZone, isoSeconds, offsetsOverDays, utcOffsetText } from '../common/time.mjs'
 import { RUNNER_SKILL } from './config.mjs'
 import { wayIsOpen } from './git.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
@@ -109,6 +110,21 @@ export function indexFileText(index, paths) {
   return lines.join('')
 }
 
+// The offsets file's text: the owner's zone's offsets from UTC through every UTC day that holds a
+// line of `index`, worked out by the runner's own time code (`offsetsOverDays`), one row for each
+// instant from which the offset is another, in order, `<instant> <offset>`, as
+// `2026-10-25T01:00:00Z +00:00`, and `-` from where no such day is on, the last row among them.
+// `show` adds the offset to a line's `at` (`vm/bin/show.mjs`), so its times are the runner's, and
+// it asks no zone database: the VM's Node has its own. The reading check holds every line's `at`
+// to a time as the datastore writes one, whose first ten characters are its UTC date.
+export function offsetsFileText(index, timeZone) {
+  const days = new Set()
+  for (const { line } of index.entries()) days.add(line.at.slice(0, 10))
+  return offsetsOverDays([...days], timeZone)
+    .map(({ from, offset }) => `${isoSeconds(from)} ${offset === null ? '-' : utcOffsetText(offset)}\n`)
+    .join('')
+}
+
 // Builds `run/` for one run, from nothing:
 // - `config/`: a copy of the agent's prompt and of `skills` (all of the agent's by default), each
 //   at its path in the config folder, so pi only ever sees this run's copy;
@@ -116,6 +132,8 @@ export function indexFileText(index, paths) {
 // - `bin/`: a copy of each program that ships with the runner, `show`, which the VM finds on its
 //   `PATH` (`piEnv` in `run.mjs`);
 // - `index.txt`: the index file, from `index`, the datastore's (`indexFileText`);
+// - `offsets.txt`: the offsets file, for the owner's zone `timeZone` over the days of `index`'s
+//   lines (`offsetsFileText`);
 // - `session/`: empty, with a copy of the session `sessionId` if the runner has one, as
 //   `sessions/<sessionId>.jsonl`. With `session: none`, `sessionId` is null;
 // - `system.md`: the protocol, the agent's prompt, and its memory as it is now.
@@ -128,7 +146,9 @@ export function indexFileText(index, paths) {
 // wrote is (`removeTree`): access taken back, no folder read whole, and however deep it goes. The
 // rest of `run/` is read-only in the VM, and the runner never reads any of it back: it is made
 // anew for each run.
-export function prepareRun({ paths, agent, protocol, index, sessionId = null, skills = agent.skills }) {
+export function prepareRun({ paths, agent, protocol, index, timeZone, sessionId = null, skills = agent.skills }) {
+  // Without a zone, `Intl` would take the process's own.
+  if (!isTimeZone(timeZone)) throw new TypeError('prepareRun needs the owner\'s time zone')
   const name = agent.name
   const runDir = paths.agentRun(name)
   const configDir = paths.agentRunConfig(name)
@@ -158,6 +178,7 @@ export function prepareRun({ paths, agent, protocol, index, sessionId = null, sk
     fs.chmodSync(copy, 0o700)
   }
   fs.writeFileSync(paths.agentRunIndex(name), indexFileText(index, paths), { mode: FILE_MODE })
+  fs.writeFileSync(paths.agentRunOffsets(name), offsetsFileText(index, timeZone), { mode: FILE_MODE })
 
   ensureDir(sessionDir, { mode: FOLDER_MODE })
   let sessionFile = null

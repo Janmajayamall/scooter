@@ -144,7 +144,7 @@ test('agent folder: git works on the agent\'s own repository, also when the data
   assert.equal(git(root, 'log', '--format=%s'), 'outer\n')
 })
 
-test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill and programs, the index file, the session, and system.md', async t => {
+test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill and programs, the index file, the offsets file, the session, and system.md', async t => {
   const { paths, dir, ensure, agent } = setup(t)
   await ensure()
   // A skill with a script that can be run, in a folder of its own.
@@ -156,6 +156,7 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
   fs.writeFileSync(path.join(dir, 'run', 'session', 'old.jsonl'), 'old')
   fs.writeFileSync(path.join(dir, 'run', 'leftover'), 'x')
   fs.writeFileSync(path.join(dir, 'run', 'index.txt'), '1 /etc/passwd:1 message\n')
+  fs.writeFileSync(path.join(dir, 'run', 'offsets.txt'), '2026-11-08T00:00:00Z +14:00\n2026-11-10T00:00:00Z -\n')
   fs.mkdirSync(path.join(dir, 'run', 'bin'))
   fs.writeFileSync(path.join(dir, 'run', 'bin', 'show'), '#!/bin/sh\necho planted\n', { mode: 0o755 })
   // The runner's copy of today's session.
@@ -165,7 +166,7 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
   index.add(line.text(1, '2026-11-08T10:00:00Z', 'coffee 120'), '2026/11/08')
   index.add(line.edit(2, '2026-11-09T15:43:00Z', 1, 'coffee 150'), '2026/11/09')
 
-  const result = prepareRun({ paths, index, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-09' })
+  const result = prepareRun({ paths, timeZone: 'Asia/Kolkata', index, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-09' })
   const run = path.join(dir, 'run')
   assert.deepEqual(result, {
     systemFile: path.join(run, 'system.md'),
@@ -173,7 +174,7 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
     sessionDir: path.join(run, 'session'),
     sessionFile: path.join(run, 'session', 'lifelog-2026-11-09.jsonl'),
   })
-  assert.deepEqual(fs.readdirSync(run).sort(), ['bin', 'config', 'index.txt', 'session', 'skills', 'system.md'])
+  assert.deepEqual(fs.readdirSync(run).sort(), ['bin', 'config', 'index.txt', 'offsets.txt', 'session', 'skills', 'system.md'])
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), ['lifelog-2026-11-09.jsonl'])
   assert.equal(fs.readFileSync(path.join(run, 'config', 'prompts', 'lifelog.md'), 'utf8'), 'You are lifelog.\n')
   assert.match(fs.readFileSync(path.join(run, 'config', 'skills', 'runs', 'SKILL.md'), 'utf8'), /^---\nname: runs\n/)
@@ -182,7 +183,8 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
   assert.equal(modeOf(path.join(run, 'system.md')), 0o600)
   for (const folder of [run, path.join(run, 'config'), path.join(run, 'session'), path.join(run, 'bin'), path.join(run, 'skills')]) assert.equal(modeOf(folder), 0o700)
   // What ships with the runner, copied anew: its skill, `show`, which can be run, and the index
-  // file, written from the index given, whatever was there before.
+  // file and the offsets file, written from the index given and the owner's zone, whatever was
+  // there before.
   assert.deepEqual(fs.readdirSync(path.join(run, 'skills')), ['scooter'])
   assert.equal(fs.readFileSync(path.join(run, 'skills', 'scooter', 'SKILL.md'), 'utf8'), fs.readFileSync(new URL('../src/runner/vm/skills/scooter/SKILL.md', import.meta.url), 'utf8'))
   assert.equal(modeOf(path.join(run, 'skills', 'scooter', 'SKILL.md')), 0o600)
@@ -194,6 +196,8 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
     `1 ${paths.dayLog('2026/11/08')}:1 message\n2 ${paths.dayLog('2026/11/09')}:1 edit 1\n`,
   )
   assert.equal(modeOf(path.join(run, 'index.txt')), 0o600)
+  assert.equal(fs.readFileSync(path.join(run, 'offsets.txt'), 'utf8'), '2026-11-08T00:00:00Z +05:30\n2026-11-10T00:00:00Z -\n')
+  assert.equal(modeOf(path.join(run, 'offsets.txt')), 0o600)
   assert.equal(
     fs.readFileSync(result.systemFile, 'utf8'),
     `# Protocol
@@ -213,14 +217,19 @@ You are lifelog.
   )
 
   // A new day's session: nothing to copy. A backfill gets its own skill alone, with the runner's.
-  const other = prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
+  const other = prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
   assert.equal(other.sessionFile, null)
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), [])
   assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')), ['people'])
   assert.deepEqual(other.skillDirs, [path.join(run, 'skills', 'scooter'), path.join(run, 'config', 'skills', 'people')])
   assert.equal(fs.readFileSync(path.join(run, 'index.txt'), 'utf8'), '')
+  assert.equal(fs.readFileSync(path.join(run, 'offsets.txt'), 'utf8'), '')
+  // Without the owner's zone, which `Intl` would take from the process, it writes nothing.
+  for (const timeZone of [undefined, '', 'asia/kolkata', 'Mars/Olympus']) {
+    assert.throws(() => prepareRun({ paths, timeZone, index: NO_LINES, agent: agent(), protocol: '' }), TypeError, String(timeZone))
+  }
   // `session: none` has no session at all.
-  assert.equal(prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '# Protocol\n' }).sessionFile, null)
+  assert.equal(prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: agent(), protocol: '# Protocol\n' }).sessionFile, null)
 })
 
 test('run folder: a session file that is a link isn\'t copied in', async t => {
@@ -228,7 +237,7 @@ test('run folder: a session file that is a link isn\'t copied in', async t => {
   await ensure()
   fs.writeFileSync(path.join(root, 'elsewhere.jsonl'), 'not a session')
   fs.symlinkSync(path.join(root, 'elsewhere.jsonl'), path.join(dir, 'sessions', 'lifelog-2026-11-09.jsonl'))
-  const result = prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '', sessionId: 'lifelog-2026-11-09' })
+  const result = prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: agent(), protocol: '', sessionId: 'lifelog-2026-11-09' })
   assert.equal(result.sessionFile, null)
   assert.deepEqual(fs.readdirSync(result.sessionDir), [])
 })
@@ -240,7 +249,7 @@ test('run folder: something in the config that isn\'t a file or a folder stops t
   // Added after the config was checked at startup.
   fs.writeFileSync(path.join(root, 'secret'), 'key')
   fs.symlinkSync(path.join(root, 'secret'), path.join(paths.configDir, 'skills', 'people', 'notes.md'))
-  assert.throws(() => prepareRun({ paths, index: NO_LINES, agent: config, protocol: '' }), error => error.code === 'ECONFIG')
+  assert.throws(() => prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: config, protocol: '' }), error => error.code === 'ECONFIG')
 })
 
 test('session: the file pi wrote is kept, never a link, a file with two names, or one too large', async t => {
@@ -251,7 +260,7 @@ test('session: the file pi wrote is kept, never a link, a file with two names, o
   const sessionDir = path.join(dir, 'run', 'session')
   const kept = path.join(dir, 'sessions', `${id}.jsonl`)
   const keep = () => keepSession({ paths, agent: config, sessionId: id, log })
-  const fresh = () => prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  const fresh = () => prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: config, protocol: '', sessionId: id })
 
   // Nothing written: nothing kept.
   fresh()
@@ -677,7 +686,7 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   const config = agent()
   const id = 'lifelog-2026-11-09'
   const sessionDir = path.join(dir, 'run', 'session')
-  prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: config, protocol: '', sessionId: id })
   fs.mkdirSync(path.join(sessionDir, 'locked'))
   fs.writeFileSync(path.join(sessionDir, 'locked', 'x'), 'x')
   fs.chmodSync(path.join(sessionDir, 'locked'), 0o000)
@@ -687,7 +696,7 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   fs.chmodSync(sessionDir, 0o000)
   assert.equal(await keepSession({ paths, agent: config, sessionId: id, log }), 'refused')
 
-  prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: config, protocol: '', sessionId: id })
   assert.deepEqual(fs.readdirSync(sessionDir), [])
   assert.equal(fs.existsSync(path.join(dir, 'sessions', `${id}.jsonl`)), false)
 })
@@ -954,7 +963,7 @@ test("run folder: no memory file is read through a link, or a folder the runner 
   const { root, paths, dir, ensure, agent } = setup(t)
   await ensure()
   const memory = path.join(dir, 'memory')
-  const system = () => fs.readFileSync(prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '' }).systemFile, 'utf8')
+  const system = () => fs.readFileSync(prepareRun({ paths, timeZone: 'Asia/Kolkata', index: NO_LINES, agent: agent(), protocol: '' }).systemFile, 'utf8')
   const empty = /## memory\/preferences\.md\n\n\(empty\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/
   // A link, to a folder with memory files that aren't the agent's.
   fs.mkdirSync(path.join(root, 'other'))

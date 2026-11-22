@@ -36,9 +36,10 @@ export function makePaths({ dataDir, configDir }) {
     agentRunSystem: name => path.join(agent(name), 'run', 'system.md'),
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
-    // The run's index file, the programs that ship with the runner, which the VM finds on its
-    // `PATH`, and the runner's own skill.
+    // The run's index file and offsets file, the programs that ship with the runner, which the VM
+    // finds on its `PATH`, and the runner's own skill.
     agentRunIndex: name => path.join(agent(name), 'run', 'index.txt'),
+    agentRunOffsets: name => path.join(agent(name), 'run', 'offsets.txt'),
     agentRunBin: name => path.join(agent(name), 'run', 'bin'),
     agentRunSkills: name => path.join(agent(name), 'run', 'skills'),
     agentState: name => path.join(agent(name), 'state.json'),

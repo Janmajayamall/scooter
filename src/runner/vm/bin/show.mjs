@@ -5,9 +5,9 @@
 // the runner gives pi (`prepareRun` in `agentdir.mjs`, `piEnv` in `run.mjs`):
 //
 //   $ show 1054
-//   1054  Mon 9 Nov 2026 21:22  /data/datastore/2026/11/09/log.jsonl:216
+//   1054  Mon 9 Nov 2026 21:22 +05:30  /data/datastore/2026/11/09/log.jsonl:216
 //   {"seq":1054,"kind":"edit",…,"target":1051,"text":"coffee 150"}
-//     points at 1051  Mon 9 Nov 2026 21:14  /data/datastore/2026/11/09/log.jsonl:213
+//     points at 1051  Mon 9 Nov 2026 21:14 +05:30  /data/datastore/2026/11/09/log.jsonl:213
 //     {"seq":1051,"kind":"message",…,"text":"coffee 120"}
 //
 // - Each line is found through the run's index file, `run/index.txt` beside `bin/`, which the
@@ -16,22 +16,25 @@
 //   that index holds: a number the index doesn't have, a line written during the run among them,
 //   prints "no such line", and the command fails.
 // - A line is printed as it is stored, byte for byte, under a header with its `seq`, its time in
-//   the owner's time zone, and where it is; then each of its attachments, by its full path; then
-//   the one line it points at, which the index gives, in the same way, indented. One hop only, and
-//   nothing that points back at the line.
+//   the owner's time zone, ending with the zone's offset from UTC then, and where it is; then each
+//   of its attachments, by its full path; then the one line it points at, which the index gives,
+//   in the same way, indented. One hop only, and nothing that points back at the line.
 // - The line is read again from its log, by counting line breaks as the runner's reader does, and
 //   printed only when its `seq` is the one asked for. Only complete lines are counted, so a log
 //   that ends in part of a line, or grows, changes nothing that was in the index.
-// - The time is converted for the zone `TZ` names, which the runner sets to the owner's, explicitly
-//   through `Intl.DateTimeFormat`, as the runner's own code converts it (`src/common/time.mjs`):
-//   without a zone that Node knows, it stops rather than print another zone's time.
+// - The time is the line's `at` plus the owner's zone's offset from UTC at that instant, which the
+//   runner worked out with its own time code (`src/common/time.mjs`) and wrote beside the index
+//   file, as `run/offsets.txt`: one row for each instant from which the offset is another,
+//   `<instant> <offset>`, `-` where it worked none out. So it asks no zone database, and reads no
+//   `TZ`: the VM's Node has zone data of its own, which can be another time's. A line whose time
+//   the file doesn't cover, which only a log changed under the run can hold, gets `no time`.
 //
 // Exit codes: 0 when every line asked for was printed, with the line it points at; 1 when one
-// wasn't; 2 when it was called without a number, or can't read the index file or the zone.
+// wasn't; 2 when it was called without a number, or can't read the index file or the offsets file.
 //
-// It runs in the VM with nothing of Scooter's but itself and the index file, so it imports only
-// Node's own modules. Node runs a file without an extension, such as `run/bin/show`, as an ES
-// module by its syntax (`test/tools/vm.test.mjs`).
+// It runs in the VM with nothing of Scooter's but itself, the index file and the offsets file, so
+// it imports only Node's own modules. Node runs a file without an extension, such as
+// `run/bin/show`, as an ES module by its syntax (`test/tools/vm.test.mjs`).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -44,47 +47,68 @@ const CHUNK_BYTES = 64 * 1024
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const ISO_SECONDS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/
 const pad = text => String(text).padStart(2, '0')
 
-// The formatter for the zone `zone` names, or null when it names none that Node knows.
-function zoneFormatter(zone) {
-  if (typeof zone !== 'string' || zone === '') return null
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: zone,
-      calendar: 'gregory',
-      numberingSystem: 'latn',
-      hourCycle: 'h23',
-      era: 'short',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return null
-  }
-}
-
-// A line's `at`, `2026-11-09T15:43:02Z`, as the zone's clock and calendar show it:
-// `Mon 9 Nov 2026 21:13`. Null when it isn't a time as the datastore writes one.
-function localTime(at, formatter) {
-  const match = typeof at === 'string' ? ISO_SECONDS.exec(at) : null
+// A UTC time as the datastore writes one, `2026-11-09T15:43:02Z`, as milliseconds since the epoch,
+// or null when it isn't one. The offsets file's last row can be in the year 10000, the end of a
+// line's day in 9999.
+const UTC_TIME = /^(\d{4,5})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/
+function instantOf(text) {
+  const match = typeof text === 'string' ? UTC_TIME.exec(text) : null
   if (!match) return null
   const [year, month, day, hour, minute, second] = match.slice(1).map(Number)
   const instant = new Date(0)
   instant.setUTCFullYear(year, month - 1, day)
   instant.setUTCHours(hour, minute, second, 0)
   // A time that doesn't exist, such as 31 February or 24:00, would have rolled over.
-  if (instant.toISOString().slice(0, 19) !== at.slice(0, 19)) return null
-  const fields = {}
-  for (const part of formatter.formatToParts(instant)) fields[part.type] = part.value
-  const localYear = fields.era === 'BC' ? 1 - Number(fields.year) : Number(fields.year)
-  const local = new Date(0)
-  local.setUTCFullYear(localYear, Number(fields.month) - 1, Number(fields.day))
-  return `${DAY_NAMES[local.getUTCDay()]} ${local.getUTCDate()} ${MONTH_NAMES[local.getUTCMonth()]} ${localYear} ${pad(fields.hour)}:${pad(fields.minute)}`
+  const parts = [instant.getUTCFullYear(), instant.getUTCMonth() + 1, instant.getUTCDate(), instant.getUTCHours(), instant.getUTCMinutes(), instant.getUTCSeconds()]
+  return parts.every((part, n) => part === [year, month, day, hour, minute, second][n]) ? instant.getTime() : null
+}
+
+// `run/offsets.txt`: `<instant> <offset>`, from that instant until the next row's, the owner's zone
+// is `<offset>` from UTC, `+05:30`, or `+05:53:28` with its seconds; or isn't covered, `-`.
+const OFFSET_ROW = /^(\S+) (-|([+-])(\d{2}):([0-5]\d)(?::([0-5]\d))?)$/
+
+// The rows of the offsets file, `{ from, offset, text }`, `offset` in milliseconds and `text` as
+// the file writes it, or both null where it covers nothing. Throws, with a code, when the file
+// can't be read, and `EDAMAGED`, with the line, when it isn't as the runner writes it: a row that
+// can't be read, rows out of order, or a file that doesn't end with a row of `-` and a line break,
+// as one cut short wouldn't.
+function readOffsets(file) {
+  const text = fs.readFileSync(file, 'utf8')
+  const rows = []
+  const lines = text.split('\n')
+  const damaged = number => Object.assign(new Error('damaged'), { code: 'EDAMAGED', line: number })
+  if (lines.pop() !== '') throw damaged(lines.length + 1)
+  lines.forEach((row, n) => {
+    const match = OFFSET_ROW.exec(row)
+    const from = match ? instantOf(match[1]) : null
+    if (from === null || (rows.length > 0 && from <= rows.at(-1).from) || (match[4] !== undefined && Number(match[4]) > 23)) throw damaged(n + 1)
+    const offset = match[2] === '-' ? null : (match[3] === '-' ? -1 : 1) * ((Number(match[4]) * 60 + Number(match[5])) * 60 + Number(match[6] ?? 0)) * 1000
+    rows.push({ from, offset, text: offset === null ? null : match[2] })
+  })
+  if (rows.length > 0 && rows.at(-1).offset !== null) throw damaged(rows.length)
+  return rows
+}
+
+// A line's `at`, `2026-11-09T15:43:02Z`, as the owner's zone's clock and calendar show it, with
+// the zone's offset from UTC then: `Mon 9 Nov 2026 21:13 +05:30`. Null when it isn't a time as the
+// datastore writes one, or the offsets don't cover it.
+function localTime(at, offsets) {
+  const instant = instantOf(at)
+  if (instant === null) return null
+  // The last row from at or before the instant.
+  let low = 0
+  let high = offsets.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (offsets[middle].from <= instant) low = middle + 1
+    else high = middle
+  }
+  const row = offsets[low - 1]
+  if (row === undefined || row.offset === null) return null
+  const wall = new Date(instant + row.offset)
+  return `${DAY_NAMES[wall.getUTCDay()]} ${wall.getUTCDate()} ${MONTH_NAMES[wall.getUTCMonth()]} ${wall.getUTCFullYear()} ${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())} ${row.text}`
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -180,8 +204,6 @@ function main() {
     process.stderr.write(`show: ${message}\n`)
     process.exitCode = 2
   }
-  const formatter = zoneFormatter(process.env.TZ)
-  if (formatter === null) return stop("TZ isn't set to a time zone, such as Asia/Kolkata, so the owner's time can't be shown")
   // Each number as the index writes it, digits without a leading zero; `#1051` is taken too.
   const asked = args.map(arg => {
     const digits = /^#?(\d+)$/.exec(arg)?.[1]
@@ -189,8 +211,9 @@ function main() {
   })
 
   // `run/index.txt`, beside the folder this program is in: the lines asked for, then the lines they
-  // point at.
-  const indexFile = path.join(path.dirname(path.resolve(process.argv[1])), '..', 'index.txt')
+  // point at. Then `run/offsets.txt`, beside it.
+  const runDir = path.join(path.dirname(path.resolve(process.argv[1])), '..')
+  const indexFile = path.join(runDir, 'index.txt')
   let index
   try {
     index = readIndex(indexFile, asked.flatMap(({ seq }) => (seq === null ? [] : [seq])))
@@ -198,6 +221,13 @@ function main() {
     for (const [seq, entry] of readIndex(indexFile, points)) index.set(seq, entry)
   } catch (error) {
     return stop(`can't read the index file ${printable(indexFile)} (${error.code ?? error.name})`)
+  }
+  const offsetsFile = path.join(runDir, 'offsets.txt')
+  let offsets
+  try {
+    offsets = readOffsets(offsetsFile)
+  } catch (error) {
+    return stop(`can't read the offsets file ${printable(offsetsFile)} (${error.code === 'EDAMAGED' ? `damaged at line ${error.line}` : (error.code ?? error.name)})`)
   }
 
   // Every line to print, read with one pass over each log.
@@ -233,7 +263,7 @@ function main() {
       write(`${indent}${lead}${seq}  can't be read at ${where}\n`)
       return false
     }
-    write(`${indent}${lead}${seq}  ${localTime(line.at, formatter) ?? 'no time'}  ${where}\n`)
+    write(`${indent}${lead}${seq}  ${localTime(line.at, offsets) ?? 'no time'}  ${where}\n`)
     write(indent)
     write(bytes)
     write('\n')

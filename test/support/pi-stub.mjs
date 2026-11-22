@@ -177,10 +177,11 @@ const seen = {
 }
 
 // `show`, found by its name on the `PATH` the stub was given, each folder of which is a path in the
-// VM, and run with the host's Node, as the VM's `env` would run it with the VM's.
+// VM, and run with the host's Node, as the VM's `env` would run it with the VM's. It reads no
+// variable, `TZ` among them: the owner's time is in the run's offsets file.
 if (has('SHOW')) {
   const folder = (process.env.PATH ?? '').split(':').find(dir => dir !== '' && fs.existsSync(inVm(path.join(dir, 'show'))))
-  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: { TZ: process.env.TZ }, encoding: 'utf8' })
+  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: {}, encoding: 'utf8' })
   seen.show = run === null ? null : { folder, code: run.status, stdout: run.stdout, stderr: run.stderr }
 }
 

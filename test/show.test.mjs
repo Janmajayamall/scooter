@@ -1,8 +1,9 @@
-// `show`, the program that ships with the runner for the VM, and the index file it reads: what the
-// runner writes into `run/` (`prepareRun`, `indexFileText`), and what `show` prints from it, run as
-// the VM runs it, as a program of its own, with `TZ` the owner's zone. That it runs by its name in
-// the VM, from the `PATH` the runner gives and from pi's bash tool, is `VM 7` in
-// `test/tools/vm.test.mjs`.
+// `show`, the program that ships with the runner for the VM, and the index file and the offsets
+// file it reads: what the runner writes into `run/` (`prepareRun`, `indexFileText`,
+// `offsetsFileText`), and what `show` prints from them, run as the VM runs it, as a program of its
+// own, without `TZ`, which it doesn't read. That it runs by its name in the VM, from the `PATH` the
+// runner gives and from pi's bash tool, and prints there what it prints here, are `VM 7` and
+// `VM 8` in `test/tools/vm.test.mjs`.
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -10,8 +11,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
-import { toLocal } from '../src/common/time.mjs'
-import { indexFileText, prepareRun } from '../src/runner/agentdir.mjs'
+import { toLocal, utcOffsetText } from '../src/common/time.mjs'
+import { indexFileText, offsetsFileText, prepareRun } from '../src/runner/agentdir.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
 import { fillerLines, handWrittenLines, line, writeDatastore } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
@@ -20,16 +21,18 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const pad = number => String(number).padStart(2, '0')
 
-// A time as `show`'s header gives it, by the runner's own time code.
+// A time as `show`'s header gives it, by the runner's own time code: the zone's clock, and its
+// offset from UTC then.
 function headerTime(at, zone) {
   const t = toLocal(Date.parse(at), zone)
-  return `${DAYS[t.weekday - 1]} ${t.day} ${MONTHS[t.month - 1]} ${t.year} ${pad(t.hour)}:${pad(t.minute)}`
+  return `${DAYS[t.weekday - 1]} ${t.day} ${MONTHS[t.month - 1]} ${t.year} ${pad(t.hour)}:${pad(t.minute)} ${utcOffsetText(Math.round(t.offsetMinutes * 60) * 1000)}`
 }
 
 // A data folder with the datastore's `lines`, written as the bridge writes them (or as given, with
-// `check: false`), and `run/` made for a run as the runner makes it, with the index of the lines it
-// has read. `show(args)` runs the run's copy of `show`, as the VM's `env` would, with Node.
-function setup(t, lines, { check = true, dataDir } = {}) {
+// `check: false`), and `run/` made for a run as the runner makes it, for the owner's zone `zone`,
+// with the index of the lines it has read. `show(args)` runs the run's copy of `show`, as the VM's
+// `env` would, with Node, and with no `TZ` unless given one.
+function setup(t, lines, { check = true, dataDir, zone = 'Asia/Kolkata' } = {}) {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: dataDir ?? path.join(root, 'data'), configDir: path.join(root, 'config') })
   fs.mkdirSync(paths.datastore, { recursive: true })
@@ -39,15 +42,15 @@ function setup(t, lines, { check = true, dataDir } = {}) {
   fs.writeFileSync(prompt, 'You are lifelog.\n')
   fs.mkdirSync(paths.agentDir('lifelog'), { recursive: true })
   const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: prompt }, skills: [] }
-  const prepare = () => {
+  const prepare = (timeZone = zone) => {
     const datastore = openDatastore({ paths })
     datastore.poll()
-    prepareRun({ paths, agent, protocol: '', index: datastore.index })
+    prepareRun({ paths, agent, protocol: '', index: datastore.index, timeZone })
     return datastore.index
   }
   const index = prepare()
   const program = path.join(paths.agentRunBin('lifelog'), 'show')
-  const show = (args, { tz = 'Asia/Kolkata', env = { TZ: tz }, encoding = 'utf8' } = {}) => {
+  const show = (args, { env = {}, encoding = 'utf8' } = {}) => {
     const result = spawnSync(process.execPath, [program, ...args], { env, encoding })
     return { code: result.status, stdout: result.stdout, stderr: result.stderr }
   }
@@ -199,7 +202,7 @@ test('show: a line of any length, and bytes that aren\'t UTF-8, are printed as s
   assert.deepEqual(result.stdout.subarray(result.stdout.indexOf(0x0a) + 1), raw)
 })
 
-test('show: the time is the owner\'s, across midnight, the clocks\' changes and a new year, in every zone, as the runner\'s own time code gives it', t => {
+test('show: the time is the owner\'s, with the zone\'s offset from UTC, across midnight, the clocks\' changes and a new year, in every zone, as the runner\'s own time code gives it', t => {
   // Every 15 minutes around the changes of the clocks in 2026 in Europe and North America, Lord
   // Howe's half hour, and the new year.
   const windows = [
@@ -214,13 +217,31 @@ test('show: the time is the owner\'s, across midnight, the clocks\' changes and 
   for (const [from, to] of windows) {
     for (let ms = Date.parse(from); ms <= Date.parse(to); ms += 15 * 60 * 1000) ats.push(new Date(ms).toISOString().replace('.000Z', 'Z'))
   }
-  // And a minute either side of each zone's midnight on 9 November.
+  // A minute either side of each zone's midnight on 9 November.
   for (const at of ['2026-11-08T18:29:00Z', '2026-11-08T18:30:00Z', '2026-11-08T23:59:00Z', '2026-11-09T00:00:00Z', '2026-11-09T04:59:00Z', '2026-11-09T05:00:00Z', '2026-11-09T11:14:00Z', '2026-11-09T11:15:00Z']) ats.push(at)
+  // 00:30 and 12:30 on the 1st and the 15th of every month of 2026 and 2027, the times at which the
+  // image's Node was found an hour off in twelve zones, and the first and last times a line can
+  // have.
+  for (const year of [2026, 2027]) {
+    for (let month = 1; month <= 12; month++) {
+      for (const day of ['01', '15']) for (const time of ['00:30', '12:30']) ats.push(`${year}-${pad(month)}-${day}T${time}:00Z`)
+    }
+  }
+  // Times when zones' offsets weren't whole minutes: Kolkata's local mean time, its change to
+  // Madras's, and Monrovia's -00:44:30 until 1972; and a line can be anywhere from year 100 to 9999.
+  ats.push('1850-01-01T00:00:00Z', '1854-06-27T18:06:31Z', '1854-06-27T18:06:32Z', '1960-01-01T12:00:00Z', '0100-01-01T00:00:00Z', '9999-12-31T23:59:59Z')
   ats.sort()
-  const { show } = setup(t, ats.map((at, n) => line.text(n + 1, at, 'x')))
+  const { show, prepare } = setup(t, ats.map((at, n) => line.text(n + 1, at, 'x')))
   const seqs = ats.map((_, n) => String(n + 1))
-  for (const zone of ['Asia/Kolkata', 'Europe/London', 'America/New_York', 'America/St_Johns', 'Australia/Lord_Howe', 'Asia/Kathmandu', 'Pacific/Chatham', 'Pacific/Kiritimati', 'UTC']) {
-    const result = show(seqs, { tz: zone })
+  const zones = [
+    ['Asia/Kolkata', 'Europe/London', 'America/New_York', 'America/St_Johns', 'Australia/Lord_Howe', 'Asia/Kathmandu', 'Pacific/Chatham', 'Pacific/Kiritimati', 'UTC'],
+    // The thirteen zones for which the image's Node gave another time, or none.
+    ['America/Coyhaique', 'Africa/Casablanca', 'Africa/El_Aaiun', 'America/Asuncion', 'America/Edmonton', 'America/Inuvik', 'America/Rainy_River', 'America/Vancouver'],
+    ['America/Winnipeg', 'America/Yellowknife', 'Canada/Central', 'Canada/Mountain', 'Canada/Pacific', 'Africa/Monrovia'],
+  ].flat()
+  for (const zone of zones) {
+    prepare(zone)
+    const result = show(seqs)
     assert.equal(result.code, 0, `${zone}: ${result.stderr}`)
     const headers = result.stdout.split('\n').filter(text => /^\d+ {2}/.test(text))
     assert.deepEqual(
@@ -229,16 +250,89 @@ test('show: the time is the owner\'s, across midnight, the clocks\' changes and 
       zone,
     )
   }
+  // What the review found, as the runner gives it.
+  const header = (zone, at) => {
+    prepare(zone)
+    return show([String(ats.indexOf(at) + 1)]).stdout.split('\n')[0].split('  ')[1]
+  }
+  assert.equal(header('America/Vancouver', '2026-11-01T12:30:00Z'), 'Sun 1 Nov 2026 05:30 -07:00')
+  assert.equal(header('America/Coyhaique', '2026-11-01T12:30:00Z'), 'Sun 1 Nov 2026 09:30 -03:00')
+  assert.equal(header('America/Asuncion', '2026-04-01T00:30:00Z'), 'Tue 31 Mar 2026 21:30 -03:00')
+  assert.equal(header('Africa/Casablanca', '2026-10-01T00:30:00Z'), 'Thu 1 Oct 2026 00:30 +00:00')
+  // UTC is +00:00, and an offset that isn't whole minutes has its seconds.
+  assert.equal(header('UTC', '9999-12-31T23:59:59Z'), 'Fri 31 Dec 9999 23:59 +00:00')
+  assert.equal(header('Asia/Kolkata', '1850-01-01T00:00:00Z'), 'Tue 1 Jan 1850 05:53 +05:53:28')
+  assert.equal(header('Asia/Kolkata', '1854-06-27T18:06:31Z'), 'Tue 27 Jun 1854 23:59 +05:53:28')
+  assert.equal(header('Asia/Kolkata', '1854-06-27T18:06:32Z'), 'Tue 27 Jun 1854 23:59 +05:53:20')
+  assert.equal(header('Africa/Monrovia', '1960-01-01T12:00:00Z'), 'Fri 1 Jan 1960 11:15 -00:44:30')
+  assert.equal(header('Pacific/Kiritimati', '0100-01-01T00:00:00Z'), 'Thu 31 Dec 99 13:30 -10:29:20')
 })
 
-test('show: without a zone it knows, it prints no time in another zone, and stops', t => {
-  const { show } = setup(t, [...fillerLines(1)])
-  for (const env of [{}, { TZ: '' }, { TZ: 'Mars/Olympus' }, { TZ: ':Asia/Kolkata' }]) {
-    const result = show(['1'], { env })
-    assert.equal(result.code, 2, JSON.stringify(env))
-    assert.equal(result.stdout, '')
-    assert.match(result.stderr, /^show: TZ isn't set to a time zone, such as Asia\/Kolkata/)
+test('show: it reads no TZ: the time is the same with TZ unset, empty, another zone or one Node doesn\'t know', t => {
+  // Vancouver's clocks went forward on 8 March 2026, and stay there: British Columbia keeps
+  // daylight time all year from then on, which the image's Node didn't know.
+  const { show } = setup(t, [line.text(1, '2026-01-15T12:30:00Z', 'x'), line.text(2, '2026-11-01T12:30:00Z', 'y')], { zone: 'America/Vancouver' })
+  const expected = show(['1', '2'])
+  assert.equal(expected.code, 0, expected.stderr)
+  assert.match(expected.stdout, /^1 {2}Thu 15 Jan 2026 04:30 -08:00 {2}/m)
+  assert.match(expected.stdout, /^2 {2}Sun 1 Nov 2026 05:30 -07:00 {2}/m)
+  for (const env of [{ TZ: '' }, { TZ: 'Asia/Kolkata' }, { TZ: 'America/Vancouver' }, { TZ: 'Mars/Olympus' }, { TZ: ':Asia/Kolkata' }, { TZ: 'UTC' }]) {
+    assert.deepEqual(show(['1', '2'], { env }), expected, JSON.stringify(env))
   }
+})
+
+test('show: without the offsets file, or with one that is damaged or doesn\'t cover a line\'s time, it prints no time it can\'t stand behind', t => {
+  const { show, paths, stored, prepare } = setup(t, [...fillerLines(1), line.text(2, '2026-11-09T15:50:00Z', 'x'), line.text(3, '2026-11-10T01:00:00Z', 'y')])
+  const offsets = paths.agentRunOffsets('lifelog')
+  const good = fs.readFileSync(offsets, 'utf8')
+  // As the runner writes it: the days of the lines, 8 to 10 November, in Kolkata.
+  assert.equal(good, '2026-11-08T00:00:00Z +05:30\n2026-11-11T00:00:00Z -\n')
+  const stops = (text, why) => {
+    if (text !== undefined) fs.writeFileSync(offsets, text)
+    const result = show(['2'])
+    assert.equal(result.code, 2, JSON.stringify(text))
+    assert.equal(result.stdout, '', JSON.stringify(text))
+    assert.equal(result.stderr, `show: can't read the offsets file ${offsets} (${why})\n`, JSON.stringify(text))
+  }
+  // Missing, or not a file.
+  fs.rmSync(offsets)
+  stops(undefined, 'ENOENT')
+  fs.mkdirSync(offsets)
+  stops(undefined, 'EISDIR')
+  fs.rmdirSync(offsets)
+  // Damaged: cut short, before or after a line break, or within a row; a row that can't be read,
+  // with a time that doesn't exist or an offset out of range; rows out of order, or doubled.
+  for (const [text, line] of [
+    ['2026-11-08T00:00:00Z +05:30\n', 1],
+    ['2026-11-08T00:00:00Z +05:30\n2026-11-11T00:00:00Z -', 2],
+    ['2026-11-08T00:00:00Z +05:30\n2026-11-11T00:00:00Z', 2],
+    ['2026-11-08T00:00:00Z +05:3\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-08T00:00:00Z +5:30\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-08T00:00:00Z +24:00\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-08T00:00:00Z +05:60\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-08T00:00:00Z  +05:30\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-02-30T00:00:00Z +05:30\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-08T00:00:00 +05:30\n2026-11-11T00:00:00Z -\n', 1],
+    ['2026-11-11T00:00:00Z -\n2026-11-08T00:00:00Z +05:30\n2026-11-11T00:00:00Z -\n', 2],
+    ['2026-11-08T00:00:00Z +05:30\n2026-11-08T00:00:00Z +05:30\n2026-11-11T00:00:00Z -\n', 2],
+    ['2026-11-08T00:00:00Z +05:30\r\n2026-11-11T00:00:00Z -\r\n', 1],
+    ['\n', 1],
+  ]) {
+    stops(text, `damaged at line ${line}`)
+  }
+
+  // A file that covers no line's time, as for a log changed under the run, or covers some: the
+  // line is printed, with `no time`, and nothing else changes.
+  for (const text of ['', '2026-11-10T00:00:00Z +05:30\n2026-11-11T00:00:00Z -\n', '2026-11-08T00:00:00Z +05:30\n2026-11-09T15:50:00Z -\n2026-11-09T15:50:01Z +05:30\n2026-11-11T00:00:00Z -\n']) {
+    fs.writeFileSync(offsets, text)
+    const result = show(['2', '3'])
+    assert.equal(result.code, 0, result.stderr)
+    assert.equal(result.stdout, `2  no time  ${stored(2).where}\n${stored(2).text}\n\n3  ${text === '' ? 'no time' : headerTime('2026-11-10T01:00:00Z', 'Asia/Kolkata')}  ${stored(3).where}\n${stored(3).text}\n`, JSON.stringify(text))
+  }
+  // What a run gives it is whole again.
+  prepare()
+  assert.equal(fs.readFileSync(offsets, 'utf8'), good)
+  assert.match(show(['2']).stdout, /^2 {2}Mon 9 Nov 2026 21:20 \+05:30 {2}/)
 })
 
 test('show: a line of a kind, a channel or a field this version doesn\'t know is printed as stored, and the index gives its kind', t => {
@@ -331,4 +425,27 @@ test('index file: one line for each seq, in order, each naming its own line of t
     assert.equal(points === undefined ? undefined : Number(points), stored.target ?? stored.replyTo, row)
   })
   assert.deepEqual([...logs.keys()], ['2026/11/07', '2026/11/08', '2026/11/09'].map(day => paths.dayLog(day)))
+})
+
+test('offsets file: the owner\'s zone\'s offsets through the days of the index\'s lines, as the runner\'s own time code gives them, with a row for each change and each gap', t => {
+  // London's clocks go back on 25 October 2026; no line on the days between the 26th and the 9th.
+  const lines = [line.text(1, '2026-10-24T22:00:00Z', 'a'), line.text(2, '2026-10-25T00:59:59Z', 'b'), line.text(3, '2026-10-25T01:00:00Z', 'c'), line.text(4, '2026-10-26T12:00:00Z', 'd'), line.text(5, '2026-11-09T15:50:00Z', 'e')]
+  const { paths, index, show } = setup(t, lines, { zone: 'Europe/London' })
+  const text = fs.readFileSync(paths.agentRunOffsets('lifelog'), 'utf8')
+  assert.equal(text, offsetsFileText(index, 'Europe/London'))
+  assert.equal(text, ['2026-10-24T00:00:00Z +01:00', '2026-10-25T01:00:00Z +00:00', '2026-10-27T00:00:00Z -', '2026-11-09T00:00:00Z +00:00', '2026-11-10T00:00:00Z -', ''].join('\n'))
+  assert.deepEqual(
+    show(['1', '2', '3', '4', '5'])
+      .stdout.split('\n')
+      .filter(row => /^\d {2}/.test(row))
+      .map(row => row.split('  ')[1]),
+    ['Sat 24 Oct 2026 23:00 +01:00', 'Sun 25 Oct 2026 01:59 +01:00', 'Sun 25 Oct 2026 01:00 +00:00', 'Mon 26 Oct 2026 12:00 +00:00', 'Mon 9 Nov 2026 15:50 +00:00'],
+  )
+  // A line of a kind this version doesn't know has its day covered too, as every line of the index.
+  const unknown = setup(t, [...fillerLines(1), { seq: 2, kind: 'note-v9', dir: 'in', at: '2026-11-12T10:00:00Z', source: 'whatsapp', trust: 'owner' }], { check: false })
+  assert.equal(fs.readFileSync(unknown.paths.agentRunOffsets('lifelog'), 'utf8'), '2026-11-08T00:00:00Z +05:30\n2026-11-09T00:00:00Z -\n2026-11-12T00:00:00Z +05:30\n2026-11-13T00:00:00Z -\n')
+  assert.match(unknown.show(['2']).stdout, /^2 {2}Thu 12 Nov 2026 15:30 \+05:30 {2}/)
+  // An empty datastore has an empty file.
+  const empty = setup(t, [])
+  assert.equal(fs.readFileSync(empty.paths.agentRunOffsets('lifelog'), 'utf8'), '')
 })
