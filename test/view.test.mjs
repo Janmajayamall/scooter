@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { isShown, mayChange, viewOf, viewProvider, writeRule } from '../src/runner/sandbox/view.mjs'
+import { isShown, allows, viewOf, viewProvider, writeRule } from '../src/runner/sandbox/view.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 import { gondolin } from './support/vm.mjs'
 
@@ -82,13 +82,13 @@ test('view: what the VM sees, and what writes lets it change, by path', () => {
 
   // A folder of writes may be made, removed and given a mode, and nothing else; a file anything but
   // made or removed as a folder.
-  for (const op of ['mkdir', 'rmdir', 'chmod']) assert.equal(mayChange(view, op, '/agents/lifelog/views'), true, op)
-  for (const op of ['open', 'unlink', 'rename', 'link', 'symlink', 'truncate']) assert.equal(mayChange(view, op, '/agents/lifelog/views'), false, op)
-  for (const op of ['open', 'unlink', 'rename', 'link', 'symlink', 'truncate', 'chmod']) assert.equal(mayChange(view, op, '/notes/todo.md'), true, op)
-  for (const op of ['mkdir', 'rmdir']) assert.equal(mayChange(view, op, '/notes/todo.md'), false, op)
+  for (const op of ['mkdir', 'rmdir', 'chmod']) assert.equal(allows(view, op, '/agents/lifelog/views'), true, op)
+  for (const op of ['open', 'unlink', 'rename', 'link', 'symlink', 'truncate']) assert.equal(allows(view, op, '/agents/lifelog/views'), false, op)
+  for (const op of ['open', 'unlink', 'rename', 'link', 'symlink', 'truncate', 'chmod']) assert.equal(allows(view, op, '/notes/todo.md'), true, op)
+  for (const op of ['mkdir', 'rmdir']) assert.equal(allows(view, op, '/notes/todo.md'), false, op)
   for (const op of ['open', 'mkdir', 'rmdir', 'unlink', 'rename', 'link', 'symlink', 'chmod', 'truncate']) {
-    assert.equal(mayChange(view, op, '/agents/lifelog/views/sub/a.csv'), true, op)
-    assert.equal(mayChange(view, op, '/agents/lifelog/state.json'), false, op)
+    assert.equal(allows(view, op, '/agents/lifelog/views/sub/a.csv'), true, op)
+    assert.equal(allows(view, op, '/agents/lifelog/state.json'), false, op)
   }
 })
 

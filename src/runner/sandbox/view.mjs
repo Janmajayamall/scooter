@@ -93,7 +93,7 @@ export function writeRule(view, p) {
 const FOLDER_OPS = ['mkdir', 'rmdir', 'chmod']
 
 // Whether `writes` lets the run do `op` at `p`.
-export function mayChange(view, op, p) {
+export function allows(view, op, p) {
   const rule = writeRule(view, p)
   if (rule === 'inside') return true
   if (rule === 'folder') return FOLDER_OPS.includes(op)
@@ -146,8 +146,8 @@ function writesProvider(gondolin, view, rootReal, backend) {
   // of `writes` never acts on a folder that is there in its place, which a rename would move whole.
   const check = (op, given, { follow, syscall = op } = {}) => {
     const p = normalize(given)
-    const landed = mayChange(view, op, p) ? landing(p, follow) : null
-    const allowed = landed !== null && mayChange(view, op, landed) && ![p, landed].some(at => writeRule(view, at) === 'file' && isFolderOnHost(at))
+    const landed = allows(view, op, p) ? landing(p, follow) : null
+    const allowed = landed !== null && allows(view, op, landed) && ![p, landed].some(at => writeRule(view, at) === 'file' && isFolderOnHost(at))
     if (!allowed) throw errnoError('EROFS', syscall, given)
     return { p, landed }
   }
