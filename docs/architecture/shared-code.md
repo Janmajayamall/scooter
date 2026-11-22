@@ -22,7 +22,7 @@ Two services and several programs share Scooter's folders, so a reader must neve
 
 ## Files another program controls
 
-The first five are what the bridge, as root, uses in a folder another user controls; when it uses them is in [Folders other users control](../ARCHITECTURE.md#folders-other-users-control). The last two are the runner's, for what pi wrote.
+The first five are what the bridge, as root, uses in a folder another user controls; when it uses them is in [Folders other users control](../ARCHITECTURE.md#folders-other-users-control). The last two are the runner's, for what pi wrote. The runner also reads what pi left with the first two: the session it keeps ([The session's copy](run.md#the-sessions-copy)), and what `send` and `mark` left ([What send and mark leave](run.md#what-send-and-mark-leave)).
 
 - **`copyUntrustedFile`** copies a file another program wrote into a folder of Scooter's own, and **`readUntrustedFile`** reads a small one. Each opens it without following a link at the end of its path and without waiting for a writer (`O_NOFOLLOW | O_NONBLOCK`), and takes it only if, on what was opened, it is a regular file with exactly one name, of at most the size it is given, and, when an owner is given, that user's. A link, a hard link to someone else's file, a FIFO, a device, or something huge is refused, with the code `EUNTRUSTED`, or `EFBIG` for the size. A copy is written under a temporary name beside its target, synced and renamed into place.
 - **`readUntrustedStart`** reads at most the start of such a file, as the header block of an email whose file may be large.
