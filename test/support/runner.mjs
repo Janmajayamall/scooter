@@ -155,7 +155,7 @@ export function exampleLines() {
 export function exampleState() {
   return {
     cursor: 1049,
-    retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T14:33:30Z', reason: 'not reported' }],
+    retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T14:33:30Z', reason: 'not marked' }],
     failed: [],
     backfillDone: [],
     scheduled: { '21:30': '2026-11-08' },
@@ -178,6 +178,6 @@ New messages:
 Retrying (not handled yet):
 #1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
 
-For context only (no action, no DONE):
+For context only (no action, nothing to mark):
 #1049 21:05 you sent: "Logged ₹340 Uber."
 #1048 21:04 the owner reacted 👍 to #1046`

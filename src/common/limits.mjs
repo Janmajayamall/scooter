@@ -205,9 +205,9 @@ const values = {
   // tests read what the programs they run in a VM print. Nothing else bounds what a program prints.
   SANDBOX_STDOUT_MAX_BYTES: 1 * MB,
   SANDBOX_STDERR_MAX_BYTES: 64 * KB,
-  // The most one run may write where it may write, what its `writes` names and `run/session/`, in
-  // bytes written and in names made (files, folders and links). The bridge
-  // writes on the same disk, so a run that writes more is stopped, its VM closed, and the run
+  // The most one run may write where it may write, what its `writes` names and `run/session/`,
+  // `run/send/` and `run/marks.txt`, in bytes written and in names made (files, folders and
+  // links). The bridge writes on the same disk, so a run that writes more is stopped, its VM closed, and the run
   // fails as pi's own failure; the runner then frees what it wrote. A run leaves at most
   // `AGENT_FILES_MAX_BYTES` and `AGENT_FILES_MAX_COUNT` in the repository and a session of
   // `SESSION_MAX_BYTES`; these leave room for rewriting them several times over.

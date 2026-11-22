@@ -15,7 +15,7 @@ const modeOf = file => fs.statSync(file).mode & 0o7777
 // An example state, with a pause.
 const EXAMPLE = {
   cursor: 1049,
-  retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
+  retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }],
   failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: 'unreadable PDF' }],
   backfill: { id: 'people-1', until: 1890, cursor: 812, retry: [], skipped: [1031] },
   backfillDone: [],

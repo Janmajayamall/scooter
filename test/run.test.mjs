@@ -180,7 +180,7 @@ test("run: the agent finds show on its PATH, and it prints the batch's lines fro
   const index = fs.readFileSync(paths.agentRunIndex('lifelog'), 'utf8').split('\n')
   assert.equal(index.length, 1044)
   assert.equal(index[1042], `1043 ${log}:2 edit 1042`)
-  // The run is what it was without show: both items reported, the cursor past them.
+  // The run is what it was without show: both items marked, the cursor past them.
   assert.equal(state().cursor, 1043)
   assert.deepEqual(state().retry, [])
 })

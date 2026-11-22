@@ -54,8 +54,8 @@ function main() {
     process.stdout.write(USAGE)
     return
   }
-  if (how !== 'done' && how !== 'failed') return fail(2, `say done or failed first\n${USAGE}`)
-  if (rest.length === 0) return fail(2, `name the line's number\n${USAGE}`)
+  if (how !== 'done' && how !== 'failed') return fail(2, `say done or failed first\n${USAGE.trimEnd()}`)
+  if (rest.length === 0) return fail(2, `name the line's number\n${USAGE.trimEnd()}`)
 
   let lines
   let seqs

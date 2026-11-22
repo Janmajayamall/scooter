@@ -48,7 +48,7 @@ test('failures: a crash discards the run\'s changes, counts an attempt, and send
   sandbox.behave({ crash: 3 })
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
-  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
   assert.deepEqual(state().retry, [{ seq: 1043, attempts: 1, due: '2026-11-09T15:51:46Z', reason: 'pi exited with code 3' }])
   assert.equal(state().cursor, 1043)
@@ -114,7 +114,7 @@ test('failures: an error in checking or committing what pi left fails the run an
   assert.ok(events().includes('runner.files_failed'))
   // Thrown away, and the session not kept.
   assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), [])
-  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
   // The same for `git commit`, at the next try: nothing is kept that the commit would have held.
@@ -520,7 +520,7 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   // A runner killed during a run leaves its lock and pi's changes.
   fs.writeFileSync(prepared.paths.runLock, '{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}\n')
   fs.writeFileSync(path.join(path.join(prepared.paths.agentDir('lifelog'), 'views'), 'half.csv'), 'x\n')
-  fs.symlinkSync('/etc/hostname', path.join(prepared.paths.agentMemory('lifelog'), 'link.md'))
+  fs.symlinkSync('/etc/hostname', path.join(path.join(prepared.paths.agentDir('lifelog'), 'memory'), 'link.md'))
   // A folder pi took the runner's access away from, with another inside.
   const locked = path.join(path.join(prepared.paths.agentDir('lifelog'), 'views'), 'locked')
   fs.mkdirSync(path.join(locked, 'deep'), { recursive: true })
@@ -534,7 +534,7 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   const second = await startTestRunner(t, prepared)
   assert.equal(fs.existsSync(prepared.paths.runLock), false)
   assert.deepEqual(fs.readdirSync(path.join(prepared.paths.agentDir('lifelog'), 'views')), [])
-  assert.deepEqual(fs.readdirSync(prepared.paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(prepared.paths.agentDir('lifelog'), 'memory')), [])
   assert.ok(prepared.events().includes('runner.lock_removed'))
   assert.ok(prepared.events().includes('agent.git_lock_removed'))
 

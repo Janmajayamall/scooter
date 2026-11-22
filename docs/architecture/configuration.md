@@ -105,8 +105,8 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 | `writes` | a list of paths in the data folder, below, which may be empty | What the agent's VM may change, and what its repository keeps ([The agent's folder](run.md#the-agents-folder)) |
 | `sends` | `whatsapp`, `email` or both, once each, or `[]` | The channels the agent's messages may go out on ([Choosing the channel](delivery.md#choosing-the-channel)) |
 | `session` | `daily` or `none` | [Sessions](runner.md#sessions) |
-| `reply_mode` | `quiet` or `confirm` | The reply mode ([The protocol](agent.md#the-protocol), [Reading the answer](run.md#reading-the-answer)) |
-| `ack_reaction` | one emoji, such as `"✅"`, or `""` for none, below | The reaction of quiet mode ([Reading the answer](run.md#reading-the-answer)) |
+| `reply_mode` | `quiet` or `confirm` | The reply mode ([show, and the runner's skill](agent.md#show-and-the-runners-skill), [What send and mark leave](run.md#what-send-and-mark-leave)) |
+| `ack_reaction` | one emoji, such as `"✅"`, or `""` for none, below | The reaction of quiet mode ([What send and mark leave](run.md#what-send-and-mark-leave)) |
 | `timeout_minutes` | a whole number of minutes, within `CONFIG_RANGES` | How long a run may take ([A run](run.md#a-run)) |
 | `run` | a list of triggers, when the agent runs, which may be empty, below | [When the agent runs](runner.md#when-the-agent-runs) |
 

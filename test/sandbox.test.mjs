@@ -62,8 +62,9 @@ function prepare(t, settings = {}) {
   const paths = makePaths(config)
   writeConfig(paths.configDir)
   const agent = paths.agentDir('lifelog')
-  for (const folder of ['views', 'memory', 'sessions', 'run/session']) fs.mkdirSync(path.join(agent, folder), { recursive: true })
+  for (const folder of ['views', 'memory', 'sessions', 'run/session', 'run/send']) fs.mkdirSync(path.join(agent, folder), { recursive: true })
   fs.writeFileSync(path.join(agent, 'state.json'), '{}\n')
+  fs.writeFileSync(path.join(agent, 'run', 'index.txt'), '')
   fs.writeFileSync(path.join(agent, 'sessions', 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
   fs.writeFileSync(path.join(agent, 'views', 'expenses.csv'), 'date,amount\n')
   fs.mkdirSync(paths.datastore, { recursive: true })
@@ -99,7 +100,7 @@ test('sandbox: a VM boots from the built image and runs pi --version, in under 3
   assert.match(sandbox.imageBuiltAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
 
   const result = await sandbox.run(specOf(prepared.paths, ['pi', '--version']))
-  assert.deepEqual({ ...result, signal: undefined }, { code: 0, signal: undefined, stdout: '1.5.2\n', stderr: '', stdoutCut: false, timedOut: false, wroteTooMuch: false })
+  assert.deepEqual({ ...result, signal: undefined }, { code: 0, signal: undefined, stdout: '1.5.2\n', stderr: '', timedOut: false, wroteTooMuch: false })
 
   // The fastest of three boots.
   for (let n = 0; n < 2; n++) assert.equal((await sandbox.run(specOf(prepared.paths, ['/bin/true']))).code, 0)
@@ -179,7 +180,7 @@ test("sandbox: doctor's boot check, stopped during the boot, closes its VM and r
   assert.deepEqual(scratch(long), [])
 })
 
-test("sandbox: what a run's VM sees, at the host's paths, may be changed only where writes names and in run/session, with sessions/ not there, even through a link", options, async t => {
+test("sandbox: what a run's VM sees, at the host's paths, may be changed only where writes names and in run/session, run/send and run/marks.txt, with sessions/ not there, even through a link", options, async t => {
   const prepared = prepare(t)
   const { paths } = prepared
   const sandbox = await openTestSandbox(t, prepared)
@@ -192,7 +193,10 @@ test("sandbox: what a run's VM sees, at the host's paths, may be changed only wh
     try touch ${agent}/run/session/s.jsonl
     try sh -c 'echo x >> ${agent}/state.json'
     try touch ${agent}/new.txt
-    try sh -c 'echo x > ${agent}/run/system.md'
+    try sh -c 'echo x > ${agent}/run/index.txt'
+    try sh -c 'echo x > ${agent}/run/send/1.json'
+    try sh -c 'echo done 1 >> ${agent}/run/marks.txt'
+    try sh -c 'echo x > ${agent}/run/marks2.txt'
     try sh -c 'echo x >> ${day}/log.jsonl'
     try rm ${day}/log.jsonl
     try chmod 600 ${agent}/state.json
@@ -219,7 +223,11 @@ test("sandbox: what a run's VM sees, at the host's paths, may be changed only wh
   expect(`touch ${agent}/run/session/s.jsonl`, 'ok')
   expect(`sh -c echo x >> ${agent}/state.json`, 'refused')
   expect(`touch ${agent}/new.txt`, 'refused')
-  expect(`sh -c echo x > ${agent}/run/system.md`, 'refused')
+  expect(`sh -c echo x > ${agent}/run/index.txt`, 'refused')
+  // The run's own places in run/: the messages send queues, and the marks file.
+  expect(`sh -c echo x > ${agent}/run/send/1.json`, 'ok')
+  expect(`sh -c echo done 1 >> ${agent}/run/marks.txt`, 'ok')
+  expect(`sh -c echo x > ${agent}/run/marks2.txt`, 'refused')
   expect(`sh -c echo x >> ${day}/log.jsonl`, 'refused')
   expect(`rm ${day}/log.jsonl`, 'refused')
   expect(`chmod 600 ${agent}/state.json`, 'refused')
@@ -354,7 +362,7 @@ test('sandbox: from inside the VM, another host, DNS to an outside resolver, UDP
   `.replace(/probe_http/g, 'curl -sS -f -m 8')
   for (const [name, network] of [
     ['the network policy, with internet access off', undefined],
-    ['with the fake model at OpenRouter, behind the policy', await fakeModelNetwork(t, createFakeModel([{ text: 'DONE' }]), prepared)],
+    ['with the fake model at OpenRouter, behind the policy', await fakeModelNetwork(t, createFakeModel([{ text: 'Done.' }]), prepared)],
   ]) {
     await t.test(name, async () => {
       hits.length = 0
@@ -480,7 +488,7 @@ test('sandbox: a run that writes more, or makes more names, than a run may is st
   const sandbox = await openTestSandbox(t, prepared)
   t.after(overrideLimits({ RUN_WRITE_MAX_BYTES: 1024 * 1024, RUN_NAMES_MAX_COUNT: 40 }))
   const views = path.join(paths.agentDir('lifelog'), 'views')
-  const memory = paths.agentMemory('lifelog')
+  const memory = path.join(paths.agentDir('lifelog'), 'memory')
 
   // Within both, nothing is stopped.
   const within = await sandbox.run(sh(paths, `head -c 500000 /dev/zero > ${views}/a.bin; for i in $(seq 1 20); do : > ${memory}/f$i; done; echo done`))
@@ -501,7 +509,7 @@ test('sandbox: a run that writes more, or makes more names, than a run may is st
   assert.deepEqual(fs.readdirSync(paths.runnerTmp), [])
 })
 
-test('sandbox: it keeps the start of stdout and the end of stderr, and says when stdout was cut', options, async t => {
+test('sandbox: it keeps the start of stdout and the end of stderr, and drops the rest', options, async t => {
   const prepared = prepare(t)
   const { paths } = prepared
   const sandbox = await openTestSandbox(t, prepared)
@@ -509,10 +517,9 @@ test('sandbox: it keeps the start of stdout and the end of stderr, and says when
   const result = await sandbox.run(sh(paths, "head -c 5000 /dev/zero | tr '\\0' a; head -c 3000 /dev/zero | tr '\\0' b >&2; echo END >&2"))
   assert.equal(result.code, 0)
   assert.equal(result.stdout, 'a'.repeat(1000))
-  assert.equal(result.stdoutCut, true)
   assert.equal(result.stderr, `${'b'.repeat(496)}END\n`)
-  const short = await sandbox.run(sh(paths, 'echo answer'))
-  assert.deepEqual({ stdout: short.stdout, stdoutCut: short.stdoutCut }, { stdout: 'answer\n', stdoutCut: false })
+  const short = await sandbox.run(sh(paths, 'echo short'))
+  assert.equal(short.stdout, 'short\n')
 })
 
 test("sandbox: a VM that doesn't start in time fails the run as one that couldn't run, and leaves nothing", options, async t => {
@@ -594,7 +601,8 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   const model = createFakeModel([
     { tool: 'read', args: { path: dayLog } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: 'date,time,merchant,amount,currency,source\n2026-11-09,21:20,Blue Tokai,150,INR,#1\n' } },
-    { text: 'NO_REPLY\nDONE: 1' },
+    { tool: 'bash', args: { command: 'mark done 1' } },
+    { text: 'Filed the coffee.' },
   ])
   const clock = systemClock
   const runner = await openRunner({
@@ -624,9 +632,10 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
   assert.equal(await git('log', '-1', '--format=%an%n%s'), 'Scooter\nlifelog: #1\n')
   assert.equal(await git('status', '--porcelain'), '')
-  // The state, the ✅, and the session kept.
+  // The state, from the mark, the ✅, and the session kept.
   const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
   assert.equal(state.cursor, 1)
+  assert.deepEqual(state.retry, [])
   assert.equal(state.lastRun.ok, true)
   const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
   // Under emulation the runner's first start also told the owner its VMs fell back to it.
@@ -638,12 +647,12 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   assert.ok(!JSON.stringify(model.requests.map(request => request.headers)).includes(KEY))
   // pi's own requests passed the policy, which asked for zero data retention in each, and the log
   // has each of them, with OpenRouter's answer.
-  assert.equal(model.modelRequests.length, 3)
+  assert.equal(model.modelRequests.length, 4)
   for (const request of model.modelRequests) assert.deepEqual(request.body.provider, { zdr: true, data_collection: 'deny' })
   const logged = readNetworkLog(paths, { from: Date.now() - 600_000, to: Date.now() + 1000 }).entries
   assert.deepEqual(
     logged.map(entry => entry.event),
-    ['request', 'response', 'end', 'request', 'response', 'end', 'request', 'response', 'end'],
+    Array(4).fill(['request', 'response', 'end']).flat(),
   )
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'request').map(entry => `${entry.method} ${entry.host}${entry.path}`))], ['POST openrouter.ai/api/v1/messages'])
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'response').map(entry => entry.status))], [200])
@@ -656,7 +665,7 @@ function systemPromptOf(request) {
   return typeof system === 'string' ? system : system.map(part => part.text ?? '').join('\n')
 }
 
-test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the protocol, the prompt, the runner's skill and the five skills, reads one, finds show and the zone rules that ship with the runner, and files a message by it", options, async t => {
+test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the prompt, the runner's skill and the five skills, reads two, finds show, send, mark and the zone rules that ship with the runner, files a message by them, says so with send and marks it with mark", options, async t => {
   const prepared = prepare(t)
   const { paths, settings, log } = prepared
   // The repository's own config folder, as `setup` copies it and Docker mounts it.
@@ -666,12 +675,15 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
 
   const skills = path.join(paths.agentRunConfig('lifelog'), 'skills')
   const header = 'date,time,merchant,description,amount,currency,category,payment,split,note,source'
+  const runnerSkillCopy = path.join(paths.agentRunSkills('lifelog'), 'scooter', 'SKILL.md')
   const model = createFakeModel([
+    { tool: 'read', args: { path: runnerSkillCopy } },
     { tool: 'read', args: { path: `${skills}/expenses/SKILL.md` } },
-    { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node show' } },
+    { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node show send mark' } },
     { tool: 'bash', args: { command: 'node -p process.versions.tz; printenv ICU_TIMEZONE_FILES_DIR' } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: `${header}\n2026-11-09,21:20,Blue Tokai,coffee,150,INR,Food & drink,,,,#1\n` } },
-    { text: 'NO_REPLY\nDONE: 1' },
+    { tool: 'bash', args: { command: "send <<'END'\nFiled the coffee at Blue Tokai: ₹150, \"Food & drink\".\nEND\nmark done 1" } },
+    { text: 'Filed it.' },
   ])
   const runner = await openRunner({
     settings: { ...settings, batchSeconds: 1 },
@@ -687,13 +699,14 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   }
   assert.deepEqual(outcome, { ok: true, cause: null })
 
-  // The system prompt: the protocol, then the agent's prompt, then the memory, and pi's list of the
-  // skills: the runner's, at its copy in run/skills/, then the five, each at its copy in
-  // run/config/, with the description its SKILL.md gives.
-  const [first, second, third, fourth] = model.modelRequests
+  // The system prompt: pi's own, with the agent's prompt appended, as the config folder has it,
+  // and pi's list of the skills: the runner's, at its copy in run/skills/, then the five, each at
+  // its copy in run/config/, with the description its SKILL.md gives. No memory: the agent reads
+  // its own.
+  const [first, second, third, fourth, fifth, , seventh] = model.modelRequests
   const system = systemPromptOf(first)
-  const at = ['# How you work with Scooter', '# You are lifelog', '# Your memory'].map(heading => system.indexOf(heading))
-  assert.ok(at[0] >= 0 && at[1] > at[0] && at[2] > at[1], JSON.stringify(at))
+  assert.ok(system.includes(fs.readFileSync(new URL('../config/prompts/lifelog.md', import.meta.url), 'utf8').trimEnd()))
+  assert.ok(!system.includes('# Your memory'))
   const offered = [...system.matchAll(/<skill>\s*<name>(.*?)<\/name>\s*<description>(.*?)<\/description>\s*<location>(.*?)<\/location>/gs)]
   const runnerSkill = new URL('../src/runner/vm/skills/scooter/SKILL.md', import.meta.url)
   assert.deepEqual(offered.map(([, name, , location]) => [name, location]), [
@@ -705,22 +718,32 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
     const own = /^description: (.*)$/m.exec(fs.readFileSync(file, 'utf8'))[1]
     assert.equal(description.replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&'), own, name)
   }
-  // pi read the skill from its copy; the programs the instructions name are in the image, and
-  // `show` is found in the run's copy, first on the PATH.
-  assert.equal(toolResults(second.body)[0].text, fs.readFileSync(new URL('../config/skills/expenses/SKILL.md', import.meta.url), 'utf8'))
-  const found = toolResults(third.body)[1].text.trim().split('\n')
-  assert.equal(found.length, 7, found.join('\n'))
-  assert.equal(found.at(-1), path.join(paths.agentRunBin('lifelog'), 'show'))
+  // pi read the skills from their copies; the programs the instructions name are in the image, and
+  // `show`, `send` and `mark` are found in the run's copy, first on the PATH.
+  assert.equal(toolResults(second.body)[0].text, fs.readFileSync(runnerSkill, 'utf8'))
+  assert.equal(toolResults(third.body)[1].text, fs.readFileSync(new URL('../config/skills/expenses/SKILL.md', import.meta.url), 'utf8'))
+  const found = toolResults(fourth.body)[2].text.trim().split('\n')
+  assert.equal(found.length, 9, found.join('\n'))
+  assert.deepEqual(found.slice(-3), ['show', 'send', 'mark'].map(program => path.join(paths.agentRunBin('lifelog'), program)))
   // What pi's bash tool runs gets the variable, and its Node converts with the rules it names, the
   // run's copy of those that ship with the runner.
-  assert.equal(toolResults(fourth.body)[2].text, `${icuTzRelease()}\n${paths.agentRunIcuTz('lifelog')}\n`)
+  assert.equal(toolResults(fifth.body)[3].text, `${icuTzRelease()}\n${paths.agentRunIcuTz('lifelog')}\n`)
+  // send and mark, from pi's bash tool, said what they did.
+  assert.equal(toolResults(seventh.body)[5].text, 'send: queued; it goes to the owner once this run has passed\nmark: 1 marked done\n')
 
-  // What pi wrote, committed, and the ✅.
+  // What pi wrote, committed; the message, and the ✅ from the mark; and what send and mark left,
+  // cleared.
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
   assert.equal(await git('log', '-1', '--format=%s', '--name-only'), 'lifelog: #1\n\nviews/expenses.csv\n')
   assert.equal(await git('status', '--porcelain'), '')
   const outbox = fs.readdirSync(paths.outbox).sort().map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
-  assert.deepEqual(outbox.filter(entry => entry.by === 'lifelog'), [{ type: 'react', by: 'lifelog', target: 1, emoji: '✅', channels: ['whatsapp'] }])
+  assert.deepEqual(outbox.filter(entry => entry.by === 'lifelog'), [
+    { type: 'text', by: 'lifelog', text: 'Filed the coffee at Blue Tokai: ₹150, "Food & drink".', about: 1, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1, emoji: '✅', channels: ['whatsapp'] },
+  ])
+  assert.deepEqual(JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8')).retry, [])
+  assert.deepEqual(fs.readdirSync(paths.agentRunSend('lifelog')), [])
+  assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
 })
 
 test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
@@ -734,7 +757,8 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   const model = createFakeModel([
     { tool: 'read', args: { path: sunday } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n' } },
-    { text: 'Filed the coffee.\nDONE: 1' },
+    { tool: 'bash', args: { command: "send 'Filed the coffee.'; mark done 1" } },
+    { text: 'Filed it.' },
   ])
   const said = []
   const result = await rebuildAgent({
@@ -753,7 +777,8 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   assert.match(JSON.stringify(first.body), /\[scooter\] Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
   assert.match(JSON.stringify(first.body), /New messages:\\n#1 10:30 text: \\"coffee 120 at Blue Tokai\\"/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000002/)
-  // One commit on the tagged one, the view in it, its session gone, and nothing sent.
+  // One commit on the tagged one, the view in it, its session gone, and nothing sent: what the
+  // batch queued with send is dropped.
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
   assert.equal(await git('log', '--format=%s'), 'lifelog: rebuild\nlifelog: initial commit\n')
   assert.equal(await git('rev-parse', 'HEAD^'), await git('rev-parse', result.tag))

@@ -39,7 +39,6 @@ test('limits: the values of the constants', () => {
     RESTIC_CHECK_WEEKDAY: 7,
     STATUS_WINDOW: 24 * 60 * MINUTE,
     // Milestone 3.
-    MEMORY_MAX_BYTES: 64 * 1024,
     GIT_CALL_TIMEOUT: MINUTE,
     CONFIG_RANGES: { timeout_minutes: [1, 120] },
     // Milestone 4.
@@ -49,7 +48,8 @@ test('limits: the values of the constants', () => {
     AGENT_FILES_MAX_BYTES: 100 * MB,
     // Milestone 4, after the owner's answer.
     AGENT_FILES_MAX_COUNT: 20000,
-    ANSWER_MAX_TEXTS: 25,
+    // The agent model, piece 6: ANSWER_MAX_TEXTS, renamed, at the same value.
+    RUN_MAX_SENDS: 25,
     // Milestone 5.
     TEXT_MAX_CHARS: 14000,
     OUTBOX_ENTRY_MAX_BYTES: MB,
@@ -88,6 +88,10 @@ test('limits: the values of the constants', () => {
     // Milestone 14.
     RUNNER_RESTART_WAITS: [MINUTE, 328634, 30 * MINUTE],
     LOGGED_NAME_MAX_CHARS: 64,
+    // The agent model, piece 6.
+    SEND_ENTRY_MAX_BYTES: MB,
+    MARKS_MAX_BYTES: 256 * 1024,
+    LOGGED_SEQS_MAX: 20,
   }
   for (const [name, value] of Object.entries(expected)) {
     assert.deepEqual(limits[name], value, name)
@@ -106,6 +110,14 @@ test('limits: a text at its longest is a few chunks, and its entry far under wha
   assert.equal(limits.TEXT_MAX_CHARS, 4 * limits.CHUNK_CHARS)
   // A character JSON writes longest is a control character, as six bytes.
   assert.ok(limits.TEXT_MAX_CHARS * 6 + 1024 < limits.OUTBOX_ENTRY_MAX_BYTES)
+})
+
+test('limits: what send writes of a text that goes out, and a batch\'s marks, fit what the runner reads of them', () => {
+  // A text cut at its longest, each character a control character JSON writes as six bytes.
+  assert.ok(limits.TEXT_MAX_CHARS * 6 + 1024 < limits.SEND_ENTRY_MAX_BYTES)
+  // Every item of a full batch, and as many brought in, marked failed with a reason as long as is
+  // kept, of four bytes a character, four times over.
+  assert.ok(4 * 2 * limits.BATCH_MAX_ITEMS * (32 + 4 * limits.REASON_MAX_CHARS) < limits.MARKS_MAX_BYTES)
 })
 
 test('limits: a run may write what the runner accepts after it several times over', () => {

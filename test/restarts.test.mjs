@@ -44,10 +44,11 @@ test('restarts: the runner keeps its own waits unless its environment says syste
 })
 
 // A runner whose batch, #1042, meets a fault that stays once pi has run: the outbox can't be
-// written, so the runner stops before the run is recorded, and runs the same batch at its next
-// start. `fault` can be turned off. Each start is as Docker's, at once after the last stop.
+// written, so the runner stops on the message the run sent, before the run is recorded, and runs
+// the same batch at its next start. `fault` can be turned off. Each start is as Docker's, at once
+// after the last stop.
 function faulty(t) {
-  const prepared = prepareTestRunner(t, { lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')], state: HANDLED, start: START })
+  const prepared = prepareTestRunner(t, { lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150 SAY')], state: HANDLED, start: START })
   const { clock, paths, sandbox } = prepared
   const control = { fault: true, piRuns: [], notices: [] }
   const keepNotices = () => {

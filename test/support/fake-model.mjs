@@ -10,7 +10,7 @@
 //
 // A step is one of:
 //   { tool: 'write', args: { path: 'views/a.csv', content: 'x' } }   the model calls one of pi's tools
-//   { text: 'NO_REPLY\nDONE: 1050' }                                 the model's answer, which ends the run
+//   { text: 'Filed it.' }                                            the model's last message, which ends the run
 //   { status: 401, message: 'User not found.' }                      OpenRouter refuses the request
 // A tool step may also carry `text`, which the model says before the call. A tool or text step may
 // carry `thinking: '…'`, sent ahead of everything else, the way a reasoning model does.

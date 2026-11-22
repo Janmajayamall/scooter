@@ -168,6 +168,8 @@ test("backfills: a batch's VM may change only the backfill's writes: a write any
   assert.deepEqual(files.writes, [
     { path: path.join(agent, 'views', 'people.csv'), folder: false },
     { path: paths.agentRunSession('lifelog'), folder: true },
+    { path: paths.agentRunSend('lifelog'), folder: true },
+    { path: paths.agentRunMarks('lifelog'), folder: false },
   ])
   for (const folder of ['views', 'memory']) assert.ok(files.reads.includes(path.join(agent, folder)), folder)
   // The VM refuses the writes anywhere else, which the stub stands for: the view outside them,
@@ -175,7 +177,7 @@ test("backfills: a batch's VM may change only the backfill's writes: a write any
   assert.deepEqual(sandbox.refused(), [path.join(agent, 'views', 'notes.csv'), path.join(agent, 'memory', 'preferences.md')])
   assert.equal(git('log', '-1', '--format=%s', '--name-only'), 'lifelog: backfill people-1 #1-#3\n\nviews/people.csv\n')
   assert.deepEqual(fs.readdirSync(path.join(agent, 'views')), ['people.csv'])
-  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.equal(views('people.csv').split('\n').filter(Boolean).length, 3)
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 3, retry: [], skipped: [] })
 })
@@ -299,7 +301,7 @@ test('backfill: the summary reads nothing through a link a run left on the way t
 })
 
 test("backfill: a batch's outcome settles the backfill's lane, as a live batch's settles the live one", () => {
-  const backfill = { id: 'people-1', until: 50, cursor: 10, retry: [{ seq: 4, attempts: 3, due: '2026-11-09T15:00:00Z', reason: 'not reported' }], skipped: [2, 7] }
+  const backfill = { id: 'people-1', until: 50, cursor: 10, retry: [{ seq: 4, attempts: 3, due: '2026-11-09T15:00:00Z', reason: 'not marked' }], skipped: [2, 7] }
   const state = { ...HANDLED, cursor: 60, backfill }
   // #4 on its fourth attempt, #7 brought back from skipped by an edit, and #11 to #13 new.
   const batch = {
@@ -318,7 +320,7 @@ test("backfill: a batch's outcome settles the backfill's lane, as a live batch's
     id: 'people-1',
     until: 50,
     cursor: 14,
-    retry: [{ seq: 13, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
+    retry: [{ seq: 13, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }],
     skipped: [2, 4, 12],
   })
   assert.deepEqual(ok.givenUp, [4])

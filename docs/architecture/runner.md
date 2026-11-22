@@ -6,14 +6,14 @@ This document covers the planner, pure functions from the state, the datastore a
 
 The runner never:
 - judges what a message says: it shows it to the model;
-- trusts pi beyond the instruction lines of its answer. The file check and git are the gate for what pi wrote ([After a successful run](run.md#after-a-successful-run)).
+- trusts pi beyond what `send` and `mark` leave, which it reads as files pi controls, once a run has passed ([What send and mark leave](run.md#what-send-and-mark-leave)). The file check and git are the gate for what pi wrote ([After a successful run](run.md#after-a-successful-run)).
 
 ## Files
 
 - `src/runner/main.mjs`: starting up, and the loop: `openRunner`, `startRunner` and `runRunner`.
 - `src/runner/triggers.mjs`: what the agent does next, `nextAction`.
 - `src/runner/batch.mjs`: the batch, its context and its size.
-- `src/runner/prompt.mjs`: the prompt, and `run/system.md`.
+- `src/runner/prompt.mjs`: the prompt.
 - `src/runner/datastore.mjs`: the runner's view of the datastore: the index, and when it last saw an incoming line.
 - `src/runner/state.mjs`: reading and writing `state.json`; sessions; the state at a start.
 - `src/runner/status.mjs`: `status.json`, and the emulation notice.
@@ -36,13 +36,13 @@ In `runner.env`, beside the settings of [the network policy](network-policy.md#s
 In this order:
 1. `runner.env`, and `agents.yaml`, which stops the runner on any fault, naming the field, with exit code 2 ([agents.yaml](configuration.md#agentsyaml)).
 2. The runner's folders, which `setup` makes in an install, and `runner/runner.sock`, held for as long as the runner lives ([One service per data folder](shared-code.md#one-service-per-data-folder)). *Why:* a second runner would run the same batches, write `state.json` against the first, and remove the first one's `run.lock` when it starts, so a backup could start during a run.
-3. What pi wrote that may still take room, removed before any folder is made: what an earlier clean-up set aside and couldn't remove, and what is in `run/session/`. *Why:* after a run that filled the disk, a crash can leave the clean-up cut short, a folder of `writes` set aside and not made again, or `run/session/` full; making that folder again then needs a block the disk hasn't got ([Facts about git, Node and Linux](run.md#facts-about-git-node-and-linux)), and a start that made its folders first couldn't start at all. So the folders of `writes` are made by the clean-up, once it has freed what pi wrote there.
+3. What pi wrote that may still take room, removed before any folder is made: what an earlier clean-up set aside and couldn't remove, and what the run could write in `run/`, `run/session/`, `run/send/` and `run/marks.txt` (`clearRunWrites`). *Why:* after a run that filled the disk, a crash can leave the clean-up cut short, a folder of `writes` set aside and not made again, or `run/session/` or `run/send/` full; making that folder again then needs a block the disk hasn't got ([Facts about git, Node and Linux](run.md#facts-about-git-node-and-linux)), and a start that made its folders first couldn't start at all. So the folders of `writes` are made by the clean-up, once it has freed what pi wrote there.
 4. The agent's folder, made if it is new ([The agent's folder](run.md#the-agents-folder)), with `agents/.discarded/<agent>/`, which is kept from then on; and git's leftover lock files, removed.
 5. [The clean-up](run.md#the-clean-up), which throws away what a run cut short by a crash or a stop left uncommitted. It takes no `run.lock`: it commits nothing, and a lock would make a file before what pi wrote is freed, on a disk pi may have filled. A backup taken meanwhile holds a repository whose commits are whole, and at worst the agent's files in part, which the next start puts back from the last commit. *Cost:* changes the owner makes by hand in what `writes` names in the agent's folder, and leaves uncommitted, are thrown away at the next start.
 6. The sandbox, which checks the image and picks the accelerator ([the sandbox](sandbox.md)). A sandbox that can't run as it is set up (`SandboxSetupError`) stops the runner with exit code 2. It opens after the clean-up, since it may make folders in `runner/tmp`.
 7. A leftover `run.lock`, removed and logged as `runner.lock_removed` ([The locks](exchange.md#the-locks)).
 8. The emulation notice, then `status.json` ([status.json](#statusjson)).
-9. The state at a start ([State](#state)), the datastore, and the protocol; and the release of the zone rules that ship for the VM, whose files are checked, and which is logged as `runner.zone_rules_differ`, with the runner's own, when the runner's Node's is another ([The zone rules](agent.md#the-zone-rules)).
+9. The state at a start ([State](#state)), and the datastore; and the release of the zone rules that ship for the VM, whose files are checked, and which is logged as `runner.zone_rules_differ`, with the runner's own, when the runner's Node's is another ([The zone rules](agent.md#the-zone-rules)).
 10. Where the runner keeps its own waits, the wait after a stop on an error ([Restarts](#restarts)); then the loop.
 
 Any other failure to start or to go on exits with 1.
@@ -78,7 +78,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 ```json
 {
   "cursor": 1049,
-  "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
+  "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not marked"}],
   "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
   "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
   "backfillDone": [],
@@ -96,7 +96,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work: the cursor moves past it, and the agent doesn't report on it. Of that, the messages Scooter sent and the reactions are shown to the agent as context ([The prompt](#the-prompt)); a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs, is passed over, as neither work nor context.
+**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work: the cursor moves past it, and the agent doesn't mark it. Of that, the messages Scooter sent and the reactions are shown to the agent as context ([The prompt](#the-prompt)); a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs, is passed over, as neither work nor context.
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 
@@ -114,7 +114,7 @@ A batch is due retries first, then work items after the cursor, oldest first, at
 - An item in `retry` whose line isn't a work item of the agent, which only changed `channels`, a damaged state, or a line this version no longer knows gives, is never due, and starts no batch.
 - **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line, with the context and the lines of channels no trigger names in that stretch. Where the cursor goes after the run is in [Failures](run.md#failures).
 - **The context:** the messages Scooter sent and the reactions, of the lines this version knows, from the oldest item to the end of what the batch covers, plus every message an item quotes.
-- **The newest item**, which an answer's plain text is about ([Reading the answer](run.md#reading-the-answer)), is the item with the highest `seq`.
+- **The newest item**, which a message `send` queued without `--reply-to` is about ([What send and mark leave](run.md#what-send-and-mark-leave)), is the item with the highest `seq`.
 
 **The size limit.** The prompt is one command-line argument, so the batch also stops growing before the prompt would pass `PROMPT_MAX_BYTES`, though it always keeps at least one item. It grows one item at a time, with what each brings in. When even the first item is too long:
 1. if it fits on its own, the oldest context lines are left out, and a line says how many;
@@ -144,7 +144,7 @@ New messages:
 Retrying (not handled yet):
 #1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
 
-For context only (no action, no DONE):
+For context only (no action, nothing to mark):
 #1049 21:05 you sent: "Logged ₹340 Uber."
 #1048 21:04 the owner reacted 👍 to #1046
 ```
@@ -164,12 +164,7 @@ For context only (no action, no DONE):
   ```
 - **A scheduled run** shows `Scheduled task (from your configuration, not a message from the owner):` and the task, instead of messages.
 
-**The system prompt.** Before each run the runner writes `run/system.md`, which pi gets with `--append-system-prompt`. It holds, in order:
-1. the protocol, `src/runner/protocol.md`, which ships with the runner ([The protocol](agent.md#the-protocol));
-2. the agent's prompt, from the run's copy of the config folder;
-3. a `# Your memory` section with what `memory/preferences.md` and `memory/needs-review.md` hold, or "(empty)".
-
-Each memory file is opened without following a link, and only a regular file is read, at most `MEMORY_MAX_BYTES` of it; otherwise the section says the file wasn't read, or was cut and should be shortened. When `memory` is itself a file, which `writes` may name as one, there is no memory file in it, and the section says "(empty)", as with no `memory/` at all: a path through a file names nothing. The same holds, and nothing is read through it, when `memory` is a link or a folder the runner can't search, which a run the runner never cleaned up after can leave there once `writes` has changed: the runner judges it as it judges the way to an entry ([A change of writes](run.md#a-change-of-writes)). *Why:* pi writes `memory/`, as the default `writes` lets it. A run that leaves a link there fails and is cleaned up, but a runner stopped before the clean-up would read the link at its next run, and a link to `runner.env` would put the OpenRouter key into the prompt. A file that grew without bound would make every request too large, and no run could then shorten it. And an error there would stop every run before pi, without counting an attempt. *Cost:* a memory file the runner can't open, such as one of mode 000, is such an error, which a run the runner never cleaned up after can leave in `memory/` once `memory/` has left `writes`: the runner stops before every run, with no attempt counted, and again after each restart ([Restarts](#restarts)), until the owner gives the file its read access back, or removes it. With `memory/` in `writes` it can't happen: the check fails a run that leaves such a file, and the clean-up puts the folder back as the last commit has it. Asked on 2026-11-22 "Leave the two new cases as documented costs and merge piece 4?", this file and the `.gitignore` of [A change of writes](run.md#a-change-of-writes), with the other choice to fix both in code, the owner answered "Yes, document and merge".
+**The system prompt** is pi's own, with the run's copy of the agent's prompt appended ([How pi is run](agent.md#how-pi-is-run)): the runner adds nothing to it. What the system says to the agent is in the runner's skill ([show, and the runner's skill](agent.md#show-and-the-runners-skill)), and the memory files are the agent's to read, as its prompt says ([Memory](agent.md#memory)): the runner reads nothing in `memory/`.
 
 ## Restarts
 

@@ -76,7 +76,7 @@ function main() {
       return
     }
     // A word that looks like an option, before the text: a text can start with `- `, a list.
-    if (words.length === 0 && OPTION.test(arg)) return fail(2, `it takes no option ${JSON.stringify(arg)}\n${USAGE}`)
+    if (words.length === 0 && OPTION.test(arg)) return fail(2, `it takes no option ${JSON.stringify(arg)}\n${USAGE.trimEnd()}`)
     words.push(arg)
   }
 
@@ -91,7 +91,7 @@ function main() {
     }
   }
   text = text.trim()
-  if (text === '') return fail(2, `nothing to send: give the text as an argument, or on standard input\n${USAGE}`)
+  if (text === '') return fail(2, `nothing to send: give the text as an argument, or on standard input\n${USAGE.trimEnd()}`)
 
   // `run/send/`, beside the folder this program is in.
   const dir = path.join(path.dirname(path.resolve(process.argv[1])), '..', 'send')

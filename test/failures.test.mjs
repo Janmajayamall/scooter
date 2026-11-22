@@ -231,17 +231,6 @@ test('failures: the cause is the status of OpenRouter\'s last answer, or what pi
     reason: 'pi wrote more than a run may',
     status: null,
   })
-  // An answer longer than the sandbox keeps, after pi exited with 0; after a failure, the failure.
-  assert.deepEqual(failureCause({ result: failed(0, { stdoutCut: true }), answer: { status: 200 } }), {
-    cause: 'other',
-    reason: "pi's answer was too long",
-    status: 200,
-  })
-  assert.deepEqual(failureCause({ result: failed(1, { stdoutCut: true }), answer: { status: 429 } }), {
-    cause: 'outage',
-    reason: 'OpenRouter answered 429',
-    status: 429,
-  })
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -281,17 +270,17 @@ const STATE = { ...initialAgentState(), cursor: 0 }
 const batchOf = (items, covered = 5) => ({ items: items.map(([seq, origin, attempt]) => ({ seq, origin, attempt })), context: [4], covered, newest: items.at(-1)[0] })
 const ok = (done, failed = {}) => ({ ok: true, done: new Set(done), failed: new Map(Object.entries(failed).map(([seq, reason]) => [Number(seq), reason])) })
 
-test('state: after a success, done items go, FAILED ones go to failed, the rest wait a minute; the cursor covers the batch', () => {
+test('state: after a success, items marked done go, those marked failed go to failed, the rest wait a minute; the cursor covers the batch', () => {
   const batch = batchOf([[1, 'new', 1], [2, 'new', 1], [3, 'new', 1], [5, 'new', 1]])
   const { state, givenUp } = settleBatch(STATE, batch, ok([1, 5], { 2: 'unreadable photo' }), TIMING)
   assert.deepEqual(givenUp, [])
   assert.equal(state.cursor, 5)
-  assert.deepEqual(state.retry, [{ seq: 3, attempts: 1, due: '2026-11-09T15:52:00Z', reason: 'not reported' }])
+  assert.deepEqual(state.retry, [{ seq: 3, attempts: 1, due: '2026-11-09T15:52:00Z', reason: 'not marked' }])
   assert.deepEqual(state.failed, [{ seq: 2, at: '2026-11-09T15:51:00Z', reason: 'unreadable photo' }])
   assert.deepEqual(state.lastRun, { at: '2026-11-09T15:50:10Z', ok: true, seqs: [1, 2, 3, 5], durationMs: 50000 })
 })
 
-test('state: an item not reported four times in a row is given up on', () => {
+test('state: an item not marked four times in a row is given up on', () => {
   let state = { ...STATE, cursor: 5, retry: [] }
   let attempt = 1
   let now = NOW
@@ -314,7 +303,7 @@ test('state: an item not reported four times in a row is given up on', () => {
 })
 
 test('state: a failure of pi\'s own counts an attempt for every item; a setup error or an outage counts none and pauses', () => {
-  const state = { ...STATE, cursor: 3, retry: [{ seq: 1, attempts: 2, due: '2026-11-09T15:40:00Z', reason: 'not reported' }], failed: [{ seq: 2, at: '2026-11-09T15:00:00Z', reason: 'x' }] }
+  const state = { ...STATE, cursor: 3, retry: [{ seq: 1, attempts: 2, due: '2026-11-09T15:40:00Z', reason: 'not marked' }], failed: [{ seq: 2, at: '2026-11-09T15:00:00Z', reason: 'x' }] }
   // #1 is a due retry; #2 was brought back from failed by an edit; #5 is new.
   const batch = batchOf([[1, 'retry', 3], [2, 'failed', 1], [5, 'new', 1]])
 

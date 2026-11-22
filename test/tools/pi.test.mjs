@@ -76,7 +76,7 @@ test('pi: it refuses a flag it does not know, and --no-context-files keeps AGENT
   const data = makeDataDir(dir)
 
   async function run(args) {
-    const model = createFakeModel([{ text: 'DONE: 1050' }])
+    const model = createFakeModel([{ text: 'Filed it.' }])
     const vm = await startVm(t, { model, files: designFiles(data) })
     // A context file where pi looks for one, as an earlier run might leave it if the home folder
     // survived.
@@ -110,7 +110,7 @@ test('pi 1: skills given with --skill load when --no-skills is set', options, as
   const data = makeDataDir(dir)
 
   async function skillsSeen(without) {
-    const model = createFakeModel([{ tool: 'read', args: { path: `${data.skill}/SKILL.md` } }, { text: 'DONE: 1050' }])
+    const model = createFakeModel([{ tool: 'read', args: { path: `${data.skill}/SKILL.md` } }, { text: 'Filed it.' }])
     const vm = await startVm(t, { model, files: designFiles(data) })
     // What a run would find if an earlier one could leave skills in the home folder.
     for (const [folder, name] of [
@@ -147,8 +147,8 @@ test('pi 2: a session is one file, and a second run with the same ID continues i
   const data = makeDataDir(dir)
   const session = { dir: data.session, id: SESSION_ID }
 
-  async function run(prompt, answer, { cwd = data.agent, memory, skills = [] } = {}) {
-    if (memory) fs.writeFileSync(data.systemPrompt, `# Your memory\n\n${memory}\n`)
+  async function run(prompt, answer, { cwd = data.agent, system, skills = [] } = {}) {
+    if (system) fs.writeFileSync(data.systemPrompt, `# You are lifelog\n\n${system}\n`)
     const model = createFakeModel([{ text: answer }])
     const vm = await startVm(t, { model, files: designFiles(data) })
     const result = await runPi(vm, { prompt, session, systemPrompt: data.systemPrompt, skills }, { cwd })
@@ -158,7 +158,7 @@ test('pi 2: a session is one file, and a second run with the same ID continues i
   }
 
   // A new ID: pi says so on stderr and writes one file, named after the time and the ID.
-  const first = await run('first prompt', 'first answer', { memory: 'memory as of the first run' })
+  const first = await run('first prompt', 'first answer', { system: 'the prompt as of the first run' })
   const warning = `Warning: No project session found with id '${SESSION_ID}'; creating a new session with that id.\n`
   assert.equal(first.stderr, warning)
   assert.equal(first.files.length, 1)
@@ -175,7 +175,7 @@ test('pi 2: a session is one file, and a second run with the same ID continues i
   // The system prompt and the skills are the ones given to this run, not the ones the session
   // started with.
   assert.deepEqual(skillsIn(systemPromptOf(first.request)), [])
-  const second = await run('second prompt', 'second answer', { memory: 'memory as of the second run', skills: [data.skill] })
+  const second = await run('second prompt', 'second answer', { system: 'the prompt as of the second run', skills: [data.skill] })
   assert.equal(second.stderr, '')
   assert.deepEqual(second.files, first.files)
   assert.deepEqual(conversationOf(second.request), [
@@ -183,8 +183,8 @@ test('pi 2: a session is one file, and a second run with the same ID continues i
     ['assistant', 'first answer'],
     ['user', 'second prompt'],
   ])
-  assert.ok(systemPromptOf(second.request).includes('memory as of the second run'))
-  assert.ok(!systemPromptOf(second.request).includes('memory as of the first run'))
+  assert.ok(systemPromptOf(second.request).includes('the prompt as of the second run'))
+  assert.ok(!systemPromptOf(second.request).includes('the prompt as of the first run'))
   assert.deepEqual(skillsIn(systemPromptOf(second.request)), ['expenses'])
 
   // pi finds the session by that first line, not by the file's name: the runner may keep the file
@@ -216,7 +216,7 @@ test('pi 3: edit and write leave nothing beside the files they change', options,
     { tool: 'write', args: { path: book, content: '# Dune\n\n- started\n' } },
     { tool: 'edit', args: { path: book, edits: [{ oldText: '- started', newText: '- started, chapter 3' }] } },
     { tool: 'edit', args: { path: preferences, edits: [{ oldText: 'Track coffee.', newText: 'Track coffee and tea.' }] } },
-    { text: 'NO_REPLY\nDONE: 1050' },
+    { text: 'Filed it.' },
   ])
   const vm = await startVm(t, { model, files: designFiles(data) })
   const result = await runPi(vm, { prompt: 'file it', session: { dir: data.session, id: SESSION_ID } }, { cwd: agent })
@@ -247,7 +247,7 @@ test('pi 4: --no-mcp works together with -p', options, async t => {
   const marker = '/root/mcp-server-started'
 
   async function run(without) {
-    const model = createFakeModel([{ tool: 'bash', args: { command: 'sleep 1' } }, { text: 'DONE: 1050' }])
+    const model = createFakeModel([{ tool: 'bash', args: { command: 'sleep 1' } }, { text: 'Filed it.' }])
     const vm = await startVm(t, { model, files: designFiles(data) })
     // An MCP server in pi's own config folder, as an earlier run might leave one if the home
     // folder survived. Starting it leaves a mark.
@@ -264,7 +264,7 @@ test('pi 4: --no-mcp works together with -p', options, async t => {
   // The runner's command runs to the end, and the server is never started.
   const designed = await run([])
   assert.equal(designed.result.exitCode, 0, designed.result.stderr)
-  assert.equal(designed.result.stdout, 'DONE: 1050\n')
+  assert.equal(designed.result.stdout, 'Filed it.\n')
   assert.equal(designed.started, false)
   assert.deepEqual(designed.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'])
 
@@ -295,7 +295,7 @@ test('pi 5: stdout holds the last answer and nothing else, and a refusal ends wi
 
   // A normal run. What the model thought, and what it said before its tool calls, is not printed.
   // The last answer is, exactly as the model wrote it, followed by one line break.
-  const answer = '  Filed ₹150 for coffee ☕.  \n\nREPLY_TO: 1050\nGot it.\nDONE: #1050\n\n'
+  const answer = '  Filed ₹150 for coffee ☕.  \n\n- *one*\nGot it.\n#1050\n\n'
   for (const model of [MESSAGES_MODEL, CHAT_MODEL]) {
     const log = `${data.day}/log.jsonl`
     const view = `${data.agent}/views/expenses.csv`
@@ -368,7 +368,7 @@ test('pi 6: the requests pi makes on both routes match the saved fixtures', opti
 test('pi 7: a 100 KB prompt argument works, and one of 128 KB fails', options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
-  const model = createFakeModel([{ text: 'DONE: 1050' }])
+  const model = createFakeModel([{ text: 'Filed it.' }])
   const vm = await startVm(t, { model, files: designFiles(data) })
 
   // The largest single argument Linux takes is 128 KB less the byte that ends it.
@@ -427,13 +427,13 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     { tool: 'read', args: { path: '/root/out.jpg' } },
     // Outside the writable folders a tool fails, and pi tells the model so instead of stopping.
     { tool: 'write', args: { path: `${agent}/state.json`, content: '{}' } },
-    { text: 'NO_REPLY\nDONE: 1050' },
+    { text: 'Filed it.' },
   ]
   const model = createFakeModel(steps)
   const vm = await startVm(t, { model, files: designFiles(data) })
   const result = await runPi(vm, { prompt: 'file it' }, { cwd: agent })
   assert.equal(result.exitCode, 0, result.stderr)
-  assert.equal(result.stdout, 'NO_REPLY\nDONE: 1050\n')
+  assert.equal(result.stdout, 'Filed it.\n')
 
   const results = toolResults(model.modelRequests.at(-1).body)
   assert.equal(results.length, steps.length - 1)

@@ -13,7 +13,6 @@ import { buildBatch, buildTaskPrompt } from '../src/runner/batch.mjs'
 import { loadConfig } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
 import { createGit } from '../src/runner/git.mjs'
-import { loadProtocol } from '../src/runner/prompt.mjs'
 import { loadState, saveState, sessionId, startupState } from '../src/runner/state.mjs'
 import { nextAction } from '../src/runner/triggers.mjs'
 import { createFakeClock } from './support/clock.mjs'
@@ -86,10 +85,10 @@ test('planning: from the datastore, the state and the clock to the next action, 
   // The run's folder, for the day's session.
   const session = sessionId(agent.name, { now: clock.now(), timeZone: SETTINGS.timeZone, rolloverHour: SETTINGS.sessionRolloverHour })
   assert.equal(session, 'lifelog-2026-11-09')
-  const run = prepareRun({ paths, agent, protocol: loadProtocol(), index: datastore.index, sessionId: session })
-  const system = fs.readFileSync(run.systemFile, 'utf8')
-  assert.ok(system.startsWith(loadProtocol().trimEnd()))
-  assert.ok(system.endsWith('\n\nYou are lifelog.\n\n# Your memory\n\n## memory/preferences.md\n\n(empty)\n\n## memory/needs-review.md\n\n(empty)\n'))
+  // What pi appends to its system prompt is the agent's prompt, as the config folder has it, and
+  // nothing else.
+  const run = prepareRun({ paths, agent, index: datastore.index, sessionId: session })
+  assert.equal(fs.readFileSync(run.promptFile, 'utf8'), 'You are lifelog.\n')
 })
 
 test('planning: a text such as /new is a message, which waits for the owner to be quiet and goes into the batch', async t => {
