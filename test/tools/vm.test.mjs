@@ -654,7 +654,8 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
     assert.equal(shown.stdout, kolkata, argv.join(' '))
     assert.equal(shown.stderr, '', argv.join(' '))
   }
-  // The same as the host prints, which the tests of `show` hold to the runner's own time code.
+  // The same as the host prints, from the same offsets file, which the runner's own time code
+  // wrote: the VM's Node converts nothing, whatever zone data it has (`VM 8`).
   const host = spawnSync(process.execPath, [path.join(bin, 'show'), '6'], { env: {}, encoding: 'utf8' })
   assert.equal(host.stdout, kolkata)
   // It reads no TZ: without one, or with another, it prints the same.
