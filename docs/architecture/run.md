@@ -7,13 +7,13 @@ A run is one run of pi, in one VM, on one batch or task, from the lock to the st
 - `src/runner/run.mjs`: one run: the lock, the sandbox's spec, then what follows a success or a failure.
 - `src/runner/answer.mjs`: reading pi's answer, and the replies and reactions it asks for.
 - `src/runner/failures.mjs`: the cause of a failure, pauses, attempts, the state after a run, and the notices.
-- `src/runner/agentdir.mjs`: the agent's folder, `run/` before each run, with the index file and the offsets file, and the session copied back.
+- `src/runner/agentdir.mjs`: the agent's folder, `run/` before each run, with the index file and a copy of the zone rules, and the session copied back.
 - `src/runner/git.mjs`: git, run on the agent's repository; the file check, the commit and the clean-up.
 
 ## A run
 
 1. **The lock.** The runner takes `run.lock`, and gives way to a backup, as [The locks](exchange.md#the-locks) says (`acquireRunLock`).
-2. **`run/`.** `prepareRun` removes `run/` with `removeTree` ([Files another program controls](shared-code.md#files-another-program-controls)), however deep what pi left there goes, and makes it again: `config/`, the run's copy of the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses`, a file that can be run keeping that; `skills/scooter/`, the runner's own skill, and `bin/show`, a program pi finds on its `PATH` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)); `index.txt`, the index file ([The index file](#the-index-file)); `offsets.txt`, the offsets file ([The offsets file](#the-offsets-file)); `session/`, with the session's copy ([The session's copy](#the-sessions-copy)); and `system.md` ([The prompt](runner.md#the-prompt)). A backfill's run copies only its skills, beside the runner's. All of `run/` but `session/` is read-only in the VM, and the runner reads none of it back. A link in a skill's folder isn't copied: `prepareRun` refuses it, since a copy that followed it would show pi whatever it leads to. *Why a copy:* pi sees only that run's copy, never the config folder itself, which belongs to the owner.
+2. **`run/`.** `prepareRun` removes `run/` with `removeTree` ([Files another program controls](shared-code.md#files-another-program-controls)), however deep what pi left there goes, and makes it again: `config/`, the run's copy of the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses`, a file that can be run keeping that; `skills/scooter/`, the runner's own skill, and `bin/show`, a program pi finds on its `PATH` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)); `icu-tz/`, ICU's zone rules, which every Node in the VM converts times with ([The zone rules](agent.md#the-zone-rules)); `index.txt`, the index file ([The index file](#the-index-file)); `session/`, with the session's copy ([The session's copy](#the-sessions-copy)); and `system.md` ([The prompt](runner.md#the-prompt)). A backfill's run copies only its skills, beside the runner's. All of `run/` but `session/` is read-only in the VM, and the runner reads none of it back. A link in a skill's folder isn't copied: `prepareRun` refuses it, since a copy that followed it would show pi whatever it leads to. *Why a copy:* pi sees only that run's copy, never the config folder itself, which belongs to the owner.
 3. **pi.** The runner gives the sandbox the run's spec: pi's command line ([How pi is run](agent.md#how-pi-is-run)), the agent's folder as its working folder, what the VM sees and may change and the environment ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change), [Environment](sandbox.md#environment)), `timeout_minutes`, and the network policy for the agent's model and the internet setting ([the network policy](network-policy.md)) (`runSpec`). What a run may change is the agent's `writes`, or a backfill's narrower ones, and `run/session/`: the sandbox refuses every other change, so nothing after the run compares what changed with what might.
 4. **After it:** [After a successful run](#after-a-successful-run), or [Failures](#failures).
 5. **The lock** is let go of, after the packing ([After a successful run](#after-a-successful-run)) and the clean-up, which have no time limit.
@@ -45,28 +45,6 @@ Before each run `prepareRun` writes `run/index.txt` from the runner's index of t
 - **It is read-only in the VM**, as all of `run/` but `run/session/` is, and the runner never reads it back: the next run's `prepareRun` makes it anew.
 
 *Cost:* a line of the file for each line of the datastore, written before every run. For 100 lines a day over five years, 182,500 lines, it was 10 MB with the data folder at `/data` and 12 MB at `/var/lib/scooter`, written in 0.26 to 0.41 seconds on the machine Scooter was built on; `show` reads only the lines it needs of it, in 0.08 seconds there for a line near its end. It is in backups, as all of `run/` is.
-
-## The offsets file
-
-Beside the index file `prepareRun` writes `run/offsets.txt`: the offsets from UTC of the owner's zone, `SCOOTER_TZ`, through every UTC day that holds a line of the index file, worked out by the runner's own time code (`offsetsFileText`, with `offsetsOverDays` of [Time](shared-code.md#time)). One row for each instant from which the offset is another, in order, `<instant> <offset>`, the instant as the datastore writes a time, the end of a line's day in 9999 being in the year 10000, and the offset as `show`'s header ends with it, or `-` from where no such day is on, the last row among them:
-
-```text
-2026-10-24T00:00:00Z +01:00
-2026-10-25T01:00:00Z +00:00
-2026-10-27T00:00:00Z -
-2026-11-09T00:00:00Z +00:00
-2026-11-10T00:00:00Z -
-```
-
-That is an owner in London, with lines from 24 to 26 October 2026, when the clocks went back, and on 9 November. `show` adds the offset to a line's `at` for its header, and prints the offset after the time, as the file writes it ([show, and the runner's skill](agent.md#show-and-the-runners-skill)).
-
-- **Why a file:** so that the time in the VM is the runner's, which the rest of Scooter goes by, and `show` asks no zone database. The image's Node has zone data of its own, which nothing checks, and which gave another time in thirteen zones the runner starts with (review 1 of piece 5). *Why not each line's offset in the index file:* the index file keeps the format the plan of the agent model gives it, and the agent searches it.
-- **What it covers:** the days of every line of the index, of any kind, so every line `show` prints, and the line it points at. A day is covered whole, from 00:00 UTC to the next day's, and the days without a line aren't: a line's `at` can be of any year from 100 to 9999, as an email's, taken from its `Date` header, can, and covering what lies between would take a lookup for each of millions of days.
-- **The offsets are the runner's,** to the second, in each day it covers, as long as no zone changes its offset twice within six hours ([Time](shared-code.md#time)).
-- **It is read-only in the VM**, as all of `run/` but `run/session/` is, and the runner never reads it back: the next run's `prepareRun` makes it anew. An index with no lines gives an empty file.
-- **`prepareRun` is given the zone, `SCOOTER_TZ`, and makes nothing without one**, before it removes anything: given none, `Intl` would quietly take the process's own.
-
-*Cost:* a lookup of the offset four times a day, for each day with a line, before every run: 63 to 96 ms for 182,500 lines over five years, 100 a day, giving 2 rows in Kolkata, 11 in Vancouver and 12 in London, on the machine Scooter was built on. Each stretch of days without a line, between two days with one, adds two rows: a line every other day for five years gave 1,834 rows, 47 KB, which `show` reads whole.
 
 ## Reading the answer
 
@@ -189,7 +167,7 @@ These rules, and those of [After a successful run](#after-a-successful-run), ans
 |---|---|---|
 | what `writes` names in it | with the default configuration, `views/`, with `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`, and `memory/`, with `preferences.md` and `needs-review.md` ([Memory](agent.md#memory)) | yes |
 | `sessions/` | pi's sessions, hidden from the VM ([The session's copy](#the-sessions-copy)) | no |
-| `run/` | made again before each run: `system.md`, `config/`, `skills/`, `bin/`, `index.txt`, `offsets.txt` and `session/` ([A run](#a-run)) | no |
+| `run/` | made again before each run: `system.md`, `config/`, `skills/`, `bin/`, `icu-tz/`, `index.txt` and `session/` ([A run](#a-run)) | no |
 | `state.json` | the runner's state ([State](runner.md#state)) | no |
 
 **The repository keeps what the agent's `writes` names in its folder** (`agent.repository`): its entries, files or folders, in the order `writes` gives them, an entry in a folder another names left out, as that folder holds it. They are what the file check walks, what is committed, and what the clean-up puts back. *Why only those:* everything else in the folder is the runner's, or isn't the agent's to change. A path of `writes` outside the agent's folder is none of the repository's: the VM may change it, and the runner otherwise leaves it alone, as [agents.yaml](configuration.md#agentsyaml) says, with what that costs. The owner agreed to this on 2026-11-21, among the six points the plan of the agent model added to issue 25: "yes to all".

@@ -256,7 +256,7 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
   2. Add `skills/<name>` to the agent's `skills` in `agents.yaml`.
   3. Add a line for its view to the list in `prompts/lifelog.md`: `- books.csv: books read or started (skill: books)`.
   4. To file the messages from before the skill was added, add a `backfill` entry (see [Backfills](#backfills)).
-- **Upgrades:** the protocol the agent follows ships with the runner, and so do the runner's own skill, `scooter`, which says how to read the datastore, and `show`, the command the agent reads a message with; they change with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
+- **Upgrades:** the protocol the agent follows ships with the runner, and so do the runner's own skill, `scooter`, which says how to read the datastore, `show`, the command the agent reads a message with, and the time zone rules the agent's VM converts times with; they change with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
 
 ## Backups and restore
 
@@ -434,7 +434,7 @@ docker compose up -d
 
 ## Development
 
-The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
+The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. The tests of `show` give Node the zone rules that ship with the runner through `ICU_TIMEZONE_FILES_DIR`, which Node's own builds take (`test/tools/icu-tz.test.mjs`). Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
 
 **The suite** runs three ways. With wacli and restic installed, restic in the container too, every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-22, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
 
@@ -460,6 +460,8 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
   It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 850 tests, 779 passed, 71 skipped: 41 for the image, 15 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+
+**The zone rules** the agent's VM converts times with ship in `src/runner/vm/icu-tz/`, for one release of the tz database, which `release.txt` names. To update them to a newer one, replace the four files and `release.txt` as [Updating them](docs/architecture/agent.md#updating-them) says, and run the suite.
 
 **The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks what a run sees and may change with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 

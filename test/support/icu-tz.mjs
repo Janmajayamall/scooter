@@ -2,10 +2,10 @@
 //
 // `show` converts in the VM with ICU's zone rules that ship with the runner, `src/runner/vm/icu-tz/`,
 // which pi's environment points the VM's Node at. This Node's own rules can be of another release
-// (2026e here, where the runner ships 2026f), and where two releases differ, `show` follows the
-// shipped one. So the times are worked out by the runner's own time code (`toLocal`) in a Node given
-// the same `ICU_TIMEZONE_FILES_DIR`: this file, run as a program, reads `{ zone, ats }` on stdin
-// and writes `{ tz, times }`.
+// (on 2026-11-22, 2026e here, where 2026f shipped), and where two releases differ, `show` follows
+// the shipped one. So the times are worked out by the runner's own time code (`toLocal`) in a Node
+// given the same `ICU_TIMEZONE_FILES_DIR`: this file, run as a program, reads `{ zone, ats }` on
+// stdin and writes `{ tz, times }`.
 
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'

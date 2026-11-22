@@ -790,8 +790,8 @@ test("VM 8: the image's Node converts with the zone rules that ship with the run
   assert.equal(await tzOf(env('Asia/Kolkata', 'changed')), release)
   // And one cut short leaves it no zone rules at all, or, now and then, makes it die as it starts,
   // with a segmentation fault, before any of `show` runs: either way `show` prints no time, saying
-  // why when it gets to run. Tried eight times each, a cut to half, to its first 64 bytes, and to
-  // all but its last 1,000 bytes; one start in eight or so died.
+  // why when it gets to run. Tried by hand, 24 starts each with the file cut to half, to its first
+  // 1,000 bytes, to its first 64, and to all but its last 1,000: 7 of the 96 died.
   for (let n = 0; n < 4; n++) {
     const started = await runIn(vm, ['node', '-p', 'JSON.stringify(process.versions.tz)'], { cwd, env: env('Asia/Kolkata', 'cut') })
     assert.ok(started.exitCode === 139 || (started.exitCode === 0 && started.stdout === '""\n'), JSON.stringify(started))
