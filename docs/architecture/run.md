@@ -64,6 +64,7 @@ That is an owner in London, with lines from 24 to 26 October 2026, when the cloc
 - **What it covers:** the days of every line of the index, of any kind, so every line `show` prints, and the line it points at. A day is covered whole, from 00:00 UTC to the next day's, and the days without a line aren't: a line's `at` can be of any year from 100 to 9999, as an email's, taken from its `Date` header, can, and covering what lies between would take a lookup for each of millions of days.
 - **The offsets are the runner's,** to the second, in each day it covers, as long as no zone changes its offset twice within six hours ([Time](shared-code.md#time)).
 - **It is read-only in the VM**, as all of `run/` but `run/session/` is, and the runner never reads it back: the next run's `prepareRun` makes it anew. An index with no lines gives an empty file.
+- **`prepareRun` is given the zone, `SCOOTER_TZ`, and makes nothing without one**, before it removes anything: given none, `Intl` would quietly take the process's own.
 
 *Cost:* a lookup of the offset four times a day, for each day with a line, before every run: 63 to 96 ms for 182,500 lines over five years, 100 a day, giving 2 rows in Kolkata, 11 in Vancouver and 12 in London, on the machine Scooter was built on. Each stretch of days without a line, between two days with one, adds two rows: a line every other day for five years gave 1,834 rows, 47 KB, which `show` reads whole.
 
