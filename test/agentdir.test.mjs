@@ -698,3 +698,67 @@ test('protocol: it ships with the runner and says what the answer parser reads',
     assert.ok(protocol.includes(words), words)
   }
 })
+
+test("git: a repository of files as well as folders: what isn't there yet is made a place for, a missing file is no fault, and the clean-up puts back what it set aside", async t => {
+  const { dir, paths, log, clock } = setup(t)
+  const entries = ['views/books/2026.csv', 'notes/', 'memory/preferences.md']
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  await ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+  await agentGit.discardChanges()
+  // A start makes each folder, and the folder each file is in, and no file.
+  for (const folder of ['views/books', 'notes', 'memory']) assert.equal(modeOf(path.join(dir, folder)), 0o700, folder)
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'views', 'books')), [])
+  const file = name => path.join(dir, name)
+
+  // Files that aren't there, and aren't in the last commit, are passed over and left out of git.
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), false)
+
+  fs.writeFileSync(file('views/books/2026.csv'), 'title\n')
+  fs.writeFileSync(file('notes/a.md'), 'a\n')
+  // Beside the file, outside the repository: never staged.
+  fs.writeFileSync(file('views/books/other.csv'), 'other\n')
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #2'), true)
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nnotes/a.md\nviews/books/2026.csv\n')
+
+  // The check walks a file as it walks a folder's: a link, or a second name, is unexpected.
+  fs.rmSync(file('views/books/2026.csv'))
+  fs.symlinkSync('/etc/hostname', file('views/books/2026.csv'))
+  assert.equal(await agentGit.unexpectedFile(), 'views/books/2026.csv')
+  await agentGit.discardChanges()
+  assert.equal(fs.readFileSync(file('views/books/2026.csv'), 'utf8'), 'title\n')
+  fs.linkSync(file('views/books/2026.csv'), file('notes/second.md'))
+  assert.equal(await agentGit.unexpectedFile(), 'views/books/2026.csv')
+  await agentGit.discardChanges()
+  assert.equal(fs.lstatSync(file('views/books/2026.csv')).nlink, 1)
+  assert.deepEqual(fs.readdirSync(file('notes')), ['a.md'])
+  // What lies beside a file of the repository is none of the clean-up's.
+  assert.equal(fs.readFileSync(file('views/books/other.csv'), 'utf8'), 'other\n')
+
+  // A file removed is a change, committed; and one made where a file isn't committed is thrown away.
+  fs.rmSync(file('views/books/2026.csv'))
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #3'), true)
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nnotes/a.md\n')
+  fs.writeFileSync(file('memory/preferences.md'), '- a rule\n')
+  await agentGit.discardChanges()
+  assert.equal(fs.existsSync(file('memory/preferences.md')), false)
+  assert.equal(fs.existsSync(file('views/books/2026.csv')), false)
+})
+
+test('git: with nothing in the repository, nothing is staged or committed, and git is never given no path', async t => {
+  const { dir, paths, log, clock } = setup(t)
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries: [], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  await ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+  await agentGit.discardChanges()
+  // What git would take with no path given: the whole tree.
+  fs.writeFileSync(path.join(dir, 'stray.txt'), 'x\n')
+  assert.equal(await agentGit.unexpectedFile(), null)
+  assert.equal(await agentGit.stage(), null)
+  assert.equal(await agentGit.commitStaged('lifelog: #1'), false)
+  await agentGit.discardChanges()
+  assert.equal(git(dir, 'ls-files'), '.gitignore\n')
+  assert.equal(fs.readFileSync(path.join(dir, 'stray.txt'), 'utf8'), 'x\n')
+})

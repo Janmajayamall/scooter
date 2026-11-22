@@ -17,12 +17,13 @@
 // A backfill's batch, whose prompt starts with `Backfill`, files each item in the first CSV file
 // its `writes` names instead of `views/notes.csv`.
 //
-// It writes only what the run's `writes` names (`PI_STUB_WRITES`), as the VM lets pi: a row or a
-// line it would write anywhere else is left out, and its path noted in `refused.txt` in its
-// control folder, as the VM refuses such a write and the run goes on.
+// It writes only what the run's `writes` names (`PI_STUB_WRITES`), as the VM lets pi: a row, a line
+// or what a keyword leaves, which it would write anywhere else, is left out, and its path noted in
+// `refused.txt` in its control folder, as the VM refuses such a write and the run goes on. A
+// keyword such as `FIFO` leaves what the VM can't make, for the runner's checks.
 //
 // Anywhere in the items or the task, or in `behavior.json` in its control folder, which a test can
-// change between runs:
+// change between runs, where `{"words": ["FILELINK"]}` also stands for any keyword below:
 //
 // | Keyword                | `behavior.json`        | It                                                 |
 // |------------------------|------------------------|----------------------------------------------------|
@@ -65,6 +66,11 @@
 // | `UNKNOWN`              |                        | reports numbers that weren't in the batch          |
 // | `REPLYTO=<seq>`        |                        | replies to that number                             |
 // | `LONGANSWER`           |                        | starts its answer with 64 KB of text               |
+// | `FILELINK`, `FILEGONE`,|                        | of the first file its writes name in the agent's   |
+// | `FILEHARD`             |                        | folder: makes it a link, removes it, or gives it a |
+// |                        |                        | second name in the first folder they name there    |
+// | `SHARED`               |                        | writes `shared.txt` in the first folder its writes |
+// |                        |                        | name outside the agent's folder                    |
 //
 // It writes OpenRouter's answers to the network log as the runner's policy would, in its format,
 // and keeps its session as pi 1.5.2 does. Every absolute path it
@@ -132,6 +138,7 @@ const everything = [...items.map(item => item.text), task].join('\n')
 // it holds. Otherwise the VM refuses the write, which is noted.
 const mayWrite = guest => WRITES.some(write => guest === write.path || (write.folder && guest.startsWith(`${write.path}/`)))
 const refuse = guest => fs.appendFileSync(path.join(CONTROL, 'refused.txt'), `${guest}\n`)
+const guestOf = file => `/${path.relative(ROOT, file)}`
 
 // A backfill's batch, and the CSV file it files in.
 const backfill = (prompt ?? '').startsWith('Backfill (from your configuration')
@@ -142,7 +149,7 @@ try {
 } catch {
   // none
 }
-const has = word => new RegExp(`\\b${word}\\b`).test(everything)
+const has = word => (behavior.words ?? []).includes(word) || new RegExp(`\\b${word}\\b`).test(everything)
 const valueOf = word => new RegExp(`\\b${word}=(\\d+)\\b`).exec(everything)?.[1]
 
 // What it saw.
@@ -259,7 +266,10 @@ function act() {
   const agent = inVm(guestCwd)
   const views = path.join(agent, 'views')
   const memory = path.join(agent, 'memory')
-  const notesFile = path.join(guestCwd, 'views', 'notes.csv')
+  // Its rows go in `views/notes.csv`, or, when the run may not write that, in the first CSV file its
+  // writes name.
+  const viewsNotes = path.join(guestCwd, 'views', 'notes.csv')
+  const notesFile = mayWrite(viewsNotes) ? viewsNotes : (WRITES.find(write => !write.folder && write.path.endsWith('.csv'))?.path ?? viewsNotes)
   // Appends `text` to the file at `guest`, a path in the VM, if the run may write it.
   const append = (guest, text, header = '') => {
     if (!mayWrite(guest)) return refuse(guest)
@@ -281,7 +291,7 @@ function act() {
       continue
     }
     const row = `${item.seq},${JSON.stringify(`${word('UNSURE') ? '❓ ' : ''}${item.text.split('\n')[0]}`)}\n`
-    const files = backfill ? [...(backfillFile ? [backfillFile] : []), ...(word('OUTSIDE') ? [notesFile] : [])] : [notesFile]
+    const files = backfill ? [...(backfillFile ? [backfillFile] : []), ...(word('OUTSIDE') ? [viewsNotes] : [])] : [notesFile]
     for (const file of files) append(file, row, 'seq,text\n')
     if (word('ASK')) {
       append(path.join(guestCwd, 'memory', 'needs-review.md'), `- #${item.seq}: work or personal?\n`)
@@ -293,9 +303,32 @@ function act() {
   if (has('MEMORY')) append(path.join(guestCwd, 'memory', 'preferences.md'), '- 2026-11-09 (#1): Track coffee.\n')
   if (task !== '') plain.push('Today: nothing missing.')
 
-  const leave =
+  let leave =
     behavior.leave ??
     ['DOTFILE', 'SYMLINK', 'FIFO', 'IGNORED', 'LOCKEDFILE', 'LOCKEDDIR', 'GITNAME', 'BIGFILE', 'MANYFILES', 'HARDLINK', 'EMPTYDIRS', 'READONLY', 'DEEPTREE', 'FILLDISK'].find(has)
+  // Each of those leaves its things in `views/`, or in `memory/`, which the VM refuses when the
+  // run's writes don't name the folder.
+  const leaveIn = leave === 'FIFO' || leave === 'LOCKEDDIR' ? memory : views
+  if (leave !== undefined && !mayWrite(`${guestOf(leaveIn)}/x`)) {
+    refuse(guestOf(leaveIn))
+    leave = undefined
+  }
+  // What the VM lets pi do to a file the run's writes name: link it elsewhere, remove it, or give
+  // it a second name in a folder they name.
+  const entryFile = WRITES.find(write => !write.folder && write.path.startsWith(`${guestCwd}/`))?.path
+  const entryFolder = WRITES.find(write => write.folder && write.path.startsWith(`${guestCwd}/`) && !write.path.startsWith(`${guestCwd}/run/`))?.path
+  if (has('FILELINK') && entryFile) {
+    fs.rmSync(inVm(entryFile), { force: true })
+    fs.symlinkSync('/etc/hostname', inVm(entryFile))
+  }
+  if (has('FILEGONE') && entryFile) fs.rmSync(inVm(entryFile), { force: true })
+  if (has('FILEHARD') && entryFile && entryFolder) {
+    if (!fs.existsSync(inVm(entryFile))) fs.writeFileSync(inVm(entryFile), 'x\n')
+    fs.linkSync(inVm(entryFile), inVm(`${entryFolder}/second-name`))
+  }
+  // A file in the first folder the run's writes name outside the agent's folder.
+  const shared = WRITES.find(write => write.folder && !write.path.startsWith(`${guestCwd}/`))?.path
+  if (has('SHARED') && shared) append(`${shared}/shared.txt`, 'from the agent\n')
   if (leave === 'DOTFILE') fs.writeFileSync(path.join(views, '.hidden'), 'x')
   if (leave === 'SYMLINK') fs.symlinkSync('/etc/hostname', path.join(views, 'link.csv'))
   if (leave === 'FIFO') execFileSync('mkfifo', [path.join(memory, 'pipe')], { env: { PATH: process.env.PI_STUB_PATH } })
