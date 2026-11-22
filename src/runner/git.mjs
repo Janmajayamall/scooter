@@ -146,9 +146,10 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     // record as two; the name at which the entries pass `maxCount` files and folders in all, or the
     // file at which they pass `maxBytes`, which git would take too long over; and any file git
     // ignores. All but the last are found without git, so git reads nothing before the files have
-    // been counted and weighed.
+    // been counted and weighed. An entry whose way is blocked is passed over, and isn't given to
+    // git (`wayIsOpen`).
     async unexpectedFile(given = entries, { maxBytes = limits.AGENT_FILES_MAX_BYTES, maxCount = limits.AGENT_FILES_MAX_COUNT } = {}) {
-      const paths = given.map(pathOf)
+      const paths = given.filter(entry => wayIsOpen(dir, entry)).map(pathOf)
       const found = findUnexpected(dir, given, { maxBytes, maxCount })
       if (found !== null || paths.length === 0) return found
       const { stdout } = await run(['status', '--porcelain=v1', '-z', '--ignored=matching', '--untracked-files=all', '--', ...paths])
@@ -173,17 +174,19 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     //   outside git. They are removed, the deepest first. A folder of `given` itself stays.
     // A file of `given` that isn't there, and isn't in the last commit, isn't given to git, which
     // would refuse it; one that is in the last commit is, and its removal staged. So is what the
-    // last commit has at an entry in the other shape, which the clean-up left out. An entry with a
-    // file on its way is passed over (`discardChanges`).
+    // last commit has at an entry in the other shape, which the clean-up left out. An entry whose
+    // way is blocked is passed over, and isn't given to git, also when the last commit holds it
+    // (`wayIsOpen`).
     async stage(given = entries) {
-      for (const entry of given) {
+      const open = given.filter(entry => wayIsOpen(dir, entry))
+      for (const entry of open) {
         const full = path.join(dir, pathOf(entry))
-        if (isFolderEntry(entry)) makeFolder(full)
+        if (isFolderEntry(entry)) ensureDir(full, { mode: 0o700 })
         if (!exists(full)) continue
         resetModes(Buffer.from(full))
         if (fs.lstatSync(full).isDirectory()) removeEmptyFolders(Buffer.from(full))
       }
-      const paths = await present(given.map(pathOf))
+      const paths = await present(open.map(pathOf))
       if (paths.length === 0) return null
       const { code } = await run(['add', '-A', '--ignore-errors', '--', ...paths], { codes: [0, 1] })
       if (code === 0) return null
@@ -233,6 +236,9 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     // commit, so the next run starts from the last good state. Nothing pi left can slow this down
     // or stop it, and it frees what pi wrote before it makes anything new, because pi may have
     // filled the disk, and on a full disk a new folder has no room:
+    // 0. The way to each entry is judged (`wayIsOpen`). An entry whose way is blocked is passed
+    //    over by every step that follows, as one that isn't there, and that is logged as
+    //    `agent.entry_blocked`.
     // 1. Each entry that is there is set aside, renamed into `discardDir`, which a start made and
     //    which is kept (`ensureAgentDir`), under a number of its own, so the name is never longer
     //    than the system takes. A rename takes the same time whatever it holds, and no room.
@@ -242,9 +248,7 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     //    the next start: it is out of pi's sight and git's.
     // 3. The folders of `given` are made again, empty, and the folder each file of `given` is in,
     //    so a file the agent may make has a folder to be made in. Only now: on a disk pi filled,
-    //    a folder has room once what pi wrote is freed. Where a file lies on the way, as a change
-    //    of `writes` can leave one, nothing is made, the entry is passed over as one that isn't
-    //    there, and that is logged as `agent.entry_blocked`.
+    //    a folder has room once what pi wrote is freed.
     // 4. The index is the last commit's again (`git read-tree HEAD`), in one step, whatever was
     //    staged. Taking a large number of names out of it one folder at a time takes time that
     //    grows faster than their number.
@@ -257,7 +261,12 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     // removed (`git prune`).
     async discardChanges(given = entries) {
       ensureDir(discardDir, { mode: 0o700 })
-      for (const entry of given) {
+      const open = given.filter(entry => {
+        if (wayIsOpen(dir, entry)) return true
+        log.warn('agent.entry_blocked', { agent: path.basename(dir), entry: pathOf(entry) })
+        return false
+      })
+      for (const entry of open) {
         const full = path.join(dir, pathOf(entry))
         const stat = lstatOrNull(full)
         if (stat === null) continue
@@ -270,12 +279,10 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
       } catch (error) {
         log.warn('agent.discarded_left', { folder: path.basename(discardDir), ...errorFields(error) })
       }
-      const open = given.filter(entry => {
+      for (const entry of open) {
         const full = path.join(dir, pathOf(entry))
-        if (makeFolder(isFolderEntry(entry) ? full : path.dirname(full))) return true
-        log.warn('agent.entry_blocked', { agent: path.basename(dir), entry: pathOf(entry) })
-        return false
-      })
+        ensureDir(isFolderEntry(entry) ? full : path.dirname(full), { mode: 0o700 })
+      }
       await run(['read-tree', 'HEAD'])
       const kept = await tracked(open)
       if (kept.length > 0) await run(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...kept])
@@ -328,13 +335,12 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
 
 const DOT = '.'.charCodeAt(0)
 
-// What is at `full`, not following a link there, or null when nothing is: `ENOENT`, or `ENOTDIR`
-// when a file lies on the way, where a path names nothing.
+// What is at `full`, not following a link there, or null when nothing is.
 function lstatOrNull(full) {
   try {
     return fs.lstatSync(full)
   } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
+    if (error.code === 'ENOENT') return null
     throw error
   }
 }
@@ -342,16 +348,29 @@ function lstatOrNull(full) {
 // Whether there is anything at `full`, a link included.
 const exists = full => lstatOrNull(full) !== null
 
-// Makes the folder `full`, and those on the way, 0700, as `ensureDir` does, and returns whether a
-// folder is there now: false when something else lies in the way, a file on the way or at `full`,
-// which a change of `writes` can leave, and which isn't the runner's to remove.
-function makeFolder(full) {
-  try {
-    ensureDir(full, { mode: 0o700 })
-  } catch (error) {
-    if (error.code !== 'ENOTDIR' && error.code !== 'EEXIST') throw error
+// Whether the way to `entry`, an entry of the repository, from the agent's folder `dir` is open:
+// each name on it, from `dir` down to the folder the entry is in, judged by `lstat`, without
+// following a link, is a folder the runner can search, or isn't there yet, and so neither is
+// anything after it. What is at the entry's own name is the entry's, which the clean-up sets
+// aside. Anything else on the way, a file, a link, a folder the runner can't search, isn't the
+// entry's: a run under an earlier `writes`, which named a folder it lies in, can have left it,
+// when the runner never cleaned up after that run, killed while pi ran. Followed, a link would
+// have the runner set aside, make, stage and empty where pi chose, outside every entry; a folder
+// it can't search, or a file, would stop it. So an entry whose way is blocked is passed over, as
+// one that isn't there, before anything is set aside, made, staged, checked, emptied or read at
+// it, and what blocks it is left as it is: it isn't the runner's to remove. The clean-up,
+// staging, the check, a rebuild's emptying, a backfill's summary and the prompt's reading of the
+// memory files all judge so. A folder the runner can search but not write doesn't block the way:
+// what that costs is in `run.md`, under A change of writes.
+export function wayIsOpen(dir, entry) {
+  let folder = dir
+  for (const name of pathOf(entry).split('/').slice(0, -1)) {
+    folder = path.join(folder, name)
+    const stat = lstatOrNull(folder)
+    if (stat === null) return true
+    if (!stat.isDirectory() || !mayAccess(folder, fs.constants.X_OK)) return false
   }
-  return lstatOrNull(full)?.isDirectory() ?? false
+  return true
 }
 
 // A path in `folder` that nothing has, a number, so what is set aside never meets what an earlier
@@ -402,9 +421,9 @@ function mayAccess(full, mode) {
 // name; a folder it can't read and search; a path longer than the system takes; the name at which
 // the files and folders so far pass `maxCount`, in the order the folder gives them; or the file at
 // which the sizes of the files so far pass `maxBytes`. `given` are the repository's entries, from
-// `dir`, each a file or a folder, a folder ending in `/`, walked in their order: one that isn't
-// there, also for a file on its way, is passed over; one that is there in the other shape is the
-// unexpected file itself; and one that is a file counts as a name. The path returned is for
+// `dir`, each a file or a folder, a folder ending in `/`, walked in their order: one whose way is
+// blocked (`wayIsOpen`), or that isn't there, is passed over; one that is there in the other shape
+// is the unexpected file itself; and one that is a file counts as a name. The path returned is for
 // people: a name that isn't UTF-8 shows its bytes as `�`. The walk goes one call deeper for each
 // folder, which the system's limit on a path's length keeps to about 2,000.
 export function findUnexpected(dir, given, { maxBytes = Infinity, maxCount = Infinity } = {}) {
@@ -435,6 +454,7 @@ export function findUnexpected(dir, given, { maxBytes = Infinity, maxCount = Inf
     return null
   }
   for (const entry of given) {
+    if (!wayIsOpen(dir, entry)) continue
     const p = pathOf(entry)
     const full = Buffer.from(path.join(dir, p))
     const stat = lstatOrNull(full)

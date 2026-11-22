@@ -57,6 +57,7 @@ import { createProc } from '../common/proc.mjs'
 import { isoSeconds, parseIsoSeconds, shortLocalTime, systemClock } from '../common/time.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
+import { wayIsOpen } from './git.mjs'
 import { holdRunnerFolder, readyAgentFolder } from './main.mjs'
 import { loadProtocol } from './prompt.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
@@ -206,15 +207,16 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
       log.info('rebuild.started', { agent: agent.name, until, tag, accel: sandbox.accel })
       say(`Rebuilding ${agent.name} from the datastore, up to #${until}. The last commit before the rebuild is tagged ${tag}.`)
       if (sandbox.accel === 'emulation') say("pi's VMs run under emulation here, because KVM isn't available, so each batch takes much longer.")
-      // Whatever is there: the start's clean-up left each entry in the shape it has, or nothing,
-      // also where a file lies on its way, which stage passes over too.
+      // Whatever is there: the start's clean-up left each entry in the shape it has, or nothing.
+      // An entry whose way is blocked is passed over, as the clean-up and stage pass it over.
       for (const entry of agent.repository) {
+        if (!wayIsOpen(paths.agentDir(agent.name), entry)) continue
         const full = path.join(paths.agentDir(agent.name), entry)
         try {
           if (entry.endsWith('/') && fs.lstatSync(full).isDirectory()) emptyFolder(full)
           else removeTree(full)
         } catch (error) {
-          if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error
+          if (error.code !== 'ENOENT') throw error
         }
       }
       emptyFolder(paths.agentSessions(agent.name))

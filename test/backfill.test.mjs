@@ -283,6 +283,20 @@ test("backfill: the summary counts each CSV in writes, a folder's included, and 
   assert.equal(summary(['shared/people.csv', 'shared/']), 'Backfill people-1 finished. Skipped: #1031, #1207.')
 })
 
+test('backfill: the summary reads nothing through a link a run left on the way to its writes, and takes what is behind it as not there', t => {
+  const paths = makePaths({ dataDir: makeTestDir(t), configDir: '/config' })
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // Where the link leads, outside every entry: CSV files with the names the backfill's writes give.
+  const outside = path.join(paths.dataDir, 'elsewhere')
+  fs.mkdirSync(path.join(outside, 'books'), { recursive: true })
+  fs.writeFileSync(path.join(outside, 'books.csv'), 'a\n1\n')
+  fs.writeFileSync(path.join(outside, 'books', 'x.csv'), 'a\n1\n2\n')
+  fs.mkdirSync(notes, { recursive: true })
+  fs.symlinkSync(outside, path.join(notes, '2026'))
+  const summary = backfillSummary({ paths, agent: { name: 'lifelog' }, entry: { id: 'books-1', skill: 'books', writes: ['agents/lifelog/notes/2026/books.csv', 'agents/lifelog/notes/2026/books/'] }, skipped: [] })
+  assert.equal(summary, "Backfill books-1 finished: notes/2026/books.csv isn't there; notes/2026/books/ holds no CSV file.")
+})
+
 test("backfill: a batch's outcome settles the backfill's lane, as a live batch's settles the live one", () => {
   const backfill = { id: 'people-1', until: 50, cursor: 10, retry: [{ seq: 4, attempts: 3, due: '2026-11-09T15:00:00Z', reason: 'not reported' }], skipped: [2, 7] }
   const state = { ...HANDLED, cursor: 60, backfill }

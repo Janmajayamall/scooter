@@ -615,6 +615,51 @@ test('run: a file left on the way to what writes names, after writes changed, is
   )
 })
 
+test('run: a link left on the way to what writes names, by a run the runner never cleaned up after, is passed over at the start and by every run, and nothing is done where it leads', async t => {
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/]'),
+  })
+  const { runner, clock, paths } = await startTestRunner(t, prepared)
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // What a run of this writes may make in notes/, which the clean-up after the run would set
+  // aside, and a runner killed while pi runs leaves, as closing it here does: a link to nothing,
+  // one to a folder outside every entry, and one to the agents' folder.
+  runner.close()
+  const kept = path.join(paths.exchange, 'kept')
+  fs.mkdirSync(kept)
+  fs.writeFileSync(path.join(kept, 'a.txt'), "not the agent's\n")
+  fs.symlinkSync('nowhere', path.join(notes, '2026'))
+  fs.symlinkSync('../../../exchange', path.join(notes, 'shared'))
+  fs.symlinkSync('../..', path.join(notes, 'up'))
+
+  // writes now names entries behind each.
+  const blocked = ['notes/2026/q1/books.csv', 'notes/2026/books', 'notes/shared/kept', 'notes/up/made']
+  writeConfig(paths.configDir, { yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/2026/q1/books.csv, agents/lifelog/notes/2026/books/, agents/lifelog/notes/shared/kept/, agents/lifelog/notes/up/made/]') })
+  const restarted = await startTestRunner(t, prepared)
+  const outcomes = []
+  for (const [seq, text] of [[1042, 'tea'], [1043, 'cake CRASH']]) {
+    restarted.add(line.text(seq, `2026-11-09T15:5${seq - 1040}:00Z`, text))
+    await clock.advance(MINUTE)
+    outcomes.push((await runNext(restarted.runner, clock)).outcome)
+  }
+  // The run that passed committed what it wrote in views/; the one that failed counted an attempt.
+  assert.deepEqual(outcomes, [{ ok: true, cause: null }, { ok: false, cause: 'other' }])
+  assert.equal(restarted.git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+  assert.equal(restarted.state().cursor, 1043)
+  assert.equal(restarted.state().retry[0].seq, 1043)
+  // Where the links lead, nothing was set aside, removed or made, and the links are as they were.
+  assert.deepEqual(fs.readdirSync(kept), ['a.txt'])
+  assert.equal(fs.readFileSync(path.join(kept, 'a.txt'), 'utf8'), "not the agent's\n")
+  assert.equal(fs.existsSync(path.join(paths.agents, 'made')), false)
+  assert.deepEqual(fs.readdirSync(notes).sort(), ['2026', 'shared', 'up'])
+  // The start's clean-up, and the failed run's, each say which entries they passed over.
+  assert.deepEqual(prepared.entries.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry), [...blocked, ...blocked])
+  assert.deepEqual(prepared.entries.filter(entry => entry.level === 'error'), [])
+})
+
 test('run: confirm mode sends the text and no reactions; sends: [] sends nothing', async t => {
   const confirm = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY')], { yaml: exampleYaml().replace('reply_mode: quiet', 'reply_mode: confirm') })
   await runNext(confirm.runner, confirm.clock)

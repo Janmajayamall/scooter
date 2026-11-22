@@ -17,7 +17,7 @@ import { loadProtocol, readMemoryFile, renderSystemPrompt } from '../src/runner/
 import { createFakeClock } from './support/clock.mjs'
 import { deepTree } from './support/deep-tree.mjs'
 import { createTestLog } from './support/log.mjs'
-import { skipIfRoot } from './support/root.mjs'
+import { isRoot, skipIfRoot } from './support/root.mjs'
 import { writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -843,6 +843,108 @@ test('git: an entry with a file on its way, as a change of writes can leave one,
   fs.rmSync(path.join(dir, 'notes', '2026'))
   await after.discardChanges()
   assert.equal(fs.lstatSync(path.join(dir, 'notes', '2026', 'books')).isDirectory(), true)
+})
+
+test('git: an entry with a link on its way, as a run the runner never cleaned up after can leave one, is passed over before anything is set aside, made, staged or checked there, and nothing is done where the link leads', async t => {
+  const { root, dir, paths, log, clock, entries: logged } = setup(t)
+  const gitFor = entries => createGit({ proc: createProc({ log, clock }), dir, entries, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const before = gitFor(['notes/'])
+  await ensureAgentDir({ paths, name: 'lifelog', git: before, log })
+  await before.discardChanges()
+  // What a run of that writes may make in notes/, and a runner killed before the clean-up leaves:
+  // a link to nothing; one to a folder outside the entries, which holds the names of entries; and
+  // one to the agents' folder.
+  const outside = path.join(root, 'outside')
+  fs.mkdirSync(path.join(outside, 'kept'), { recursive: true })
+  fs.writeFileSync(path.join(outside, 'kept', 'a.md'), "not the agent's\n")
+  fs.writeFileSync(path.join(outside, 'books.csv'), "not the agent's either\n")
+  fs.symlinkSync('nowhere', path.join(dir, 'notes', '2026'))
+  fs.symlinkSync(outside, path.join(dir, 'notes', 'out'))
+  fs.symlinkSync('../..', path.join(dir, 'notes', 'up'))
+
+  // writes now names entries behind each, files and folders, there and not there.
+  const blocked = ['notes/2026/q1/books.csv', 'notes/2026/books/', 'notes/out/kept/', 'notes/out/books.csv', 'notes/out/new/', 'notes/up/made/']
+  const after = gitFor([...blocked, 'views/'])
+  for (let n = 0; n < 2; n++) {
+    await after.discardChanges()
+    assert.equal(await after.unexpectedFile(), null)
+    assert.equal(await after.stage(), null)
+    assert.equal(await after.commitStaged('lifelog: #2'), false)
+  }
+  // Where the links lead, nothing was set aside, removed or made, and the links are as they were.
+  assert.deepEqual(fs.readdirSync(outside).sort(), ['books.csv', 'kept'])
+  assert.deepEqual(fs.readdirSync(path.join(outside, 'kept')), ['a.md'])
+  assert.equal(fs.readFileSync(path.join(outside, 'kept', 'a.md'), 'utf8'), "not the agent's\n")
+  assert.equal(fs.readFileSync(path.join(outside, 'books.csv'), 'utf8'), "not the agent's either\n")
+  assert.equal(fs.existsSync(path.join(paths.agents, 'made')), false)
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'notes')).sort(), ['2026', 'out', 'up'])
+  assert.equal(fs.readlinkSync(path.join(dir, 'notes', '2026')), 'nowhere')
+  assert.deepEqual(fs.readdirSync(paths.agentDiscarded('lifelog')), [])
+  // The entry whose way is open is the clean-up's as ever.
+  assert.equal(modeOf(path.join(dir, 'views')), 0o700)
+  const names = blocked.map(entry => entry.replace(/\/$/, ''))
+  assert.deepEqual(logged.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry), [...names, ...names])
+
+  // Once the link is gone, the entries behind it are made as any other.
+  fs.rmSync(path.join(dir, 'notes', 'out'))
+  await after.discardChanges()
+  assert.equal(fs.lstatSync(path.join(dir, 'notes', 'out', 'kept')).isDirectory(), true)
+  assert.equal(fs.lstatSync(path.join(dir, 'notes', 'out', 'new')).isDirectory(), true)
+  assert.equal(fs.existsSync(path.join(dir, 'notes', 'out', 'books.csv')), false)
+})
+
+test("git: an entry with a folder the runner can't search on its way, as a run the runner never cleaned up after can leave one, is passed over too, and what the folder holds is left as it is", { skip: skipIfRoot }, async t => {
+  const { dir, paths, log, clock, entries: logged } = setup(t)
+  const gitFor = entries => createGit({ proc: createProc({ log, clock }), dir, entries, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const before = gitFor(['notes/'])
+  await ensureAgentDir({ paths, name: 'lifelog', git: before, log })
+  await before.discardChanges()
+  // A folder in notes/ that holds an entry's names, whose mode a run made 000.
+  const shut = path.join(dir, 'notes', '2026')
+  fs.mkdirSync(path.join(shut, 'books'), { recursive: true })
+  fs.writeFileSync(path.join(shut, 'books.csv'), 'a row\n')
+  fs.chmodSync(shut, 0o000)
+
+  const blocked = ['notes/2026/books.csv', 'notes/2026/books/', 'notes/2026/q1/x.csv']
+  const after = gitFor(blocked)
+  for (let n = 0; n < 2; n++) {
+    await after.discardChanges()
+    assert.equal(await after.unexpectedFile(), null)
+    assert.equal(await after.stage(), null)
+    assert.equal(await after.commitStaged('lifelog: #2'), false)
+  }
+  assert.equal(modeOf(shut), 0o000)
+  const names = blocked.map(entry => entry.replace(/\/$/, ''))
+  assert.deepEqual(logged.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry), [...names, ...names])
+  fs.chmodSync(shut, 0o700)
+  assert.deepEqual(fs.readdirSync(shut).sort(), ['books', 'books.csv'])
+  assert.equal(fs.readFileSync(path.join(shut, 'books.csv'), 'utf8'), 'a row\n')
+
+  // Once the runner can search it, the entries in it are the entries: what no commit holds goes.
+  await after.discardChanges()
+  assert.deepEqual(fs.readdirSync(shut).sort(), ['books', 'q1'])
+})
+
+test("run folder: no memory file is read through a link, or a folder the runner can't search, that a run left at memory, as none is through a file", async t => {
+  const { root, paths, dir, ensure, agent } = setup(t)
+  await ensure()
+  const memory = path.join(dir, 'memory')
+  const system = () => fs.readFileSync(prepareRun({ paths, agent: agent(), protocol: '' }).systemFile, 'utf8')
+  const empty = /## memory\/preferences\.md\n\n\(empty\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/
+  // A link, to a folder with memory files that aren't the agent's.
+  fs.mkdirSync(path.join(root, 'other'))
+  fs.writeFileSync(path.join(root, 'other', 'preferences.md'), "- not this agent's\n")
+  fs.rmSync(memory, { recursive: true })
+  fs.symlinkSync(path.join(root, 'other'), memory)
+  assert.match(system(), empty)
+  // A folder the runner can't search, which would stop every run before pi; root searches it.
+  fs.rmSync(memory)
+  fs.mkdirSync(memory)
+  fs.writeFileSync(path.join(memory, 'preferences.md'), '- a rule\n')
+  fs.chmodSync(memory, 0o000)
+  assert.match(system(), isRoot ? /## memory\/preferences\.md\n\n- a rule\n/ : empty)
+  fs.chmodSync(memory, 0o700)
+  assert.match(system(), /## memory\/preferences\.md\n\n- a rule\n/)
 })
 
 test('git: what the clean-up sets aside is named by a number, so an entry whose name is as long as the system takes is set aside too', async t => {

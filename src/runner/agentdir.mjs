@@ -15,6 +15,7 @@ import path from 'node:path'
 import { copyUntrustedFile, emptyFolder, ensureDir, removeTree } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
+import { wayIsOpen } from './git.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside what
@@ -127,11 +128,15 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
 
   const systemFile = paths.agentRunSystem(name)
   const memory = paths.agentMemory(name)
+  // Nothing is read through what a run left at `memory` that blocks the way to the file, a link or
+  // a folder the runner can't search, as for an entry of `writes` (`wayIsOpen`): there is no
+  // memory file then.
+  const memoryFile = file => (wayIsOpen(paths.agentDir(name), `memory/${file}`) ? readMemoryFile(path.join(memory, file)) : null)
   const system = renderSystemPrompt({
     protocol,
     prompt: fs.readFileSync(promptCopy, 'utf8'),
-    preferences: readMemoryFile(path.join(memory, 'preferences.md')),
-    needsReview: readMemoryFile(path.join(memory, 'needs-review.md')),
+    preferences: memoryFile('preferences.md'),
+    needsReview: memoryFile('needs-review.md'),
   })
   fs.writeFileSync(systemFile, system, { mode: FILE_MODE })
   return { systemFile, skillDirs, sessionDir, sessionFile }

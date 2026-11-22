@@ -35,6 +35,7 @@ import { readUntrustedFile } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
 import { pauseAfterRun, settleLane } from './failures.mjs'
+import { wayIsOpen } from './git.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
 import { saveState } from './state.mjs'
 
@@ -138,7 +139,9 @@ export function countRows(text) {
 // The CSV files a backfill's `writes` name in the agent's folder, as `{ name, file }`: `name` the
 // path from the agent's folder, `file` the path on disk. A folder in `writes` gives every CSV file
 // in it, at any depth, in order; a file that isn't a CSV gives none. Links aren't followed. A path
-// of `writes` outside the agent's folder gives none: the runner never reads there.
+// of `writes` outside the agent's folder gives none: the runner never reads there. One whose way is
+// blocked, as by a link a run left on it, is taken as not there, and nothing is read through what
+// blocks it (`wayIsOpen`).
 function csvFilesOf(agentDir, own, writes) {
   const found = []
   const walk = (folder, relative) => {
@@ -155,12 +158,13 @@ function csvFilesOf(agentDir, own, writes) {
     }
   }
   for (const write of writes.filter(entry => entry.startsWith(own)).map(entry => entry.slice(own.length))) {
+    const open = wayIsOpen(agentDir, write)
     if (write.endsWith('/')) {
       const before = found.length
-      walk(path.join(agentDir, write), write)
+      if (open) walk(path.join(agentDir, write), write)
       if (found.length === before) found.push({ name: write, file: null })
     } else if (write.endsWith('.csv')) {
-      found.push({ name: write, file: path.join(agentDir, write) })
+      found.push({ name: write, file: open ? path.join(agentDir, write) : null })
     }
   }
   return found
@@ -170,7 +174,7 @@ const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`
 
 // What one CSV file of a backfill's says in its summary.
 function describeCsv({ name, file }) {
-  if (file === null) return `${name} holds no CSV file`
+  if (file === null) return name.endsWith('/') ? `${name} holds no CSV file` : `${name} isn't there`
   let text
   try {
     // The files are the last commit's now, which the check of the files pi left let through: within its limits,

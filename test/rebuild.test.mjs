@@ -217,6 +217,30 @@ test('rebuild: it empties what writes names in whatever shape it finds, and pass
   assert.equal(gitOf(paths, 'ls-files', 'todo.md', 'notes'), 'notes\n')
 })
 
+test('rebuild: it passes over an entry with a link on its way, and empties nothing where the link leads', async t => {
+  const prepared = await prepare(t)
+  const { paths, root, entries } = prepared
+  const agent = paths.agentDir('lifelog')
+  // A link that a run left in notes/, under an earlier writes, to a folder outside the entries
+  // that holds their names; writes now names entries behind it.
+  const outside = path.join(root, 'outside')
+  fs.mkdirSync(path.join(outside, 'kept'), { recursive: true })
+  fs.writeFileSync(path.join(outside, 'kept', 'a.md'), "not the agent's\n")
+  fs.writeFileSync(path.join(outside, 'books.csv'), "not the agent's either\n")
+  fs.mkdirSync(path.join(agent, 'notes'))
+  fs.symlinkSync(outside, path.join(agent, 'notes', 'out'))
+  const yaml = rebuildYaml().replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog/views/, agents/lifelog/memory/, agents/lifelog/notes/out/kept/, agents/lifelog/notes/out/books.csv]')
+  fs.writeFileSync(paths.agentsYaml, yaml)
+  const { done } = startRebuild(prepared)
+  const result = await drive(prepared, done)
+  assert.equal(result.stopped, false)
+  assert.deepEqual(fs.readdirSync(outside).sort(), ['books.csv', 'kept'])
+  assert.deepEqual(fs.readdirSync(path.join(outside, 'kept')), ['a.md'])
+  assert.equal(fs.readFileSync(path.join(outside, 'books.csv'), 'utf8'), "not the agent's either\n")
+  assert.equal(fs.readlinkSync(path.join(agent, 'notes', 'out')), outside)
+  assert.deepEqual(entries.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry).slice(0, 2), ['notes/out/kept', 'notes/out/books.csv'])
+})
+
 test("rebuild: it doesn't start while a runner runs or run.lock is there, and nothing of the runner's starts while it runs", async t => {
   const prepared = await prepare(t)
   const { paths, sandbox, settings, clock, log, proc } = prepared
