@@ -196,6 +196,7 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
 | The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
 | The index file | runner → `show`, pi | `src/runner/agentdir.mjs` | [The index file](architecture/run.md#the-index-file) |
+| The offsets file | runner → `show` | `src/runner/agentdir.mjs` | [The offsets file](architecture/run.md#the-offsets-file) |
 | The answer | pi → runner | `src/runner/answer.mjs` | [Reading the answer](architecture/run.md#reading-the-answer) |
 | `agents.yaml` | owner → runner | `src/runner/config.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
 | The env files | owner → both services | `src/common/settings.mjs` | [The env files](architecture/configuration.md#the-env-files) |
@@ -285,6 +286,7 @@ The project's own names, each used one way in these documents.
 | store | The datastore's one writer, `src/bridge/store.mjs`. wacli's own is its message store |
 | index | What the bridge and the runner each keep in memory of the datastore: lines by `seq` and by channel ID, and what each message says now |
 | index file | `run/index.txt`: the runner's index as a file, written for each run, one line for each `seq` with where the line is, its kind and the line it points at |
+| offsets file | `run/offsets.txt`: the owner's zone's offsets from UTC through the days of the index file's lines, worked out by the runner for each run, which `show` adds to a line's time |
 | `show` | The program that ships with the runner, which pi runs in its VM to print lines of the datastore by their `seq`, through the index file |
 | webhook | wacli's post to the bridge, on loopback, for each message it receives |
 | catch-up | The bridge listing wacli's message store for what the webhook missed |
@@ -334,7 +336,7 @@ The project's own names, each used one way in these documents.
 | The outbox entry, or the locks | `src/common/outbox.mjs`, `src/common/locks.mjs`, and both services' users of them | `test/outbox.test.mjs`, `test/locks.test.mjs`, `test/delivery.test.mjs`, `test/backup.test.mjs`, `test/runner.test.mjs` | [exchange](architecture/exchange.md) |
 | `scooter status`, or the bridge's `status.json` | `src/bridge/status.mjs`, `src/bridge/main.mjs` | `test/status.test.mjs`, `test/bridge.test.mjs` | [scooter status](architecture/bridge.md#scooter-status) |
 | Backups and restore | `src/bridge/backup.mjs` | `test/backup.test.mjs`, `test/support/restic-stub.mjs` | [backups](architecture/backups.md) |
-| Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
+| Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs`, `test/tools/tz.test.mjs` | [shared code](architecture/shared-code.md) |
 | A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
 | The runner's files that `scooter status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [scooter status](architecture/bridge.md#scooter-status) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [Constants](architecture/configuration.md#constants) |
@@ -348,7 +350,7 @@ The project's own names, each used one way in these documents.
 | The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/view.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
 | The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) |
 | The agent's instructions | `src/runner/protocol.md`, `src/runner/vm/skills/`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
-| `show` or the index file | `src/runner/vm/bin/show.mjs`, `src/runner/agentdir.mjs`, `src/runner/vm/skills/scooter/SKILL.md` | `test/show.test.mjs`, `test/instructions.test.mjs`, `test/agentdir.test.mjs`, `test/tools/vm.test.mjs` | [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill), [The index file](architecture/run.md#the-index-file) |
+| `show`, the index file or the offsets file | `src/runner/vm/bin/show.mjs`, `src/runner/agentdir.mjs`, `src/common/time.mjs`, `src/runner/vm/skills/scooter/SKILL.md` | `test/show.test.mjs`, `test/time.test.mjs`, `test/instructions.test.mjs`, `test/agentdir.test.mjs`, `test/tools/vm.test.mjs`, `test/tools/tz.test.mjs` | [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill), [The index file](architecture/run.md#the-index-file), [The offsets file](architecture/run.md#the-offsets-file) |
 | pi's version | `config/image/build.json`, `src/runner/sandbox/policy.mjs`, `test/fixtures/pi-requests/` (`test/tools/capture-pi-requests.mjs`) | `test/tools/pi.test.mjs`, `test/tools/fixtures.test.mjs`, `test/policy.test.mjs`, `test/image.test.mjs` | [Facts about pi 1.5.2](architecture/agent.md#facts-about-pi-152), [What pi sends](architecture/network-policy.md#what-pi-sends), [The VM image](architecture/sandbox.md#the-vm-image) |
 | Gondolin's version | `package.json`, `src/runner/sandbox/` | `test/tools/vm.test.mjs`, `test/sandbox.test.mjs`, `test/policy.test.mjs` | [Facts about Gondolin 0.14.0](architecture/sandbox.md#facts-about-gondolin-0140), [Facts about Gondolin's network](architecture/network-policy.md#facts-about-gondolins-network) |
 | The native install or Docker | `src/ops/`, `deploy/systemd/`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | `test/setup.test.mjs`, `test/doctor.test.mjs`, `test/units.test.mjs`, `test/docker.test.mjs` | [install](architecture/install.md), the [README](../README.md) |
