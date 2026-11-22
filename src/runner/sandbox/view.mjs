@@ -21,7 +21,7 @@
 //   `rmdir` and `chmod`: so the run can make it when it isn't there, and can't put a file, a link
 //   or another folder in its place, or move it;
 // - **a file** lets the run write, make, truncate, `chmod`, remove, rename, link and make a link
-//   at that one path, and not make a folder there.
+//   at that one path, and not make a folder there or move one there, or act on one that is there.
 //
 // The operations that change something, as Gondolin's file system service calls them: `open` for
 // writing (which is also how a file is made, and how `truncate` reaches a file), `mkdir`, `rmdir`,
@@ -142,14 +142,21 @@ function writesProvider(gondolin, view, rootReal, backend) {
       return false
     }
   }
-  // Throws EROFS unless the run may do `op` at `given`, and at where it lands. A file of `writes`
-  // never acts on a folder that is there in its place, which a rename would move whole.
+  // Throws EROFS unless the run may do `op` at `given`, and at where it lands; returns both. A file
+  // of `writes` never acts on a folder that is there in its place, which a rename would move whole.
   const check = (op, given, { follow, syscall = op } = {}) => {
     const p = normalize(given)
     const landed = mayChange(view, op, p) ? landing(p, follow) : null
     const allowed = landed !== null && mayChange(view, op, landed) && ![p, landed].some(at => writeRule(view, at) === 'file' && isFolderOnHost(at))
     if (!allowed) throw errnoError('EROFS', syscall, given)
-    return p
+    return { p, landed }
+  }
+  // A rename: both ends allowed, and no folder moved to where `writes` names a file, which would
+  // then hold what the folder held.
+  const checkRename = (from, to) => {
+    const source = check('rename', from)
+    const target = check('rename', to)
+    if ([target.p, target.landed].some(at => writeRule(view, at) === 'file') && isFolderOnHost(source.landed)) throw errnoError('EROFS', 'rename', to)
   }
 
   class WritesProvider extends gondolin.VirtualProviderClass {
@@ -196,13 +203,11 @@ function writesProvider(gondolin, view, rootReal, backend) {
       return backend.unlinkSync(p)
     }
     async rename(from, to) {
-      check('rename', from)
-      check('rename', to)
+      checkRename(from, to)
       return backend.rename(from, to)
     }
     renameSync(from, to) {
-      check('rename', from)
-      check('rename', to)
+      checkRename(from, to)
       return backend.renameSync(from, to)
     }
     // A hard link: the file linked to, which the host finds through links, and the new name.

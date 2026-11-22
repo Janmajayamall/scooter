@@ -1,5 +1,5 @@
-// Backfills: the datastore's history run through a newly added skill alone,
-// without touching the other views and without stopping live work. A rebuild for one view.
+// Backfills: the datastore's history run through a newly added skill alone, changing only what
+// the backfill's `writes` names, without stopping live work.
 //
 // - **Its lane in the state.** `state.backfill` is `{ id, until, cursor, retry, skipped }`.
 //   A start begins the first backfill of the config that isn't in `backfillDone`, with `until` the

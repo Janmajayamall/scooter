@@ -192,12 +192,33 @@ test('view: inside writes every change is allowed; a folder of writes keeps its 
   assert.equal(fs.lstatSync(path.join(root, 'empty')).isDirectory(), true)
   assert.equal(fs.lstatSync(path.join(root, 'allowed')).isDirectory(), true)
 
+  // A folder can't be moved where writes names a file, to hold there what it held.
+  await provider.mkdir('/allowed/moving')
+  const inside = await provider.open('/allowed/moving/x.txt', 'w')
+  await inside.close()
+  await refusedWith('EROFS', provider.rename('/allowed/moving', '/new.txt'), 'a folder moved to a file of writes that isn\'t there')
+  await provider.unlink('/file.txt')
+  await refusedWith('EROFS', provider.rename('/allowed/moving', '/file.txt'), 'a folder moved to a file of writes removed first')
+  assert.equal(fs.existsSync(path.join(root, 'new.txt')), false)
+  assert.equal(fs.existsSync(path.join(root, 'file.txt')), false)
+
   // A file of writes that is a folder on the host can't be moved, with what it holds, or changed.
   await refusedWith('EROFS', provider.rename('/folder.txt', '/allowed/folder'), 'a folder named as a file, moved')
   await refusedWith('EROFS', provider.rename('/allowed/old.txt', '/folder.txt'), 'a file moved onto a folder named as a file')
   await refusedWith('EROFS', provider.chmod('/folder.txt', 0o700), 'a folder named as a file, given a mode')
   await refusedWith('EROFS', provider.open('/folder.txt/inside/x.txt', 'w'), 'a file made in a folder named as a file')
   assert.equal(fs.lstatSync(path.join(root, 'folder.txt', 'inside')).isDirectory(), true)
+})
+
+test('view: a file opened for reading, where the run may not write, writes nothing through its handle', async t => {
+  const { root, provider } = layOut(t)
+  // Gondolin's service writes, truncates (also for O_TRUNC with O_RDONLY), allocates and copies
+  // through a handle opened before; the host refuses each on a handle opened for reading.
+  const handle = await provider.open('/ro/keep.txt', 'r')
+  await assert.rejects(handle.write(Buffer.from('x'), 0, 1, 0))
+  await assert.rejects(handle.truncate(0))
+  await handle.close()
+  assert.equal(fs.readFileSync(path.join(root, 'ro', 'keep.txt'), 'utf8'), 'keep\n')
 })
 
 test('view: what nothing names, and what is hidden, the VM neither sees nor lists', async t => {
