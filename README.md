@@ -242,6 +242,7 @@ A guess is marked ❓ at the start of a row's `note`, and the open questions are
 They are your files, in the config folder (`/etc/scooter/config` natively, `./config` in Docker): `agents.yaml`, the prompt `prompts/lifelog.md`, and a folder for each skill under `skills/`, each with a `SKILL.md`. The agent can't change them. Restart the runner after a change; it checks the files at its start, and refuses to start, naming the field, when something is wrong.
 
 - **The default `agents.yaml`** sends an evening check-in at 21:30 (`- at: "21:30"`). Remove that entry for a quieter bot.
+- **What the agent sees, changes and sends** is in `agents.yaml` too, as paths of the data folder, a folder ending in `/`: `reads`, by default the datastore and the agent's own folder; `writes`, by default `agents/lifelog/views/` and `agents/lifelog/memory/`, which is what the agent's git repository keeps; and `sends`, the channels its messages may go out on, by default `[whatsapp]`. The trigger `on: new-messages` names the `channels` whose messages it works on, by default `[whatsapp, email]`. The agent's VM can't change anything `writes` doesn't name. Nothing limits what they may name but the runner's own files in the agent's folder: a path of the datastore, the outbox or the runner's folder in `writes` is yours to choose, with what it gives the agent. A path of `writes` outside the agent's folder isn't in git, and a failed run's changes there aren't undone.
 - **To add a skill**, for a new view:
   1. Make a folder `skills/<name>/` with a `SKILL.md` whose frontmatter gives the folder's name as `name` and a `description` that says when to use it, then the instructions:
      ```markdown
@@ -305,7 +306,7 @@ docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look
 
 ### Rebuilds
 
-`rebuild` throws the views and memory away and files your whole history again, one of your days at a time, as it was then: rules you sent as messages are learned again where you sent them. Use it after changing the instructions in a way the old views should follow. It sends nothing to you while it works, and it spends on OpenRouter for every message ever sent.
+`rebuild` throws away what `writes` names in the agent's folder, the views and memory by default, and files your whole history again, one of your days at a time, as it was then: rules you sent as messages are learned again where you sent them. Use it after changing the instructions in a way the old views should follow. It sends nothing to you while it works, and it spends on OpenRouter for every message ever sent.
 
 1. **Stop the runner** first; the bridge may keep running, and stores what arrives. `rebuild` refuses while a runner runs.
 2. **Start the rebuild right after**: it stops at the newest message when it starts, so a message that waited for the stopped runner is filed with no reply or ✅.
@@ -325,7 +326,7 @@ docker compose start runner
 ```
 
 - It tags the last commit before it `before-rebuild-<UTC time>`, such as `before-rebuild-20261118T101500Z`. To go back to it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-rebuild-20261118T101500Z` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's state stays as the rebuild left it.
-- It throws away uncommitted changes in `views/` and `memory/`, as a start of the runner does.
+- It throws away uncommitted changes in what `writes` names in the agent's folder, `views/` and `memory/` by default, as a start of the runner does, and empties it.
 - A rebuild that finished commits as `lifelog: rebuild`. One that didn't leaves the last commit's message as `lifelog: rebuild #…`, and nothing else says so: look at it after a crash, a reboot or a restore (`git log -1`), and run the rebuild again if it reads so.
 
 ### Backfills
@@ -335,10 +336,10 @@ A backfill files the messages from before a skill was added, for that skill alon
 ```yaml
       - backfill: books-1           # an ID of your choosing, used once
         skill: books
-        writes: [views/books.csv]   # what it may change
+        writes: [agents/lifelog/views/books.csv]   # what it may change, in the agent's writes
 ```
 
-It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
+It works only while nothing live is waiting, and its VM can change only what its `writes` names. It sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
 
 ## When something goes wrong
 
@@ -368,7 +369,7 @@ The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker c
 What each part can reach, and what protects what ([The boundaries](docs/ARCHITECTURE.md#the-boundaries), [the sandbox](docs/architecture/sandbox.md) and [the network policy](docs/architecture/network-policy.md)):
 
 - **Strangers** can't reach the agent: the bridge keeps WhatsApp messages only from your number and IDs, never from groups, and email only from your addresses when it passes DMARC. Replies have no recipient field: they always go to you.
-- **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees the datastore read-only, and can write only its views, its memory and its copy of the current session. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
+- **The agent is sandboxed.** pi runs in a fresh VM for every batch, with no secrets: it sees a placeholder where the OpenRouter key would be, which the runner swaps for the key on the way out, and only on requests to OpenRouter. It sees what `reads` names, by default the datastore and its own folder, read-only, and can write only what `writes` names, by default its views and its memory, and its copy of the current session; it never sees the other sessions. Nothing it does inside the VM survives it. A run may write at most 1 GB and make at most 100,000 files, or it is stopped, so it can't fill the disk.
 - **The network policy** lets pi's VM reach only OpenRouter's two chat endpoints, with the configured model. It refuses anything that would make OpenRouter fetch from the web for the agent: its web plugin and server tools, `:online` models, and images given by URL. DNS is answered inside the runner, and private addresses, UDP and raw TCP are refused. Every request is logged (see below). A request whose log line can't be written doesn't go out.
 - **Internet access**, `AGENT_INTERNET=on` in `runner.env`, also lets pi reach public HTTPS websites, which the agent may use to look something up for a filing. A misled agent could then send your data to any public website, and even an ordinary lookup tells a website what was looked up. The log shows when, which host and path, and how much, never what. It is off by default.
 - **Third-party code that faces the outside**, wacli and the email reader, runs as its own user, with only its own settings and folder. Neither can read the key, the datastore, the agent's folder, the exchange or the bridge's state.

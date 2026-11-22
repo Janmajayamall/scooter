@@ -157,13 +157,14 @@ const values = {
   MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped.
   GIT_CALL_TIMEOUT: 1 * MINUTE,
-  // The most `views/` and `memory/` may hold together after a run, in bytes. pi can make a file of
+  // The most what an agent's repository keeps, its `writes` in its folder, may hold together after a
+  // run, in bytes. pi can make a file of
   // any size in an instant, all holes, and git reads every byte of a file to add it, so a run that
   // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`.
   // On the plan's Linux machine git adds this much in about 2 seconds, and the five default views
   // of a year at 20 rows a day, of about 70 bytes each, take about 0.5 MB.
   AGENT_FILES_MAX_BYTES: 100 * MB,
-  // The most files and folders `views/` and `memory/` may hold together after a run. pi can make
+  // The most files and folders what an agent's repository keeps may hold together after a run. pi can make
   // hundreds of thousands in a run, and some of git's work grows faster than their number, such as
   // taking them out of the index again, so a run that leaves more fails before git reads anything.
   // The default skills keep five CSV files, and the memory two more, which grow in rows, not in
@@ -196,11 +197,11 @@ const values = {
   // few kilobytes, and nothing else bounds it. An answer cut here fails the run as pi's own failure.
   SANDBOX_STDOUT_MAX_BYTES: 1 * MB,
   SANDBOX_STDERR_MAX_BYTES: 64 * KB,
-  // The most one run may write through the VM's writable folders, `views/`, `memory/` and
-  // `run/session/`, in bytes written and in names made (files, folders and links). The bridge
+  // The most one run may write where it may write, what its `writes` names and `run/session/`, in
+  // bytes written and in names made (files, folders and links). The bridge
   // writes on the same disk, so a run that writes more is stopped, its VM closed, and the run
   // fails as pi's own failure; the runner then frees what it wrote. A run leaves at most
-  // `AGENT_FILES_MAX_BYTES` and `AGENT_FILES_MAX_COUNT` in the two folders and a session of
+  // `AGENT_FILES_MAX_BYTES` and `AGENT_FILES_MAX_COUNT` in the repository and a session of
   // `SESSION_MAX_BYTES`; these leave room for rewriting them several times over.
   RUN_WRITE_MAX_BYTES: 1024 * MB,
   RUN_NAMES_MAX_COUNT: 100000,
