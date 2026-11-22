@@ -1,13 +1,12 @@
 // An agent's state: its format, reading and writing it, and the changes that
-// planning makes to it: sessions, commands and startup.
+// planning makes to it: sessions and startup.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { AgentStateError, checkAgentState, initialAgentState, readAgentState } from '../src/common/agentstate.mjs'
-import { applyCommands, currentSession, loadState, saveState, sessionDay, sessionId, startupState } from '../src/runner/state.mjs'
-import { line } from './support/runner.mjs'
+import { loadState, saveState, sessionDay, sessionId, startupState } from '../src/runner/state.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const at = Date.parse
@@ -16,10 +15,8 @@ const modeOf = file => fs.statSync(file).mode & 0o7777
 // An example state, with a pause.
 const EXAMPLE = {
   cursor: 1049,
-  commandSeq: 1038,
   retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
   failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: 'unreadable PDF' }],
-  session: { day: '2026-11-09', bump: 0 },
   backfill: { id: 'people-1', until: 1890, cursor: 812, retry: [], skipped: [1031] },
   backfillDone: [],
   scheduled: { '21:30': '2026-11-09' },
@@ -37,10 +34,8 @@ test('state: an example state, and the state of an agent that has never run, are
   assert.deepEqual(checkAgentState(initialAgentState()), [])
   assert.deepEqual(initialAgentState(), {
     cursor: 0,
-    commandSeq: 0,
     retry: [],
     failed: [],
-    session: null,
     backfillDone: [],
     scheduled: {},
     lastRun: null,
@@ -50,7 +45,6 @@ test('state: an example state, and the state of an agent that has never run, are
 test('state: each fault names its field', () => {
   const cases = [
     [{ cursor: -1 }, 'cursor must be a whole number, 0 or more'],
-    [{ commandSeq: '1038' }, 'commandSeq must be a whole number, 0 or more'],
     [{ retry: {} }, 'retry must be a list'],
     [{ retry: [{ seq: 1047, attempts: 1, due: 'soon', reason: 'x' }] }, 'retry[0].due must be a UTC time to the second'],
     [{ retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z' }] }, 'retry[0].reason is missing'],
@@ -60,8 +54,9 @@ test('state: each fault names its field', () => {
     [{ retry: [{ ...EXAMPLE.retry[0], seq: 1050 }] }, 'retry[0].seq is after the cursor'],
     [{ backfill: { ...EXAMPLE.backfill, retry: [{ ...EXAMPLE.retry[0], seq: 813 }] } }, 'backfill.retry[0].seq is after the cursor'],
     [{ failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: '' }] }, "failed[0].reason must be a string that isn't empty"],
-    [{ session: { day: '2026-02-30', bump: 0 } }, 'session.day must be a date such as 2026-11-09'],
-    [{ session: { day: '2026-11-09', bump: -1 } }, 'session.bump must be a whole number, 0 or more'],
+    // The fields of the commands and of `/new`, which are gone.
+    [{ commandSeq: 1038 }, 'commandSeq is not a field of the state'],
+    [{ session: { day: '2026-11-09', bump: 0 } }, 'session is not a field of the state'],
     [{ backfillDone: [''] }, "backfillDone[0] must be a string that isn't empty"],
     [{ backfill: { ...EXAMPLE.backfill, skipped: [1031, 1031] } }, 'backfill.skipped holds a seq twice'],
     [{ backfill: { ...EXAMPLE.backfill, cursor: undefined } }, 'backfill.cursor is missing'],
@@ -121,51 +116,12 @@ test('state: the session\'s day changes at the rollover hour of the local clock,
   assert.equal(sessionDay(at('2027-01-01T01:00:00Z'), 'UTC', 4), '2026-12-31')
 })
 
-test('state: the session ID is the agent and the day, with the number of /new commands that day', () => {
-  const options = { now: at('2026-11-09T15:50:00Z'), timeZone: 'Asia/Kolkata', rolloverHour: 4 }
-  assert.deepEqual(currentSession(initialAgentState(), options), { day: '2026-11-09', bump: 0 })
-  assert.deepEqual(currentSession({ ...initialAgentState(), session: { day: '2026-11-09', bump: 2 } }, options), { day: '2026-11-09', bump: 2 })
-  // A /new of another day counts for nothing today.
-  assert.deepEqual(currentSession({ ...initialAgentState(), session: { day: '2026-11-08', bump: 2 } }, options), { day: '2026-11-09', bump: 0 })
-  assert.equal(sessionId('lifelog', { day: '2026-11-09', bump: 0 }), 'lifelog-2026-11-09')
-  assert.equal(sessionId('lifelog', { day: '2026-11-09', bump: 2 }), 'lifelog-2026-11-09-2')
-})
-
-test('state: /new starts a fresh session and is answered about itself; the bridge\'s commands are passed over', () => {
-  const options = { now: at('2026-11-09T15:50:00Z'), timeZone: 'Asia/Kolkata', rolloverHour: 4 }
-  const lines = [line.command(1060, '2026-11-09T15:49:00Z', '/status'), line.command(1062, '2026-11-09T15:49:30Z', '/new')]
-  const { state, replies } = applyCommands(initialAgentState(), lines, options)
-  assert.equal(state.commandSeq, 1062)
-  assert.deepEqual(state.session, { day: '2026-11-09', bump: 1 })
-  assert.deepEqual(replies, [{ type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1062 }])
-
-  // A second /new the same day starts another; one the next day starts the first of that day.
-  const second = applyCommands(state, [line.command(1070, '2026-11-09T16:00:00Z', '/new')], options)
-  assert.deepEqual(second.state.session, { day: '2026-11-09', bump: 2 })
-  const nextDay = applyCommands(second.state, [line.command(1080, '2026-11-10T03:00:00Z', '/new')], { ...options, now: at('2026-11-10T03:00:00Z') })
-  assert.deepEqual(nextDay.state.session, { day: '2026-11-10', bump: 1 })
-
-  // A command already handled isn't handled again.
-  const again = applyCommands(state, lines, options)
-  assert.deepEqual(again.replies, [])
-  assert.equal(again.state, state)
-  // Only the bridge's: `commandSeq` moves, and nothing is said.
-  const bridgeOnly = applyCommands(initialAgentState(), [line.command(5, '2026-11-09T15:49:00Z', '/help')], options)
-  assert.deepEqual([bridgeOnly.state.commandSeq, bridgeOnly.state.session, bridgeOnly.replies], [5, null, []])
-})
-
-test('state: a /new counts for the session of the day it was sent, also when it is handled after the rollover', () => {
+test('state: the session ID is the agent and the session\'s day', () => {
   const options = { timeZone: 'Asia/Kolkata', rolloverHour: 4 }
-  // Sent at 03:50 on the 10th, Kolkata time, which is still the 9th's session; handled at 04:10,
-  // after a runner that was down came back.
-  const sent = line.command(1090, '2026-11-09T22:20:00Z', '/new')
-  const late = applyCommands(initialAgentState(), [sent], { ...options, now: at('2026-11-09T22:40:00Z') })
-  assert.deepEqual(late.state.session, { day: '2026-11-09', bump: 1 })
-  // So the 10th's session starts as usual.
-  assert.deepEqual(currentSession(late.state, { ...options, now: at('2026-11-09T22:40:00Z'), rolloverHour: 4 }), { day: '2026-11-10', bump: 0 })
-  // A time from the channel later than now counts as now.
-  const future = applyCommands(initialAgentState(), [line.command(1091, '2026-11-12T10:00:00Z', '/new')], { ...options, now: at('2026-11-09T15:50:00Z') })
-  assert.deepEqual(future.state.session, { day: '2026-11-09', bump: 1 })
+  assert.equal(sessionId('lifelog', { ...options, now: at('2026-11-09T15:50:00Z') }), 'lifelog-2026-11-09')
+  // 03:59 in Kolkata on the 10th is still the 9th's session; 04:00 is the 10th's.
+  assert.equal(sessionId('lifelog', { ...options, now: at('2026-11-09T22:29:59Z') }), 'lifelog-2026-11-09')
+  assert.equal(sessionId('lifelog', { ...options, now: at('2026-11-09T22:30:00Z') }), 'lifelog-2026-11-10')
 })
 
 test('state: at startup, scheduled tasks already past wait for their next time, and the rest is set up', () => {

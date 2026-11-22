@@ -36,7 +36,6 @@ import { systemClock } from '../common/time.mjs'
 import { ensureAgentDir } from './agentdir.mjs'
 import { backfillJob, finishBackfill } from './backfill.mjs'
 import { buildBatch, buildTaskPrompt } from './batch.mjs'
-import { handleCommands } from './commands.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
@@ -157,21 +156,6 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       })
       const prompts = { agent, paths, now, timeZone: settings.timeZone, homeCurrency: settings.homeCurrency, internet: settings.agentInternet }
 
-      if (action.kind === 'commands') {
-        state = await handleCommands({
-          agent,
-          state,
-          lines: action.lines,
-          stateFile,
-          paths,
-          ids,
-          log,
-          now,
-          timeZone: settings.timeZone,
-          rolloverHour: settings.sessionRolloverHour,
-        })
-        return { action }
-      }
       if (action.kind === 'messages') {
         const built = buildBatch({ agent, state, index: datastore.index, ...prompts })
         if (!built) return { action }
@@ -207,8 +191,8 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       datastore,
       restarts,
       tick,
-      // A start stopped while it waited no longer waits, and `/status` mustn't go on saying
-      // it does until the next start: `status.json` loses its `restart`.
+      // A start stopped while it waited no longer waits, and `scooter status` mustn't go on
+      // saying it does until the next start: `status.json` loses its `restart`.
       // As best it can: the stop goes on if it can't be written.
       endRestartWait() {
         if (status.restart === null) return

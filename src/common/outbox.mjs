@@ -6,7 +6,7 @@
 // taken when the folder is renamed, the entry takes the next ID (`handOff`).
 //
 //   {"type":"text","by":"lifelog","text":"Blue Tokai, ₹450 at 12:40: work or personal?","replyTo":1042}
-//   {"type":"text","by":"runner","text":"Started a fresh conversation.","about":1060}
+//   {"type":"text","by":"lifelog","text":"Logged the run and the coffee.","about":1061}
 //   {"type":"react","by":"lifelog","target":1044,"emoji":"✅"}
 //
 // There is no recipient: everything goes to the owner. Messages are named by `seq` only, and the
@@ -19,8 +19,8 @@
 //
 // The bridge keeps that record in its own folder, never in the runner's outbox, which the runner's
 // user controls: `bridge/sending/<id>.json` for an entry of the runner's. The bridge's own entries,
-// such as its replies to commands, are written to `bridge/outbox/` in the same form, and their
-// record is `sending.json` in the entry's folder there.
+// its backup notices, are written to `bridge/outbox/` in the same form, and their record is
+// `sending.json` in the entry's folder there.
 //
 // A text is at most `TEXT_MAX_CHARS` long. `writeOutboxEntry` cuts a longer one, with a line that
 // says so, rather than refuse it: what the agent wrote is its own to make as long as it likes, and

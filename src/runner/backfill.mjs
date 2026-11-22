@@ -7,8 +7,8 @@
 //   Live runs, which load the new skill from then on, handle everything after `until`, and the
 //   backfill everything up to it, so every message is covered once.
 // - **When it runs** (`nextAction` in `triggers.mjs`): a batch only when nothing live is waiting,
-//   no work items after the live cursor, no due retries, no scheduled task and no command. Runs
-//   never overlap, so a message that arrives during a batch waits for it, and then goes first.
+//   no work items after the live cursor, no due retries and no scheduled task. Runs never overlap,
+//   so a message that arrives during a batch waits for it, and then goes first.
 // - **Its batches** are replayed (`replay.mjs`): one of the owner's days each, `Now:` the time of
 //   the batch's newest item, a session of its own for each day, and the locks. The prompt starts
 //   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the

@@ -1,5 +1,5 @@
 // The formats the runner shares, and the sandbox interface:
-// `status.json` and its reader for `/status`, and the spec a sandbox takes.
+// `status.json` and its reader for `scooter status`, and the spec a sandbox takes.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -37,7 +37,7 @@ test('status.json: the format, each fault naming its field', () => {
     [{ agents: { lifelog: { ...STATUS.agents.lifelog, timeoutMinutes: 0 } } }, 'agents.lifelog.timeoutMinutes must be a whole number of minutes'],
     [{ agents: { lifelog: { ...STATUS.agents.lifelog, key: 'x' } } }, 'agents.lifelog.key is not a field of the status'],
     [{ extra: 1 }, 'extra is not a field of the status'],
-    // The bridge makes paths of the names, for `/status`.
+    // `scooter status` makes paths of the names.
     [{ agents: { '../etc': STATUS.agents.lifelog } }, 'agents must be named as agents.yaml names them, such as lifelog'],
     [{ internet: undefined }, 'internet is missing'],
   ]

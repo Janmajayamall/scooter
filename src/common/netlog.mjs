@@ -27,8 +27,8 @@
 // Lines hold hosts, paths without their query strings, statuses, byte counts and timings, never
 // headers, bodies or query strings. A path is cut at `NETLOG_PATH_MAX_CHARS`, so every line fits
 // within `NETLOG_LINE_MAX_BYTES`. The runner writes the log (`src/runner/sandbox/netlog.mjs`), and
-// reads it to learn why a run failed. The bridge reads it for `/status`, which is why its
-// format is here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
+// reads it to learn why a run failed. `scooter status` reads it too, which is why its format is
+// here. Both read it as a stream (`scanNetworkLog`), since its size is pi's to decide.
 
 import fs from 'node:fs'
 import { limits } from './limits.mjs'
@@ -140,8 +140,8 @@ export function scanNetworkLog(paths, { from, to }, each) {
   for (let day = Date.parse(`${utcDate(start)}T00:00:00Z`); day <= to; day += DAY) {
     let fd
     try {
-      // Without following a link, and without waiting on a FIFO: the bridge, as root, reads the
-      // runner's log for `/status`.
+      // Without following a link, and without waiting on a FIFO: `scooter status`, as root, reads
+      // the runner's log.
       fd = fs.openSync(paths.networkLog(utcDate(day)), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
     } catch (error) {
       if (error.code === 'ENOENT') continue

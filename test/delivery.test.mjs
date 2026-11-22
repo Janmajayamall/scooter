@@ -1,8 +1,9 @@
 // Delivery: the outbox processor with fake channels and
 // a real store. Order, pacing, chunking, quoting, reactions, `out` lines with the channel's IDs,
 // recovery from the bridge's record of an entry, which it keeps in its own folder, waiting,
-// failed sends, entries that aren't entries, pausing, and how long a text may be. Routing has its own tests (`routing.test.mjs`), and the WhatsApp module's
-// command lines theirs (`whatsapp.test.mjs`).
+// failed sends, entries that aren't entries, pausing, and how long a text may be. Routing has its
+// own tests (`routing.test.mjs`), and the WhatsApp module's command lines theirs
+// (`whatsapp.test.mjs`).
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -42,7 +43,7 @@ function setup(t, { lines = LINES, started = true } = {}) {
   writeDatastore(paths, lines)
   const store = openStore({ paths, clock, log })
   const whatsapp = createFakeChannel({ name: 'whatsapp', clock })
-  const email = createFakeChannel({ name: 'email', takesCommands: false, canSend: false, canReact: false, clock })
+  const email = createFakeChannel({ name: 'email', canSend: false, canReact: false, clock })
   const channels = new Map([
     ['whatsapp', whatsapp],
     ['email', email],
@@ -524,15 +525,15 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   fs.mkdirSync(paths.exchange, { recursive: true })
   fs.symlinkSync(elsewhere, paths.outbox)
   // A record of a runner's entry, whose removal would reach through the link, and an entry of the
-  // bridge's own, such as its reply to `/status`.
+  // bridge's own, such as a backup's notice.
   fs.mkdirSync(paths.bridgeSending, { recursive: true })
   fs.writeFileSync(path.join(paths.bridgeSending, '20261109T150000000-0001.json'), JSON.stringify({ entry: { type: 'text', by: 'lifelog', text: 'from the record' }, sent: 0 }))
-  await context.writeOwn({ type: 'text', by: 'bridge', text: 'the reply to /status', about: 2 })
+  await context.writeOwn({ type: 'text', by: 'bridge', text: 'the backup failed' })
   context.start()
   for (let n = 0; n < 30; n++) await clock.advance(SECOND)
   for (const name of ['agents', 'datastore', '20261109T150000000-0001']) assert.ok(fs.existsSync(path.join(elsewhere, name, 'kept')), name)
   // The bridge's own entry goes, while nothing of the runner's does, its record included.
-  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status'])
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the backup failed'])
   assert.deepEqual(fs.readdirSync(paths.bridgeSending), ['20261109T150000000-0001.json'])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.failed'), [])
   assert.deepEqual(entries.filter(entry => entry.event === 'outbox.runner_outbox_refused').map(entry => entry.reason), ['not used: a symbolic link'])
@@ -543,7 +544,7 @@ test('delivery: an outbox the runner\'s user made a link is not looked into, and
   assert.equal(context.events().filter(event => event === 'outbox.runner_outbox_taken').length, 0)
   fs.mkdirSync(paths.outbox, { mode: 0o700 })
   for (let n = 0; n < 10; n++) await clock.advance(SECOND)
-  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the reply to /status', 'from the record'])
+  assert.deepEqual(sendsOf(whatsapp).map(send => send.text), ['the backup failed', 'from the record'])
   assert.equal(context.events().filter(event => event === 'outbox.runner_outbox_taken').length, 1)
 })
 

@@ -1,5 +1,5 @@
-// The runner's `status.json`: what `/status` needs to know about the
-// runner's settings, which the bridge can't read for itself, since it reads neither `config/` nor
+// The runner's `status.json`: what `scooter status` needs to know about the runner's settings,
+// which a command of the bridge's side can't read for itself, since it reads neither `config/` nor
 // `runner.env`.
 //
 //   {
@@ -25,7 +25,7 @@
 //   runner wrote has none.
 //
 // The runner writes it atomically at startup, and again without `restart` when it is stopped
-// during that wait. The bridge reads it for `/status`, which is why its format is here.
+// during that wait. `scooter status` reads it, which is why its format is here.
 
 import { SOURCES } from './datastore/line.mjs'
 import { readJsonFile, readUntrustedFile } from './files.mjs'
@@ -41,7 +41,7 @@ const AGENT_FIELDS = ['model', 'timeoutMinutes', 'reads']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isTime = value => parseIsoSeconds(value) !== null
-// An agent's name, as `agents.yaml` allows it. The bridge makes paths of it, for `/status`.
+// An agent's name, as `agents.yaml` allows it. `scooter status` makes paths of it.
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 
 // What is wrong with a status, as a list of statements that name fields. An empty list means it is
@@ -115,8 +115,8 @@ export class RunnerStatusError extends Error {
 
 // Reads a `status.json`. Returns null when there is none, which is so until the runner first
 // starts, and throws a `RunnerStatusError` that names the file when it isn't a status. With
-// `maxBytes`, it is read as a file another user controls (`readUntrustedFile`): so the bridge, as
-// root, reads it for `/status`.
+// `maxBytes`, it is read as a file another user controls (`readUntrustedFile`): so `scooter
+// status`, as root, reads it.
 export function readRunnerStatus(file, { maxBytes = null } = {}) {
   let status
   try {

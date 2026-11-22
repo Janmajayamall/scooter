@@ -44,6 +44,8 @@ test('paths: the data folder\'s folders, as they are in Docker', () => {
     imageStaging: '/data/.image-build',
     bridge: '/data/bridge',
     bridgeState: '/data/bridge/state.json',
+    bridgeStatusDir: '/data/bridge/status',
+    bridgeStatus: '/data/bridge/status/status.json',
     bridgeSocket: '/data/bridge/bridge.sock',
     bridgeIncoming: '/data/bridge/incoming',
     backupCache: '/data/bridge/backup-cache',

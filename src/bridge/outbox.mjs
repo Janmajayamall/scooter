@@ -16,7 +16,7 @@
 //   with the channel as `source` and the ID the channel gave it as `sourceId`. The entry is
 //   deleted once all of it has gone.
 // - **Two outboxes.** The runner writes its entries to `exchange/outbox/`, and the bridge its own,
-//   such as its replies to commands, to `bridge/outbox/`, in the same form. The entries of both are
+//   its backup notices, to `bridge/outbox/`, in the same form. The entries of both are
 //   taken together, in the order of their IDs.
 // - **Crash safety**. Before the first message goes, the bridge records the entry and how
 //   many of its messages have gone out, and writes the record again after each one, once its `out`
@@ -56,8 +56,8 @@
 // folders named as `createIds` names them, since it names its record after the entry, and leaves
 // any other name, logged once. It removes an entry only by the names one holds, which in the
 // runner's outbox is `entry.json` alone, and leaves what isn't a folder, logged once. While the
-// runner's outbox isn't one to take from, the bridge's own entries still go, `/status`'s reply
-// among them. Logs name entries by their ID and never hold their text.
+// runner's outbox isn't one to take from, the bridge's own entries still go. Logs name entries by
+// their ID and never hold their text.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -116,15 +116,15 @@ export function splitText(text, max = limits.CHUNK_CHARS) {
 // ---------------------------------------------------------------------------------------------
 // Routing
 
-// The message a line is, or changes: a message or a command is itself, and an edit or a deletion
-// is the message it changes. Null for anything else.
+// The message a line is, or changes: a message is itself, and an edit or a deletion is the message
+// it changes. Null for anything else.
 function messageOf(index, seq) {
   const line = index.get(seq)?.line
   if (!line) return null
-  if (line.kind === 'message' || line.kind === 'command') return line
+  if (line.kind === 'message') return line
   if (line.kind !== 'edit' && line.kind !== 'delete') return null
   const target = index.get(line.target)?.line
-  return target && (target.kind === 'message' || target.kind === 'command') ? target : null
+  return target?.kind === 'message' ? target : null
 }
 
 // Where an entry goes, and what goes there. `index` is the datastore's, `channels` a Map from each

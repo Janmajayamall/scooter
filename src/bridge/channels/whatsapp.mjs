@@ -586,7 +586,6 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
 
   return {
     name: 'whatsapp',
-    takesCommands: true,
     canSend: true,
     canReact: true,
 
@@ -680,7 +679,7 @@ export function createWhatsApp({ settings, paths, proc, log, clock = systemClock
       return sentId(await wacli(['send', 'react', '--to', chat, '--id', id, '--sender', chat, '--reaction', emoji], { signal }))
     },
 
-    // One line for `/status`: the link state.
+    // One line for `scooter status`: the link state.
     status() {
       const lines = {
         stopped: 'WhatsApp: stopped',

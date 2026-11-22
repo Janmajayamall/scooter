@@ -31,7 +31,7 @@ you (WhatsApp, email) ──▶ bridge ──▶ datastore ──▶ runner ─�
          └───── replies ────┘◀────── outbox ─────────┘
 ```
 
-- **The bridge** runs as root. It runs [wacli](https://github.com/openclaw/wacli), a WhatsApp client linked to the bot's number, as the user `scooter-wacli`, and the email reader as `scooter-mail`. It writes every message from you to the **datastore**, a log that is only ever appended to. It sends the replies, answers `/status`, `/backup` and `/help`, and makes the backups.
+- **The bridge** runs as root. It runs [wacli](https://github.com/openclaw/wacli), a WhatsApp client linked to the bot's number, as the user `scooter-wacli`, and the email reader as `scooter-mail`. It writes every message from you to the **datastore**, a log that is only ever appended to. It sends the replies, and makes the backups.
 - **The runner** runs as `scooter-runner`. It holds the OpenRouter key. When you have been quiet for 8 seconds it gives your new messages to the agent, [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent), which runs in a fresh virtual machine for every batch, with no secrets and no network of its own. Everything pi sends goes through the runner's network policy, which allows OpenRouter's two chat endpoints and nothing else, and logs every request. pi writes the **views** (CSV files) and its **memory**; the runner checks what it wrote, commits it to git, and writes the replies to the outbox.
 
 The two services share folders and never talk over the network. Nothing listens for connections from outside.
@@ -102,7 +102,7 @@ sudo -u scooter-runner scooter doctor
 
 `scooter pair --phone +919812345678` gives a code to type into the phone instead of a QR code. `pair` does nothing while wacli is linked: to link it again, unlink it first on the phone. `doctor` runs as `scooter-runner` only, since it checks what the runner can reach (see [When something goes wrong](#when-something-goes-wrong)).
 
-Commands run as their service's user: `sudo scooter <command>` for the bridge's (`pair`, `email-check`, `backup-init`, `snapshots`, `check`, `restore`), `sudo -u scooter-runner scooter <command>` for the runner's (`doctor`, `rebuild`). `scooter help` lists them. The logs are in the journal: `journalctl -u scooter-bridge -u scooter-runner`.
+Commands run as their service's user: `sudo scooter <command>` for the bridge's (`pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check`, `restore`), `sudo -u scooter-runner scooter <command>` for the runner's (`doctor`, `rebuild`). `scooter help` lists them. The logs are in the journal: `journalctl -u scooter-bridge -u scooter-runner`.
 
 Where things are: the data in `/var/lib/scooter`, the settings in `/etc/scooter`, the agent's instructions in `/etc/scooter/config`.
 
@@ -123,7 +123,7 @@ docker compose run --rm bridge pair
 - **`build-image`** builds the VM image into the data volume. Run it after installing and after each upgrade, with the runner stopped. It runs in a container of its own, as root and privileged, because Gondolin's builder makes a chroot with `/proc` and `/dev` mounted in it: under rootful Docker that container is root on the host, as a native build is.
 - **The data** is one named volume, `scooter_data`, mounted at `/data` in every container. A new volume starts as a copy of the image's `/data`, whose folders have the right owners and modes, which keep each service out of the others' folders. Keep the named volume: a bind mount of a host folder in its place starts empty, and then its folders must first be made with their owners, as the `Dockerfile` makes them.
 - **The config** is the repository's `./config`, mounted read-only into the runner. Its files must be readable by other users of the host, as git leaves them under the usual umask.
-- **Commands** run with `docker compose run --rm <service> <command>`: `bridge` for `pair`, `email-check`, `backup-init`, `snapshots`, `check` and `restore`, `runner` for `doctor` and `rebuild`. Logs: `docker compose logs bridge runner`.
+- **Commands** run with `docker compose run --rm <service> <command>`: `bridge` for `pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check` and `restore`, `runner` for `doctor` and `rebuild`. Logs: `docker compose logs bridge runner`.
 - **Without KVM** pi's VMs run under emulation. To use KVM, see the next section.
 - **Ubuntu 24.04 with rootless Docker** needs Docker's AppArmor profile for `rootlesskit`, which Docker's documentation on rootless mode gives, because Ubuntu restricts unprivileged user namespaces.
 
@@ -214,16 +214,16 @@ The ones you set: `OWNER_NUMBER` (bridge) and `OPENROUTER_API_KEY` (runner), alw
 
 ## Daily use
 
-Send the bot what you want kept: a receipt photo, a screenshot of a run, a note such as "an hour with Sam, planning the Goa trip", a ticket, a voice note's announcement. Forward bookings and files to the mailbox. Scooter is quiet by default: it reacts ✅ to each message it has handled, and writes only when it has a question or you asked something. With `reply_mode: confirm` in `agents.yaml` it writes one short line per batch instead. A message that fits none of the views, such as a note about the day, or that holds nothing to keep, such as "thanks", is kept in the datastore as every message is, and filed in no view; in quiet mode it gets its ✅ all the same. A view for such notes is a skill you add ([The agent's instructions](#the-agents-instructions)). You can reply to its questions; edit or delete a message, and it changes or removes what it filed from it. Standing instructions ("start tracking coffee") go into its memory, `memory/preferences.md`, and apply from then on.
+Send the bot what you want kept: a receipt photo, a screenshot of a run, a note such as "an hour with Sam, planning the Goa trip", a ticket, a voice note's announcement. Forward bookings and files to the mailbox. Scooter is quiet by default: it reacts ✅ to each message it has handled, and writes only when it has a question or you asked something. With `reply_mode: confirm` in `agents.yaml` it writes one short line per batch instead. A message that fits none of the views, such as a note about the day, or that holds nothing to keep, such as "thanks", is kept in the datastore as every message is, and filed in no view; in quiet mode it gets its ✅ all the same. A view for such notes is a skill you add ([The agent's instructions](#the-agents-instructions)). You can reply to its questions; edit or delete a message, and it changes or removes what it filed from it. Standing instructions ("start tracking coffee") go into its memory, `memory/preferences.md`, and apply from then on. The agent keeps one conversation a day, which ends at `SESSION_ROLLOVER_HOUR`, 04:00 by default.
 
-**Commands**, sent on WhatsApp:
+Everything you send is a message to file: Scooter takes no commands on WhatsApp. **How it is doing** is on the machine:
 
-| Command | What it does |
-|---|---|
-| `/status` | The channels, the newest message, the agent's last run, whether runs are paused and why, whether the runner waits after stopping on an error, the messages pending, retrying and failed, the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups |
-| `/backup` | Makes a backup now, or joins the one in progress, and replies with its snapshot ID or its error |
-| `/help` | Lists the commands |
-| `/new` | Starts a fresh conversation with the agent for the rest of the day |
+```sh
+sudo scooter status                        # natively
+docker compose run --rm bridge status      # Docker
+```
+
+It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down, and `scooter status` doesn't say so either: it shows when the runner last started, the agent's last run and the messages pending, which only get older and more while it is down. The logs say whether it runs ([When something goes wrong](#when-something-goes-wrong)).
 
 **The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
@@ -259,9 +259,9 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
 
 ## Backups and restore
 
-**Backups** run every night at `BACKUP_TIME`, in `SCOOTER_TZ`, encrypted by restic before they leave the machine. A backup holds the datastore, the agent's folder, wacli's session, the bridge's folder, the mail reader's folder, the network log and the runner's outbox; not the env files, and not the VM image, which `build-image` makes again. The bridge's folder holds its state, its own replies waiting to go out (`bridge/outbox/`), and its record of the runner's entries it is sending (`bridge/sending/`). While restic reads, a backup stops WhatsApp, email and the replies, and waits for a run of the agent to finish first; what arrives meanwhile is collected when the channels start again. The first backup, of everything, can take hours, up to 6 hours a step (`RESTIC_TIMEOUT`); what it uploaded is used again by the next. `restic check` runs on Sundays.
+**Backups** run every night at `BACKUP_TIME`, in `SCOOTER_TZ`, encrypted by restic before they leave the machine. A backup holds the datastore, the agent's folder, wacli's session, the bridge's folder, the mail reader's folder, the network log and the runner's outbox; not the env files, and not the VM image, which `build-image` makes again. The bridge's folder holds its state, its own notices waiting to go out (`bridge/outbox/`), and its record of the runner's entries it is sending (`bridge/sending/`); not its status (`bridge/status/`), which says how the bridge is doing. While restic reads, a backup stops WhatsApp, email and the replies, and waits for a run of the agent to finish first; what arrives meanwhile is collected when the channels start again. The first backup, of everything, can take hours, up to 6 hours a step (`RESTIC_TIMEOUT`); what it uploaded is used again by the next. `restic check` runs on Sundays.
 
-A failed backup sends you a notice; `/status` shows the last one and the next. To back up now: `/backup`, or
+A failed backup sends you a notice, which says when the next one is; `scooter status` shows the last one and the next. To back up now:
 
 ```sh
 sudo systemctl kill --kill-whom=main -s USR1 scooter-bridge   # natively
@@ -338,7 +338,7 @@ A backfill files the messages from before a skill was added, for that skill alon
         writes: [views/books.csv]   # what it may change
 ```
 
-It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `/status` shows how far it has got.
+It works only while nothing live is waiting, and sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
 
 ## When something goes wrong
 
@@ -356,7 +356,7 @@ docker compose run --rm runner doctor      # Docker
 **The runner's restarts.** The runner stops when something outside pi goes wrong, such as a damaged datastore or a full disk, and its service manager starts it again. So that a fault that stays can't run the agent, and spend on OpenRouter, every few seconds, the starts wait 1 minute after the first stop in a row, about 5½ after the second, then 30 minutes after each:
 
 - Natively systemd keeps these waits, and counts the restarts until the service is started by hand or the machine starts again. After you have fixed the cause, `sudo systemctl restart scooter-runner` brings it back at once.
-- In Docker the runner keeps them itself, since Docker would start it again at once. The first wait sends you a notice ("⚠️ I stopped on an error (ENOSPC), so I wait until …"), and `/status` says until when and why. `docker compose restart runner` ends the wait.
+- In Docker the runner keeps them itself, since Docker would start it again at once. The first wait sends you a notice ("⚠️ I stopped on an error (ENOSPC), so I wait until …"), and `scooter status` says until when and why. `docker compose restart runner` ends the wait.
 - A start that stops before it gets that far, such as on a mistake in `agents.yaml`, a missing VM image or a damaged datastore, runs nothing of pi's, and keeps no wait and sends no notice. Natively systemd waits as after any stop. In Docker, Docker starts it again by its own restart policy, whose waits are a minute at most, and `docker compose ps` shows the runner restarting.
 
 The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker compose logs runner` in Docker. They hold IDs, kinds, sizes and timings, never the text of your messages.
@@ -400,11 +400,11 @@ docker compose exec runner cat /data/runner/log/2026-11-18.jsonl      # Docker
 | `refused` | A request the policy refused, and why |
 | `unlogged` | Refusals past the first 100 of a run, counted in one line |
 
-Lines of one request share its `id`. No line holds a header, a body or a query string. `/status` counts the last 24 hours. With `jq`, the hosts of a day: `jq -r 'select(.event=="request") | .host' <file> | sort | uniq -c`. With internet access off, every `request` line names `openrouter.ai`.
+Lines of one request share its `id`. No line holds a header, a body or a query string. `scooter status` counts the last 24 hours. With `jq`, the hosts of a day: `jq -r 'select(.event=="request") | .host' <file> | sort | uniq -c`. With internet access off, every `request` line names `openrouter.ai`.
 
 ## Known limits
 
-- **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `/status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 ([Failures](docs/architecture/run.md#failures)).
+- **A request the agent sends itself can decide why a run failed.** The policy lets out any request shaped like pi's that carries the key's placeholder, whoever sends it, and the VM's environment holds the placeholder. So a message that misleads the agent into sending one, with `curl`, can make a failed run look like an OpenRouter outage or setup error: its batch is then tried every 30 minutes, without using its attempts, for as long as that message is in it, and `scooter status` shows runs paused or retried. Deleting the message on WhatsApp takes its text out of what the agent is shown, which shows only that it was deleted; an email can't be deleted so. You accepted this on 2026-11-18 ([Failures](docs/architecture/run.md#failures)).
 - **A WhatsApp message that reaches wacli long after messages sent later**, more than 2 minutes, and whose webhook to the bridge was also lost, may never be stored. Catch-up lists wacli's store by the messages' own times, from where it had got to, less 2 minutes; your messages normally reach wacli in their order. It stays in WhatsApp and in wacli's own store ([Catch-up](docs/architecture/whatsapp.md#catch-up)).
 - **The image on arm64**, Docker Desktop, OrbStack, Colima and macOS have never been run.
 - **The native install and upgrade, as written here,** have never been run whole: the install's steps ran in a throwaway VM, as the plan the code was built by worded them, and the upgrade's one at a time. `sudo RESTORE_TARGET=… scooter restore` has never been run.
@@ -435,19 +435,19 @@ docker compose up -d
 
 The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
 
-**The suite** runs three ways. With wacli and restic installed, restic in the container too, every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-21, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
+**The suite** runs three ways. With wacli and restic installed, restic in the container too, every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-22, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
 
 - **Plain**, as an ordinary user:
   ```sh
   npm ci && npm test
   ```
-  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 772 tests, 717 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 777 tests, 722 passed, 55 skipped: 37 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
 - **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 774 tests, 756 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 779 tests, 761 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
 
   Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
   ```sh
@@ -458,7 +458,7 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
-  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 772 tests, 706 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 777 tests, 711 passed, 66 skipped: 37 for the image, 14 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
 
 **The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks a run's mounts with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 
@@ -473,4 +473,5 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
 - [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli ([Catch-up](docs/architecture/whatsapp.md#catch-up)): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case catch-up leaves (see [Known limits](#known-limits)).
 - [ ] Email: IDLE with the app password, over TLS; the `Authentication-Results` header and its `dmarc=` result, as `email-check` shows them; your own mail passes DMARC; a forwarded booking and an audio attachment are parsed.
-- [ ] A backup to the real bucket, and a restore of it into an empty folder.
+- [ ] A backup to the real bucket, and a restore of it into an empty folder; and that the restore has no `bridge/status/`, which `--exclude` leaves out.
+- [ ] `sudo scooter status` on the installed machine, with the bridge running and with it stopped.

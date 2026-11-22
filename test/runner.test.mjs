@@ -1,5 +1,5 @@
 // The runner as a whole, with the fake
-// sandbox: failures and their notices, pauses and outages, the locks, scheduled tasks, `/new`,
+// sandbox: failures and their notices, pauses and outages, the locks, scheduled tasks, sessions,
 // `status.json` and the emulation notice, startup, and the loop.
 
 import assert from 'node:assert/strict'
@@ -20,7 +20,7 @@ import { atEnd } from './support/tmp.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null }
 
 function openWith(t, lines, options = {}) {
   return openTestRunner(t, { lines: [...fillerLines(1041), ...lines], state: HANDLED, start: START, ...options })
@@ -190,9 +190,9 @@ test('failures: a 401, 402, 403 or 404 pauses runs, counts no attempt, and is tr
     { type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (${reason}). Runs are paused until this is fixed. I'll try again every 30 minutes.` },
   ])
 
-  // Nothing runs while paused; messages that arrive wait, and commands still work.
-  add(line.text(1043, '2026-11-09T15:55:00Z', 'lunch 300'), line.command(1044, '2026-11-09T15:55:01Z', '/new'))
-  assert.equal((await runner.tick()).action.kind, 'commands')
+  // Nothing runs while paused, and messages that arrive wait.
+  add(line.text(1043, '2026-11-09T15:55:00Z', 'lunch 300'))
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'paused' })
   await clock.advance(29 * MINUTE)
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'paused' })
   assert.equal(sandbox.runs.length, 1)
@@ -208,7 +208,7 @@ test('failures: a 401, 402, 403 or 404 pauses runs, counts no attempt, and is tr
       [1043, 0],
     ],
   )
-  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1044 }])
+  assert.deepEqual(outbox({ take: true }), [])
 
   // A restart tries again at once, once the owner has been quiet. The key has been fixed: the
   // whole batch is handled.
@@ -370,7 +370,7 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
 })
 
 // ---------------------------------------------------------------------------------------------
-// Tasks and commands
+// Tasks and sessions
 
 test('tasks: the evening check-in runs at 21:30 with its task, sends its text on its own, and is done for the day', async t => {
   const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
@@ -439,32 +439,38 @@ test('tasks: a scheduled task that a setup error holds back is still the next tr
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
 })
 
-test('commands: /new is handled once, even when the batch after it fails', async t => {
-  const { runner, clock, state, outbox, sandbox } = await openWith(t, [line.command(1042, '2026-11-09T15:50:00Z', '/new'), line.text(1043, '2026-11-09T15:50:01Z', 'start again')])
-  sandbox.behave({ crash: 1 })
-  assert.equal((await runner.tick()).action.kind, 'commands')
-  await clock.advance(8 * SECOND)
-  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
-  sandbox.behave(null)
-  await clock.advance(MINUTE)
-  assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
-  assert.equal(state().commandSeq, 1042)
-  assert.deepEqual(state().session, { day: '2026-11-09', bump: 1 })
-  assert.deepEqual(
-    outbox().filter(entry => entry.by === 'runner' && entry.about === 1042),
-    [{ type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1042 }],
-  )
-  // Both runs went into the new session.
+test('sessions: a day\'s session ends at SESSION_ROLLOVER_HOUR, and the runs after it go into the next day\'s', async t => {
+  // 03:59:30 in Asia/Kolkata on Tuesday 10 November: still Monday's session.
+  const { runner, clock, add, sandbox, paths, state } = await openTestRunner(t, {
+    lines: [...fillerLines(1041), line.text(1042, '2026-11-09T22:29:00Z', 'late tea')],
+    state: HANDLED,
+    start: '2026-11-09T22:29:30Z',
+  })
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  // 04:00:30, past the rollover hour: Tuesday's.
+  await clock.advance(MINUTE - 8 * SECOND)
+  add(line.text(1043, '2026-11-09T22:30:00Z', 'early run'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(state().lastRun.seqs, [1043])
   assert.deepEqual(
     sandbox.runs.map(({ spec }) => spec.argv[spec.argv.indexOf('--session-id') + 1]),
-    ['lifelog-2026-11-09-1', 'lifelog-2026-11-09-1'],
+    ['lifelog-2026-11-09', 'lifelog-2026-11-10'],
   )
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')).sort(), ['lifelog-2026-11-09.jsonl', 'lifelog-2026-11-10.jsonl'])
+  // The new session didn't continue the old one.
+  assert.equal(sandbox.seen()[1].sessionContinued, false)
+  // A session whose file is removed ends too: the next run starts it again.
+  fs.rmSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-10.jsonl'))
+  add(line.text(1044, '2026-11-09T22:31:00Z', 'and breakfast'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(sandbox.runs[2].spec.argv[sandbox.runs[2].spec.argv.indexOf('--session-id') + 1], 'lifelog-2026-11-10')
+  assert.equal(sandbox.seen()[2].sessionContinued, false)
 })
 
 // ---------------------------------------------------------------------------------------------
 // Startup, status.json and the emulation notice
 
-test('status: status.json holds what /status shows of the runner\'s settings', async t => {
+test('status: status.json holds what scooter status shows of the runner\'s settings', async t => {
   const { paths } = await openWith(t, [], { settings: { agentInternet: true, zdr: false } })
   assert.deepEqual(readRunnerStatus(paths.runnerStatus), {
     startedAt: '2026-11-09T15:50:30Z',

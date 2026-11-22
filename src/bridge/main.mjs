@@ -14,8 +14,9 @@
 // 5. It makes its channels: WhatsApp, and email when `EMAIL_IMAP_HOST` is set. It checks
 //    `DEFAULT_CHANNEL`: a channel that can send, which in v2 is only WhatsApp.
 // 6. It starts the channels.
-// 7. It answers the commands it hadn't answered, starts delivery, which first sends what was left
-//    in the outbox, from where a crash cut it short, and starts the backups' schedule.
+// 7. It starts delivery, which first sends what was left in the outbox, from where a crash cut it
+//    short, the backups' schedule, and the writing of `bridge/status/status.json`, which
+//    `scooter status` reads (`status.mjs`).
 
 import fs from 'node:fs'
 import { checkOwnFolder, createIds, ensureDir } from '../common/files.mjs'
@@ -29,11 +30,10 @@ import { createBackups } from './backup.mjs'
 import { createEmail } from './channels/email.mjs'
 import { defaultChannelProblem } from './channels/index.mjs'
 import { createWhatsApp } from './channels/whatsapp.mjs'
-import { createCommands } from './commands.mjs'
 import { createIntake } from './intake.mjs'
 import { createOutbox } from './outbox.mjs'
 import { openBridgeState } from './state.mjs'
-import { statusText } from './status.mjs'
+import { createStatusFile } from './status.mjs'
 import { openStore } from './store.mjs'
 
 // The bridge can't start because of how it is configured. `scooter bridge` exits with 2.
@@ -44,7 +44,7 @@ export class BridgeConfigError extends Error {
   }
 }
 
-// Starts the bridge. Returns `{ paths, store, state, intake, channels, outbox, commands, backups,
+// Starts the bridge. Returns `{ paths, store, state, intake, channels, outbox, backups, statusFile,
 // fatal, stop }`, where `fatal` resolves with an error if the bridge can't go on, and `stop()`
 // stops it.
 // `proc` is what `createProc` returns; tests give one with a clock of their own, and `emailReader`
@@ -68,7 +68,7 @@ export async function startBridge({ settings, clock = systemClock, log = createL
   ensureDir(paths.dataDir, { mode: 0o755 })
   ensureDir(paths.bridge, { mode: 0o700 })
   // The exchange is the runner's: the bridge takes the runner's entries from the outbox
-  // there, and writes its `backup.lock` into `locks/`; its own replies go to `bridge/outbox/`.
+  // there, and writes its `backup.lock` into `locks/`; its own notices go to `bridge/outbox/`.
   // Made here, if they are missing, with the runner's owner, so that a bridge that starts
   // first doesn't leave the runner a folder it can't write.
   for (const folder of [paths.exchange, paths.outbox, paths.locks]) ensureDir(folder, { mode: 0o700, owner: runnerUser })
@@ -90,16 +90,13 @@ export async function startBridge({ settings, clock = systemClock, log = createL
     // again.
     fs.rmSync(paths.bridgeIncoming, { recursive: true, force: true })
     const store = openStore({ paths, clock, log, owner: storeOwner })
-    const state = openBridgeState({ paths, clock, log, newestSeq: store.index.lastSeq })
+    const state = openBridgeState({ paths, clock, log })
 
     let reportFatal
     const fatal = new Promise(resolve => (reportFatal = resolve))
     const channels = new Map()
     const ids = createIds(clock)
-    // `backups` is made below, before any channel starts, so before any command can come.
-    const status = async () => statusText({ now: clock.now(), settings, paths, channels, index: store.index, backups: backups.statusLine(clock.now()) })
-    const commands = createCommands({ store, state, paths, ids, log, clock, status, backup: seq => backups.ask(seq) })
-    const intake = createIntake({ store, channels, paths, log, clock, onFatal: reportFatal, onCommand: () => commands.handle() })
+    const intake = createIntake({ store, channels, paths, log, clock, onFatal: reportFatal })
     const whatsapp = createWhatsApp({
       settings,
       paths,
@@ -151,10 +148,17 @@ export async function startBridge({ settings, clock = systemClock, log = createL
       },
       onFatal: reportFatal,
     })
+    // What `scooter status` shows of the bridge: each channel's line, and the backups'.
+    const statusFile = createStatusFile({
+      paths,
+      clock,
+      log,
+      render: now => ({ channels: Object.fromEntries([...channels].map(([name, channel]) => [name, channel.status()])), backups: backups.statusLine(now) }),
+    })
     for (const channel of channels.values()) await channel.start(take)
-    commands.handle()
     outbox.start()
     backups.start()
+    statusFile.start()
     log.info('bridge.started', { lines: store.index.lastSeq, channels: [...channels.keys()], defaultChannel: settings.defaultChannel })
 
     let stopping = null
@@ -165,20 +169,20 @@ export async function startBridge({ settings, clock = systemClock, log = createL
       intake,
       channels,
       outbox,
-      commands,
       backups,
+      statusFile,
       fatal,
       // Stops the backups, cutting short one in progress, which then starts nothing again; then
       // delivery, cutting short a send in progress, which goes out again at the next start; then
-      // the channels; waits for what they handed over to be stored and answered; and lets go of
-      // the data folder.
+      // the channels; waits for what they handed over to be stored; writes `status.json` a last
+      // time, saying it stopped; and lets go of the data folder.
       stop: () =>
         (stopping ??= (async () => {
           await backups.stop()
           await outbox.stop()
           for (const channel of channels.values()) await channel.stop()
           await intake.idle()
-          await commands.stop()
+          await statusFile.stop()
           await instance.close()
           log.info('bridge.stopped')
         })()),

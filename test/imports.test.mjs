@@ -161,7 +161,7 @@ test('imports: one place for each outside contact', () => {
   assert.match(violations({ ...channels, 'src/bridge/outbox.mjs': "run('wacli', ['send', 'text'])" })[0], /names the program wacli; only src\/bridge\/channels\/whatsapp.mjs runs it/)
   assert.match(violations({ ...channels, 'src/ops/doctor.mjs': 'const tools = ["restic", "qemu-img"]' })[0], /names the program restic; only src\/bridge\/backup.mjs runs it/)
   assert.match(violations({ ...channels, 'src/bridge/main.mjs': "const reader = new URL('../mail/reader.mjs', import.meta.url)" })[0], /names the email reader's program/)
-  assert.match(violations({ ...channels, 'src/bridge/commands.mjs': "import { createProc } from '../common/proc.mjs'" })[0], /only the two channels and the backup module run programs/)
+  assert.match(violations({ ...channels, 'src/bridge/status.mjs': "import { createProc } from '../common/proc.mjs'" })[0], /only the two channels and the backup module run programs/)
   // Every program is run through proc.mjs, which never uses a shell.
   assert.match(violations({ 'src/runner/git.mjs': "import { execFile } from 'node:child_process'" })[0], /only src\/common\/proc.mjs imports node:child_process/)
   // A comment may say what it likes.

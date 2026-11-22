@@ -19,7 +19,7 @@ const START = '2026-11-09T15:50:30Z'
 test('run: the pi stub takes a message from the datastore to a committed view and a correct state.json', async t => {
   const { runner, clock, state, outbox, git, views, paths, sandbox } = await openTestRunner(t, {
     lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')],
-    state: { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null },
+    state: { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null },
     start: START,
   })
 
@@ -55,7 +55,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
 })
 
 // A state that has dealt with the 1,041 lines of filler.
-const HANDLED = { cursor: 1041, commandSeq: 0, retry: [], failed: [], session: null, backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null }
 
 // A runner with the filler and `lines` after it, at 21:20 in Kolkata.
 function openWith(t, lines, options = {}) {
@@ -200,13 +200,17 @@ test('run: with session: none, pi keeps no session', async t => {
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 })
 
-test('run: a /new among the messages starts the session the batch goes into', async t => {
-  const { runner, clock, sandbox, outbox } = await openWith(t, [line.command(1042, '2026-11-09T15:50:00Z', '/new'), line.text(1043, '2026-11-09T15:50:01Z', 'start again')])
-  assert.equal((await runner.tick()).action.kind, 'commands')
+test('run: a text such as /new is a message the agent is given, and its batch goes into the day\'s session', async t => {
+  const { runner, clock, sandbox, outbox, state } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', '/new'), line.text(1043, '2026-11-09T15:50:01Z', 'start again')])
+  assert.equal((await runner.tick()).action.kind, 'idle')
   await runNext(runner, clock)
-  assert.equal(sandbox.runs[0].spec.argv[sandbox.runs[0].spec.argv.indexOf('--session-id') + 1], 'lifelog-2026-11-09-1')
+  assert.equal(sandbox.runs.length, 1)
+  const argv = sandbox.runs[0].spec.argv
+  assert.equal(argv[argv.indexOf('--session-id') + 1], 'lifelog-2026-11-09')
+  assert.match(argv.at(-1), /^#1042 21:20 text: "\/new"$/m)
+  assert.deepEqual(state().lastRun.seqs, [1042, 1043])
   assert.deepEqual(outbox(), [
-    { type: 'text', by: 'runner', text: 'Started a fresh conversation.', about: 1042 },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅' },
     { type: 'react', by: 'lifelog', target: 1043, emoji: '✅' },
   ])
 })

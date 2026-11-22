@@ -2,10 +2,8 @@
 //
 //   {
 //     "cursor": 1049,
-//     "commandSeq": 1038,
 //     "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not reported"}],
 //     "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
-//     "session": {"day": "2026-11-09", "bump": 0},
 //     "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
 //     "backfillDone": [],
 //     "scheduled": {"21:30": "2026-11-09"},
@@ -15,13 +13,10 @@
 //
 // - `cursor`: the highest `seq` the runner has dealt with, by giving it to the agent or by skipping
 //   it. 0 before anything has been.
-// - `commandSeq`: the `seq` of the newest command line the runner has handled, 0 before any.
 // - `retry`: items given to the agent and not handled yet. `attempts` is how many runs they have
 //   been in that counted, and `due` when they are next tried. Each is at or before the cursor: a
 //   run moves the cursor past its batch, whether it succeeds or fails.
 // - `failed`: items given up on, the newest `FAILED_KEEP`.
-// - `session`: the owner's day of the newest `/new`, and how many there were that day. Null before
-//   the first `/new`: a day without one has the session `<agent>-<day>`.
 // - `backfillDone`: the IDs of the backfills that have finished.
 // - `backfill`: only while a backfill is in progress. Its own cursor, its retries, and the
 //   items it gave up on.
@@ -31,16 +26,16 @@
 // - `paused`: only while a setup error or an outage holds runs back. `cause` is `setup` or
 //   `outage`, `next` is the next try, and `tries` how many tries in a row have failed.
 //
-// Times are UTC to the second. `session.day` and the dates in `scheduled` are dates of the owner's
-// day in `SCOOTER_TZ`. The runner alone writes the file, atomically. The bridge reads it for
-// `/status`, which is why its format is here.
+// Times are UTC to the second. The dates in `scheduled` are dates of the owner's day in
+// `SCOOTER_TZ`. The runner alone writes the file, atomically. `scooter status` reads it, which is
+// why its format is here.
 
 import { readJsonFile, readUntrustedFile } from './files.mjs'
 import { isDate, parseIsoSeconds } from './time.mjs'
 
 export const PAUSE_CAUSES = ['setup', 'outage']
 
-const FIELDS = ['cursor', 'commandSeq', 'retry', 'failed', 'session', 'backfill', 'backfillDone', 'scheduled', 'lastRun', 'paused']
+const FIELDS = ['cursor', 'retry', 'failed', 'backfill', 'backfillDone', 'scheduled', 'lastRun', 'paused']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isCount = value => Number.isSafeInteger(value) && value >= 0
@@ -52,10 +47,8 @@ const isText = value => typeof value === 'string' && value !== ''
 export function initialAgentState() {
   return {
     cursor: 0,
-    commandSeq: 0,
     retry: [],
     failed: [],
-    session: null,
     backfillDone: [],
     scheduled: {},
     lastRun: null,
@@ -131,7 +124,6 @@ export function checkAgentState(state) {
   }
 
   if (state.cursor !== undefined && !isCount(state.cursor)) fault('cursor', 'a whole number, 0 or more')
-  if (state.commandSeq !== undefined && !isCount(state.commandSeq)) fault('commandSeq', 'a whole number, 0 or more')
   if (state.retry !== undefined) {
     retries('retry', state.retry)
     behindCursor('retry', state.retry, state.cursor)
@@ -140,9 +132,6 @@ export function checkAgentState(state) {
     list('failed', state.failed, (name, item) =>
       shape(name, item, { seq: [isSeq, 'a seq'], at: [isTime, 'a UTC time to the second'], reason: [isText, "a string that isn't empty"] }),
     )
-  }
-  if (state.session !== undefined && state.session !== null) {
-    shape('session', state.session, { day: [isDate, 'a date such as 2026-11-09'], bump: [isCount, 'a whole number, 0 or more'] })
   }
   if (state.backfillDone !== undefined) ids('backfillDone', state.backfillDone)
   if (state.backfill !== undefined) {
@@ -199,7 +188,7 @@ export class AgentStateError extends Error {
 // Reads a `state.json`. Returns null when there is none, and throws an `AgentStateError` that
 // names the file when it isn't a state. The file is written atomically, so a crash doesn't leave
 // half of one. With `maxBytes`, it is read as a file another user controls (`readUntrustedFile`):
-// so the bridge, as root, reads the runner's for `/status`.
+// so `scooter status`, as root, reads the runner's.
 export function readAgentState(file, { maxBytes = null } = {}) {
   let state
   try {

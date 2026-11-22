@@ -1,9 +1,9 @@
 // The runner's `status.json`, and the notice about emulation.
-// The format, and its reader for the bridge, are in `src/common/runnerstatus.mjs`.
+// The format, and its reader for `scooter status`, are in `src/common/runnerstatus.mjs`.
 //
-// At startup the runner writes what `/status` needs to know about its settings: how its VMs run,
-// whether ZDR and the agent's internet access are on, when the VM image was built, and each agent's
-// model, timeout and sources. The file it replaces says how the VMs ran before, which is how the
+// At startup the runner writes what `scooter status` needs to know about its settings: how its VMs
+// run, whether ZDR and the agent's internet access are on, when the VM image was built, and each
+// agent's model, timeout and sources. The file it replaces says how the VMs ran before, which is how the
 // runner knows whether the accelerator has just changed to emulation.
 
 import { writeFileAtomic } from '../common/files.mjs'

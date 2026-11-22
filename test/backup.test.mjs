@@ -1,7 +1,7 @@
 // Backups: the lock coordination with a restic stub, a
 // backup that waits for a run to finish and goes ahead once `run.lock` is 2 minutes past its time,
 // and a leftover `backup.lock` removed at startup; restic's arguments and environment; the
-// schedule; the replies, the notices and `/status`; the commands; and, when restic is installed, a
+// schedule; the notices and the status line; the CLI commands; and, when restic is installed, a
 // real round trip: init, back up, no plaintext in the repository, the wrong password failing, the
 // restore matching, and `--force` needed for a target that isn't empty.
 
@@ -10,12 +10,13 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { BACKUPS_OFF, OFF_REPLY, backUp, createBackups, createRestic, restoreArgs, runBackupInit, runCheck, runRestore, runSnapshots, snapshotBase } from '../src/bridge/backup.mjs'
+import { BACKUPS_OFF, backUp, backupSources, createBackups, createRestic, restoreArgs, runBackupInit, runCheck, runRestore, runSnapshots, snapshotBase } from '../src/bridge/backup.mjs'
 import { startBridge } from '../src/bridge/main.mjs'
+import { readIndex, statusText } from '../src/bridge/status.mjs'
 import { openBridgeState } from '../src/bridge/state.mjs'
 import { createIds, ensureDir, listHandOffs } from '../src/common/files.mjs'
 import { holdInstance } from '../src/common/instance.mjs'
-import { overrideLimits } from '../src/common/limits.mjs'
+import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { lockExists, releaseLock, takeLock } from '../src/common/locks.mjs'
 import { writeOutboxEntry } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
@@ -80,7 +81,8 @@ function fillDataFolder(paths) {
     [path.join(paths.agentState('lifelog'))]: '{"cursor":1}\n',
     [path.join(paths.wacliStore, 'wacli.db')]: 'the WhatsApp session',
     [path.join(paths.wacliCache, 'thumbnail')]: 'a cache',
-    [paths.bridgeState]: '{"firstStart":"2026-11-09T15:43:02Z","ownerChat":null,"lastBackup":null,"commandSeq":0}\n',
+    [paths.bridgeState]: '{"firstStart":"2026-11-09T15:43:02Z","ownerChat":null,"lastBackup":null}\n',
+    [paths.bridgeStatus]: '{"startedAt":"2026-11-09T15:43:02Z"}\n',
     [paths.mailState]: '{"next":5}\n',
     [paths.networkLog('2026-11-09')]: '{"event":"request"}\n',
     [path.join(paths.outbox, FIXTURE_ENTRY, 'entry.json')]: '{"type":"text","by":"runner","text":"hi"}\n',
@@ -267,7 +269,7 @@ test('backups: a leftover backup.lock is removed when the bridge starts, and a b
 // ---------------------------------------------------------------------------------------------
 // restic's command lines and environment
 
-test('backups: restic backs up the folders a backup holds, leaves out the caches and what is being removed, forgets by the retention, and gets only the backup settings', async t => {
+test('backups: restic backs up the folders a backup holds, leaves out the caches, what is being removed and the bridge\'s status, forgets by the retention, and gets only the backup settings', async t => {
   const h = harness(t, { extra: { backup: { keepDaily: 14, keepWeekly: 0, keepMonthly: 24 } } })
   // Email is off, so there is no mail folder, and it isn't asked for.
   fs.rmSync(h.paths.mail, { recursive: true })
@@ -294,6 +296,8 @@ test('backups: restic backs up the folders a backup holds, leaves out the caches
     p.wacliCache,
     '--exclude',
     p.agentsDiscarded,
+    '--exclude',
+    p.bridgeStatusDir,
     '--exclude-caches',
   ])
   // Scooter's snapshots are one group, whatever folders each holds.
@@ -365,13 +369,15 @@ test('backups: restic check runs on Sundays in SCOOTER_TZ and on no other day, o
 })
 
 // ---------------------------------------------------------------------------------------------
-// Results: the state, the replies and the notices
+// Results: the state and the notices
 
-test('backups: /backup always replies, with the snapshot or the error; the result is kept for /status', async t => {
+// What a notice ends with: when the next backup is.
+const NEXT = ' The next one is at Tue 10 Nov 03:30.'
+
+test('backups: a backup says nothing when it works, and sends a notice when it fails, which says why and when the next one is; the result is kept for scooter status', async t => {
   const h = harness(t)
-  assert.equal(h.backups.ask(41), null)
-  await h.backups.idle()
-  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: 'Backed up: snapshot abcd1234.', about: 41 }])
+  assert.equal((await h.backups.request('signal')).ok, true)
+  assert.deepEqual(h.outbox(), [])
   assert.deepEqual(h.state.get().lastBackup, { at: START, ok: true, snapshot: 'abcd1234', reason: null })
   assert.equal(h.backups.statusLine(h.clock.now()), 'Backups: last 21:20, snapshot abcd1234. Next Tue 10 Nov 03:30.')
 
@@ -379,10 +385,9 @@ test('backups: /backup always replies, with the snapshot or the error; the resul
   const said = 'Fatal: unable to open repository at s3:https://account.r2.cloudflarestorage.com/bucket/scooter: Access Denied.'
   h.stub.fixtures({ exit: { backup: 1 }, stderr: { backup: `open repository\n${said}\n` } })
   await h.clock.advance(HOUR)
-  h.backups.ask(42)
-  await h.backups.idle()
+  await h.backups.request('signal')
   const reason = `restic backup: ${said.slice(0, -1)}`
-  assert.deepEqual(h.outbox().at(-1), { type: 'text', by: 'bridge', text: `⚠️ The backup failed: ${reason}.`, about: 42 })
+  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: `⚠️ The backup failed: ${reason}.${NEXT}` }])
   assert.deepEqual(h.state.get().lastBackup, { at: '2026-11-09T16:50:30Z', ok: false, snapshot: null, reason })
   assert.equal(h.backups.statusLine(h.clock.now()), `Backups: the last, 22:20, failed (${reason}). Next Tue 10 Nov 03:30.`)
   assert.ok(!h.entries.some(entry => JSON.stringify(entry).includes('Access Denied')))
@@ -402,67 +407,116 @@ test('backups: /backup always replies, with the snapshot or the error; the resul
   ]
   for (const [fixtures, text] of cases) {
     h.stub.fixtures({ exit: {}, stderr: {}, snapshot: 'abcd1234', ...fixtures })
-    h.backups.ask(43)
-    await h.backups.idle()
-    assert.equal(h.outbox().at(-1).text, text)
+    await h.backups.request('signal')
+    assert.equal(h.outbox().at(-1).text, `${text}${NEXT}`)
   }
   // A failed forget stops the backup there: no check, even with FORCE_CHECK.
   assert.ok(!h.stub.commands().includes('check'))
 })
 
-test('backups: a scheduled backup says nothing when it works, and tells the owner when it fails; a /backup that joins one gets the reply', async t => {
+test('backups: restic\'s words come back with the password and the bucket\'s keys hidden, so no reason, notice, state or status holds one', async t => {
+  const h = harness(t)
+  const secrets = [BACKUP.password, 'key-id', 'key-secret']
+  h.stub.fixtures({ exit: { backup: 1 }, stderr: { backup: `Fatal: ${secrets.join(' and ')} were refused\n` } })
+  await h.backups.request('signal')
+  const reason = 'restic backup: Fatal: … and … and … were refused'
+  assert.deepEqual(h.state.get().lastBackup.reason, reason)
+  assert.equal(h.outbox()[0].text, `⚠️ The backup failed: ${reason}.${NEXT}`)
+  assert.match(h.backups.statusLine(h.clock.now()), /failed \(restic backup: Fatal: … and … and … were refused\)/)
+  // And what the CLI commands pass on.
+  h.stub.fixtures({ exit: {}, stderr: { snapshots: `${BACKUP.password} key-secret\n` } })
+  let out = ''
+  let err = ''
+  await runSnapshots({ settings: h.settings, stdout: { write: text => (out += text) }, stderr: { write: text => (err += text) }, clock: h.clock, log: h.log, proc: h.proc })
+  assert.equal(err, '… …\n')
+  assert.match(out, /^abcd1234 /m)
+  const said = `${out}${err}${JSON.stringify(h.state.get())}${JSON.stringify(h.outbox())}`
+  for (const secret of secrets) assert.ok(!said.includes(secret), secret)
+})
+
+test('backups: a scheduled backup is told as one on SIGUSR1 is; a request during a backup joins it, and one notice goes out; no notice names a command', async t => {
   const h = harness(t)
   await h.backups.request('scheduled')
   assert.deepEqual(h.outbox(), [])
 
   h.stub.fixtures({ exit: { backup: 12 } })
   await h.backups.request('scheduled')
-  assert.deepEqual(h.outbox(), [
-    {
-      type: 'text',
-      by: 'bridge',
-      text: "⚠️ The backup failed: RESTIC_PASSWORD doesn't open the backup repository. The next one is at Tue 10 Nov 03:30. Send /backup to try again now.",
-    },
-  ])
+  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: `⚠️ The backup failed: RESTIC_PASSWORD doesn't open the backup repository.${NEXT}` }])
 
-  // SIGUSR1 is a backup the owner didn't ask for by message, as a scheduled one is.
   h.stub.fixtures({ exit: {}, hold: ['backup'] })
   const scheduled = h.backups.request('scheduled')
   await h.stub.holding('backup')
-  // A request during a backup joins it, and only the reply goes out.
-  assert.equal(h.backups.ask(50), null)
   const joined = h.backups.request('signal')
   h.stub.fixtures({ exit: { backup: 1 } })
   h.stub.release('backup')
   assert.equal(await scheduled, await joined)
-  assert.deepEqual(h.outbox().slice(1), [{ type: 'text', by: 'bridge', text: '⚠️ The backup failed: restic backup exited with code 1.', about: 50 }])
+  assert.deepEqual(h.outbox().slice(1), [{ type: 'text', by: 'bridge', text: `⚠️ The backup failed: restic backup exited with code 1.${NEXT}` }])
   assert.deepEqual(h.stub.commands(), ['backup', 'forget', 'backup', 'backup'])
+
+  // With BACKUP_TIME off, the notice says that none is scheduled.
+  const unscheduled = harness(t, { extra: { backupTime: null } })
+  unscheduled.stub.fixtures({ exit: { backup: 12 } })
+  await unscheduled.backups.request('signal')
+  assert.deepEqual(unscheduled.outbox(), [
+    { type: 'text', by: 'bridge', text: "⚠️ The backup failed: RESTIC_PASSWORD doesn't open the backup repository. None is scheduled: BACKUP_TIME is off." },
+  ])
+  for (const { text } of [...h.outbox(), ...unscheduled.outbox()]) assert.doesNotMatch(text, /(^|\s)\/[a-z]/)
+})
+
+test('backups: a notice tried again waits while a later backup has the writers stopped, so nothing is written in bridge/outbox while restic reads', async t => {
+  const h = harness(t)
+  // A backup fails, and its notice can't be written, since bridge/outbox is a file.
+  fs.writeFileSync(h.paths.bridgeOutbox, 'not a folder\n')
+  h.stub.fixtures({ exit: { backup: 1 }, stderr: { backup: 'Fatal: unable to open repository\n' } })
+  const first = h.backups.request('signal')
+  await waitFor(() => h.events().includes('backup.not_told'), 'the notice to fail')
+  fs.rmSync(h.paths.bridgeOutbox)
+
+  // The next backup holds restic, with the writers stopped, past the notice's wait.
+  h.stub.fixtures({ exit: {}, stderr: {}, hold: ['backup'] })
+  const second = h.backups.request('signal')
+  await h.stub.holding('backup')
+  await h.clock.advance(limits.SEND_RETRY_BACKOFF.max)
+  await new Promise(resolve => setTimeout(resolve, 100))
+  assert.deepEqual(h.outbox(), [])
+  assert.ok(!h.events().includes('backup.told'))
+
+  // Once the writers start again, it is written.
+  h.stub.release('backup')
+  assert.equal((await second).ok, true)
+  await first
+  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: `⚠️ The backup failed: restic backup: Fatal: unable to open repository.${NEXT}` }])
+  const events = h.events()
+  assert.ok(events.indexOf('backup.told') > events.lastIndexOf('backup.step'))
+  assert.deepEqual(h.happened.map(([what]) => what), ['quiesce', 'resume', 'quiesce', 'resume'])
 })
 
 test('backups: a restic step that takes longer than RESTIC_TIMEOUT is stopped, and the backup fails', async t => {
   const h = harness(t)
   atEnd(t, overrideLimits({ RESTIC_TIMEOUT: 10 * MINUTE }))
   h.stub.fixtures({ hold: ['backup'] })
-  h.backups.ask(7)
+  const done = h.backups.request('signal')
   await h.stub.holding('backup')
   await h.clock.whenSleeping()
   await h.clock.advance(10 * MINUTE)
-  await h.backups.idle()
+  await done
   assert.equal(h.stub.stopped('backup'), true)
-  assert.equal(h.outbox()[0].text, '⚠️ The backup failed: restic backup took longer than 10 minutes, and was stopped.')
+  assert.equal(h.outbox()[0].text, `⚠️ The backup failed: restic backup took longer than 10 minutes, and was stopped.${NEXT}`)
   assert.deepEqual(h.happened, [['quiesce', 0], ['resume', 1]])
 })
 
-test('backups: a bridge that stops during a backup stops restic, starts nothing again, lets go of backup.lock, and tells a /backup it stopped', async t => {
+test('backups: a bridge that stops during a backup stops restic, starts nothing again, lets go of backup.lock, and sends nothing', async t => {
   const h = harness(t)
   h.stub.fixtures({ hold: ['backup'] })
-  h.backups.ask(9)
+  const done = h.backups.request('signal')
   await h.stub.holding('backup')
   await h.backups.stop()
+  assert.deepEqual(await done, { stopped: true })
   assert.equal(h.stub.stopped('backup'), true)
   assert.deepEqual(h.happened, [['quiesce', 0]])
   assert.equal(lockExists(h.paths.backupLock), false)
-  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: 'The backup was stopped, because the bridge was stopping. Send /backup to try again.', about: 9 }])
+  assert.deepEqual(h.outbox(), [])
+  assert.ok(h.events().includes('backup.stopped'))
   // It isn't a backup that failed.
   assert.equal(h.state.get().lastBackup, null)
 
@@ -476,25 +530,26 @@ test('backups: a bridge that stops during a backup stops restic, starts nothing 
   assert.deepEqual([w.happened, w.stub.commands(), lockExists(w.paths.backupLock)], [[], [], false])
 })
 
-test('backups: a stop that comes as a backup ends is over only once that backup is told: its result kept and its reply written', async t => {
+test('backups: a stop that comes as a backup ends is over only once that backup is told: its result kept and its notice written', async t => {
   const h = harness(t)
+  h.stub.fixtures({ exit: { backup: 12 } })
   let stop
   const stopped = new Promise(resolve => (stop = resolve))
   const update = h.state.update
-  // The bridge's stop comes as the result is kept, before the reply is written.
+  // The bridge's stop comes as the result is kept, before the notice is written.
   h.state.update = changes => {
     const result = update(changes)
     if (changes.lastBackup) stop(h.backups.stop())
     return result
   }
   const order = []
-  const told = h.backups.request('command', { about: 5 }).then(() => order.push('told'))
+  const told = h.backups.request('signal').then(() => order.push('told'))
   // Resolves once the stop is over.
   await stopped
   order.push('stopped')
   await told
   assert.deepEqual(order, ['told', 'stopped'])
-  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: 'Backed up: snapshot abcd1234.', about: 5 }])
+  assert.deepEqual(h.outbox(), [{ type: 'text', by: 'bridge', text: `⚠️ The backup failed: RESTIC_PASSWORD doesn't open the backup repository.${NEXT}` }])
 })
 
 test('backups: a failure to start the writers again is fatal, and backup.lock goes all the same', async t => {
@@ -516,9 +571,8 @@ test('backups: exchange/locks is used only while it is the runner\'s folder and 
   fs.mkdirSync(elsewhere)
   fs.rmSync(h.paths.locks, { recursive: true })
   fs.symlinkSync(elsewhere, h.paths.locks)
-  h.backups.ask(3)
-  await h.backups.idle()
-  assert.match(h.outbox()[0].text, /^⚠️ The backup failed: the bridge couldn't back up \(EUNTRUSTED: not used: a symbolic link\)\.$/)
+  await h.backups.request('signal')
+  assert.equal(h.outbox()[0].text, `⚠️ The backup failed: the bridge couldn't back up (EUNTRUSTED: not used: a symbolic link).${NEXT}`)
   assert.deepEqual(fs.readdirSync(elsewhere), [])
   assert.deepEqual(h.stub.commands(), [])
   assert.deepEqual(h.happened, [])
@@ -571,11 +625,10 @@ test('backups: across a daylight-saving change the backup runs once a day, at th
   )
 })
 
-test('backups: off without RESTIC_REPOSITORY, with a warning at startup; BACKUP_TIME=off leaves only /backup and SIGUSR1', async t => {
+test('backups: off without RESTIC_REPOSITORY, with a warning at startup; BACKUP_TIME=off leaves only SIGUSR1', async t => {
   const off = harness(t, { extra: { backup: null } })
   off.backups.start()
   assert.deepEqual(off.entries.find(entry => entry.event === 'backup.off').reason, BACKUPS_OFF)
-  assert.equal(off.backups.ask(5), OFF_REPLY)
   assert.deepEqual(await off.backups.request('signal'), { off: true })
   assert.equal(off.backups.statusLine(off.clock.now()), "Backups: off, because RESTIC_REPOSITORY isn't set in bridge.env.")
   assert.deepEqual(off.stub.commands(), [])
@@ -703,40 +756,83 @@ test('backups: in the bridge, a download the backup cut short, and the messages 
   assert.deepEqual(restic.commands(), ['backup', 'forget'])
 })
 
-test('backups: in the bridge, a /backup waiting for a run doesn\'t hold back a /status sent after it, and replies once it is done', async t => {
+// Records the paths that the code in this process asks `fs` to change, through its synchronous
+// calls, until `stop()`: a file opened for writing, written or removed, a folder made or removed,
+// and both names of a rename or a link.
+function recordChanges(t) {
+  const changed = []
+  let recording = true
+  const writing = flags =>
+    typeof flags === 'string' ? /[wa+]/.test(flags) : typeof flags === 'number' && (flags & (fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_APPEND)) !== 0
+  const watch = (name, targets) => {
+    const original = fs[name]
+    t.mock.method(fs, name, function (...args) {
+      if (recording) changed.push(...targets(args).filter(target => typeof target === 'string'))
+      return original.apply(this, args)
+    })
+  }
+  watch('openSync', ([file, flags]) => (writing(flags) ? [file] : []))
+  for (const name of ['writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'rmdirSync', 'unlinkSync', 'truncateSync']) watch(name, ([file]) => [file])
+  for (const name of ['renameSync', 'linkSync', 'copyFileSync']) watch(name, ([from, to]) => [from, to])
+  watch('symlinkSync', ([, file]) => [file])
+  return { changed, stop: () => (recording = false) }
+}
+
+test('backups: in the bridge, scooter status shows a backup waiting for a run, then the channels stopped while restic runs; its status is written meanwhile, in a folder the backup leaves out, and nothing it holds', async t => {
   const root = makeTestDir(t)
   const wacli = createWacliStub(t, root)
   wacli.fixtures({ paired: true, messages: [] })
-  createResticStub(t, root)
+  const restic = createResticStub(t, root)
+  restic.fixtures({ hold: ['backup'] })
   atEnd(t, overrideLimits({ WEBHOOK_PORT: 0, WACLI_CALL_TIMEOUT: 365 * 24 * HOUR }))
   const clock = createFakeClock(START)
   const { log } = createTestLog({ clock })
   const proc = createProc({ log, clock })
-  const bridge = await startBridge({ settings: settingsFor(root), clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
+  const settings = settingsFor(root)
+  const bridge = await startBridge({ settings, clock, log, proc: isRoot ? { ...proc, lookupUser: async () => null } : proc })
   atEnd(t, () => bridge.stop())
   await waitFor(() => wacli.callsOf('sync').length === 1, 'sync to start')
-  const post = async (id, text) => {
-    assert.equal(await wacli.postWebhook(webhookPayload({ ID: id, Timestamp: '2026-11-09T15:50:00Z', Text: text })), 200)
-    await new Promise(resolve => setTimeout(resolve, 20))
-    await bridge.intake.idle()
-    await bridge.commands.idle()
+  const report = () => statusText({ now: clock.now(), settings, paths: bridge.paths, index: readIndex(bridge.paths) })
+  // Each look is a second of the clock's, in which the bridge may write its status.
+  const shows = async pattern => {
+    await clock.advance(SECOND)
+    return pattern.test(report())
   }
-  const replies = () => listHandOffs(bridge.paths.bridgeOutbox).map(id => JSON.parse(fs.readFileSync(path.join(bridge.paths.bridgeOutbox, id, 'entry.json'), 'utf8')))
 
   // A run is under way.
   takeLock(bridge.paths.runLock, { deadline: clock.now() + 10 * MINUTE, clock })
-  await post('B1', '/backup')
-  await post('S1', '/status')
-  const [status] = replies()
-  assert.equal(status.about, 2)
-  assert.match(status.text, /^Backups: one in progress since 21:20, waiting for the agent's run to end; none yet\. Next Tue 10 Nov 03:30\.$/m)
-  assert.equal(bridge.state.get().commandSeq, 2)
+  const done = bridge.backups.request('signal')
+  await waitFor(() => shows(/^Backups: one in progress since 21:20, waiting for the agent's run to end; none yet\. Next Tue 10 Nov 03:30\.$/m), 'the wait to show')
+  assert.match(report(), /^WhatsApp: linked$/m)
 
+  // The run is over: restic runs, with the channels stopped, and the status says so.
   releaseLock(bridge.paths.runLock)
   await clock.advance(SECOND)
-  await bridge.backups.idle()
-  // Delivery, started again, may have sent the reply to /status already.
-  assert.deepEqual(replies().at(-1), { type: 'text', by: 'bridge', text: 'Backed up: snapshot abcd1234.', about: 1 })
+  await restic.holding('backup')
+  const changes = recordChanges(t)
+  await waitFor(() => shows(/^WhatsApp: stopped$/m), 'the channel to show stopped')
+  assert.match(report(), /^Backups: one in progress since 21:20; none yet\. Next Tue 10 Nov 03:30\.$/m)
+  // Past midnight, the line says on which day the backup started: the status is written again
+  // while restic reads.
+  await clock.advance(3 * HOUR)
+  await waitFor(() => shows(/^Backups: one in progress since Mon 9 Nov 21:20; none yet\. Next 03:30\.$/m), 'the new day to show')
+  changes.stop()
+  // Each write of the status, its temporary file among them, was in the folder the backup leaves
+  // out, and nothing else of what the backup holds changed while restic read.
+  const { include, exclude } = backupSources(bridge.paths)
+  const within = (file, folder) => file === folder || file.startsWith(`${folder}/`)
+  assert.ok(changes.changed.some(file => within(file, bridge.paths.bridgeStatusDir) && path.basename(file).startsWith('.tmp-')), JSON.stringify(changes.changed))
+  assert.deepEqual(
+    changes.changed.filter(file => include.some(folder => within(file, folder)) && !exclude.some(folder => within(file, folder))),
+    [],
+  )
+  const args = restic.calls()[0].args
+  assert.equal(args[args.indexOf(bridge.paths.bridgeStatusDir) - 1], '--exclude')
+  assert.equal(path.dirname(bridge.paths.bridgeStatus), bridge.paths.bridgeStatusDir)
+
+  restic.release('backup')
+  assert.equal((await done).ok, true)
+  await waitFor(() => shows(/^WhatsApp: linked\n(.*\n)*Backups: last Mon 9 Nov 21:20, snapshot abcd1234\. Next 03:30\.$/m), 'the backup to show done')
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -909,6 +1005,38 @@ test('backups: restore refuses when runner/ or exchange/ is a link, which restic
   assert.deepEqual(stub.commands().slice(-2), ['snapshots', 'restore'])
 })
 
+test('backups: a secret that is part of what restic prints, such as the snapshot\'s ID or a word of the data folder\'s path, changes nothing the code reads from it', async t => {
+  // The password and a key are parts of the ID `restic backup` says it saved.
+  const h = harness(t, { extra: { backup: { password: 'cd12', env: { ...BACKUP.env, AWS_ACCESS_KEY_ID: 'ab' } } } })
+  assert.deepEqual(await h.backups.request('signal'), { ok: true, snapshot: 'abcd1234', checked: false })
+  assert.deepEqual(h.state.get().lastBackup, { at: START, ok: true, snapshot: 'abcd1234', reason: null })
+  assert.deepEqual(h.outbox(), [])
+
+  // The password is a word of the path the snapshot was made from, or part of its ID: restic is
+  // asked for the restore any other password gives.
+  const { root, stub, run } = cli(t)
+  const target = path.join(root, 'restored')
+  stub.fixtures({ snapshots: [snapshotOf('/var/lib/scooter')] })
+  for (const password of ['lib', 'scooter', '0000']) {
+    const done = await run(runRestore, [], { backup: { ...BACKUP, password, restoreTarget: target } })
+    assert.equal(done.code, 0, `${password}: ${done.err}`)
+    assert.deepEqual(stub.calls().at(-1).args.slice(1, 5), ['restore', `${SNAPSHOT_ID}:/var/lib/scooter`, '--target', `${target}/var/lib/scooter`], password)
+  }
+
+  // The password is a word of the live data folder's path: a restore into it is refused while the
+  // bridge runs on it, as with any other.
+  const live = cli(t)
+  live.stub.fixtures({ snapshots: [snapshotOf(live.paths.dataDir)] })
+  fs.mkdirSync(live.paths.bridge, { recursive: true })
+  const bridge = await holdInstance(live.paths.bridgeSocket, 'bridge')
+  atEnd(t, () => bridge.close())
+  const word = path.basename(path.dirname(live.paths.dataDir))
+  const refused = await live.run(runRestore, ['--force'], { backup: { ...BACKUP, password: word } })
+  assert.equal(refused.code, 2)
+  assert.match(refused.err, /the bridge is running on .* answers\): stop the bridge and the runner first/)
+  assert.deepEqual(live.stub.commands(), ['snapshots'])
+})
+
 test('backups: as root, restore refuses until setup has made Scooter\'s users, whose names its files get as owners, and asks restic nothing', async t => {
   const { root, stub, settings } = cli(t)
   stub.fixtures({ snapshots: [snapshotOf('/var/lib/scooter')] })
@@ -996,6 +1124,10 @@ test('backups: a real round trip with restic: init, back up, no plaintext, the w
   assert.deepEqual(tree(back.wacli), [['store', null], ['store/wacli.db', 'the WhatsApp session']])
   assert.equal(fs.existsSync(back.agentsDiscarded), false)
   assert.equal(fs.existsSync(back.backupCache), false)
+  // The bridge's state is held, and its status, which says how the bridge that wrote it was doing,
+  // isn't.
+  assert.equal(fs.readFileSync(back.bridgeState, 'utf8'), fs.readFileSync(paths.bridgeState, 'utf8'))
+  assert.equal(fs.existsSync(back.bridgeStatusDir), false)
   assert.equal(fs.existsSync(back.runnerImage), false)
   assert.equal(fs.existsSync(back.locks), false)
   assert.equal(fs.statSync(back.datastore).mode & 0o777, fs.statSync(paths.datastore).mode & 0o777)

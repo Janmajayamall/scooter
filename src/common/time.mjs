@@ -182,7 +182,7 @@ const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 
 // A time as the owner reads it in a short line, in their zone: `21:13` on the zone's date of `now`,
 // `Sun 8 Nov 20:02` on another date of the same year, and `Sat 8 Nov 2025 20:02` in another year.
-// The agent's prompt shows its items this way, and `/status` its times.
+// The agent's prompt shows its items this way, and `scooter status` its times.
 export function shortLocalTime(ms, now, timeZone) {
   const t = toLocal(ms, timeZone)
   const clock = `${pad(t.hour)}:${pad(t.minute)}`

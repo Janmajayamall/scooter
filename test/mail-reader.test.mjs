@@ -258,7 +258,7 @@ test('reader: IDLE wakes it at once, and it looks every EMAIL_CHECK_SECONDS in c
   await context.clock.advance(1 * SECOND)
   await context.looked(3)
   assert.equal(context.folders().length, 2)
-  // Every look is recorded, for `/status`.
+  // Every look is recorded, for the bridge's status.
   assert.equal(context.position().checkedAt, '2026-11-09T16:00:30Z')
 })
 

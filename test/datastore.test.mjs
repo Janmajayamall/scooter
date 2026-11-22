@@ -80,7 +80,6 @@ test('datastore: every kind of line', () => {
     { ...base, kind: 'delete', target: 4 },
     { ...base, kind: 'reaction', target: 4, emoji: '👍' },
     { ...base, kind: 'reaction', target: 4, emoji: '' },
-    { ...base, kind: 'command', text: '/status' },
     { ...base, kind: 'message', text: '', trust: 'external' },
     { seq: 9, kind: 'message', dir: 'out', at: base.at, source: 'whatsapp', by: 'bridge', text: 'Backup failed.' },
   ]
@@ -132,9 +131,8 @@ test('datastore: what is not a line, and why', () => {
     // An email's message has its subject, "" when it had none.
     [{ ...decodeLine(EXAMPLES[4]), subject: undefined }, /subject is missing/],
     [{ ...decodeLine(EXAMPLES[4]), subject: null }, /subject must be a string/],
-    // A command's text is one of the four commands, exactly.
-    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: '/stats' }, /text must be one of \/status, \/backup, \/help, \/new/],
-    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: ' /status' }, /text must be one of/],
+    // There is no kind `command`: a text such as /status is a message.
+    [{ ...good, kind: 'command', replyTo: undefined, quoted: undefined, text: '/status' }, /^kind must be one of message, edit, delete, reaction; text doesn't belong on this line$/],
     [[], /not an object/],
     [null, /not an object/],
   ]
@@ -369,7 +367,7 @@ test('datastore: the index is rebuilt on restart', async t => {
   await store.append(incoming('', { kind: 'edit', target: 1, text: 'coffee 120', sourceId: 'MSG-1' }))
   await store.append({ kind: 'reaction', dir: 'in', at: '2026-11-10T08:01:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 2, emoji: '👍' })
   await store.append({ kind: 'message', dir: 'in', at: '2026-11-10T08:02:00Z', source: 'email', sourceId: 'mail-1@example.com', trust: 'owner', subject: 'Receipt', text: 'attached' })
-  await store.append(incoming('/status', { kind: 'command', sourceId: 'CMD-1' }))
+  await store.append(incoming('lunch 300', { sourceId: 'MSG-3' }))
   await store.append({ kind: 'delete', dir: 'in', at: '2026-11-10T08:03:00Z', source: 'whatsapp', trust: 'owner', target: 5 })
 
   const check = index => {
@@ -385,7 +383,7 @@ test('datastore: the index is rebuilt on restart', async t => {
     assert.equal(index.seqOf('whatsapp', 'OUT-1'), 2)
     assert.equal(index.seqOf('whatsapp', 'REACT-1'), 4)
     assert.equal(index.seqOf('email', 'mail-1@example.com'), 5)
-    assert.equal(index.seqOf('whatsapp', 'CMD-1'), 6)
+    assert.equal(index.seqOf('whatsapp', 'MSG-3'), 6)
     // The same ID on another channel is another message.
     assert.equal(index.seqOf('email', 'MSG-1'), undefined)
     assert.equal(index.seqOf('whatsapp', 'mail-1@example.com'), undefined)
@@ -393,6 +391,7 @@ test('datastore: the index is rebuilt on restart', async t => {
     assert.deepEqual(index.current(1), { text: 'coffee 120', editedIn: 3, deletedIn: null })
     assert.deepEqual(index.current(2), { text: 'Work or personal?', editedIn: null, deletedIn: null })
     assert.deepEqual(index.current(5), { text: 'attached', editedIn: null, deletedIn: 7 })
+    assert.deepEqual(index.current(6), { text: 'lunch 300', editedIn: null, deletedIn: null })
     assert.equal(index.current(4), undefined)
     assert.equal(index.current(99), undefined)
     // Each line's number in its day's log, which the runner's prompt points at.
@@ -419,18 +418,6 @@ test('datastore: the index refuses lines out of order', () => {
   assert.equal(index.lastSeq, 2)
   assert.equal(index.newestDay, '2026/11/10')
   assert.throws(() => createIndex().add(line(2), '2026/11/09'), /seq 2 follows seq 0/)
-})
-
-test('datastore: the index lists the commands after a seq, for the runner', () => {
-  const index = createIndex()
-  const base = { dir: 'in', at: '2026-11-09T15:43:02Z', source: 'whatsapp', trust: 'owner' }
-  const texts = ['coffee', '/new', 'lunch', '/status', '/help']
-  texts.forEach((text, n) => index.add({ ...base, seq: n + 1, kind: text.startsWith('/') ? 'command' : 'message', text }, '2026/11/09'))
-  assert.deepEqual(index.commandsAfter(0), [2, 4, 5])
-  assert.deepEqual(index.commandsAfter(2), [4, 5])
-  assert.deepEqual(index.commandsAfter(3), [4, 5])
-  assert.deepEqual(index.commandsAfter(5), [])
-  assert.deepEqual(createIndex().commandsAfter(0), [])
 })
 
 test('datastore: a damaged datastore stops the store, and the error says where', async t => {
@@ -521,16 +508,16 @@ test('datastore: a line that is not well formed is refused, and uses up no seq',
 // ---------------------------------------------------------------------------------------------
 // The store: duplicates
 
-test('datastore: a message, a command or a reaction whose ID is stored is ignored', async t => {
+test('datastore: a message or a reaction whose ID is stored is ignored', async t => {
   const { open, linesOf } = setup(t)
   let store = open()
   const message = incoming('coffee 150', { sourceId: 'MSG-1' })
-  const command = incoming('/status', { kind: 'command', sourceId: 'CMD-1' })
+  const other = incoming('lunch 300', { sourceId: 'MSG-3' })
   const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'REACT-1', trust: 'owner', target: 1, emoji: '👍' }
-  for (const line of [message, command, reaction]) assert.equal((await store.append(line)).stored, true)
+  for (const line of [message, other, reaction]) assert.equal((await store.append(line)).stored, true)
 
   // The webhook and catch-up both deliver the same event.
-  for (const line of [message, command, reaction]) {
+  for (const line of [message, other, reaction]) {
     assert.deepEqual(await store.append(line), { stored: false, reason: 'duplicate' })
   }
   // The ID decides, not the contents; and the same contents under a new ID are a new message.
@@ -547,7 +534,7 @@ test('datastore: a message, a command or a reaction whose ID is stored is ignore
 
   // Duplicates are still known after a restart.
   store = open()
-  for (const line of [message, command, reaction]) assert.equal((await store.append(line)).stored, false)
+  for (const line of [message, other, reaction]) assert.equal((await store.append(line)).stored, false)
   assert.equal(linesOf('2026/11/09').length, 8)
   assert.equal(store.index.lastSeq, 8)
 })
@@ -720,11 +707,11 @@ test('datastore: an attachment left by a crash, whose seq has no line, is remove
   assert.deepEqual(fs.readdirSync(path.join(dir, '2026/11/10')), [])
 })
 
-test('datastore: an edit, a deletion or a reaction points at a message or a command', async t => {
+test('datastore: an edit, a deletion or a reaction points at a message', async t => {
   const { open } = setup(t)
   const store = open()
   await store.append(incoming('coffee 150'))
-  await store.append(incoming('/status', { kind: 'command' }))
+  await store.append(incoming('lunch 300'))
   const reaction = { kind: 'reaction', dir: 'in', at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'R1', trust: 'owner', target: 1, emoji: '👍' }
   assert.equal((await store.append(reaction)).seq, 3)
   assert.equal((await store.append({ ...reaction, sourceId: 'R2', target: 2 })).seq, 4)
@@ -736,7 +723,7 @@ test('datastore: an edit, a deletion or a reaction points at a message or a comm
   ]) {
     await assert.rejects(store.append(line), error => {
       assert.ok(error instanceof DatastoreError)
-      assert.match(error.message, new RegExp(`a ${line.kind} must point at a message or a command, and seq 3 is neither`))
+      assert.match(error.message, new RegExp(`a ${line.kind} must point at a message, and seq 3 isn't one`))
       return true
     })
   }

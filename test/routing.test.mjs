@@ -31,12 +31,11 @@ const LINES = [
   line.reaction(6, AT, 1, '👍', { sourceId: 'WA6' }),
   line.email(7, AT, '', 'No subject here.', { sourceId: 'mail-2@example.com' }),
   { ...line.sent(8, AT, 'sent, and wacli gave no ID'), sourceId: undefined },
-  line.command(9, AT, '/status'),
 ].map(fixture => JSON.parse(JSON.stringify(fixture)))
 
 function channels() {
   const whatsapp = createFakeChannel({ name: 'whatsapp' })
-  const email = createFakeChannel({ name: 'email', takesCommands: false, canSend: false, canReact: false })
+  const email = createFakeChannel({ name: 'email', canSend: false, canReact: false })
   return new Map([
     ['whatsapp', whatsapp],
     ['email', email],
@@ -65,8 +64,6 @@ test('routing: replyTo and about follow their line\'s channel; only replyTo quot
   // A line with no channel ID, or one that isn't a message, goes to its channel unquoted.
   assert.deepEqual(route(text({ replyTo: 8 })), ['whatsapp', null, 'hello'])
   assert.deepEqual(route(text({ replyTo: 6 })), ['whatsapp', null, 'hello'])
-  // A command is quoted, as the message it was.
-  assert.deepEqual(route(text({ replyTo: 9 })), ['whatsapp', LINES[8].sourceId, 'hello'])
 })
 
 test('routing: a reply about an email reaches DEFAULT_CHANNEL without a quote', () => {
@@ -94,8 +91,8 @@ test('routing: a reaction to an email becomes a ✅ Email: text on DEFAULT_CHANN
 test('routing: the ✅ Email: text is cut as an entry\'s text is, whatever subject the datastore holds', () => {
   // The text was once made after the entry was written, from a subject the datastore bounds only
   // since milestone 6.
-  const lines = [...LINES, line.email(10, AT, `a\0${'s'.repeat(60000)}`, 'long', { sourceId: 'mail-3@example.com' })]
-  const [channel, quote, text] = route(react(10), { lines })
+  const lines = [...LINES, line.email(9, AT, `a\0${'s'.repeat(60000)}`, 'long', { sourceId: 'mail-3@example.com' })]
+  const [channel, quote, text] = route(react(9), { lines })
   assert.deepEqual([channel, quote], ['whatsapp', null])
   assert.equal(textLength(text), limits.TEXT_MAX_CHARS)
   assert.ok(text.startsWith('✅ Email: a\ufffdsss'))

@@ -2,7 +2,7 @@
 // position in the mailbox.
 //
 // The folder is the reader's home, `/data/mail`, which only `scooter-mail` and root can read.
-// The bridge takes the spool's folders in order, and reads `state.json` for `/status`. The
+// The bridge takes the spool's folders in order, and reads `state.json` for its status. The
 // names here are a contract with `src/bridge/channels/email.mjs`, which can't import this module:
 // the bridge treats what is here as untrusted, and checks it.
 //
@@ -35,8 +35,8 @@
 //   handed over arrived, from which a renumbered mailbox is read again.
 // - `parsing` is the UID of the message being parsed, null otherwise. A reader that finds it set at
 //   a start ended while parsing that message, and hands it over unparsed.
-// - `connected` and `checkedAt` are for `/status`: whether the reader has the mailbox open, and when
-//   it last looked for new mail.
+// - `connected` and `checkedAt` are for the bridge's status, which `scooter status` shows: whether
+//   the reader has the mailbox open, and when it last looked for new mail.
 
 import fs from 'node:fs'
 import path from 'node:path'

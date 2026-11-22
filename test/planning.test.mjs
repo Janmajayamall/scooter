@@ -6,17 +6,15 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { createIds } from '../src/common/files.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { ensureAgentDir, prepareRun } from '../src/runner/agentdir.mjs'
 import { buildBatch, buildTaskPrompt } from '../src/runner/batch.mjs'
-import { handleCommands } from '../src/runner/commands.mjs'
 import { loadConfig } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
 import { createGit } from '../src/runner/git.mjs'
 import { loadProtocol } from '../src/runner/prompt.mjs'
-import { currentSession, loadState, saveState, sessionId, startupState } from '../src/runner/state.mjs'
+import { loadState, saveState, sessionId, startupState } from '../src/runner/state.mjs'
 import { nextAction } from '../src/runner/triggers.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
@@ -86,59 +84,36 @@ test('planning: from the datastore, the state and the clock to the next action, 
   assert.equal(batch.covered, 1054)
 
   // The run's folder, for the day's session.
-  const session = currentSession(loadState(stateFile), { now: clock.now(), timeZone: SETTINGS.timeZone, rolloverHour: SETTINGS.sessionRolloverHour })
-  assert.equal(sessionId(agent.name, session), 'lifelog-2026-11-09')
-  const run = prepareRun({ paths, agent, protocol: loadProtocol(), sessionId: sessionId(agent.name, session) })
+  const session = sessionId(agent.name, { now: clock.now(), timeZone: SETTINGS.timeZone, rolloverHour: SETTINGS.sessionRolloverHour })
+  assert.equal(session, 'lifelog-2026-11-09')
+  const run = prepareRun({ paths, agent, protocol: loadProtocol(), sessionId: session })
   const system = fs.readFileSync(run.systemFile, 'utf8')
   assert.ok(system.startsWith(loadProtocol().trimEnd()))
   assert.ok(system.endsWith('\n\nYou are lifelog.\n\n# Your memory\n\n## memory/preferences.md\n\n(empty)\n\n## memory/needs-review.md\n\n(empty)\n'))
 })
 
-test('planning: a /new among the messages is handled first, answered, and saved, so it is handled once', async t => {
-  const { paths, stateFile, clock, log, entries } = setup(t)
+test('planning: a text such as /new is a message, which waits for the owner to be quiet and goes into the batch', async t => {
+  const { paths, stateFile, clock } = setup(t)
   const { agents: [agent] } = loadConfig({ paths })
   const datastore = openDatastore({ paths, clock })
   datastore.poll()
   // The owner sends /new, then another message.
-  writeDatastore(paths, [line.command(1055, '2026-11-09T15:50:25Z', '/new'), line.text(1056, '2026-11-09T15:50:26Z', 'start again')])
+  writeDatastore(paths, [line.text(1055, '2026-11-09T15:50:25Z', '/new'), line.text(1056, '2026-11-09T15:50:26Z', 'start again')])
   await clock.advance(5 * SECOND)
   assert.equal(datastore.poll(), 2)
 
   const ask = () =>
     nextAction({ agent, state: loadState(stateFile), index: datastore.index, now: clock.now(), timeZone: SETTINGS.timeZone, batchSeconds: 8, incomingSeenAt: datastore.incomingSeenAt })
-  const action = ask()
-  assert.equal(action.kind, 'commands')
-  const ids = createIds(clock)
-  const handled = await handleCommands({
-    agent,
-    state: loadState(stateFile),
-    lines: action.lines,
-    stateFile,
-    paths,
-    ids,
-    log,
-    now: clock.now(),
-    timeZone: SETTINGS.timeZone,
-    rolloverHour: SETTINGS.sessionRolloverHour,
-  })
-  // The reply is in the outbox, about the command, and the state is saved.
-  const [entry] = fs.readdirSync(paths.outbox)
-  assert.equal(fs.readFileSync(path.join(paths.outbox, entry, 'entry.json'), 'utf8'), '{"type":"text","by":"runner","text":"Started a fresh conversation.","about":1055}\n')
-  assert.deepEqual(loadState(stateFile), handled)
-  assert.equal(handled.commandSeq, 1055)
-  assert.deepEqual(handled.session, { day: '2026-11-09', bump: 1 })
-  assert.ok(entries.some(logged => logged.event === 'runner.command' && logged.seq === 1055 && logged.command === '/new'))
-
-  // Asked again, as after a crash or a failed batch: the command isn't handled twice. The messages
-  // wait for the owner to be quiet, and then go in the new session, /new and all.
   assert.deepEqual(ask(), { kind: 'idle', reason: 'quiet' })
   await clock.advance(8 * SECOND)
   assert.deepEqual(ask(), { kind: 'messages' })
   const { batch, prompt } = buildBatch({ agent, state: loadState(stateFile), index: datastore.index, paths, now: clock.now(), timeZone: SETTINGS.timeZone, homeCurrency: 'INR', internet: false })
-  assert.deepEqual(batch.items.map(item => item.seq), [1047, 1050, 1051, 1052, 1053, 1054, 1056])
+  assert.deepEqual(batch.items.map(item => item.seq), [1047, 1050, 1051, 1052, 1053, 1054, 1055, 1056])
   assert.equal(batch.covered, 1056)
-  assert.ok(!prompt.includes('/new'))
-  assert.equal(sessionId(agent.name, currentSession(loadState(stateFile), { now: clock.now(), timeZone: SETTINGS.timeZone, rolloverHour: 4 })), 'lifelog-2026-11-09-1')
+  assert.match(prompt, /^#1055 21:20 text: "\/new"$/m)
+  // Nothing was written but the datastore's lines: no reply, and the state as it was.
+  assert.deepEqual(fs.existsSync(paths.outbox) ? fs.readdirSync(paths.outbox) : [], [])
+  assert.deepEqual(loadState(stateFile), exampleState())
 })
 
 test('planning: the evening check-in comes due at 21:30, after the messages, with its own prompt', async t => {

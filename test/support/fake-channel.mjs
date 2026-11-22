@@ -29,10 +29,9 @@ export function makeAttachment(fields = {}) {
   return { type: 'image', mime: 'image/jpeg', name: null, bytes: null, error: null, ...fields }
 }
 
-// A channel the test drives. Options: its `name`, and whether it `takesCommands`, `canSend` and
-// `canReact`. Its sends are recorded with the fake clock's time, when one is given, and answer
+// A channel the test drives. Options: its `name`, and whether it `canSend` and `canReact`. Its sends are recorded with the fake clock's time, when one is given, and answer
 // with IDs `<NAME>-OUT-1`, `-2`…; the test can make it not ready, or make sends fail.
-export function createFakeChannel({ name = 'whatsapp', takesCommands = true, canSend = true, canReact = true, clock = null } = {}) {
+export function createFakeChannel({ name = 'whatsapp', canSend = true, canReact = true, clock = null } = {}) {
   let onRecord = null
   const plans = new Map()
   const downloads = []
@@ -62,7 +61,6 @@ export function createFakeChannel({ name = 'whatsapp', takesCommands = true, can
   }
   return {
     name,
-    takesCommands,
     canSend,
     canReact,
     async start(handler) {

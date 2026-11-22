@@ -6,7 +6,7 @@ pi's VM has no network of its own. Gondolin's host side, inside the runner's pro
 
 - `src/runner/sandbox/policy.mjs`: the policy, `policyNetwork`: hosts, the key, OpenRouter's two routes and their checks, the body that goes out, zero data retention, the internet switch, and what one run may send.
 - `src/runner/sandbox/netlog.mjs`: writing the log, and following each request the policy lets out to its answer.
-- `src/common/netlog.mjs`: the log's format, its check, and its reader, for the runner and for `/status`.
+- `src/common/netlog.mjs`: the log's format, its check, and its reader, for the runner and for `scooter status`.
 
 ## Settings
 
@@ -16,9 +16,9 @@ In `runner.env`:
 |---|---|---|
 | `OPENROUTER_API_KEY` | required | The key the runner swaps in on pi's requests to OpenRouter ([The key](#the-key)). It never enters pi's VM |
 | `OPENROUTER_ZDR` | `on` | `on` sends every request to OpenRouter only to endpoints that keep no prompts or responses ([Zero data retention](#zero-data-retention)) |
-| `AGENT_INTERNET` | `off` | `on` lets pi reach public HTTPS websites through the policy, which logs every request ([Hosts](#hosts)). The prompt tells the agent which ([The prompt](runner.md#the-prompt)), and `/status` shows it, from `status.json` ([status.json](runner.md#statusjson)) |
+| `AGENT_INTERNET` | `off` | `on` lets pi reach public HTTPS websites through the policy, which logs every request ([Hosts](#hosts)). The prompt tells the agent which ([The prompt](runner.md#the-prompt)), and `scooter status` shows it, from `status.json` ([status.json](runner.md#statusjson)) |
 
-`AGENT_INTERNET` is the runner's setting alone. *Why:* the bridge needs to know it only for `/status`, and a second copy in `bridge.env` could disagree with the one the runner uses.
+`AGENT_INTERNET` is the runner's setting alone. *Why:* the bridge's side needs to know it only for `scooter status`, and a second copy in `bridge.env` could disagree with the one the runner uses.
 
 ## The VM's network
 
@@ -98,7 +98,7 @@ Lines hold hosts, paths without their query strings, statuses, byte counts and t
 
 **Following a request to its answer.** The hook writes the `request` line; what comes of the request is undici's, inside Gondolin, which the hook doesn't see, and an `onResponse` hook would hold back streaming ([Facts about Gondolin's network](#facts-about-gondolins-network)). So the hook sets a header of its own, `x-scooter-request`, holding the request's ID, on every request it lets out, in place of any the VM sent. The runner subscribes to `undici:request:create`, which undici publishes as it makes a request, before it has a connection, takes the header out of the request's list of headers, which undici writes only once it has a connection, and follows that request by undici's own object: `undici:client:sendHeaders` for the connection's byte counts, `undici:request:headers` for the `response` line, and `undici:request:trailers` or `undici:request:error` for the `end` or `error` line. When the run's network closes, what is left is written: `not_sent` for what never reached undici, `run_ended` for what was still waiting. *Why not match by method and URL:* a request Gondolin let out and then didn't send, as when a host doesn't resolve, would take the next request's answer, and two requests to one URL at once could swap; both lead the failure handling to the wrong status. Gondolin's `fetch` option, a hook that makes the request itself, would lose the guarded connection Gondolin makes only with its own client, which keeps a name that resolved to a public address from connecting to a private one. *Cost:* taking the header out reaches into undici's request, whose headers are a list of names and values in undici 6.28.0 (Node 22.23.2's), 6.29.1 (Gondolin's) and 7.30.2 (Node 24.22.3's), each checked by a test or a run; if a later undici keeps them otherwise, the header goes out as it is, an ID of no use to anyone, and the request has no answer in the log. The policy's tests would fail first.
 
-**Reading it.** `scanNetworkLog` takes the lines whose `at` falls in a time window, counting its first second whole, across the UTC days the window spans, reading each day's file a piece at a time, so a day of any size costs the same memory. It takes a line only up to `NETLOG_LINE_MAX_BYTES`, and skips a longer one, part of a line at the end of a file, and a line that isn't one of the log's, counting them, so one bad line doesn't hide the rest. Three things read the log: the runner, for the cause of a failure ([Failures](run.md#failures)); the bridge, for the counts in `/status` over `STATUS_WINDOW` ([/status](bridge.md#status)); and the owner ([README](../../README.md#reading-the-network-log)). It is backed up with the rest ([What a backup holds](backups.md#what-a-backup-holds)).
+**Reading it.** `scanNetworkLog` takes the lines whose `at` falls in a time window, counting its first second whole, across the UTC days the window spans, reading each day's file a piece at a time, so a day of any size costs the same memory. It takes a line only up to `NETLOG_LINE_MAX_BYTES`, and skips a longer one, part of a line at the end of a file, and a line that isn't one of the log's, counting them, so one bad line doesn't hide the rest. Three things read the log: the runner, for the cause of a failure ([Failures](run.md#failures)); `scooter status`, for its counts over `STATUS_WINDOW` ([scooter status](bridge.md#scooter-status)); and the owner ([README](../../README.md#reading-the-network-log)). It is backed up with the rest ([What a backup holds](backups.md#what-a-backup-holds)).
 
 ## What pi sends
 

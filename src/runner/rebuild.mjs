@@ -15,9 +15,9 @@
 // 2. **Note the newest `seq`** in the datastore, `until`. The rebuild stops there: what comes after
 //    it is the runner's, which handles it with replies.
 // 3. **Empty** `views/`, `memory/` and `sessions/`, and commit the empty folders, so that a failed
-//    batch's clean-up comes back to them. **Reset `state.json`**: `cursor` and `commandSeq` are
-//    `until`, so old commands aren't answered again, and a runner started after a rebuild cut
-//    short goes on from there, rather than give the agent all of history again with replies;
+//    batch's clean-up comes back to them. **Reset `state.json`**: `cursor` is `until`, so a runner
+//    started after a rebuild cut short goes on from there, rather than give the agent all of
+//    history again with replies;
 //    `backfillDone` is kept; and every backfill of the config counts as done, the one in progress,
 //    which is dropped, among them, because the rebuild runs every skill over the history each
 //    would cover.
@@ -78,11 +78,11 @@ export function rebuildTag(now) {
 }
 
 // The state a rebuild leaves, and works from while it runs (step 3): that of an agent that has never
-// run, but for `cursor` and `commandSeq`, which are `until`, and the backfills done. Every backfill
-// of `agent`'s config counts as done, as does the one in progress in `before`.
+// run, but for `cursor`, which is `until`, and the backfills done. Every backfill of `agent`'s
+// config counts as done, as does the one in progress in `before`.
 export function rebuiltState(before, agent, until) {
   const done = new Set([...before.backfillDone, ...(before.backfill ? [before.backfill.id] : []), ...agent.run.backfill.map(entry => entry.id)])
-  return { ...initialAgentState(), cursor: until, commandSeq: until, backfillDone: [...done] }
+  return { ...initialAgentState(), cursor: until, backfillDone: [...done] }
 }
 
 const rangeOf = seqs => {

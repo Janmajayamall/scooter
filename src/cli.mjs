@@ -99,6 +99,13 @@ export const COMMANDS = {
     summary: 'List the mailbox\'s newest 5 messages and whether each would pass the sender check',
     load: async () => (await import('./bridge/channels/email.mjs')).runEmailCheck,
   },
+  status: {
+    side: 'bridge',
+    usage: 'status',
+    where: 'bridge',
+    summary: 'Print how Scooter is doing: the channels, the runner, the agent and the backups',
+    load: async () => (await import('./bridge/status.mjs')).runStatus,
+  },
   // The backup module's operations.
   'backup-init': {
     side: 'bridge',
