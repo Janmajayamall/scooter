@@ -206,6 +206,10 @@ const LIBRARIES = {
   'postal-mime': file => areaOf(file) === 'mail',
 }
 
+// What under `src/` isn't code: the documents, the runner's skill among them, and the data in the
+// folder of ICU's zone rules that ship with the runner for the VM (`src/runner/vm/icu-tz/`).
+const NOT_CODE = file => file.endsWith('.md') || file.startsWith('src/runner/vm/icu-tz/')
+
 // Calls that change files. The code in `src/common/datastore/` only reads.
 const WRITES = /\b(?:appendFile|writeFile|write|writev|truncate|ftruncate|rename|unlink|rm|rmdir|mkdir|copyFile|cp|createWriteStream|chmod|fchmod|chown|fchown|link|symlink)(?:Sync)? ?\(/
 
@@ -216,7 +220,7 @@ export function checkImportRules(files) {
   const graph = new Map()
 
   for (const [file, text] of files) {
-    if (file.endsWith('.md')) continue
+    if (NOT_CODE(file)) continue
     if (!file.endsWith('.mjs')) {
       violations.push(`${file}: code under src/ is ES modules in .mjs files`)
       continue

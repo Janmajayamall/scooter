@@ -123,12 +123,13 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   assert.match(spec.argv.at(-1), /^\[scooter\] Now: Monday 9 November 2026, 21:20 \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
 
   // pi's environment and nothing else, with a placeholder where the key would be.
-  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
+  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'ICU_TIMEZONE_FILES_DIR', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
   assert.deepEqual({ ...env, OPENROUTER_API_KEY: undefined }, {
     PATH: `${path.join(run, 'bin')}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
     HOME: '/root',
     LANG: 'C.UTF-8',
     TZ: 'Asia/Kolkata',
+    ICU_TIMEZONE_FILES_DIR: path.join(run, 'icu-tz'),
     PI_SKIP_VERSION_CHECK: '1',
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',

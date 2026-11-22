@@ -98,7 +98,7 @@ for (const [route, model, routePath] of ROUTES) {
       const result = await runner.sandbox.run({
         argv: ['/bin/sh', '-c', 'curl -sS -f -m 20 https://example.com/ >/dev/null 2>&1; echo "curl: $?"'],
         cwd: paths.agentDir('lifelog'),
-        env: piEnv({ timeZone: settings.timeZone, binDir: paths.agentRunBin('lifelog') }),
+        env: piEnv({ timeZone: settings.timeZone, binDir: paths.agentRunBin('lifelog'), icuTzDir: paths.agentRunIcuTz('lifelog') }),
         files: piFiles(paths, loadConfig({ paths }).agents[0]),
         timeoutMs: 120_000,
         policy: { model: agent.model, internet: false, zdr: true, secrets: { OPENROUTER_API_KEY: { hosts: ['openrouter.ai'], value: DUMMY_KEY } } },

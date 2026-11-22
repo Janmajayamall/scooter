@@ -3,7 +3,7 @@
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
 //    If a backup holds it, let go of `run.lock` and wait.
 // 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, the runner's own skill
-//    and programs, the index file and the offsets file, and a copy of the current session.
+//    and programs, ICU's zone rules, the index file, and a copy of the current session.
 // 3. **Run** pi in the sandbox, with its command, what it sees and may change, its environment and
 //    the network policy.
 // 4. **After a successful run,** in this order: check the files pi left, staging them as the
@@ -63,13 +63,16 @@ export function piFiles(paths, agent, writes = agent.writes) {
 // pi's environment, apart from the key's placeholder, which the sandbox sets from the policy. The
 // programs that ship with the runner, in the run's `bin/` (`prepareRun`), come first on the `PATH`,
 // so the VM finds them by their names, and pi's tools do. The runner refuses a data folder whose
-// path holds a `:`, which would split it (`settings.mjs`).
-export function piEnv({ timeZone, binDir }) {
+// path holds a `:`, which would split it (`settings.mjs`). `ICU_TIMEZONE_FILES_DIR` is the run's
+// copy of ICU's zone rules, `icuTzDir`, which every Node in the VM, `show` and pi, then converts
+// times with, in place of the image's own.
+export function piEnv({ timeZone, binDir, icuTzDir }) {
   return {
     PATH: `${binDir}:${GUEST_PATH}`,
     HOME: GUEST_HOME,
     LANG: 'C.UTF-8',
     TZ: timeZone,
+    ICU_TIMEZONE_FILES_DIR: icuTzDir,
     PI_SKIP_VERSION_CHECK: '1',
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',
@@ -122,7 +125,7 @@ export function runSpec({ agent, settings, paths, prepared, sessionId: id, promp
   return {
     argv: [PI_PROGRAM, ...piArgs({ agent, prepared, sessionId: id, prompt })],
     cwd: paths.agentDir(agent.name),
-    env: piEnv({ timeZone: settings.timeZone, binDir: paths.agentRunBin(agent.name) }),
+    env: piEnv({ timeZone: settings.timeZone, binDir: paths.agentRunBin(agent.name), icuTzDir: paths.agentRunIcuTz(agent.name) }),
     files: piFiles(paths, agent, writes),
     timeoutMs: agent.timeoutMinutes * MINUTE,
     policy: piPolicy({ agent, settings }),
@@ -206,7 +209,7 @@ export async function performRun(context) {
       : agent.session === 'daily'
         ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
-    const prepared = prepareRun({ paths, agent, protocol, index, timeZone: settings.timeZone, sessionId: id, skills: job.skills })
+    const prepared = prepareRun({ paths, agent, protocol, index, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
     const task = job.kind === 'scheduled' ? job.at : undefined

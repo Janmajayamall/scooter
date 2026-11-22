@@ -2,9 +2,7 @@
 //
 // Instants are milliseconds since the epoch, as `Date.now()` gives them. Nothing here reads the
 // process's own time zone: UTC parts come from the `getUTC…` methods, and a local time is always
-// worked out for a named IANA zone. This is the one place a zone is converted for: what runs in
-// pi's VM, `show`, is given the offsets it needs (`offsetsOverDays`), since the VM's Node has zone
-// data of its own.
+// worked out for a named IANA zone.
 
 const SECOND = 1000
 const MINUTE = 60 * SECOND
@@ -243,76 +241,6 @@ export function fromLocal(parts, timeZone) {
     else low = middle
   }
   return high
-}
-
-// ---------------------------------------------------------------------------------------------
-// The zone's offsets from UTC, which a run's `show` adds to a line's time
-
-// How far apart the offset is looked up through a day. It isn't a tuning number: what it finds is
-// right only while the zone doesn't change its offset twice within it, and in the tz database no
-// zone has: the shortest time between two changes is about 96 hours (`test/tools/tz.test.mjs`).
-export const OFFSET_STEP = 6 * HOUR
-
-// The zone's offsets from UTC through the UTC days `days`, each a date as `utcDate` writes it, as
-// `[{ from, offset }]`, in order: each holds from the instant `from` until the next one's `from`,
-// and `offset` is the zone's distance from UTC then, in milliseconds, whole seconds, or null where
-// none of `days` is. The last, when there are any, is null.
-//
-// The offset is looked up every `OFFSET_STEP` from the start of each day to the start of the
-// next, and where two lookups differ, the second of each change between them is found by halving.
-// So within those days the offsets are the runner's own conversion (`toLocal`) to the second, as
-// long as the zone doesn't change its offset twice within a step.
-export function offsetsOverDays(days, timeZone) {
-  const starts = [...new Set(days)]
-    .map(day => {
-      if (!isDate(day)) throw new RangeError('not a date')
-      const [year, month, date] = day.split('-').map(Number)
-      return wallFromParts({ year, month, day: date })
-    })
-    .sort((a, b) => a - b)
-  const known = new Map()
-  const offsetOf = ms => {
-    if (!known.has(ms)) known.set(ms, offsetAt(ms, timeZone))
-    return known.get(ms)
-  }
-  const rows = []
-  const add = (from, offset) => {
-    if (rows.length === 0 || rows.at(-1).offset !== offset) rows.push({ from, offset })
-  }
-  let end = null
-  for (const start of starts) {
-    if (end !== null && end !== start) add(end, null)
-    for (let from = start; from < start + DAY; from += OFFSET_STEP) {
-      const to = Math.min(from + OFFSET_STEP, start + DAY)
-      let offset = offsetOf(from)
-      add(from, offset)
-      // Before a change the zone's offset is the one at `low`, and from it on another.
-      let low = from
-      while (offset !== offsetOf(to)) {
-        let high = to
-        while (high - low > SECOND) {
-          const middle = low + Math.floor((high - low) / (2 * SECOND)) * SECOND
-          if (offsetOf(middle) === offset) low = middle
-          else high = middle
-        }
-        offset = offsetOf(high)
-        add(high, offset)
-        low = high
-      }
-    }
-    end = start + DAY
-  }
-  if (end !== null) add(end, null)
-  return rows
-}
-
-// An offset from UTC, in milliseconds, as `show`'s header ends with it: `+05:30`, `-07:00`,
-// `+00:00` for UTC itself, and `+05:53:28`, with its seconds, when it isn't a whole number of
-// minutes, as a zone's local mean time before its first standard time often isn't.
-export function utcOffsetText(offset) {
-  const seconds = Math.abs(offset) / SECOND
-  const text = `${offset < 0 ? '-' : '+'}${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds / 60) % 60)}`
-  return seconds % 60 === 0 ? text : `${text}:${pad(seconds % 60)}`
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -177,11 +177,12 @@ const seen = {
 }
 
 // `show`, found by its name on the `PATH` the stub was given, each folder of which is a path in the
-// VM, and run with the host's Node, as the VM's `env` would run it with the VM's. It reads no
-// variable, `TZ` among them: the owner's time is in the run's offsets file.
+// VM, and run with the host's Node, as the VM's `env` would run it with the VM's, and with the
+// environment pi got, as pi's bash tool runs a program: `TZ`, and `ICU_TIMEZONE_FILES_DIR`, a path
+// in the VM that is the same path on the host.
 if (has('SHOW')) {
   const folder = (process.env.PATH ?? '').split(':').find(dir => dir !== '' && fs.existsSync(inVm(path.join(dir, 'show'))))
-  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: {}, encoding: 'utf8' })
+  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: seen.env, encoding: 'utf8' })
   seen.show = run === null ? null : { folder, code: run.status, stdout: run.stdout, stderr: run.stderr }
 }
 

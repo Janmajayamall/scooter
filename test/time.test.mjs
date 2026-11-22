@@ -7,14 +7,12 @@ import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
-  OFFSET_STEP,
   fromLocal,
   isDate,
   isTimeZone,
   isoSeconds,
   localDate,
   nextLocalTime,
-  offsetsOverDays,
   parseIsoSeconds,
   parseLocalTime,
   previousLocalTime,
@@ -22,7 +20,6 @@ import {
   systemClock,
   toLocal,
   utcDate,
-  utcOffsetText,
   utcStamp,
 } from '../src/common/time.mjs'
 import { createFakeClock } from './support/clock.mjs'
@@ -78,96 +75,6 @@ test('time: an instant in the owner\'s time zone', () => {
   assert.equal(toLocal(at('2026-01-01T00:00:00Z'), 'Pacific/Kiritimati').offsetMinutes, 840)
   assert.equal(toLocal(at('2026-01-01T00:00:00Z'), 'America/New_York').offsetMinutes, -300)
   assert.equal(toLocal(at('2026-07-01T00:00:00Z'), 'America/New_York').offsetMinutes, -240)
-})
-
-// The offset a table of `offsetsOverDays` gives an instant: that of the last row from at or before
-// it, or null.
-function offsetIn(rows, ms) {
-  let found
-  for (const row of rows) if (row.from <= ms) found = row
-  return found === undefined ? null : found.offset
-}
-
-// The runner's own conversion's offset at an instant, in milliseconds.
-const offsetOf = (ms, zone) => Math.round(toLocal(ms, zone).offsetMinutes * 60) * 1000
-
-test('time: the zone\'s offsets through some days are the runner\'s own conversion, to the second, with a row for each change and for each gap', () => {
-  const rows = (days, zone) => offsetsOverDays(days, zone).map(({ from, offset }) => `${isoSeconds(from)} ${offset === null ? '-' : utcOffsetText(offset)}`)
-  // London's clocks go back at 01:00 UTC on 25 October 2026; the days are given in any order, and
-  // twice; a day without one of them is a gap.
-  assert.deepEqual(rows(['2026-11-09', '2026-10-25', '2026-10-24', '2026-10-26', '2026-10-25'], 'Europe/London'), [
-    '2026-10-24T00:00:00Z +01:00',
-    '2026-10-25T01:00:00Z +00:00',
-    '2026-10-27T00:00:00Z -',
-    '2026-11-09T00:00:00Z +00:00',
-    '2026-11-10T00:00:00Z -',
-  ])
-  // Lord Howe's half hour, a change at a time that isn't a whole hour, and a zone that skipped a
-  // day: Samoa's 30 December 2011.
-  assert.deepEqual(rows(['2026-04-04'], 'Australia/Lord_Howe'), ['2026-04-04T00:00:00Z +11:00', '2026-04-04T15:00:00Z +10:30', '2026-04-05T00:00:00Z -'])
-  assert.deepEqual(rows(['2011-12-29', '2011-12-30', '2011-12-31'], 'Pacific/Apia'), ['2011-12-29T00:00:00Z -10:00', '2011-12-30T10:00:00Z +14:00', '2012-01-01T00:00:00Z -'])
-  // An offset that isn't a whole number of minutes, and a change between two such, to the second.
-  assert.deepEqual(rows(['1854-06-27'], 'Asia/Kolkata'), ['1854-06-27T00:00:00Z +05:53:28', '1854-06-27T18:06:32Z +05:53:20', '1854-06-28T00:00:00Z -'])
-  assert.deepEqual(rows(['1972-01-07'], 'Africa/Monrovia'), ['1972-01-07T00:00:00Z -00:44:30', '1972-01-07T00:44:30Z +00:00', '1972-01-08T00:00:00Z -'])
-  // The first and last days a line can have, and none.
-  assert.deepEqual(rows(['9999-12-31', '0100-01-01'], 'UTC'), ['0100-01-01T00:00:00Z +00:00', '0100-01-02T00:00:00Z -', '9999-12-31T00:00:00Z +00:00', '10000-01-01T00:00:00Z -'])
-  assert.deepEqual(offsetsOverDays([], 'Asia/Kolkata'), [])
-  for (const day of ['2026-02-30', '2026-11-9', '', '2026-11-09T00:00:00Z']) assert.throws(() => offsetsOverDays([day], 'UTC'), RangeError, day)
-
-  // Every 15 minutes through days of changes, in zones whose changes are at odd times, are many,
-  // or go both ways: each instant has the offset the runner's own conversion gives it.
-  const cases = [
-    ['America/Vancouver', ['2026-03-08', '2026-11-01', '2025-11-02']],
-    ['America/Coyhaique', ['2025-04-05', '2025-04-06', '2026-11-01']],
-    ['Africa/Casablanca', ['2026-02-15', '2026-03-22', '2026-10-01']],
-    ['America/Asuncion', ['2024-10-06', '2025-03-23', '2026-04-01']],
-    ['Australia/Lord_Howe', ['2026-04-04', '2026-10-03']],
-    ['Africa/Freetown', ['1939-05-31', '1939-06-01', '1939-09-01']],
-    ['Asia/Kolkata', ['1854-06-27', '1941-09-30', '1942-05-15']],
-  ]
-  for (const [zone, days] of cases) {
-    const table = offsetsOverDays(days, zone)
-    for (const day of days) {
-      for (let ms = at(`${day}T00:00:00Z`); ms < at(`${day}T00:00:00Z`) + 24 * HOUR; ms += 15 * 60 * 1000) {
-        assert.equal(offsetIn(table, ms), offsetOf(ms, zone), `${zone} ${isoSeconds(ms)}`)
-      }
-    }
-    // Each change at the second the runner's own conversion makes it.
-    for (const { from, offset } of table) {
-      if (offset === null || days.includes(isoSeconds(from).slice(0, 10)) === false) continue
-      assert.equal(offsetOf(from, zone), offset, `${zone} ${isoSeconds(from)}`)
-      if (isoSeconds(from).slice(11) !== '00:00:00Z') assert.notEqual(offsetOf(from - 1000, zone), offset, `${zone} ${isoSeconds(from)}`)
-    }
-  }
-})
-
-test('time: the zone\'s offsets are the runner\'s own conversion in every zone Node knows, on the days and at the times the review of show tried', () => {
-  // 00:30 and 12:30 UTC on the 1st and the 15th of each month of 2026 and 2027, in every zone the
-  // runner's Node knows, and the backward names the review found the image's Node wrong in.
-  const instants = []
-  for (const year of [2026, 2027]) {
-    for (let month = 0; month < 12; month++) for (const day of [1, 15]) for (const hour of [0, 12]) instants.push(Date.UTC(year, month, day, hour, 30))
-  }
-  const days = instants.map(ms => utcDate(ms))
-  const zones = [...Intl.supportedValuesOf('timeZone'), 'America/Coyhaique', 'Canada/Central', 'Canada/Mountain', 'Canada/Pacific', 'America/Rainy_River', 'America/Yellowknife', 'UTC']
-  for (const zone of zones) {
-    const table = offsetsOverDays(days, zone)
-    for (const ms of instants) assert.equal(offsetIn(table, ms), offsetOf(ms, zone), `${zone} ${isoSeconds(ms)}`)
-    assert.equal(table.at(-1).offset, null)
-  }
-  // The step is a quarter of a day, so that a day is looked up four times.
-  assert.equal(OFFSET_STEP, 6 * HOUR)
-})
-
-test('time: an offset as show\'s header ends with it', () => {
-  assert.equal(utcOffsetText(5.5 * HOUR), '+05:30')
-  assert.equal(utcOffsetText(-7 * HOUR), '-07:00')
-  assert.equal(utcOffsetText(0), '+00:00')
-  assert.equal(utcOffsetText(-0), '+00:00')
-  assert.equal(utcOffsetText(14 * HOUR), '+14:00')
-  assert.equal(utcOffsetText(-(9 * HOUR + 30 * 60 * 1000)), '-09:30')
-  assert.equal(utcOffsetText((5 * 3600 + 53 * 60 + 28) * 1000), '+05:53:28')
-  assert.equal(utcOffsetText(-(44 * 60 + 30) * 1000), '-00:44:30')
 })
 
 test('time: a local time back to its instant', () => {

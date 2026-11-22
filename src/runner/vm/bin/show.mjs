@@ -22,20 +22,24 @@
 // - The line is read again from its log, by counting line breaks as the runner's reader does, and
 //   printed only when its `seq` is the one asked for. Only complete lines are counted, so a log
 //   that ends in part of a line, or grows, changes nothing that was in the index.
-// - The time is the line's `at` plus the owner's zone's offset from UTC at that instant, which the
-//   runner worked out with its own time code (`src/common/time.mjs`) and wrote beside the index
-//   file, as `run/offsets.txt`: one row for each instant from which the offset is another,
-//   `<instant> <offset>`, `-` where it worked none out. So it asks no zone database, and reads no
-//   `TZ`: the VM's Node has zone data of its own, which can be another time's. A line whose time
-//   the file doesn't cover, which only a log changed under the run can hold, gets `no time`.
+// - The time is converted for the zone `TZ` names, which the runner sets to the owner's, through
+//   `Intl.DateTimeFormat`, and ends with the zone's offset from UTC then, worked out from the
+//   conversion itself. The VM's Node converts with ICU's zone rules that ship with the runner,
+//   which each run gets as `run/icu-tz/` beside `bin/`, and which `ICU_TIMEZONE_FILES_DIR` points
+//   ICU at in pi's environment. Before it converts anything, it checks that it does: that each of
+//   the folder's four files is what its `release.txt` lists, that the variable names the folder,
+//   and that this Node's rules are of the release named there. Otherwise, and without a zone `TZ`
+//   names that those rules know, it stops rather than print another time.
 //
 // Exit codes: 0 when every line asked for was printed, with the line it points at; 1 when one
-// wasn't; 2 when it was called without a number, or can't read the index file or the offsets file.
+// wasn't; 2 when it was called without a number, can't read the index file, or has no zone rules or
+// zone it can stand behind.
 //
-// It runs in the VM with nothing of Scooter's but itself, the index file and the offsets file, so
-// it imports only Node's own modules. Node runs a file without an extension, such as
-// `run/bin/show`, as an ES module by its syntax (`test/tools/vm.test.mjs`).
+// It runs in the VM with nothing of Scooter's but itself and what is in `run/`, so it imports only
+// Node's own modules. Node runs a file without an extension, such as `run/bin/show`, as an ES
+// module by its syntax (`test/tools/vm.test.mjs`).
 
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -49,66 +53,121 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const pad = text => String(text).padStart(2, '0')
 
-// A UTC time as the datastore writes one, `2026-11-09T15:43:02Z`, as milliseconds since the epoch,
-// or null when it isn't one. The offsets file's last row can be in the year 10000, the end of a
-// line's day in 9999.
-const UTC_TIME = /^(\d{4,5})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/
-function instantOf(text) {
-  const match = typeof text === 'string' ? UTC_TIME.exec(text) : null
+const ISO_SECONDS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/
+
+// ICU's four zone files, which the run's copy of the zone rules holds.
+const ZONE_FILES = ['zoneinfo64.res', 'metaZones.res', 'timezoneTypes.res', 'windowsZones.res']
+
+// The release of the tz database that the zone rules in `dir` are of, once each of the four files
+// there is what their `release.txt` lists: its first line names the release, such as `2026f`, and
+// each line after it gives a file's SHA-256 and its name, as `sha256sum` writes them. Otherwise it
+// throws, saying which file is missing or isn't as listed. *Why:* ICU checks little of a file it
+// reads. Tried in the VM: a `zoneinfo64.res` that isn't ICU's leaves Node no zone rules, and makes
+// it abort once a time is converted; one cut short leaves it none too, or now and then kills it as
+// it starts, before any of this runs; and one with a byte changed is taken as it is.
+function zoneRulesRelease(dir) {
+  const damaged = (name, why) => Object.assign(new Error(`${name}: ${why}`), { code: 'EDAMAGED' })
+  const read = name => {
+    try {
+      return fs.readFileSync(path.join(dir, name))
+    } catch (error) {
+      throw damaged(name, error.code ?? error.name)
+    }
+  }
+  const [release, ...rows] = read('release.txt').toString('utf8').split('\n')
+  const sums = new Map()
+  for (const row of rows) {
+    const match = /^([0-9a-f]{64}) {2}(\S+)$/.exec(row)
+    if (match) sums.set(match[2], match[1])
+    else if (row !== '') throw damaged('release.txt', 'a line that is no file\'s SHA-256 and name')
+  }
+  if (!/^\d{4}[a-z]+$/.test(release)) throw damaged('release.txt', 'no release on its first line')
+  if (sums.size !== ZONE_FILES.length || !ZONE_FILES.every(name => sums.has(name))) throw damaged('release.txt', `not one line for each of ${ZONE_FILES.join(', ')}`)
+  for (const name of ZONE_FILES) {
+    if (createHash('sha256').update(read(name)).digest('hex') !== sums.get(name)) throw damaged(name, 'not the file release.txt lists')
+  }
+  return release
+}
+
+// The formatter for the owner's zone, with the run's zone rules in `dir`, or a message that says why
+// there is none: the rules aren't whole; `ICU_TIMEZONE_FILES_DIR` doesn't name them, so ICU would
+// use the rules built into this Node; this Node's rules aren't of their release, as when ICU
+// couldn't use a file there; `TZ` isn't set; or the rules don't know the zone `TZ` names.
+function ownerZone(dir) {
+  let release
+  try {
+    release = zoneRulesRelease(dir)
+  } catch (error) {
+    if (error.code !== 'EDAMAGED') throw error
+    return { problem: `the run's zone rules, ${printable(dir)}, are missing or damaged (${error.message})` }
+  }
+  const named = process.env.ICU_TIMEZONE_FILES_DIR
+  if (named === undefined || named === '') return { problem: `ICU_TIMEZONE_FILES_DIR isn't set to the run's zone rules, ${printable(dir)}, so Node would convert with rules of its own` }
+  if (realPath(named) !== realPath(dir)) return { problem: `ICU_TIMEZONE_FILES_DIR is ${printable(named)}, not the run's zone rules, ${printable(dir)}` }
+  if (process.versions.tz !== release) return { problem: `this Node converts with zone rules of ${process.versions.tz ? `tz ${process.versions.tz}` : 'no release it could read'}, not those of the run, tz ${release}, in ${printable(dir)}` }
+  const zone = process.env.TZ
+  if (zone === undefined || zone === '') return { problem: "TZ isn't set, so the owner's time can't be shown" }
+  try {
+    return {
+      formatter: new Intl.DateTimeFormat('en-US', {
+        timeZone: zone,
+        calendar: 'gregory',
+        numberingSystem: 'latn',
+        hourCycle: 'h23',
+        era: 'short',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    }
+  } catch {
+    return { problem: `TZ is ${printable(zone)}, which the run's zone rules, tz ${release}, don't know as a time zone` }
+  }
+}
+
+// A folder's path with no link in it, or null when there is no such folder.
+function realPath(dir) {
+  try {
+    return fs.realpathSync(path.resolve(dir))
+  } catch {
+    return null
+  }
+}
+
+// A line's `at`, `2026-11-09T15:43:02Z`, as the zone's clock and calendar show it, then the zone's
+// offset from UTC at that instant: `Mon 9 Nov 2026 21:13 +05:30`. Null when it isn't a time as the
+// datastore writes one. The offset is the zone's clock less the UTC time, to the second, from the
+// conversion itself: the zone's name for it isn't one form in every ICU, `GMT` in ICU 76 where ICU
+// 78 writes `GMT+00:00`.
+function localTime(at, formatter) {
+  const match = typeof at === 'string' ? ISO_SECONDS.exec(at) : null
   if (!match) return null
   const [year, month, day, hour, minute, second] = match.slice(1).map(Number)
   const instant = new Date(0)
   instant.setUTCFullYear(year, month - 1, day)
   instant.setUTCHours(hour, minute, second, 0)
   // A time that doesn't exist, such as 31 February or 24:00, would have rolled over.
-  const parts = [instant.getUTCFullYear(), instant.getUTCMonth() + 1, instant.getUTCDate(), instant.getUTCHours(), instant.getUTCMinutes(), instant.getUTCSeconds()]
-  return parts.every((part, n) => part === [year, month, day, hour, minute, second][n]) ? instant.getTime() : null
+  if (instant.toISOString().slice(0, 19) !== at.slice(0, 19)) return null
+  const fields = {}
+  for (const part of formatter.formatToParts(instant)) fields[part.type] = part.value
+  const localYear = fields.era === 'BC' ? 1 - Number(fields.year) : Number(fields.year)
+  const local = new Date(0)
+  local.setUTCFullYear(localYear, Number(fields.month) - 1, Number(fields.day))
+  local.setUTCHours(Number(fields.hour), Number(fields.minute), Number(fields.second), 0)
+  const offset = (local.getTime() - instant.getTime()) / 1000
+  return `${DAY_NAMES[local.getUTCDay()]} ${local.getUTCDate()} ${MONTH_NAMES[local.getUTCMonth()]} ${localYear} ${pad(fields.hour)}:${pad(fields.minute)} ${offsetText(offset)}`
 }
 
-// `run/offsets.txt`: `<instant> <offset>`, from that instant until the next row's, the owner's zone
-// is `<offset>` from UTC, `+05:30`, or `+05:53:28` with its seconds; or isn't covered, `-`.
-const OFFSET_ROW = /^(\S+) (-|([+-])(\d{2}):([0-5]\d)(?::([0-5]\d))?)$/
-
-// The rows of the offsets file, `{ from, offset, text }`, `offset` in milliseconds and `text` as
-// the file writes it, or both null where it covers nothing. Throws, with a code, when the file
-// can't be read, and `EDAMAGED`, with the line, when it isn't as the runner writes it: a row that
-// can't be read, rows out of order, or a file that doesn't end with a row of `-` and a line break,
-// as one cut short wouldn't.
-function readOffsets(file) {
-  const text = fs.readFileSync(file, 'utf8')
-  const rows = []
-  const lines = text.split('\n')
-  const damaged = number => Object.assign(new Error('damaged'), { code: 'EDAMAGED', line: number })
-  if (lines.pop() !== '') throw damaged(lines.length + 1)
-  lines.forEach((row, n) => {
-    const match = OFFSET_ROW.exec(row)
-    const from = match ? instantOf(match[1]) : null
-    if (from === null || (rows.length > 0 && from <= rows.at(-1).from) || (match[4] !== undefined && Number(match[4]) > 23)) throw damaged(n + 1)
-    const offset = match[2] === '-' ? null : (match[3] === '-' ? -1 : 1) * ((Number(match[4]) * 60 + Number(match[5])) * 60 + Number(match[6] ?? 0)) * 1000
-    rows.push({ from, offset, text: offset === null ? null : match[2] })
-  })
-  if (rows.length > 0 && rows.at(-1).offset !== null) throw damaged(rows.length)
-  return rows
-}
-
-// A line's `at`, `2026-11-09T15:43:02Z`, as the owner's zone's clock and calendar show it, with
-// the zone's offset from UTC then: `Mon 9 Nov 2026 21:13 +05:30`. Null when it isn't a time as the
-// datastore writes one, or the offsets don't cover it.
-function localTime(at, offsets) {
-  const instant = instantOf(at)
-  if (instant === null) return null
-  // The last row from at or before the instant.
-  let low = 0
-  let high = offsets.length
-  while (low < high) {
-    const middle = (low + high) >> 1
-    if (offsets[middle].from <= instant) low = middle + 1
-    else high = middle
-  }
-  const row = offsets[low - 1]
-  if (row === undefined || row.offset === null) return null
-  const wall = new Date(instant + row.offset)
-  return `${DAY_NAMES[wall.getUTCDay()]} ${wall.getUTCDate()} ${MONTH_NAMES[wall.getUTCMonth()]} ${wall.getUTCFullYear()} ${pad(wall.getUTCHours())}:${pad(wall.getUTCMinutes())} ${row.text}`
+// An offset from UTC, in seconds, as the header ends with it: `+05:30`, `-07:00`, `+00:00` for UTC
+// itself, and `+05:53:28`, with its seconds, when it isn't a whole number of minutes, as a zone's
+// local mean time before its first standard time often isn't.
+function offsetText(offset) {
+  const size = Math.abs(offset)
+  const text = `${offset < 0 ? '-' : '+'}${pad(Math.floor(size / 3600))}:${pad(Math.floor(size / 60) % 60)}`
+  return size % 60 === 0 ? text : `${text}:${pad(size % 60)}`
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -210,9 +269,11 @@ function main() {
     return { arg, seq: digits === undefined ? null : BigInt(digits).toString() }
   })
 
-  // `run/index.txt`, beside the folder this program is in: the lines asked for, then the lines they
-  // point at. Then `run/offsets.txt`, beside it.
+  // `run/`, the folder beside the one this program is in: the zone rules in `icu-tz/`, then the
+  // lines asked for in `index.txt`, then the lines they point at.
   const runDir = path.join(path.dirname(path.resolve(process.argv[1])), '..')
+  const { formatter, problem } = ownerZone(path.join(runDir, 'icu-tz'))
+  if (problem) return stop(problem)
   const indexFile = path.join(runDir, 'index.txt')
   let index
   try {
@@ -221,13 +282,6 @@ function main() {
     for (const [seq, entry] of readIndex(indexFile, points)) index.set(seq, entry)
   } catch (error) {
     return stop(`can't read the index file ${printable(indexFile)} (${error.code ?? error.name})`)
-  }
-  const offsetsFile = path.join(runDir, 'offsets.txt')
-  let offsets
-  try {
-    offsets = readOffsets(offsetsFile)
-  } catch (error) {
-    return stop(`can't read the offsets file ${printable(offsetsFile)} (${error.code === 'EDAMAGED' ? `damaged at line ${error.line}` : (error.code ?? error.name)})`)
   }
 
   // Every line to print, read with one pass over each log.
@@ -263,7 +317,7 @@ function main() {
       write(`${indent}${lead}${seq}  can't be read at ${where}\n`)
       return false
     }
-    write(`${indent}${lead}${seq}  ${localTime(line.at, offsets) ?? 'no time'}  ${where}\n`)
+    write(`${indent}${lead}${seq}  ${localTime(line.at, formatter) ?? 'no time'}  ${where}\n`)
     write(indent)
     write(bytes)
     write('\n')
