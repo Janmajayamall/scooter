@@ -7,10 +7,11 @@
 // run is in `test/run.test.mjs`.
 
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { createIndex } from '../src/common/datastore/index.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
@@ -101,6 +102,40 @@ test('send: nothing to send, a --reply-to that is no number, or an option it doe
   assert.deepEqual(fs.readdirSync(sendDir), [])
   assert.match(send(['--help']).stdout, /^usage: send \[--reply-to <seq>\]/)
   assert.equal(send(['--help']).code, 0)
+})
+
+test('send: a text through a pipe is read to its end, however slow the command writing it: a part larger than the pipe holds, then one written late; with /dev/null there is nothing to send', async t => {
+  const { paths, sendDir } = setup(t)
+  const program = path.join(paths.agentRunBin('lifelog'), 'send')
+  // A pipe the shell makes, as in `command | send`, which the test writes into through `cat`. The
+  // first part is more than the socket to `cat`, `cat` and the pipe hold together, so its write is
+  // over only once `send` is reading it. The second comes a second later, once `send` has read all
+  // there was and met the pipe empty with its writer still open, where a read that doesn't wait
+  // fails. So what the test finds doesn't depend on how soon `send` starts.
+  const child = spawn('sh', ['-c', 'cat | "$0" "$1"', process.execPath, program], { env: { PATH: process.env.PATH } })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8').on('data', chunk => (stdout += chunk))
+  child.stderr.setEncoding('utf8').on('data', chunk => (stderr += chunk))
+  // A `send` that failed has closed the pipe: the writes then fail, and its exit says why.
+  child.stdin.on('error', () => {})
+  const exited = new Promise(resolve => child.on('close', code => resolve(code)))
+  const first = 'x'.repeat(1_000_000)
+  await Promise.race([new Promise(resolve => child.stdin.write(first, resolve)), exited])
+  await Promise.race([delay(1000, null, { ref: false }), exited])
+  child.stdin.end(' and the end, written late.\n')
+  const code = await exited
+  assert.deepEqual({ code, stdout, stderr }, { code: 0, stdout: QUEUED, stderr: '' })
+  assert.deepEqual(fs.readdirSync(sendDir), ['1.json'])
+  const { text, ...rest } = JSON.parse(fs.readFileSync(path.join(sendDir, '1.json'), 'utf8'))
+  assert.deepEqual(rest, {})
+  assert.ok(text === `${first} and the end, written late.`, `the text queued is ${text.length} characters, ending ${JSON.stringify(text.slice(-30))}`)
+
+  // pi's bash tool gives `/dev/null`: nothing to send, at once.
+  const empty = spawnSync(process.execPath, [program], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: { PATH: process.env.PATH } })
+  assert.equal(empty.status, 2)
+  assert.match(empty.stderr, /^send: nothing to send/)
+  assert.deepEqual(fs.readdirSync(sendDir), ['1.json'])
 })
 
 test('send: each takes the number after the highest there, and two at once take two', t => {

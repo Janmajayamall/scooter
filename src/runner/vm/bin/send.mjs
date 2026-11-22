@@ -13,8 +13,8 @@
 //   the run has passed, and hands it to the outbox (`report.mjs`). A run that fails sends none of
 //   what it queued.
 // - The text is the words after the options, joined by spaces, or, with none, what standard input
-//   holds, as from a here-document. Its ends are trimmed, and one that holds nothing else is
-//   refused.
+//   holds, as from a here-document or a pipe, read to its end. Its ends are trimmed, and one that
+//   holds nothing else is refused.
 // - `--reply-to` names the line it answers by its `seq`, which the owner sees it quote.
 // - An entry is `<n>.json`, n the next number after the highest there, made only if it isn't there:
 //   `{"text": "…", "replyTo": 1052}`, `replyTo` left out when not given. The runner takes them in
@@ -28,6 +28,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { isatty } from 'node:tty'
 
 const USAGE = `usage: send [--reply-to <seq>] "<text>"
        send [--reply-to <seq>] <<'END'
@@ -80,10 +81,13 @@ function main() {
     words.push(arg)
   }
 
-  // Standard input, when no text was given: pi's bash tool gives a command `/dev/null` there, so
-  // `send` with neither reads nothing, and says so.
+  // Standard input, when no text was given, read to its end, as `cat` reads it: from a pipe, it
+  // waits for the command writing it to finish. It is never looked at through `process.stdin`,
+  // which would open it as a stream, and make a pipe non-blocking: the read would then fail with
+  // `EAGAIN` whenever the pipe is empty before its writer has finished. pi's bash tool gives a
+  // command `/dev/null` there, so `send` with neither reads nothing, and says so.
   let text = words.join(' ')
-  if (words.length === 0 && !process.stdin.isTTY) {
+  if (words.length === 0 && !isatty(0)) {
     try {
       text = fs.readFileSync(0, 'utf8')
     } catch (error) {
