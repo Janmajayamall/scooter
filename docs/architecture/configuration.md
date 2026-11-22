@@ -67,7 +67,7 @@ Each service reads its own env file, as [Secrets](../ARCHITECTURE.md#secrets) sa
 | Variable | Default | Meaning |
 |---|---|---|
 | `SCOOTER_TZ` | `Asia/Kolkata` | The owner's IANA time zone, written as the tz database writes it ([Time](shared-code.md#time)), used where [The owner's fixed choices](../ARCHITECTURE.md#the-owners-fixed-choices) say. Each service reads its own, so the owner keeps the two the same |
-| `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` | The data folder and the config folder, the roots of every path ([Paths](shared-code.md#paths)), each an absolute path. Docker uses the defaults, a native install sets its own in both files ([setup](install.md#setup)), and development and the tests give their own |
+| `DATA_DIR`, `CONFIG_DIR` | `/data`, `/config` | The data folder and the config folder, the roots of every path ([Paths](shared-code.md#paths)), each an absolute path. Docker uses the defaults, a native install sets its own in both files ([setup](install.md#setup)), and development and the tests give their own. The runner refuses a `DATA_DIR` that holds a `:` or a control character, such as a line break: its VMs' `PATH` names a folder of it, which a `:` would split ([Environment](sandbox.md#environment)), and each line of a run's index file a path of it, which a line break would split ([The index file](run.md#the-index-file)) |
 
 The other settings are in the documents of the components that read them: [WhatsApp](whatsapp.md#settings), [email](email.md#settings), [delivery](delivery.md#settings), [backups](backups.md#settings), [the runner](runner.md#settings), [the network policy](network-policy.md#settings) and [the sandbox](sandbox.md#settings). Those of email and of backups say when each is on, and what it then needs.
 
@@ -115,7 +115,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 **Paths.** `prompt` and each skill are relative to the config folder, cleaned, so `./`, `//` and a trailing `/` don't matter, and must name something inside the folder, other than the folder itself, after links are followed. A link out of it is a fault. The prompt is a file, and each skill a folder.
 
 **Skills.**
-- **A skill's name is its folder's name,** and two skills can't share one: a backfill names its skill that way, and the skill's copy for a run, in `run/config/`, is a folder of that name.
+- **A skill's name is its folder's name,** and two skills can't share one: a backfill names its skill that way, and the skill's copy for a run, in `run/config/`, is a folder of that name. Nor can a skill be named `scooter`, the name of the skill that ships with the runner, which every run is given beside the agent's own ([show, and the runner's skill](agent.md#show-and-the-runners-skill)): pi offers the model a skill by its name, so the name must say which skill is meant.
 - **A skill's folder holds only files and folders,** and a `SKILL.md` that is a file. A link inside one is a fault at the start; what a run does with one that appears later is in [A run](run.md#a-run).
 - **No skill lies inside another's folder, and the prompt in none:** either way round it is a fault that names the field. *Why:* each is copied into `run/config/` at its own path, so the copies would overlap, and every run would fail.
 - **Its `SKILL.md`** must give the folder's name and a description. The check reads its frontmatter as pi does, a first line `---` and YAML up to the next line that starts `---`, a byte-order mark and Windows line breaks allowed, and refuses, naming the skill's field (`agents.lifelog.skills[1] names skills/runs, whose SKILL.md has no description, …`):
@@ -148,7 +148,7 @@ The tuning numbers are in `src/common/limits.mjs` ([The code's layers](../ARCHIT
 - A `backfill`'s ID is lowercase letters, digits and hyphens, unique among the backfills. It goes into session names, commit messages and the state ([rebuild and backfill](rebuild-and-backfill.md)).
 - `run` may be empty: an agent that runs on nothing is the owner's to configure.
 
-**A backfill** fills a newly added view from the whole datastore ([Backfill](rebuild-and-backfill.md#backfill)). Its `skill` is one of the agent's skills, by name, the only one its batches are given. Its `writes` is all its batches may change, which narrows the agent's own, as the sandbox enforces for each: a list of at least one path, of the same form as the agent's `writes`, none twice, each in the agent's own `writes`, the same file, or in a folder it names.
+**A backfill** fills a newly added view from the whole datastore ([Backfill](rebuild-and-backfill.md#backfill)). Its `skill` is one of the agent's skills, by name, the only one of them its batches are given, after the runner's own. Its `writes` is all its batches may change, which narrows the agent's own, as the sandbox enforces for each: a list of at least one path, of the same form as the agent's `writes`, none twice, each in the agent's own `writes`, the same file, or in a folder it names.
 
 ## Facts about yaml 2.9.1
 

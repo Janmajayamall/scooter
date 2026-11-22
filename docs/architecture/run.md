@@ -7,13 +7,13 @@ A run is one run of pi, in one VM, on one batch or task, from the lock to the st
 - `src/runner/run.mjs`: one run: the lock, the sandbox's spec, then what follows a success or a failure.
 - `src/runner/answer.mjs`: reading pi's answer, and the replies and reactions it asks for.
 - `src/runner/failures.mjs`: the cause of a failure, pauses, attempts, the state after a run, and the notices.
-- `src/runner/agentdir.mjs`: the agent's folder, `run/` before each run, and the session copied back.
+- `src/runner/agentdir.mjs`: the agent's folder, `run/` before each run, with the index file, and the session copied back.
 - `src/runner/git.mjs`: git, run on the agent's repository; the file check, the commit and the clean-up.
 
 ## A run
 
 1. **The lock.** The runner takes `run.lock`, and gives way to a backup, as [The locks](exchange.md#the-locks) says (`acquireRunLock`).
-2. **`run/`.** `prepareRun` removes `run/` with `removeTree` ([Files another program controls](shared-code.md#files-another-program-controls)), however deep what pi left there goes, and makes it again: `config/`, the run's copy of the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses`, a file that can be run keeping that; `session/`, with the session's copy ([The session's copy](#the-sessions-copy)); and `system.md` ([The prompt](runner.md#the-prompt)). A backfill's run copies only its skills. A link in a skill's folder isn't copied: `prepareRun` refuses it, since a copy that followed it would show pi whatever it leads to. *Why a copy:* pi sees only that run's copy, never the config folder itself, which belongs to the owner.
+2. **`run/`.** `prepareRun` removes `run/` with `removeTree` ([Files another program controls](shared-code.md#files-another-program-controls)), however deep what pi left there goes, and makes it again: `config/`, the run's copy of the prompt and the skills, each at its path in the config folder, so `skills/expenses` is `run/config/skills/expenses`, a file that can be run keeping that; `skills/scooter/`, the runner's own skill, and `bin/show`, a program pi finds on its `PATH` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)); `index.txt`, the index file ([The index file](#the-index-file)); `session/`, with the session's copy ([The session's copy](#the-sessions-copy)); and `system.md` ([The prompt](runner.md#the-prompt)). A backfill's run copies only its skills, beside the runner's. All of `run/` but `session/` is read-only in the VM, and the runner reads none of it back. A link in a skill's folder isn't copied: `prepareRun` refuses it, since a copy that followed it would show pi whatever it leads to. *Why a copy:* pi sees only that run's copy, never the config folder itself, which belongs to the owner.
 3. **pi.** The runner gives the sandbox the run's spec: pi's command line ([How pi is run](agent.md#how-pi-is-run)), the agent's folder as its working folder, what the VM sees and may change and the environment ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change), [Environment](sandbox.md#environment)), `timeout_minutes`, and the network policy for the agent's model and the internet setting ([the network policy](network-policy.md)) (`runSpec`). What a run may change is the agent's `writes`, or a backfill's narrower ones, and `run/session/`: the sandbox refuses every other change, so nothing after the run compares what changed with what might.
 4. **After it:** [After a successful run](#after-a-successful-run), or [Failures](#failures).
 5. **The lock** is let go of, after the packing ([After a successful run](#after-a-successful-run)) and the clean-up, which have no time limit.
@@ -28,6 +28,23 @@ A run is one run of pi, in one VM, on one batch or task, from the lock to the st
 So a run can only extend the session it continues: it can't change another session, or plant one for a later day. *Why after the commit:* a session kept before the commit would remember a run that a failed commit, or a crash between the two, then threw away. Kept after it, a crash between the two leaves the files committed and the session without the run, so the next try sees the rows it filed.
 
 *Facts about pi 1.5.2's sessions*, which this relies on, checked in a VM: pi writes one file into the session folder and nothing else, `<UTC time>_<session ID>.jsonl`, such as `2026-11-16T00-03-41-509Z_lifelog-2026-11-09.jsonl`, whose first line names the session and the working folder. A second run with the same ID prints nothing, sends the earlier conversation again, and appends to the same file. pi finds a session again by that first line, not by the file's name, so a copy under another name is continued; the working folder is part of the match, so after a restore to another data folder the day's session starts afresh, in a second file with the same ID, and the runner takes the file pi wrote, not the one it copied in. A new ID prints a warning on stderr, "Warning: No project session found…", which nothing reads. The system prompt and the skills aren't taken from the session: a continued session is sent with those of the current run, so the memory in the system prompt is current on every run of a day's session. pi sends the session's ID to OpenRouter in an `x-session-id` header.
+
+## The index file
+
+Before each run `prepareRun` writes `run/index.txt` from the runner's index of the datastore, as far as the runner had read it when the run began (`indexFileText`): one line for each `seq`, in order, with where the line is, its day's log and its line number there, its kind, and the `seq` of the line it points at, if any. `show` reads it in the VM, and the agent can search it ([show, and the runner's skill](agent.md#show-and-the-runners-skill)):
+
+```text
+1051 /data/datastore/2026/11/09/log.jsonl:213 message
+1053 /data/datastore/2026/11/09/log.jsonl:215 message 1043
+1054 /data/datastore/2026/11/09/log.jsonl:216 edit 1051
+```
+
+- **A line points at** its `target`, an edit's, a deletion's or a reaction's, or else at what a message replies to, its `replyTo`. Only a line of a kind this version doesn't know can have both, and then it points at its `target`. A line of a kind or a channel this version doesn't know is in the file with its kind as the line has it ([Reading a line](datastore.md#reading-a-line)).
+- **The paths are the host's,** which the VM sees at the same paths ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). The reading check holds a kind to a name and a `seq` to a whole number, so a line of the file is read back one way, from both ends, whatever the data folder's path holds between them; and the runner refuses a `DATA_DIR` that holds a line break, which would split a line of the file ([The env files](configuration.md#the-env-files)).
+- **A line written after** the runner last read the datastore isn't in it, so `show` doesn't show it during the run.
+- **It is read-only in the VM**, as all of `run/` but `run/session/` is, and the runner never reads it back: the next run's `prepareRun` makes it anew.
+
+*Cost:* a line of the file for each line of the datastore, written before every run. For 100 lines a day over five years, 182,500 lines, it was 10 MB with the data folder at `/data` and 12 MB at `/var/lib/scooter`, written in 0.26 to 0.41 seconds on the machine Scooter was built on; `show` reads only the lines it needs of it, 0.08 seconds there for a line of the last. It is in backups, as all of `run/` is.
 
 ## Reading the answer
 
@@ -150,7 +167,7 @@ These rules, and those of [After a successful run](#after-a-successful-run), ans
 |---|---|---|
 | what `writes` names in it | with the default configuration, `views/`, with `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`, and `memory/`, with `preferences.md` and `needs-review.md` ([Memory](agent.md#memory)) | yes |
 | `sessions/` | pi's sessions, hidden from the VM ([The session's copy](#the-sessions-copy)) | no |
-| `run/` | made again before each run: `system.md`, `config/` and `session/` ([A run](#a-run)) | no |
+| `run/` | made again before each run: `system.md`, `config/`, `skills/`, `bin/`, `index.txt` and `session/` ([A run](#a-run)) | no |
 | `state.json` | the runner's state ([State](runner.md#state)) | no |
 
 **The repository keeps what the agent's `writes` names in its folder** (`agent.repository`): its entries, files or folders, in the order `writes` gives them, an entry in a folder another names left out, as that folder holds it. They are what the file check walks, what is committed, and what the clean-up puts back. *Why only those:* everything else in the folder is the runner's, or isn't the agent's to change. A path of `writes` outside the agent's folder is none of the repository's: the VM may change it, and the runner otherwise leaves it alone, as [agents.yaml](configuration.md#agentsyaml) says, with what that costs. The owner agreed to this on 2026-11-21, among the six points the plan of the agent model added to issue 25: "yes to all".

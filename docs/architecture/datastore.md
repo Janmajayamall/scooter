@@ -2,7 +2,7 @@
 
 The datastore is Scooter's source of truth: every message in and out, appended and never changed. Everything else, the views, the memory, the sessions and the runner's state, is derived from it and can be rebuilt ([Why it is built this way](../ARCHITECTURE.md#why-it-is-built-this-way)). This document covers its layout, the format of a line, how lines are written, and how they are read back.
 
-The bridge is its one writer, through the store. Two read it: the runner, and pi, whose VM may read it and change none of it ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
+The bridge is its one writer, through the store. Two read it: the runner, and pi, whose VM may read it and change none of it ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)), as files and through `show`, which prints a line by its `seq` ([Reading](#reading)). It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
 
 Who owns its folders, and their modes, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners).
 
@@ -90,14 +90,14 @@ Examples:
 - `seq`, a whole number, 1 or more; that it is one more than the last is the index's to check ([The index](#the-index));
 - `dir`, `in` or `out`;
 - `at`, a UTC time to the second;
-- `kind` and `source`, each a name: a lowercase letter, then lowercase letters, digits and hyphens. *Why:* a reader goes by them, compares them with its own, and logs them, and a name is safe to compare and to log as it is;
+- `kind` and `source`, each a name: a lowercase letter, then lowercase letters, digits and hyphens. *Why:* a reader goes by them and compares them with its own, and a name is safe to compare, to log and to write in a line of the run's index file as it is ([The index file](run.md#the-index-file));
 - the type of each field this version's code acts on, where the line has it: `sourceId` and `by`, strings that aren't empty; `replyTo` and `target`, a `seq` before the line's own; `text`, a string; `files`, a list of at least one file, each read by its `path`, a name in the line's own day folder, its `mime`, a string that isn't empty, and its `name`, a string where there is one; and `media`, an object whose `type` and `error` are strings that aren't empty and whose `mime` is a string where there is one.
 
 A field it doesn't know is ignored, at the top level or in a file or `media`, and so is `trust`, which no code of this version reads, and everything in `data`. A complete line that isn't JSON, or fails the check, is damage ([Starting up](#starting-up), [Reading](#reading)).
 
 **A line this version knows** (`isKnown`) is one of its kinds and channels, with the fields its kind needs: a message its `text`, an edit its `target` and `text`, a deletion and a reaction their `target`. Any other line is kept in the index by its `seq`, and passed over, as the runner passes over a line that isn't work ([The index](#the-index)):
 
-- it is no message to edit, delete, react to or quote, and the store refuses a line that points at it as its target ([Writing](#writing));
+- it is no message to edit, delete or react to, and the store refuses a line that points at it as its target ([Writing](#writing)); a message that replies to it keeps its `seq` as `replyTo` ([Intake](bridge.md#intake)), which the index file and `show` follow, as for any line;
 - the runner gives it to the agent neither as work nor as context, and its cursor goes past it ([State](runner.md#state));
 - `scooter status` counts it neither as the newest message nor as one pending ([scooter status](bridge.md#scooter-status));
 - a text that replies to it goes to its channel, or to `DEFAULT_CHANNEL` when that channel is gone, unquoted, and a reaction to it is dropped ([Choosing the channel](delivery.md#choosing-the-channel)).
@@ -157,3 +157,5 @@ A reader, `createReader` in `reader.mjs`, starts at the first line and keeps its
 - A poll gives all of its new lines or none. A complete line that isn't JSON or fails the check makes it throw, naming the file and the line, and stay where it was before the poll. *Why:* a reader that gave half a poll's lines and then failed would have moved past lines nobody received.
 - It takes only complete lines. Part of a line at the end is left for its next poll: either the rest arrives, or the store removes the part when it next starts.
 - It never changes anything. The import rule that holds the store to being the only writer is in [The code's layers](../ARCHITECTURE.md#the-codes-layers).
+
+**pi reads a line through `show`**, by the run's index file, which the runner writes before each run from its own index: where each line is, its day's log and its line number there ([The index file](run.md#the-index-file), [show, and the runner's skill](agent.md#show-and-the-runners-skill)). `show` counts the log's line breaks as the reader does, takes only complete lines, and prints a line only when it holds the `seq` the index gives it, so a log that grows, or ends in part of a line, changes nothing it prints. A line written after the runner last read the datastore isn't in the index, and `show` says there is no such line.

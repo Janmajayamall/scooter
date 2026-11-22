@@ -646,15 +646,10 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
   const vm = await startVm(t, { model, files: designFiles(data) })
   const inAgent = (argv, environment) => runIn(vm, argv, { cwd: data.agent, env: Object.fromEntries(Object.entries(environment).filter(([, value]) => value !== undefined)) })
 
-  // Node in the image runs the copy, a file without an extension in ES module syntax, as a module,
-  // and says nothing of it on stderr.
-  const node = await inAgent(['node', '--version'], { PATH: GUEST_PATH })
-  assert.match(node.stdout, /^v\d+\.\d+\.\d+\n$/)
-  const [major, minor] = node.stdout.slice(1).split('.').map(Number)
-  assert.ok(major > 22 || (major === 22 && minor >= 12), `Node ${node.stdout.trim()} doesn't run a file without an extension as a module by its syntax`)
-
   // By its name, from the PATH the runner gives: by `env`, as the sandbox runs pi, and from a
-  // shell, as pi's bash tool runs a command. TZ gives the owner's time, across their midnight.
+  // shell, as pi's bash tool runs a command. The image's Node runs the copy, a file without an
+  // extension in ES module syntax, as a module, and says nothing of it on stderr. TZ gives the
+  // owner's time, across their midnight.
   for (const argv of [['show', '6'], ['bash', '-c', 'show 6'], ['sh', '-c', 'cd /tmp && show 6']]) {
     const shown = await inAgent(argv, env('Asia/Kolkata'))
     assert.equal(shown.exitCode, 0, `${argv.join(' ')}: ${shown.stderr}`)

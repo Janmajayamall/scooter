@@ -11,10 +11,10 @@
 //     {"seq":1051,"kind":"message",…,"text":"coffee 120"}
 //
 // - Each line is found through the run's index file, `run/index.txt` beside `bin/`, which the
-//   runner wrote before the run from its own index of the datastore: one line for each `seq`,
-//   `<seq> <log>:<line number> <kind>[ <seq it points at>]`. So it shows only what that index
-//   holds: a number the index doesn't have, a line written during the run among them, prints
-//   "no such line", and the command fails.
+//   runner wrote before the run from its own index of the datastore: one line for each `seq`, in
+//   order from 1, `<seq> <log>:<line number> <kind>[ <seq it points at>]`. So it shows only what
+//   that index holds: a number the index doesn't have, a line written during the run among them,
+//   prints "no such line", and the command fails.
 // - A line is printed as it is stored, byte for byte, under a header with its `seq`, its time in
 //   the owner's time zone, and where it is; then each of its attachments, by its full path; then
 //   the one line it points at, which the index gives, in the same way, indented. One hop only, and
@@ -95,12 +95,17 @@ function localTime(at, formatter) {
 // folder whose path holds a line break.
 const INDEX_LINE = /^(\d+) (.+):(\d+) ([a-z][a-z0-9-]*)(?: (\d+))?$/s
 
-// The index file, as a Map from each `seq`, as written, to `{ log, number, points }`.
-function readIndex(file) {
+// What the index file says of each of `seqs`, as a Map from the `seq`, as the index writes it, to
+// `{ log, number, points }`; a `seq` it doesn't have is left out. The index has every `seq` from 1,
+// in order, so the line of `seq` N is its line N, and only those lines are read: a datastore of
+// years makes an index of megabytes. A line that doesn't hold its `seq` is taken as none.
+function readIndex(file, seqs) {
+  const numbers = new Set()
+  for (const seq of seqs) if (seq.length <= 15) numbers.add(Number(seq))
   const entries = new Map()
-  for (const text of fs.readFileSync(file, 'utf8').split('\n')) {
-    const match = INDEX_LINE.exec(text)
-    if (match) entries.set(match[1], { log: match[2], number: Number(match[3]), points: match[5] ?? null })
+  for (const [number, bytes] of readLines(file, numbers)) {
+    const match = INDEX_LINE.exec(bytes.toString('utf8'))
+    if (match && match[1] === String(number)) entries.set(match[1], { log: match[2], number: Number(match[3]), points: match[5] ?? null })
   }
   return entries
 }
@@ -114,6 +119,7 @@ function readLines(file, wanted) {
   for (const number of wanted) last = Math.max(last, number)
   const fd = fs.openSync(file, 'r')
   try {
+    if (last === 0) return found
     const chunk = Buffer.alloc(CHUNK_BYTES)
     let number = 1
     let parts = []
@@ -176,26 +182,27 @@ function main() {
   }
   const formatter = zoneFormatter(process.env.TZ)
   if (formatter === null) return stop("TZ isn't set to a time zone, such as Asia/Kolkata, so the owner's time can't be shown")
-  // `run/index.txt`, beside the folder this program is in.
-  const indexFile = path.join(path.dirname(path.resolve(process.argv[1])), '..', 'index.txt')
-  let index
-  try {
-    index = readIndex(indexFile)
-  } catch (error) {
-    return stop(`can't read the index file ${printable(indexFile)} (${error.code ?? error.name})`)
-  }
-
   // Each number as the index writes it, digits without a leading zero; `#1051` is taken too.
   const asked = args.map(arg => {
     const digits = /^#?(\d+)$/.exec(arg)?.[1]
     return { arg, seq: digits === undefined ? null : BigInt(digits).toString() }
   })
 
+  // `run/index.txt`, beside the folder this program is in: the lines asked for, then the lines they
+  // point at.
+  const indexFile = path.join(path.dirname(path.resolve(process.argv[1])), '..', 'index.txt')
+  let index
+  try {
+    index = readIndex(indexFile, asked.flatMap(({ seq }) => (seq === null ? [] : [seq])))
+    const points = [...index.values()].map(entry => entry.points).filter(seq => seq !== null && !index.has(seq))
+    for (const [seq, entry] of readIndex(indexFile, points)) index.set(seq, entry)
+  } catch (error) {
+    return stop(`can't read the index file ${printable(indexFile)} (${error.code ?? error.name})`)
+  }
+
   // Every line to print, read with one pass over each log.
   const wanted = new Map()
-  for (const seq of asked.flatMap(({ seq }) => (seq === null ? [] : [seq, index.get(seq)?.points]))) {
-    const entry = seq ? index.get(seq) : undefined
-    if (!entry) continue
+  for (const entry of index.values()) {
     if (!wanted.has(entry.log)) wanted.set(entry.log, new Set())
     wanted.get(entry.log).add(entry.number)
   }

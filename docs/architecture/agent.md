@@ -1,12 +1,14 @@
 # The agent and its instructions
 
-The agent is pi, a third-party coding agent (`@earendil-works/pi-coding-agent`), and the model behind it, run headless in a VM for each run with every kind of discovery turned off and seven tools. It is given the prompt, which the runner builds from the batch ([The prompt](runner.md#the-prompt)); the system prompt: the protocol, which ships with the runner, the agent's prompt from the config folder, and its memory; and the skills, from that run's copy of the config folder ([A run](run.md#a-run)). It produces changes to what the agent's `writes` names, with the default configuration its `views/` and `memory/`, and a final answer that ends with the protocol's instruction lines. This document covers how pi is run, its instructions, and the facts about pi that Scooter relies on. What pi can reach in its VM is in [What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change) and [the network policy](network-policy.md); what the runner accepts of what it leaves, in [After a successful run](run.md#after-a-successful-run).
+The agent is pi, a third-party coding agent (`@earendil-works/pi-coding-agent`), and the model behind it, run headless in a VM for each run with every kind of discovery turned off and seven tools. It is given the prompt, which the runner builds from the batch ([The prompt](runner.md#the-prompt)); the system prompt: the protocol, which ships with the runner, the agent's prompt from the config folder, and its memory; the skills, from that run's copy of the config folder, after the runner's own skill; and, in its VM, `show`, a program that prints lines of the datastore by their numbers from the run's index file ([show, and the runner's skill](#show-and-the-runners-skill), [The index file](run.md#the-index-file), [A run](run.md#a-run)). It produces changes to what the agent's `writes` names, with the default configuration its `views/` and `memory/`, and a final answer that ends with the protocol's instruction lines. This document covers how pi is run, its instructions, and the facts about pi that Scooter relies on. What pi can reach in its VM is in [What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change) and [the network policy](network-policy.md); what the runner accepts of what it leaves, in [After a successful run](run.md#after-a-successful-run).
 
 The config folder's `prompts/` and `skills/` are the owner's, which `setup` copies from the repository and Docker mounts ([setup](install.md#setup), [compose.yaml](install.md#composeyaml)); the agent can't change them, and sees only the run's copy.
 
 ## Files
 
 - `src/runner/protocol.md`: the protocol, which the runner puts first in every system prompt.
+- `src/runner/vm/skills/scooter/SKILL.md`: the runner's skill, which every run is given first: the datastore, `show`, the index file and the format of a line.
+- `src/runner/vm/bin/show.mjs`: `show`, which every run gets a copy of as `run/bin/show`.
 - `config/prompts/lifelog.md`: the agent's prompt.
 - `config/skills/expenses/SKILL.md`: `views/expenses.csv`.
 - `config/skills/meals/SKILL.md`: `views/meals.csv`.
@@ -14,7 +16,7 @@ The config folder's `prompts/` and `skills/` are the owner's, which `setup` copi
 - `config/skills/runs/SKILL.md`: `views/runs.csv`.
 - `config/skills/travel/SKILL.md`: `views/travel.csv`.
 
-`test/instructions.test.mjs` takes what these files must hold word for word from this document: [The prompt](#the-prompt)'s list of views, and [Skills](#skills)' table, its CSV headers and categories. So a change of wording there fails the test until the files follow, and the two can't drift apart. It also checks the protocol against the parser of the answer.
+`test/instructions.test.mjs` takes what these files must hold word for word from this document: [The prompt](#the-prompt)'s list of views, and [Skills](#skills)' table, its CSV headers and categories. So a change of wording there fails the test until the files follow, and the two can't drift apart. It also checks the protocol against the parser of the answer, and the runner's skill against the line format and `show` ([show, and the runner's skill](#show-and-the-runners-skill)).
 
 ## How pi is run
 
@@ -26,6 +28,7 @@ pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-contex
    --tools read,bash,edit,write,grep,find,ls \
    --session-dir /data/agents/lifelog/run/session --session-id <session ID> \
    --append-system-prompt /data/agents/lifelog/run/system.md \
+   --skill /data/agents/lifelog/run/skills/scooter \
    --skill /data/agents/lifelog/run/config/skills/expenses --skill /data/agents/lifelog/run/config/skills/runs … \
    -- "<prompt>"
 ```
@@ -34,7 +37,8 @@ pi -p --no-approve --no-extensions --no-skills --no-prompt-templates --no-contex
 - The model is the agent's configured model, and `--thinking` its level when `agents.yaml` gives one. pi talks to OpenRouter at its usual address, with `OPENROUTER_API_KEY`, which holds a placeholder ([The key](network-policy.md#the-key)), so it needs no `models.json`.
 - The seven tools: `read`, `bash`, `edit`, `write`, `grep`, `find` and `ls`.
 - The session is the run's copy in `run/session/`, by its ID ([Sessions](runner.md#sessions), [The session's copy](run.md#the-sessions-copy)); with `session: none`, `--no-session` instead.
-- The skills are given one by one with `--skill`, from the run's copy: those of the agent, or a backfill's ([Backfill](rebuild-and-backfill.md#backfill)).
+- The skills are given one by one with `--skill`, from the run's copies: the runner's own first, then those of the agent, or a backfill's ([Backfill](rebuild-and-backfill.md#backfill)).
+- Its environment puts the run's `bin/` first on the `PATH`, so pi and the programs its tools start find `show` by its name ([Environment](sandbox.md#environment)).
 - The prompt is one argument, after `--`, so nothing in it can pass for a flag; that is why a batch has a size limit ([The batch](runner.md#the-batch)).
 
 ## The protocol
@@ -110,6 +114,31 @@ Each skill holds what this table gives it word for word, then a line for each co
 - `meals`: five kinds, `breakfast`, `lunch`, `dinner`, `snack` and `drink`; `est_kcal` rounded to tens; a number the owner gives is used, and its source noted; a person mentioned with a meal stays in its `note`.
 - `travel`: times as the ticket prints them, local where each leg departs and arrives; a stay is a row with `mode` `stay`, check-in as `date`, the place as `carrier` and check-out as `arrive`; a cab across town is only an expense; a change updates the row, and a cancellation keeps it, with `cancelled` in `note`.
 - `people`: the rules of the table, and a missing length is a row with `minutes` empty, marked ❓.
+
+## show, and the runner's skill
+
+Two things ship with the runner for every run's VM, beside the index file they read and describe ([The index file](run.md#the-index-file)), and every run gets a copy of each in `run/` ([A run](run.md#a-run)), whatever its agent, its trigger or its skills, a backfill's and a rebuild's runs among them. They describe the system, not lifelog. *Why with the runner, not in the VM image:* `show` and the runner must agree on the index file, and an image is built at another time than the runner is installed; a copy for each run always matches the runner that wrote the index, the image doesn't change, and the fake sandbox runs the same file. The owner agreed to this on 2026-11-21, among the six points the plan of the agent model added to issue 25: "yes to all".
+
+**`show <seq>…`**, `src/runner/vm/bin/show.mjs`, copied as `run/bin/show`, prints each line asked for, one after another, each after an empty line:
+
+```text
+$ show 1054
+1054  Mon 9 Nov 2026 21:22  /data/datastore/2026/11/09/log.jsonl:216
+{"seq":1054,"kind":"edit","dir":"in","at":"2026-11-09T15:52:00Z","source":"whatsapp","sourceId":"3EB0B7C6D5E4F3A2B1C0","trust":"owner","target":1051,"text":"coffee 150"}
+  points at 1051  Mon 9 Nov 2026 21:14  /data/datastore/2026/11/09/log.jsonl:213
+  {"seq":1051,"kind":"message","dir":"in","at":"2026-11-09T15:44:00Z","source":"whatsapp","sourceId":"3EB0B7C6D5E4F3A2B1C0","trust":"owner","text":"coffee 120"}
+```
+
+- **A header** gives the `seq`, the line's `at` in the owner's time zone, and where it is. **The line** follows as it is stored, byte for byte, bytes that aren't UTF-8 included. Then **each attachment**, as `  file <its full path>`, the line's own day folder and the file's name. Then, indented, **the one line it points at**, as the index file gives it, in the same way. One hop only, and nothing that points back at the line: not its replies, the reactions to it, nor its edits or its deletion. Each of those is a line of its own, which the agent finds in the index file and asks for by its number.
+- **A number that isn't in the run's index file** prints `<number>  no such line`, a line written during the run among them, and so does an argument that isn't a number. `#1051` and a number with leading zeros are taken as the same number. A line the index has but its log doesn't, at that line number, or with another `seq` there, as after a restore by hand, prints `can't be read at <where>`. Either makes `show` exit with 1, after it has printed the rest. It exits with 2 when it is given no number, and prints how it is used, and when it can't read the index file or has no zone, which it says on stderr, printing nothing else.
+- **What it reads.** The index file, beside the folder `show` is in, so a copy elsewhere finds none, and of it only the lines it needs: the index has every `seq` from 1, so its line N is `seq` N, and a line that doesn't hold its `seq` counts as none. Then each log once, in pieces of 64 KB, counting line breaks as the runner's reader does, up to the last line it needs, so a line of any length is read whole, and part of a line at the end, or lines added during the run, change nothing the index has. It prints a line only when its own `seq` is the one asked for.
+- **The time** is converted for the zone `TZ` names, which the runner sets to `SCOOTER_TZ` ([Environment](sandbox.md#environment)), explicitly through `Intl.DateTimeFormat`, as [Time](shared-code.md#time) has the runner's own code do. Without a zone Node knows, `TZ` unset, empty or a POSIX rule such as `:Asia/Kolkata`, it stops instead of printing the time in another zone. `test/show.test.mjs` holds its headers to the runner's `toLocal` every 15 minutes across the changes of the clocks of 2026 and a new year, in nine zones.
+- **A path that could break its line**, one holding a control character or a line or paragraph separator, is printed as a JSON string. A path as it is starts with `/`, so the two can't be taken for each other.
+- **It imports only Node's own modules:** the VM has nothing of Scooter's but the copies in `run/`.
+
+**The runner's skill**, `scooter`, copied to `run/skills/scooter/`, is given to pi first, before the agent's skills. It says what the datastore is, what `show` prints, how to search the index file, and what each field of a line holds. `agents.yaml` refuses a skill of the agent's with its name ([agents.yaml](configuration.md#agentsyaml)): pi offers the model a skill by its name. `test/instructions.test.mjs` holds it to `line.mjs`, its table of fields to `FIELDS`, in order, and the values it lists to `KINDS`, `DIRECTIONS`, `SOURCES`, `TRUSTS` and `OWN_AUTHORS`, with what `data` holds as [data](datastore.md#data) gives it; each line its examples show to the store's check; and each of its examples of `show` and of the index file to what `show` prints, and the runner writes, for a datastore of those lines.
+
+*Checked in a VM* (`VM 7` in `test/tools/vm.test.mjs`), with the image's Node, 24.22.3: `show`, copied into `run/bin/` as `prepareRun` copies it, runs by its name from the `PATH` the runner gives, through `env`, as the sandbox runs pi, from `sh` and `bash`, and from pi's `bash` tool, with pi's environment; the image's Node runs it, a file without an extension in ES module syntax, as a module, saying nothing on stderr, as Node 22.12.0 and 26.13.1 did too when tried by hand; `TZ` gives the owner's time, across midnight in Kolkata and both changes of the clocks in London; without `TZ` it stops; and writing, removing, moving or changing the mode of `run/bin/show` or `run/index.txt`, or making a file in `run/bin/`, fails with "Read-only file system".
 
 ## Memory
 
