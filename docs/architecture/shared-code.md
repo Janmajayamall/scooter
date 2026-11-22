@@ -63,7 +63,7 @@ The first five are what the bridge, as root, uses in a folder another user contr
 Every log line is one JSON object on stderr: `at`, `level`, `component`, `event` and the caller's fields. stderr leaves stdout to the CLI commands that print results.
 
 - **Logs carry no content:** IDs, kinds, sizes and timings, never message text or file contents. That rule is the caller's to keep, in every component, and three things here make the common slips harmless:
-  - a field named `text`, `subject` or `quoted`, the content fields of a datastore line, is written as `[withheld]`, so logging a whole line leaks nothing;
+  - a field named `text` or `data`, the content fields of a datastore line, is written as `[withheld]`, so logging a whole line leaks nothing. `data` is withheld whatever it holds: a line a reader took can hold a list of strings there, which would otherwise be logged as it is ([data](datastore.md#data));
   - a field's value is a string, a number, a boolean, null, or a list of those; anything nested is written as `[object]` or `[array]`;
   - `errorFields(error)` gives an error's name, the system's code and call, and, for a program that failed, its exit code and whether it timed out, without its message, which can quote what was being parsed.
 

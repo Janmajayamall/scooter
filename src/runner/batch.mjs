@@ -8,8 +8,9 @@
 //   that message waits in `retry` (due or not) or is in `failed`. It joins as a retry; one from
 //   `failed` starts again at attempt 1. Otherwise the edit could be handled before its message, and
 //   the retry would later file the old text. These can take the batch past `BATCH_MAX_ITEMS`.
-// - **Context:** the out lines and reactions from the oldest item to the end of what the batch
-//   covers, plus the message each reply quotes, shown under it.
+// - **Context:** the messages Scooter sent and the reactions, of the lines this version knows, from
+//   the oldest item to the end of what the batch covers, plus the message each reply quotes, shown
+//   under it.
 // - **Covered:** the lines up to the first work item left for a later batch. When the run succeeds,
 //   the cursor moves there: the context and the lines of other sources in that stretch are dealt
 //   with too.

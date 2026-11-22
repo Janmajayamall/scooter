@@ -106,7 +106,8 @@ function fsyncPath(target) {
 // - `owner` is `{ uid, gid }` for everything the store creates: root and the runner's group. Leave
 //   it out when not running as root, and owners are left alone. Modes are set either way.
 // - It throws a `DatastoreError` if the datastore's contents are damaged: a complete line that
-//   isn't a line, or `seq` numbers out of order.
+//   isn't JSON or fails a reader's check, or `seq` numbers out of order. A line of a kind, a
+//   channel or a field this version doesn't know is no damage: it is read, and passed over.
 export function openStore({ paths, clock = systemClock, log, owner = null }) {
   const dir = paths.datastore
   ensureDir(dir, { mode: DIR_MODE, owner })

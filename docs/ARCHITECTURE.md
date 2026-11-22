@@ -144,7 +144,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 
 *Cost, accepted:* Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a user who controls one of these folders can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, which nothing else of Scooter's or the system's has, and empty folders, which are all a folder's removal takes; and where the bridge makes `backup.lock`, under that name. Only the runner's user controls `exchange/`, and an escape from pi's VM is needed to reach it.
 
-`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules, the first without the check of the owner: it uses each of those folders only while it is a folder and not a link. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
+`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules, the first without the check of the owner, and the second but for a day of the log, which it reads as a stream, opened without following a link and only if it is a regular file: it uses each of those folders only while it is a folder and not a link. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
 
 `build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [build-image](architecture/sandbox.md#build-image).
 
@@ -275,6 +275,8 @@ The project's own names, each used one way in these documents.
 | core | The bridge apart from its channels: the store, intake, delivery and the backups |
 | record | A message as a channel hands it to the core, the same for every channel |
 | line | One JSON object in the datastore, for one message, edit, deletion or reaction, in or out |
+| `data` | The object on a line that holds what its channel keeps and only the agent reads, such as an email's subject |
+| known line | A line of a kind and a channel this version has, with the fields its kind needs; any other is kept, and passed over |
 | `seq` | A line's permanent number, and the only name a message has outside the bridge |
 | datastore | The append-only log of lines, a `log.jsonl` per day folder with the attachments beside it |
 | day folder | `datastore/YYYY/MM/DD`, the UTC date a line was written |
@@ -301,7 +303,7 @@ The project's own names, each used one way in these documents.
 | config folder | `CONFIG_DIR`: the owner's `agents.yaml`, prompt, skills and the VM image's build file |
 | env file | `bridge.env` or `runner.env`: a service's settings |
 | owner's day | A date in `SCOOTER_TZ` |
-| work item | An `in` line from a source the agent reads, of kind `message`, `edit` or `delete` |
+| work item | An `in` line from a source the agent reads, of kind `message`, `edit` or `delete`, that this version knows |
 | batch | The work items one run is given |
 | run | One run of pi, in one VM, on one batch or task |
 | view | A file the agent keeps in `views/`, such as `expenses.csv` |

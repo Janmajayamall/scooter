@@ -96,7 +96,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`. Everything else, `out` lines and reactions, isn't work: the cursor moves past it, and the agent doesn't report on it, and both are shown to the agent as context ([The prompt](#the-prompt)).
+**Work items** are `in` lines from a source the agent `reads`, of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). Everything else isn't work: the cursor moves past it, and the agent doesn't report on it. Of that, the messages Scooter sent and the reactions are shown to the agent as context ([The prompt](#the-prompt)); a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs, is passed over, as neither work nor context.
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 
@@ -111,9 +111,9 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 A batch is due retries first, then work items after the cursor, oldest first, at most `BATCH_MAX_ITEMS` in all.
 
 - **An edit or a deletion in the batch brings in the message it changes** when that message waits in `retry`, due or not, or is in `failed`. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. These may take the batch past `BATCH_MAX_ITEMS`. *Why:* otherwise the edit could be handled before the message it changes, and the retry would later file the old text.
-- An item in `retry` whose line isn't a work item of the agent, which only a changed `reads` or a damaged state gives, is never due, and starts no batch.
+- An item in `retry` whose line isn't a work item of the agent, which only a changed `reads`, a damaged state, or a line this version no longer knows gives, is never due, and starts no batch.
 - **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line, with the context and the lines of sources the agent doesn't read in that stretch. Where the cursor goes after the run is in [Failures](run.md#failures).
-- **The context:** the `out` lines and reactions from the oldest item to the end of what the batch covers, plus every message an item quotes.
+- **The context:** the messages Scooter sent and the reactions, of the lines this version knows, from the oldest item to the end of what the batch covers, plus every message an item quotes.
 - **The newest item**, which an answer's plain text is about ([Reading the answer](run.md#reading-the-answer)), is the item with the highest `seq`.
 
 **The size limit.** The prompt is one command-line argument, so the batch also stops growing before the prompt would pass `PROMPT_MAX_BYTES`, though it always keeps at least one item. It grows one item at a time, with what each brings in. When even the first item is too long:
@@ -153,7 +153,8 @@ For context only (no action, no DONE):
 - **Every text** the owner or the agent wrote is a JSON string, so a line break or a quote in it can't pass for the prompt's own lines.
 - **A file's kind** comes from its MIME type: `photo`, `video`, `audio` or `document`, with its absolute path, its MIME type and its original name. A message's further files are `attachment` lines under it. Media that couldn't be stored says so: `photo, not stored (download failed)`, with the caption if there is one.
 - **Every message is shown as it is now:** with the text of its latest edit, marked `(edited in #<seq>)`, or, if it was deleted, `(deleted in #<seq>)` in place of its content. That holds for new items, retries and quoted messages. An edit is `edit of #1051, now: "<its own text>"`, and a deletion `deletion of #1051`.
-- **A reply** shows the quoted message and who sent it: "you sent", "the owner sent", `↳ reply to an earlier message: "<the quoted preview>"` when Scooter doesn't have it, or `↳ reply to #N: "<quoted>"` for a line the index can't show. A reply to a photo shows the photo's path. Forwarded messages are marked as forwarded.
+- **A reply** shows the quoted message and who sent it: "you sent", "the owner sent", `↳ reply to an earlier message: "<the quoted preview>"` when Scooter doesn't have it, or `↳ reply to #N: "<quoted>"` for a line the index can't show as a message, such as one this version doesn't know. A reply to a photo shows the photo's path. Forwarded messages are marked as forwarded.
+- **What the prompt takes from a line's `data`**, the quoted preview, whether it was forwarded, an email's subject and a reaction's emoji ([data](datastore.md#data)), it takes only when it is of its type there: a preview that isn't a string isn't shown, a message is forwarded only when `forwarded` is `true`, an email without a subject shows `email ""`, and a reaction without an emoji `the owner reacted to #1046`.
 - **Context lines** are listed newest first, and say who sent them: `you` for the agent's own, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices. One is shown with the message it replies to: `you sent, in reply to #1047: "…"`.
 - **An email** shows `email`, its subject and its text, then each attachment, and the whole message; one that couldn't be read adds `email not stored (could not be parsed)`:
   ```

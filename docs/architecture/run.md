@@ -117,7 +117,7 @@ A run fails when pi exits with a code other than 0, times out, is stopped, or it
 Notices are outbox entries `by: "runner"`, which go to `DEFAULT_CHANNEL` ([Choosing the channel](delivery.md#choosing-the-channel)), and go out also with `can_message: false`: that setting is about what the agent sends.
 
 - **The first failure in a row** sends one notice; later failures send nothing until a run succeeds: "⚠️ I couldn't process your last messages (<short reason>). I'll try again." A setup error's says instead "Runs are paused until this is fixed. I'll try again every 30 minutes." A task's names it, "run the scheduled task 21:30", and says when it runs again. A task is a live run, so a failing task can be the first failure of a row, and one that gets through ends the row.
-- **Items given up on:** one notice listing them: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds.
+- **Items given up on:** one notice listing them: "⚠️ I gave up on #1051 ("coffee 120") and #1052 (a photo) after 4 attempts. Send them again if they matter." Each item is named by its text as it is now, cut to `NOTICE_QUOTE_CHARS`, or by what it holds; an email as `email "<subject>"`, the subject cut the same way. The subject is the email channel's, in the line's `data`, and is used only when it is a string there, else `""` ([data](datastore.md#data)).
 - **The emulation notice** ([status.json](runner.md#statusjson)) and **the restart notice** ([Restarts](runner.md#restarts)).
 
 ## The clean-up
