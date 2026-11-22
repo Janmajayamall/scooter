@@ -102,7 +102,7 @@ A run passes when pi exits with 0 and its files pass the check below. Then, in t
 
    So after a successful run what the repository keeps holds nothing the commit doesn't, with the runner's modes, and nothing hidden carries over to later runs.
 3. **The commit,** only if what was staged differs from the last commit: `lifelog: #1050 #1051 #1053`, every item of the batch, or `lifelog: scheduled task 21:30`, as `Scooter <scooter@localhost>`, unsigned. A backfill's and a rebuild's are in [rebuild and backfill](rebuild-and-backfill.md).
-4. **The session,** copied back ([The session's copy](#the-sessions-copy)). Then what `send` and `mark` left is read, and what the run could write in `run/` cleared ([What send and mark leave](#what-send-and-mark-leave)).
+4. **The session,** copied back ([The session's copy](#the-sessions-copy)). Before it, what `send` and `mark` left is read, and cleared at once, and after it `run/session/` is emptied, so nothing pi wrote in `run/` takes room the session's copy, the outbox or the state needs ([What send and mark leave](#what-send-and-mark-leave)).
 5. **The outbox,** from what `send` left: the messages, in order, then the notice of lines given up on, if any ([Notices](#notices)).
 6. **The state,** from the marks: lines marked done leave `retry`; lines marked failed go to `failed`; lines marked neither way have used the attempt this run was ([Failures](#failures)); the cursor moves to what the batch covered; and `lastRun` is recorded.
 7. **The ✅,** in quiet mode, for each message marked done that no message of the run replies to ([What send and mark leave](#what-send-and-mark-leave)).

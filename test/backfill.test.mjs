@@ -63,7 +63,7 @@ const skillsOf = call => call.argv.flatMap((arg, n) => (arg === '--skill' ? [pat
 // As the runner runs it
 
 test('backfills: until is the live cursor when it starts, every message up to it is covered once, a day at a time, and nothing is sent until its summary', async t => {
-  const { runner, clock, state, outbox, git, views, add, paths, sandbox } = await openBackfill(t, { words: { 3: 'UNSURE', 4: 'SAY', 5: 'FAIL' } })
+  const { runner, clock, state, outbox, git, views, add, paths, sandbox, entries } = await openBackfill(t, { words: { 3: 'UNSURE', 4: 'SAY', 5: 'FAIL' } })
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 0, retry: [], skipped: [] })
 
   // Saturday: #1 and #3, with #2, which Scooter sent, as context.
@@ -77,8 +77,8 @@ test('backfills: until is the live cursor when it starts, every message up to it
   )
   assert.equal(prompt[1], '[scooter] Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.')
   assert.match(first.prompt, /^#2 12:31 you sent: "Logged."$/m)
-  // Its own session for the day, the backfill's skill alone after the runner's, and the live
-  // system prompt.
+  // Its own session for the day, the backfill's skill alone after the runner's, and the agent's
+  // prompt of live runs.
   assert.equal(sessionOf(first), 'lifelog-backfill-people-1-2026-11-07')
   assert.deepEqual(skillsOf(first), ['scooter', 'people'])
   assert.match(first.systemPrompt, /You are lifelog\./)
@@ -88,9 +88,11 @@ test('backfills: until is the live cursor when it starts, every message up to it
   assert.deepEqual(outbox(), [])
   assert.deepEqual(state().lastRun, LAST_RUN)
 
-  // Sunday: #4, whose text the stub sends, and #5, which it can't read. Neither is sent.
+  // Sunday: #4, whose text the stub sends, and #5, which it can't read, and says so. Neither is
+  // sent: what send queued is dropped, and counted.
   assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
   assert.deepEqual(sandbox.seen()[1].items, [4, 5])
+  assert.deepEqual(entries.filter(entry => entry.event === 'runner.sends_dropped').map(entry => entry.silent), [2])
   assert.equal(sessionOf(sandbox.seen()[1]), 'lifelog-backfill-people-1-2026-11-08')
   assert.match(sandbox.seen()[1].prompt.split('\n')[1], /Now: Sunday 8 November 2026, 19:30 /)
   assert.equal(git('log', '-1', '--format=%s'), 'lifelog: backfill people-1 #4-#5\n')

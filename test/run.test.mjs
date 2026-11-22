@@ -771,3 +771,144 @@ test('run: an edit of a failed message brings it back into the batch, and it lea
   assert.deepEqual(state().failed, [])
   assert.deepEqual(state().retry, [])
 })
+
+// ---------------------------------------------------------------------------------------------
+// What a run leaves in run/ for the runner: it never stops the runner
+
+test('run: nothing a run leaves in run/send/ or as run/marks.txt, in place of what send and mark write, stops the runner, and the next run runs', async t => {
+  const notMarked = { seq: 1042, attempts: 1, due: '2026-11-09T15:51:38Z', reason: 'not marked' }
+  const react = { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] }
+  const text = (words, extra = { about: 1042 }) => ({ type: 'text', by: 'lifelog', text: words, ...extra, channels: ['whatsapp'] })
+  // What each leaves, and what comes of it: the line's retry, if any, what goes out, and the log.
+  for (const [what, { retry = [], sends = [react], logged = {}, skip = false }] of [
+    // The marks file as anything but the file mark writes: refused whole, so the line is given
+    // again, with its attempt counted, and gets no ✅.
+    ['MARKSLINK', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EUNTRUSTED' } }],
+    ['MARKSFIFO', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EUNTRUSTED' } }],
+    ['MARKSDIR', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EUNTRUSTED' } }],
+    ['MARKSHARD', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EUNTRUSTED' } }],
+    ['MARKSBIG', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EFBIG' } }],
+    ['MARKSLOCKED', { retry: [notMarked], sends: [], logged: { 'runner.marks_refused': 'EACCES' }, skip: skipIfRoot }],
+    // Lines mark doesn't write, beside its own: passed over and counted, and its own counts.
+    ['MARKSODD', { logged: { 'runner.marks_unreadable': 11 } }],
+    // An entry as anything but what send writes: refused, and nothing of it goes out.
+    ['SENDLINK', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    ['SENDFIFO', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    ['SENDDIR', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    ['SENDHARD', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    ['SENDBIG', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    ['SENDLOCKED', { logged: { 'runner.sends_dropped': { refused: 1 } }, skip: skipIfRoot }],
+    ['SENDODD', { logged: { 'runner.sends_dropped': { refused: 15 } } }],
+    ['SENDDEEP', { logged: { 'runner.sends_dropped': { refused: 1 } } }],
+    // Entries send could write: a text of nearly a megabyte, cut where every text is; U+0000 and
+    // half a surrogate pair, made something a channel can send; and a thousand, the first 25 sent.
+    ['SENDLONG', { sends: 'long' }],
+    ['SENDNUL', { sends: [text('a\ufffdb\ufffdc'), react] }],
+    ['SENDMANY', { sends: 'many', logged: { 'runner.sends_dropped': { past: 975 } } }],
+  ]) {
+    await t.test(what, { skip }, async t => {
+      const { runner, clock, state, outbox, sandbox, paths, add, entries, git } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
+      sandbox.behave({ runLeaves: what })
+      assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+      assert.deepEqual(state().retry, retry)
+      assert.equal(state().cursor, 1042)
+      assert.equal(git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+      const sent = outbox({ take: true })
+      if (sends === 'long') {
+        assert.equal(sent.length, 2)
+        assert.ok([...sent[0].text].length <= 14000)
+        assert.match(sent[0].text, /^long long .*\[The rest of this message was too long to send\.\]$/s)
+        assert.deepEqual(sent[1], react)
+      } else if (sends === 'many') {
+        assert.deepEqual(sent, [...Array.from({ length: 25 }, (_, n) => text(`Message ${n + 1}.`)), react])
+      } else {
+        assert.deepEqual(sent, sends)
+      }
+      for (const [event, fields] of Object.entries(logged)) {
+        const found = entries.filter(entry => entry.event === event)
+        assert.equal(found.length, 1, event)
+        if (typeof fields === 'object') for (const [name, value] of Object.entries(fields)) assert.equal(found[0][name], value, `${event} ${name}`)
+        else assert.equal(event === 'runner.marks_refused' ? found[0].error : found[0].lines, fields, event)
+      }
+      // Cleared before the run was recorded, whatever it was; nothing was left that couldn't be.
+      assert.deepEqual(fs.readdirSync(paths.agentRunSend('lifelog')), [])
+      assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
+      assert.deepEqual(fs.readdirSync(paths.agentRunSession('lifelog')), [])
+      assert.deepEqual(entries.filter(entry => entry.event === 'runner.run_left' || entry.level === 'error'), [])
+
+      // The next run runs, and marks as it should.
+      sandbox.behave(null)
+      add(line.text(1043, '2026-11-09T15:51:00Z', 'tea'))
+      await clock.advance(MINUTE)
+      assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+      assert.deepEqual(state().retry, [])
+      assert.equal(state().cursor, 1043)
+    })
+  }
+})
+
+test('run: on a disk pi filled through run/send/, a run that passed frees it before it keeps the session, or writes the outbox or the state', async t => {
+  const { runner, clock, paths, state, outbox, events, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY')])
+  // pi leaves fill.bin in run/send/ beside the message it queued, and exits with 0. Until it is
+  // gone, nothing can be made: not the session's copy, the outbox entries, or the state.
+  sandbox.behave({ runLeaves: 'FILLSEND' })
+  t.after(actFull(() => holds([paths.agentRunSend('lifelog')], 'fill.bin')))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.deepEqual(outbox(), [
+    { type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042, channels: ['whatsapp'] },
+    { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
+  ])
+  assert.deepEqual(state().retry, [])
+  assert.equal(state().cursor, 1042)
+  assert.ok(fs.existsSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-09.jsonl')))
+  assert.deepEqual(fs.readdirSync(paths.agentRunSend('lifelog')), [])
+  assert.deepEqual(events().filter(event => event === 'runner.session_refused' || event.endsWith('_left')), [])
+})
+
+test('run: a run that marks and sends, then fails, crashed or timed out, sends nothing and settles nothing, and each line it was given has used an attempt', async t => {
+  for (const [how, behavior, reason] of [
+    ['crashed', { late: true, crash: 3 }, 'pi exited with code 3'],
+    ['timed out', { late: true, hang: true }, 'timed out'],
+  ]) {
+    await t.test(how, async t => {
+      const { runner, clock, state, outbox, sandbox, paths, git } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee SAY'), line.text(1043, '2026-11-09T15:50:01Z', 'lunch ASK')])
+      sandbox.behave(behavior)
+      await runner.tick()
+      await clock.advance(8 * SECOND)
+      const ticking = runner.tick()
+      if (behavior.hang) {
+        await sandbox.whenHung()
+        await clock.advance(10 * MINUTE)
+      }
+      assert.deepEqual((await ticking).outcome, { ok: false, cause: 'other' })
+      // It did mark and send: the stub's programs said so.
+      assert.deepEqual(sandbox.reported()[0].map(({ program, code }) => [program, code]), [['send', 0], ['send', 0], ['mark', 0]])
+      // Nothing of it was read: no message, no ✅, both lines given again at their second attempt.
+      assert.deepEqual(outbox(), [{ type: 'text', by: 'runner', text: `⚠️ I couldn't process your last messages (${reason}). I'll try again.` }])
+      assert.deepEqual(state().retry.map(entry => [entry.seq, entry.attempts, entry.reason]), [[1042, 1, reason], [1043, 1, reason]])
+      assert.deepEqual(state().failed, [])
+      assert.equal(git('rev-list', '--count', 'HEAD'), '1\n')
+      assert.deepEqual(fs.readdirSync(paths.agentRunSend('lifelog')), [])
+      assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
+    })
+  }
+})
+
+test('run: a scheduled run sends what send queued to DEFAULT_CHANNEL, and its marks are ignored and logged', async t => {
+  const { runner, clock, state, outbox, entries, sandbox } = await openWith(t, [], { start: '2026-11-09T15:59:50Z', state: { ...HANDLED, scheduled: { '21:30': '2026-11-08' } } })
+  // The stub marks two numbers as well as sending the task's message.
+  sandbox.behave({ words: ['UNKNOWN'] })
+  await clock.advance(MINUTE)
+  const { action, outcome } = await runner.tick()
+  assert.equal(action.kind, 'scheduled')
+  assert.deepEqual(outcome, { ok: true, cause: null })
+  // No `about`: Scooter says it on its own, so it goes to DEFAULT_CHANNEL.
+  assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.', channels: ['whatsapp'] }])
+  assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
+  assert.deepEqual(state().retry, [])
+  assert.deepEqual(state().failed, [])
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'runner.marks_unknown').map(entry => [entry.count, entry.seqs]),
+    [[2, [888888, 999999]]],
+  )
+})

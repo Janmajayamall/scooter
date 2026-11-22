@@ -319,7 +319,7 @@ test('sends: a text of nearly a megabyte is read whole, and one with U+0000 or h
   const { messages } = sends()
   assert.equal(messages[0].text, long)
   // U+0000 stays for the outbox's own cut, which makes it U+FFFD (`exchange.md`).
-  assert.equal(messages[1].text, 'a\u0000b�c�')
+  assert.equal(messages[1].text, 'a\u0000b\ufffdc\ufffd')
 })
 
 test('sends: no folder is no messages; a link or a file in its place gives none, and says why', t => {

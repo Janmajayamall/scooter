@@ -260,15 +260,16 @@ export async function keepSession({ paths, agent, sessionId, log }) {
 }
 
 // Clears what a run could write in `run/`: empties `run/session/` and `run/send/`, and removes
-// `run/marks.txt`. It runs once a run is over, and its session kept and what `send` and `mark` left
-// read, and before a failed run's clean-up, so before the runner records the run; and at a start.
-// pi wrote what is there, and could have filled the disk with it: the folders stay, so nothing is
-// made. Returns nothing. An error is logged, naming what couldn't be cleared, and left to
-// `prepareRun`, which removes `run/` whole before the next run.
-export function clearRunWrites({ paths, agent, log }) {
+// `run/marks.txt`; with `session: false`, all but `run/session/`. It runs once a run is over, what
+// `send` and `mark` left read and its session kept, and before a failed run's clean-up, so before
+// the runner records the run; and at a start. pi wrote what is there, and could have filled the
+// disk with it: the folders stay, so nothing is made. Returns nothing. An error is logged, naming
+// what couldn't be cleared, and left to `prepareRun`, which removes `run/` whole before the next
+// run.
+export function clearRunWrites({ paths, agent, log, session = true }) {
   const name = agent.name
   for (const [what, clear] of [
-    ['session', () => emptyFolder(paths.agentRunSession(name))],
+    ...(session ? [['session', () => emptyFolder(paths.agentRunSession(name))]] : []),
     ['send', () => emptyFolder(paths.agentRunSend(name))],
     ['marks.txt', () => removeTree(paths.agentRunMarks(name))],
   ]) {

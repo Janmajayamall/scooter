@@ -278,8 +278,9 @@ async function commitFiles({ agent, git, log, job }) {
 
 // After the commit: the session; the outbox, from what `send` queued; the state, from what `mark`
 // wrote; the reactions; then, outside what the run depends on, the repository is packed if it needs
-// it. What `send` and `mark` left is read before anything is written, and cleared with the rest of
-// what the run could write in `run/`, so it takes no room the outbox or the state needs.
+// it. What `send` and `mark` left is read before anything is written, and cleared at once, and
+// `run/session/` once the session is kept, so nothing pi wrote there takes room the session's
+// copy, the outbox or the state needs.
 //
 // - The messages: at most `RUN_MAX_SENDS` go out, the first ones; the rest, and what isn't a
 //   message `send` writes, are dropped and counted in the log. A replay's, and with `sends: []`
@@ -288,9 +289,10 @@ async function commitFiles({ agent, git, log, job }) {
 //   all are, since it is given none.
 async function afterSuccess(context, { sessionId: id, seqs, timing, committed }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
-  const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id, log })
   const sends = readSends(paths.agentRunSend(agent.name))
   const marks = readMarks(paths.agentRunMarks(agent.name))
+  clearRunWrites({ paths, agent, log, session: false })
+  const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id, log })
   clearRunWrites({ paths, agent, log })
 
   if (sends.error !== null) log.warn('runner.sends_unreadable', { agent: agent.name, error: sends.error })
