@@ -44,7 +44,7 @@ Before each run `prepareRun` writes `run/index.txt` from the runner's index of t
 - **A line written after** the runner last read the datastore isn't in it, so `show` doesn't show it during the run.
 - **It is read-only in the VM**, as all of `run/` but `run/session/` is, and the runner never reads it back: the next run's `prepareRun` makes it anew.
 
-*Cost:* a line of the file for each line of the datastore, written before every run. For 100 lines a day over five years, 182,500 lines, it was 10 MB with the data folder at `/data` and 12 MB at `/var/lib/scooter`, written in 0.26 to 0.41 seconds on the machine Scooter was built on; `show` reads only the lines it needs of it, 0.08 seconds there for a line of the last. It is in backups, as all of `run/` is.
+*Cost:* a line of the file for each line of the datastore, written before every run. For 100 lines a day over five years, 182,500 lines, it was 10 MB with the data folder at `/data` and 12 MB at `/var/lib/scooter`, written in 0.26 to 0.41 seconds on the machine Scooter was built on; `show` reads only the lines it needs of it, in 0.08 seconds there for a line near its end. It is in backups, as all of `run/` is.
 
 ## Reading the answer
 
