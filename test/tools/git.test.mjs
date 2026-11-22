@@ -75,3 +75,46 @@ test('git: a path is a pattern unless GIT_LITERAL_PATHSPECS=1, and add -A with n
   assert.equal(git(['add', '-A', '--']).status, 0)
   assert.equal(git(['diff', '--cached', '--name-only']).stdout, 'other.txt\nviews/b.csv\nviews/c.csv\n')
 })
+
+test('git: add -A stages a path whose kind changed, a file become a folder or the other way, and takes a path through a file without a word but in add', t => {
+  const { dir, git } = repository(t)
+  const literal = { GIT_LITERAL_PATHSPECS: '1' }
+  fs.writeFileSync(path.join(dir, 'notes'), 'n\n')
+  fs.mkdirSync(path.join(dir, 'm.md'))
+  fs.writeFileSync(path.join(dir, 'm.md', 'x'), 'x\n')
+  assert.equal(git(['add', '-A', '--', 'notes', 'm.md'], literal).status, 0)
+  assert.equal(git(['commit', '--quiet', '-m', 'second']).status, 0)
+  // ls-tree -r names a file by its path, and a folder by the files in it.
+  assert.deepEqual(git(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', 'notes', 'm.md'], literal).stdout.split('\0').filter(Boolean), ['m.md/x', 'notes'])
+
+  // A file become a folder, and a folder gone, with the index the last commit's.
+  fs.rmSync(path.join(dir, 'notes'))
+  fs.mkdirSync(path.join(dir, 'notes'))
+  fs.writeFileSync(path.join(dir, 'notes', 'a.md'), 'a\n')
+  fs.rmSync(path.join(dir, 'm.md'), { recursive: true })
+  assert.equal(git(['add', '-A', '--', 'notes', 'm.md'], literal).status, 0)
+  assert.equal(git(['status', '--porcelain', '--', 'notes', 'm.md']).stdout, 'D  m.md/x\nD  notes\nA  notes/a.md\n')
+  assert.equal(git(['reset', '--quiet']).status, 0)
+  // A folder become a file.
+  fs.writeFileSync(path.join(dir, 'm.md'), 'f\n')
+  assert.equal(git(['add', '-A', '--', 'm.md'], literal).status, 0)
+  assert.equal(git(['status', '--porcelain', '--', 'm.md']).stdout, 'A  m.md\nD  m.md/x\n')
+  assert.equal(git(['reset', '--quiet']).status, 0)
+
+  // A path that runs through a file: what reads paths takes it without a word; add refuses it.
+  fs.rmSync(path.join(dir, 'notes'), { recursive: true })
+  fs.writeFileSync(path.join(dir, 'notes'), 'n\n')
+  for (const args of [
+    ['status', '--porcelain=v1', '-z', '--ignored=matching', '--untracked-files=all', '--', 'notes/2026/books.csv'],
+    ['diff', '--cached', '--quiet', '--', 'notes/2026/books.csv'],
+    ['ls-files', '-z', '--', 'notes/2026/books.csv'],
+    ['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', 'notes/2026/books.csv'],
+  ]) {
+    const result = git(args, literal)
+    assert.equal(result.status, 0, args.join(' '))
+    assert.equal(result.stdout, '', args.join(' '))
+  }
+  const through = git(['add', '-A', '--ignore-errors', '--', 'notes/2026/books.csv'], literal)
+  assert.equal(through.status, 128)
+  assert.match(through.stderr, /pathspec 'notes\/2026\/books.csv' did not match any files/)
+})
