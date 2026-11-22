@@ -589,6 +589,30 @@ test('startup: on a disk pi filled, the start frees what pi wrote before it make
   assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
 })
 
+test('startup: on a disk pi filled, a folder of writes that pi removed is made again only once what pi wrote is freed', async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const first = await startTestRunner(t, prepared)
+  first.runner.close()
+  // pi removed views/, which the VM allows of a folder writes names, and filled the disk in
+  // memory/; then a crash, before the clean-up.
+  const { paths } = prepared
+  const agent = paths.agentDir('lifelog')
+  fs.rmdirSync(path.join(agent, 'views'))
+  const fill = path.join(agent, 'memory', 'fill.bin')
+  fs.writeFileSync(fill, '')
+  fs.truncateSync(fill, 1024 ** 3)
+  const restore = actFull(() => holds([path.join(agent, 'memory'), paths.agentDiscarded('lifelog')], 'fill.bin'))
+  let second
+  try {
+    second = await startTestRunner(t, prepared)
+  } finally {
+    restore()
+  }
+  for (const folder of ['views', 'memory']) assert.deepEqual(fs.readdirSync(path.join(agent, folder)), [], folder)
+  second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
+  assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
+})
+
 test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {
   const prepared = prepareTestRunner(t, { lines: fillerLines(3), start: START })
   await startTestRunner(t, prepared)

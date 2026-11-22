@@ -762,3 +762,25 @@ test('git: with nothing in the repository, nothing is staged or committed, and g
   assert.equal(git(dir, 'ls-files'), '.gitignore\n')
   assert.equal(fs.readFileSync(path.join(dir, 'stray.txt'), 'utf8'), 'x\n')
 })
+
+test('git: a folder where writes names a file, as a change of writes can leave one committed, is walked as a folder, and never stops the clean-up', async t => {
+  const { dir, paths, log, clock } = setup(t)
+  const folderGit = createGit({ proc: createProc({ log, clock }), dir, entries: ['views/'], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  await ensureAgentDir({ paths, name: 'lifelog', git: folderGit, log })
+  await folderGit.discardChanges()
+  fs.mkdirSync(path.join(dir, 'views', 'books.csv'))
+  fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'old.csv'), 'old\n')
+  assert.equal(await folderGit.stage(), null)
+  assert.equal(await folderGit.commitStaged('lifelog: #1'), true)
+
+  // writes now names views/books.csv as a file.
+  const fileGit = createGit({ proc: createProc({ log, clock }), dir, entries: ['views/books.csv'], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'new.csv'), 'new\n')
+  assert.equal(await fileGit.unexpectedFile(), null)
+  await fileGit.discardChanges()
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'views', 'books.csv')), ['old.csv'])
+  fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'new.csv'), 'new\n')
+  assert.equal(await fileGit.stage(), null)
+  assert.equal(await fileGit.commitStaged('lifelog: #2'), true)
+  assert.equal(git(dir, 'ls-files', 'views'), 'views/books.csv/new.csv\nviews/books.csv/old.csv\n')
+})
