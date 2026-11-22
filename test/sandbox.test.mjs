@@ -612,7 +612,7 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   }
   assert.deepEqual(outcome, { ok: true, cause: null })
 
-  // pi read the message's line in the datastore, through its read-only mount: the tool's result,
+  // pi read the message's line in the datastore, which its VM sees read-only: the tool's result,
   // which the model got with the next request, holds what only the file has, its WhatsApp ID.
   const [first, second] = model.modelRequests
   assert.match(JSON.stringify(first.body), /New messages:\\n#1 [^"]* text: \\"coffee 150 at Blue Tokai\\"/)
@@ -737,7 +737,7 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   assert.deepEqual({ ...result, tag: undefined }, { stopped: false, tag: undefined, until: 1, cursor: 1, batches: 1, failed: [] })
   assert.match(result.tag, /^before-rebuild-\d{8}T\d{6}Z$/)
 
-  // The prompt has the message's own time, and pi read its line through the read-only mount.
+  // The prompt has the message's own time, and pi read its line, which its VM sees read-only.
   const [first, second] = model.modelRequests
   assert.match(JSON.stringify(first.body), /\[scooter\] Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
   assert.match(JSON.stringify(first.body), /New messages:\\n#1 10:30 text: \\"coffee 120 at Blue Tokai\\"/)

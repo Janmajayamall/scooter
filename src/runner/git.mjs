@@ -88,10 +88,10 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     return { code: result.code, stdout: result.stdout }
   }
 
-  // The paths of `given`, entries of the repository, that the last commit has in the shape the entry
-  // gives: a folder that holds files, for a folder; a file, for a file. What it has in the other
-  // shape, as a change of `writes` can leave, isn't the entry's any more. git given no path would
-  // take the whole tree, so it is given none then.
+  // The paths of `given`, entries of the repository, that the last commit has in the shape the
+  // entry gives: a folder that holds files, for a folder; a file, for a file. What it has in the
+  // other shape, as a change of `writes` can leave, isn't the entry's any more. git given no path
+  // would take the whole tree, so it is given none then.
   async function tracked(given) {
     if (given.length === 0) return []
     const { stdout } = await run(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...given.map(pathOf)])
@@ -140,13 +140,13 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
     // The first thing in `given` (the repository's entries by default) that git wouldn't record,
     // as a path from the agent's folder, or null when there is none: an entry that isn't the shape
     // `writes` gives it, a folder or a file; anything that isn't a regular file or a folder, such
-    // as a link; any name starting with `.`, such as a `.gitignore` or a
-    // nested `.git`; a file the runner can't read, or a folder it can't read and search, or a path
-    // longer than the system takes, which git would pass over or fail on; a file with more than one
-    // name, which git would record as two; the name at which the entries pass `maxCount` files and
-    // folders in all, or the file at which they pass `maxBytes`, which git would take too long
-    // over; and any file git ignores. All but the last are found without git, so git reads nothing
-    // before the files have been counted and weighed.
+    // as a link; any name starting with `.`, such as a `.gitignore` or a nested `.git`; a file the
+    // runner can't read, or a folder it can't read and search, or a path longer than the system
+    // takes, which git would pass over or fail on; a file with more than one name, which git would
+    // record as two; the name at which the entries pass `maxCount` files and folders in all, or the
+    // file at which they pass `maxBytes`, which git would take too long over; and any file git
+    // ignores. All but the last are found without git, so git reads nothing before the files have
+    // been counted and weighed.
     async unexpectedFile(given = entries, { maxBytes = limits.AGENT_FILES_MAX_BYTES, maxCount = limits.AGENT_FILES_MAX_COUNT } = {}) {
       const paths = given.map(pathOf)
       const found = findUnexpected(dir, given, { maxBytes, maxCount })
