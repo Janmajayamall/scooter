@@ -543,9 +543,10 @@ test('git: the clean-up sets the folders aside and puts back the last commit, wh
   fs.rmSync(file('views'), { recursive: true })
   fs.symlinkSync('/etc', file('views'))
   const discarded = paths.agentDiscarded('lifelog')
-  fs.mkdirSync(path.join(discarded, 'views-1', 'locked'), { recursive: true })
-  fs.writeFileSync(path.join(discarded, 'views-1', 'locked', 'x.csv'), 'x')
-  fs.chmodSync(path.join(discarded, 'views-1', 'locked'), 0o000)
+  // What is set aside is named by a number, which the next set aside then passes.
+  fs.mkdirSync(path.join(discarded, '1', 'locked'), { recursive: true })
+  fs.writeFileSync(path.join(discarded, '1', 'locked', 'x.csv'), 'x')
+  fs.chmodSync(path.join(discarded, '1', 'locked'), 0o000)
 
   await agentGit.discardChanges()
   assert.equal(fs.lstatSync(file('views')).isDirectory(), true)
@@ -666,7 +667,7 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   assert.equal(fs.existsSync(path.join(dir, 'sessions', `${id}.jsonl`)), false)
 })
 
-test('memory: read without following a link, only from a regular file, and at most MEMORY_MAX_BYTES', t => {
+test('memory: read without following a link, only from a regular file, at most MEMORY_MAX_BYTES, and none through a file', t => {
   const root = makeTestDir(t)
   const file = name => path.join(root, name)
   assert.equal(readMemoryFile(file('missing.md')), null)
@@ -682,6 +683,8 @@ test('memory: read without following a link, only from a regular file, and at mo
   assert.deepEqual(readMemoryFile(file('fifo.md')), { text: '(not a regular file, so not read)', cut: false })
   fs.mkdirSync(file('folder.md'))
   assert.deepEqual(readMemoryFile(file('folder.md')), { text: '(not a regular file, so not read)', cut: false })
+  // The memory folder is a file, which writes may name as one: there is no memory file in it.
+  assert.equal(readMemoryFile(file('plain.md/preferences.md')), null)
 
   // Too long: cut, without splitting a character, and the prompt says so.
   fs.writeFileSync(file('long.md'), `${'a'.repeat(64 * 1024 - 1)}€ and more`)
@@ -763,24 +766,117 @@ test('git: with nothing in the repository, nothing is staged or committed, and g
   assert.equal(fs.readFileSync(path.join(dir, 'stray.txt'), 'utf8'), 'x\n')
 })
 
-test('git: a folder where writes names a file, as a change of writes can leave one committed, is walked as a folder, and never stops the clean-up', async t => {
-  const { dir, paths, log, clock } = setup(t)
-  const folderGit = createGit({ proc: createProc({ log, clock }), dir, entries: ['views/'], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+test('git: an entry in the other shape than writes gives it, as a change of writes can leave one committed, is unexpected, left out by the clean-up, and its removal committed by the next run', async t => {
+  const { dir, paths, log, clock, events } = setup(t)
+  const gitFor = entries => createGit({ proc: createProc({ log, clock }), dir, entries, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const folderGit = gitFor(['views/', 'notes.md'])
   await ensureAgentDir({ paths, name: 'lifelog', git: folderGit, log })
   await folderGit.discardChanges()
   fs.mkdirSync(path.join(dir, 'views', 'books.csv'))
   fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'old.csv'), 'old\n')
+  fs.writeFileSync(path.join(dir, 'notes.md'), 'a note\n')
   assert.equal(await folderGit.stage(), null)
   assert.equal(await folderGit.commitStaged('lifelog: #1'), true)
 
-  // writes now names views/books.csv as a file.
-  const fileGit = createGit({ proc: createProc({ log, clock }), dir, entries: ['views/books.csv'], discardDir: paths.agentDiscarded('lifelog'), log, clock })
-  fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'new.csv'), 'new\n')
-  assert.equal(await fileGit.unexpectedFile(), null)
+  // writes now names views/books.csv as a file, and notes.md as a folder: what the last commit
+  // has there is the other shape, which the VM could change neither way.
+  const fileGit = gitFor(['views/books.csv', 'notes.md/'])
+  assert.equal(await fileGit.unexpectedFile(), 'views/books.csv')
+  // A start's clean-up leaves both out, and makes the folder writes names.
   await fileGit.discardChanges()
-  assert.deepEqual(fs.readdirSync(path.join(dir, 'views', 'books.csv')), ['old.csv'])
-  fs.writeFileSync(path.join(dir, 'views', 'books.csv', 'new.csv'), 'new\n')
+  assert.equal(fs.existsSync(path.join(dir, 'views', 'books.csv')), false)
+  assert.equal(fs.lstatSync(path.join(dir, 'notes.md')).isDirectory(), true)
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'notes.md')), [])
+  assert.equal(await fileGit.unexpectedFile(), null)
+  assert.deepEqual(events().filter(event => event.startsWith('agent.entry')), [])
+
+  // The next run that passes commits the removal, with what it wrote in the new shape.
+  fs.writeFileSync(path.join(dir, 'views', 'books.csv'), 'title\n')
+  fs.writeFileSync(path.join(dir, 'notes.md', 'a.md'), 'a\n')
   assert.equal(await fileGit.stage(), null)
   assert.equal(await fileGit.commitStaged('lifelog: #2'), true)
-  assert.equal(git(dir, 'ls-files', 'views'), 'views/books.csv/new.csv\nviews/books.csv/old.csv\n')
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nnotes.md/a.md\nviews/books.csv\n')
+  await fileGit.discardChanges()
+  assert.equal(fs.readFileSync(path.join(dir, 'views', 'books.csv'), 'utf8'), 'title\n')
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'notes.md')), ['a.md'])
+
+  // With nothing written meanwhile, the removal alone is committed.
+  const back = gitFor(['views/', 'notes.md'])
+  await back.discardChanges()
+  assert.equal(fs.existsSync(path.join(dir, 'notes.md')), false)
+  assert.equal(await back.stage(), null)
+  assert.equal(await back.commitStaged('lifelog: #3'), true)
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nviews/books.csv\n')
+})
+
+test('git: an entry with a file on its way, as a change of writes can leave one, is passed over by the check, staging and the clean-up, which say so, and stops nothing', async t => {
+  const { dir, paths, log, clock, events, entries: logged } = setup(t)
+  const gitFor = entries => createGit({ proc: createProc({ log, clock }), dir, entries, discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  const before = gitFor(['notes/'])
+  await ensureAgentDir({ paths, name: 'lifelog', git: before, log })
+  await before.discardChanges()
+  fs.writeFileSync(path.join(dir, 'notes', '2026'), 'a file\n')
+  assert.equal(await before.stage(), null)
+  assert.equal(await before.commitStaged('lifelog: #1'), true)
+
+  // writes now names a file and a folder under notes/2026, which is a file; and a file under one
+  // that was never committed.
+  fs.writeFileSync(path.join(dir, 'loose'), 'never committed\n')
+  const after = gitFor(['notes/2026/books.csv', 'notes/2026/books/', 'loose/a.md'])
+  for (let n = 0; n < 2; n++) {
+    await after.discardChanges()
+    assert.equal(await after.unexpectedFile(), null)
+    assert.equal(await after.stage(), null)
+    assert.equal(await after.commitStaged('lifelog: #2'), false)
+  }
+  // The files in the way are left as they are: they aren't the entries'.
+  assert.equal(fs.readFileSync(path.join(dir, 'notes', '2026'), 'utf8'), 'a file\n')
+  assert.equal(fs.readFileSync(path.join(dir, 'loose'), 'utf8'), 'never committed\n')
+  assert.equal(git(dir, 'ls-files'), '.gitignore\nnotes/2026\n')
+  assert.deepEqual(
+    logged.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry),
+    ['notes/2026/books.csv', 'notes/2026/books', 'loose/a.md', 'notes/2026/books.csv', 'notes/2026/books', 'loose/a.md'],
+  )
+  assert.ok(events().includes('agent.entry_blocked'))
+
+  // Once the file in the way is gone, the entry is made as any other.
+  fs.rmSync(path.join(dir, 'notes', '2026'))
+  await after.discardChanges()
+  assert.equal(fs.lstatSync(path.join(dir, 'notes', '2026', 'books')).isDirectory(), true)
+})
+
+test('git: what the clean-up sets aside is named by a number, so an entry whose name is as long as the system takes is set aside too', async t => {
+  const { dir, paths, log, clock } = setup(t)
+  const long = 'a'.repeat(255)
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries: [`${long}/`, `b${'b'.repeat(254)}`], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  await ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+  await agentGit.discardChanges()
+  for (let n = 0; n < 2; n++) {
+    fs.writeFileSync(path.join(dir, long, 'x.md'), 'x\n')
+    fs.writeFileSync(path.join(dir, 'b'.repeat(255)), 'x\n')
+    await agentGit.discardChanges()
+    assert.deepEqual(fs.readdirSync(path.join(dir, long)), [])
+    assert.equal(fs.existsSync(path.join(dir, 'b'.repeat(255))), false)
+  }
+})
+
+test('git: the limits count a file of writes as a name, and weigh it, with what the folders hold', async t => {
+  const { dir, paths, log, clock } = setup(t)
+  const agentGit = createGit({ proc: createProc({ log, clock }), dir, entries: ['a.md', 'views/', 'b.md'], discardDir: paths.agentDiscarded('lifelog'), log, clock })
+  await ensureAgentDir({ paths, name: 'lifelog', git: agentGit, log })
+  await agentGit.discardChanges()
+  // Two files of writes, each of 10 bytes, and a folder of writes with two files of 10 bytes: four
+  // names, the folder of writes itself not among them, of 40 bytes in all, counted in the order
+  // writes gives them, and a folder's names in the order the folder gives them.
+  for (const name of ['a.md', 'b.md', 'views/x.csv', 'views/y.csv']) fs.writeFileSync(path.join(dir, name), '123456789\n')
+  const found = limits => agentGit.unexpectedFile(undefined, limits)
+  assert.equal(await found({ maxCount: 4, maxBytes: 40 }), null)
+  assert.equal(await found({ maxCount: 0, maxBytes: 40 }), 'a.md')
+  assert.match(await found({ maxCount: 1, maxBytes: 40 }), /^views\/[xy]\.csv$/)
+  assert.match(await found({ maxCount: 2, maxBytes: 40 }), /^views\/[xy]\.csv$/)
+  assert.equal(await found({ maxCount: 3, maxBytes: 40 }), 'b.md')
+  // The sizes are added in name order.
+  assert.equal(await found({ maxCount: 4, maxBytes: 9 }), 'a.md')
+  assert.equal(await found({ maxCount: 4, maxBytes: 25 }), 'views/y.csv')
+  assert.equal(await found({ maxCount: 4, maxBytes: 39 }), 'b.md')
 })

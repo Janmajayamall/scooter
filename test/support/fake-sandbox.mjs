@@ -4,8 +4,9 @@
 // It takes the same spec as the real sandbox (`src/runner/sandbox/index.mjs`) and checks it. For
 // each run it makes a folder that stands for the VM's root, and puts each path the spec's `files`
 // shows at its path there: a link to the host's file or folder, or, for a folder that holds a
-// hidden path, a folder of links to everything in it but that. So, as in the VM, the agent's
-// `sessions/` isn't there at all. What it doesn't do is keep the stub from changing what `writes`
+// hidden path, a folder of links to everything in it but that, with a link to where each path of
+// `writes` in it that isn't there yet would be. So, as in the VM, the agent's `sessions/` isn't
+// there at all, and what the stub makes where `writes` names reaches the host. What it doesn't do is keep the stub from changing what `writes`
 // doesn't name: it gives the stub the run's `writes` (`PI_STUB_WRITES`), and the stub writes only
 // there, as the VM would let it, noting each write it leaves out. The real VM's tests show the
 // sandbox holding pi to them (`test/tools/vm.test.mjs`, `test/sandbox.test.mjs`).
@@ -46,6 +47,33 @@ function layOut(root, files) {
     const target = path.join(root, entry)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     place(entry, target)
+  }
+  // A path of `writes` that isn't there yet, in a folder laid out as links, which holds only what
+  // was there: a link to where it would be on the host, so what the stub makes there reaches the
+  // host, as in the VM.
+  const own = fs.realpathSync(root)
+  for (const write of files.writes) {
+    const target = path.join(root, write.path)
+    if (files.hide.some(hidden => isIn(write.path, hidden)) || lstatOrNull(target) !== null) continue
+    // Only in a folder of the fake VM's own: one reached through a link is the host's.
+    const folder = realpathOrNull(path.dirname(target))
+    if (folder !== null && isIn(folder, own)) fs.symlinkSync(write.path, target)
+  }
+}
+
+function lstatOrNull(target) {
+  try {
+    return fs.lstatSync(target)
+  } catch {
+    return null
+  }
+}
+
+function realpathOrNull(target) {
+  try {
+    return fs.realpathSync(target)
+  } catch {
+    return null
   }
 }
 

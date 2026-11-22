@@ -284,6 +284,13 @@ test('config: reads and writes name paths of the data folder, of any kind, and w
     ['agents/lifelog//views/', /must be a path in the data folder/],
     ['./agents/lifelog/views/', /must be a path in the data folder/],
     ['agents\\\\lifelog', /must be a path in the data folder/],
+    // Where the clean-up sets aside what it throws away, beside the agent's folder.
+    ['agents/.discarded/', /is agents\/.discarded\/, which the agent can't write: the runner sets aside there what a clean-up throws away, and removes it/],
+    ['agents/.discarded/lifelog/', /which the agent can't write: the runner sets aside there/],
+    ['agents/.discarded', /which the agent can't write: the runner sets aside there/],
+    // A name no file system takes, which the runner couldn't make.
+    [`agents/lifelog/${'a'.repeat(256)}/`, /has a name of 256 bytes, where a file system takes 255 at most/],
+    [`agents/lifelog/views/${'é'.repeat(128)}.csv`, /has a name of 260 bytes, where a file system takes 255 at most/],
   ]) {
     const problems = faults(change(base, 'writes', `["${write}"]`))
     const problem = problems.find(candidate => candidate.field === 'agents.lifelog.writes[0]')
@@ -291,6 +298,9 @@ test('config: reads and writes name paths of the data folder, of any kind, and w
     assert.match(problem.message, message, write)
   }
   assert.match(faults(change(base, 'writes', '[42]')).find(problem => problem.field === 'agents.lifelog.writes[0]').message, /must be a path in the data folder/)
+  // A name of 255 bytes is the longest a file system takes; reads is held to the same.
+  assert.deepEqual(parse(change(base, 'writes', `[agents/lifelog/${'a'.repeat(255)}/]`)).agents[0].repository, [`${'a'.repeat(255)}/`])
+  assert.match(faults(change(base, 'reads', `[${'a'.repeat(256)}.md]`))[0].message, /agents\.lifelog\.reads\[0\] has a name of 259 bytes/)
   // reads may name the runner's own, which the VM then sees, but for sessions/, which it never does.
   assert.deepEqual(parse(change(base, 'reads', '[agents/, runner/]')).agents[0].reads, ['agents/', 'runner/'])
   assert.match(faults(change(base, 'reads', '[../etc/]'))[0].message, /agents\.lifelog\.reads\[0\] must be a path in the data folder, such as datastore\//)
@@ -443,7 +453,7 @@ test('config: no prompt or skill lies inside another skill\'s folder, where thei
   assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people'])
 })
 
-test('config: loadConfig reads agents.yaml from the config folder, and names it when it can\'t', t => {
+test('config: loadConfig reads agents.yaml from the config folder, names it when it can\'t, and holds paths to what the system takes in the data folder', t => {
   const { root, configDir } = setup(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir })
   assert.equal(loadConfig({ paths }).agents[0].name, 'lifelog')
@@ -451,4 +461,13 @@ test('config: loadConfig reads agents.yaml from the config folder, and names it 
   assert.throws(() => loadConfig({ paths }), error => error instanceof ConfigError && error.message === `${paths.agentsYaml} can't be read (ENOENT)`)
   fs.writeFileSync(paths.agentsYaml, change(exampleYaml(), 'session', 'weekly'))
   assert.throws(() => loadConfig({ paths }), error => error.message.startsWith(`${paths.agentsYaml}, line `))
+
+  // A path of reads or writes that, in the data folder, would pass what the system takes as a
+  // path: the runner couldn't make it.
+  const deep = Array.from({ length: 17 }, () => 'a'.repeat(250)).join('/')
+  fs.writeFileSync(paths.agentsYaml, change(exampleYaml(), 'writes', `[agents/lifelog/views/, agents/lifelog/${deep}/]`))
+  assert.throws(
+    () => loadConfig({ paths }),
+    error => error instanceof ConfigError && error.problems.length === 1 && /agents\.lifelog\.writes\[1\] makes, in the data folder, a path of more than 4095 bytes, which the system doesn't take/.test(error.message),
+  )
 })

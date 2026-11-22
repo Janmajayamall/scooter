@@ -48,6 +48,16 @@ export const TRIGGER_KINDS = ['on', 'at', 'backfill']
 // which can't be the folder that holds them.
 export const RUNNER_NAMES = ['state.json', 'sessions', 'run']
 
+// Where a clean-up sets aside what it throws away, beside the agents' folders
+// (`paths.agentDiscarded`): the runner's own, which `writes` can't name either.
+const DISCARDED = 'agents/.discarded'
+
+// Linux's limits on a name and on a path, in bytes, not tuning numbers: a path of `reads` or
+// `writes` with a longer name names nothing, and the runner, which makes the folders of `writes`,
+// couldn't make one.
+const NAME_MAX_BYTES = 255
+const PATH_MAX_BYTES = 4095
+
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
 // A backfill's ID goes into session names, commit messages and the state.
 const BACKFILL_ID = /^[a-z0-9][a-z0-9-]*$/
@@ -115,7 +125,8 @@ function isInside(dir, target) {
 }
 
 // Reads the text of `agents.yaml`. `configDir` is the config folder that its paths are relative
-// to, and `file` names the file in messages. Returns the configuration:
+// to, `dataDir`, when given, the data folder, against whose path a path of `reads` and `writes` is
+// measured, and `file` names the file in messages. Returns the configuration:
 //
 //   { agents: [agent] }
 //
@@ -132,7 +143,7 @@ function isInside(dir, target) {
 // the agent's repository keeps (`repositoryPaths`). `channels` is every channel the triggers for
 // new messages name, in order. `schedule` is what `parseLocalTime` returns. Throws a `ConfigError`
 // that lists every fault.
-export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
+export function parseConfig(text, { configDir, dataDir = null, file = 'agents.yaml' }) {
   const problems = []
   const lineCounter = new LineCounter()
   const doc = parseDocument(text, { version: '1.2', schema: 'core', uniqueKeys: true, prettyErrors: true, lineCounter })
@@ -250,9 +261,13 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
     value.forEach((item, n) => {
       const entry = dataPath(item)
       const twice = entry === null ? -1 : found.findIndex(other => other !== null && bare(other) === bare(entry))
+      const long = entry === null ? undefined : bare(entry).split('/').find(part => Buffer.byteLength(part) > NAME_MAX_BYTES)
+      const tooDeep = entry !== null && dataDir !== null && Buffer.byteLength(path.join(dataDir, entry)) > PATH_MAX_BYTES
       if (entry === null) fault([...parts, n], `must be a path in the data folder, such as ${example}: relative to it, without a ., .. or empty part, and a folder ending in /`)
       else if (twice !== -1) fault([...parts, n], `is ${entry}, which ${parts.at(-1)}[${twice}] names too`)
-      found.push(entry === null || twice !== -1 ? null : entry)
+      else if (long !== undefined) fault([...parts, n], `has a name of ${Buffer.byteLength(long)} bytes, where a file system takes ${NAME_MAX_BYTES} at most`)
+      else if (tooDeep) fault([...parts, n], `makes, in the data folder, a path of more than ${PATH_MAX_BYTES} bytes, which the system doesn't take`)
+      found.push(entry === null || twice !== -1 || long !== undefined || tooDeep ? null : entry)
     })
     found.forEach((entry, n) => {
       const file = entry === null ? undefined : found.find(other => other !== null && !isFolder(other) && bare(entry).startsWith(`${other}/`))
@@ -354,6 +369,10 @@ export function parseConfig(text, { configDir, file = 'agents.yaml' }) {
       // be moved, with everything in it.
       if (bare(write) === own || own.startsWith(`${bare(write)}/`)) {
         fault(where, `is ${write}, which holds ${own}/, the agent's folder, where the runner keeps its state, its repository, run/ and the sessions: name what the agent may write in it, such as ${own}/views/`)
+        return
+      }
+      if (bare(write) === DISCARDED || write.startsWith(`${DISCARDED}/`)) {
+        fault(where, `is ${write}, which the agent can't write: the runner sets aside there what a clean-up throws away, and removes it`)
         return
       }
       if (!write.startsWith(`${own}/`)) return
@@ -549,5 +568,5 @@ export function loadConfig({ paths }) {
   } catch (error) {
     throw new ConfigError([{ field: null, line: null, message: `${paths.agentsYaml} can't be read (${error.code ?? error.name})` }])
   }
-  return parseConfig(text, { configDir: paths.configDir, file: paths.agentsYaml })
+  return parseConfig(text, { configDir: paths.configDir, dataDir: paths.dataDir, file: paths.agentsYaml })
 }

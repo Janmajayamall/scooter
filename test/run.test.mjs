@@ -10,8 +10,8 @@ import { overrideLimits } from '../src/common/limits.mjs'
 import { readLock } from '../src/common/locks.mjs'
 import { actFull, holds } from './support/full-disk.mjs'
 import { skipIfRoot } from './support/root.mjs'
-import { exampleYaml, fillerLines, line } from './support/runner.mjs'
-import { KEY, MINUTE, SECOND, openTestRunner } from './support/test-runner.mjs'
+import { exampleYaml, fillerLines, line, writeConfig } from './support/runner.mjs'
+import { KEY, MINUTE, SECOND, openTestRunner, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
@@ -540,6 +540,79 @@ test('run: a file writes names, made a link, removed, or given a second name, fa
   await clock.advance(MINUTE)
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
   assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+})
+
+test('run: writes naming memory as a file, which a run makes, and then memory/ as a folder, never stop the runner, which reads no memory through a file', async t => {
+  // memory as a file: what writes gives with the / of the default left out.
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/memory]'),
+  })
+  const { runner, clock, add, git, paths, state, sandbox, entries } = await startTestRunner(t, prepared)
+  const memory = path.join(paths.agentDir('lifelog'), 'memory')
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'remember FILEWRITE'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(fs.readFileSync(memory, 'utf8'), '1042\n')
+  assert.equal(git('ls-files', 'memory'), 'memory\n')
+
+  // The next run reads no memory file through it, and goes on.
+  add(line.text(1043, '2026-11-09T15:51:00Z', 'coffee'))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.match(sandbox.seen().at(-1).systemPrompt, /## memory\/preferences\.md\n\n\(empty\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/)
+  assert.deepEqual(state().retry, [])
+  assert.equal(state().cursor, 1043)
+
+  // writes now names memory/ as a folder again, with memory a file in the last commit: the start
+  // leaves the file out and makes the folder, the runs go on, and the next commit records it.
+  runner.close()
+  writeConfig(paths.configDir, { yaml: exampleYaml() })
+  const restarted = await startTestRunner(t, prepared)
+  assert.equal(fs.lstatSync(memory).isDirectory(), true)
+  restarted.add(line.text(1044, '2026-11-09T15:52:00Z', 'tea MEMORY'))
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runNext(restarted.runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(git('ls-files', 'memory'), 'memory/preferences.md\n')
+  assert.equal(git('show', '--format=%s', '--name-status', 'HEAD'), 'lifelog: #1044\n\nD\tmemory\nA\tmemory/preferences.md\nM\tviews/notes.csv\n')
+  assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
+  assert.equal(restarted.state().cursor, 1044)
+  assert.deepEqual(entries.filter(entry => entry.level === 'error'), [])
+})
+
+test('run: a file left on the way to what writes names, after writes changed, is passed over at the start and by every run, and logged', async t => {
+  const prepared = prepareTestRunner(t, {
+    lines: fillerLines(1041),
+    state: HANDLED,
+    start: START,
+    yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/]'),
+  })
+  const { runner, clock, add, git, paths } = await startTestRunner(t, prepared)
+  const notes = path.join(paths.agentDir('lifelog'), 'notes')
+  // What a run of this writes may leave, and commit: a file in notes/.
+  fs.writeFileSync(path.join(notes, '2026'), 'a file\n')
+  add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee'))
+  assert.deepEqual((await runNext(runner, clock)).outcome, { ok: true, cause: null })
+  assert.equal(git('ls-files', 'notes'), 'notes/2026\n')
+
+  // writes now names a file and a folder under notes/2026, which is that file.
+  runner.close()
+  writeConfig(paths.configDir, { yaml: exampleYaml().replace(/writes: \[.*\]/, 'writes: [agents/lifelog/views/, agents/lifelog/notes/2026/books.csv, agents/lifelog/notes/2026/books/]') })
+  const restarted = await startTestRunner(t, prepared)
+  for (const [seq, text] of [[1043, 'tea'], [1044, 'cake CRASH']]) {
+    restarted.add(line.text(seq, `2026-11-09T15:5${seq - 1042}:00Z`, text))
+    await clock.advance(MINUTE)
+    await runNext(restarted.runner, clock)
+  }
+  assert.equal(restarted.state().cursor, 1044)
+  assert.equal(restarted.state().retry[0].seq, 1044)
+  assert.equal(fs.readFileSync(path.join(notes, '2026'), 'utf8'), 'a file\n')
+  // The start's clean-up, and the failed run's, each say which entries they passed over.
+  assert.deepEqual(
+    prepared.entries.filter(entry => entry.event === 'agent.entry_blocked').map(entry => entry.entry),
+    ['notes/2026/books.csv', 'notes/2026/books', 'notes/2026/books.csv', 'notes/2026/books'],
+  )
 })
 
 test('run: confirm mode sends the text and no reactions; sends: [] sends nothing', async t => {

@@ -196,6 +196,27 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
 })
 
+test('rebuild: it empties what writes names in whatever shape it finds, and passes over an entry with a file on its way', async t => {
+  const prepared = await prepare(t)
+  const { paths } = prepared
+  const agent = paths.agentDir('lifelog')
+  // writes names, besides, a file and a folder under notes, which is a file a change of writes
+  // left, as the backfills' files need their own; and a file that is there.
+  fs.writeFileSync(path.join(agent, 'notes'), 'in the way\n')
+  fs.writeFileSync(path.join(agent, 'todo.md'), '- a\n')
+  gitOf(paths, 'add', '--', 'notes', 'todo.md')
+  commitByHand(paths, 'lifelog: by hand')
+  const yaml = rebuildYaml().replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog/views/, agents/lifelog/memory/, agents/lifelog/notes/a.md, agents/lifelog/notes/b/, agents/lifelog/todo.md]')
+  fs.writeFileSync(paths.agentsYaml, yaml)
+  const { done } = startRebuild(prepared)
+  const result = await drive(prepared, done)
+  assert.equal(result.stopped, false)
+  assert.equal(fs.readFileSync(path.join(agent, 'notes'), 'utf8'), 'in the way\n')
+  // The file of writes was emptied away, and that committed.
+  assert.equal(fs.existsSync(path.join(agent, 'todo.md')), false)
+  assert.equal(gitOf(paths, 'ls-files', 'todo.md', 'notes'), 'notes\n')
+})
+
 test("rebuild: it doesn't start while a runner runs or run.lock is there, and nothing of the runner's starts while it runs", async t => {
   const prepared = await prepare(t)
   const { paths, sandbox, settings, clock, log, proc } = prepared

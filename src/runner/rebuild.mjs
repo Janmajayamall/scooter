@@ -47,7 +47,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { createIds, emptyFolder } from '../common/files.mjs'
+import { createIds, emptyFolder, removeTree } from '../common/files.mjs'
 import { initialAgentState } from '../common/agentstate.mjs'
 import { limits } from '../common/limits.mjs'
 import { lockExists, releaseLock } from '../common/locks.mjs'
@@ -206,10 +206,16 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
       log.info('rebuild.started', { agent: agent.name, until, tag, accel: sandbox.accel })
       say(`Rebuilding ${agent.name} from the datastore, up to #${until}. The last commit before the rebuild is tagged ${tag}.`)
       if (sandbox.accel === 'emulation') say("pi's VMs run under emulation here, because KVM isn't available, so each batch takes much longer.")
+      // Whatever is there: the start's clean-up left each entry in the shape it has, or nothing,
+      // also where a file lies on its way, which stage passes over too.
       for (const entry of agent.repository) {
         const full = path.join(paths.agentDir(agent.name), entry)
-        if (entry.endsWith('/')) emptyFolder(full)
-        else fs.rmSync(full, { force: true })
+        try {
+          if (entry.endsWith('/') && fs.lstatSync(full).isDirectory()) emptyFolder(full)
+          else removeTree(full)
+        } catch (error) {
+          if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error
+        }
       }
       emptyFolder(paths.agentSessions(agent.name))
       const refused = await git.stage()

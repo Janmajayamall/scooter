@@ -67,8 +67,9 @@
 // | `REPLYTO=<seq>`        |                        | replies to that number                             |
 // | `LONGANSWER`           |                        | starts its answer with 64 KB of text               |
 // | `FILELINK`, `FILEGONE`,|                        | of the first file its writes name in the agent's   |
-// | `FILEHARD`             |                        | folder: makes it a link, removes it, or gives it a |
-// |                        |                        | second name in the first folder they name there    |
+// | `FILEWRITE`,           |                        | folder: makes it a link, removes it, adds a line   |
+// | `FILEHARD`             |                        | of the batch's numbers to it, or gives it a second |
+// |                        |                        | name in the first folder they name there           |
 // | `SHARED`               |                        | writes `shared.txt` in the first folder its writes |
 // |                        |                        | name outside the agent's folder                    |
 //
@@ -138,6 +139,13 @@ const everything = [...items.map(item => item.text), task].join('\n')
 // it holds. Otherwise the VM refuses the write, which is noted.
 const mayWrite = guest => WRITES.some(write => guest === write.path || (write.folder && guest.startsWith(`${write.path}/`)))
 const refuse = guest => fs.appendFileSync(path.join(CONTROL, 'refused.txt'), `${guest}\n`)
+const readlinkOrNull = file => {
+  try {
+    return fs.readlinkSync(file)
+  } catch {
+    return null
+  }
+}
 const guestOf = file => `/${path.relative(ROOT, file)}`
 
 // A backfill's batch, and the CSV file it files in.
@@ -317,14 +325,18 @@ function act() {
   // it a second name in a folder they name.
   const entryFile = WRITES.find(write => !write.folder && write.path.startsWith(`${guestCwd}/`))?.path
   const entryFolder = WRITES.find(write => write.folder && write.path.startsWith(`${guestCwd}/`) && !write.path.startsWith(`${guestCwd}/run/`))?.path
+  // The file itself, which the fake sandbox can have put at its path as a link to the host's, in a
+  // folder of its own: acting on the name acts on the host's, as in the VM.
+  const fileName = entryFile && (readlinkOrNull(inVm(entryFile)) === entryFile ? entryFile : inVm(entryFile))
   if (has('FILELINK') && entryFile) {
-    fs.rmSync(inVm(entryFile), { force: true })
-    fs.symlinkSync('/etc/hostname', inVm(entryFile))
+    fs.rmSync(fileName, { force: true })
+    fs.symlinkSync('/etc/hostname', fileName)
   }
-  if (has('FILEGONE') && entryFile) fs.rmSync(inVm(entryFile), { force: true })
+  if (has('FILEGONE') && entryFile) fs.rmSync(fileName, { force: true })
+  if (has('FILEWRITE') && entryFile) fs.appendFileSync(fileName, `${items.map(item => item.seq).join(' ')}\n`)
   if (has('FILEHARD') && entryFile && entryFolder) {
-    if (!fs.existsSync(inVm(entryFile))) fs.writeFileSync(inVm(entryFile), 'x\n')
-    fs.linkSync(inVm(entryFile), inVm(`${entryFolder}/second-name`))
+    if (!fs.existsSync(fileName)) fs.writeFileSync(fileName, 'x\n')
+    fs.linkSync(fileName, inVm(`${entryFolder}/second-name`))
   }
   // A file in the first folder the run's writes name outside the agent's folder.
   const shared = WRITES.find(write => write.folder && !write.path.startsWith(`${guestCwd}/`))?.path
