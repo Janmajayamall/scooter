@@ -151,6 +151,37 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   assert.deepEqual(seen.env, env)
 })
 
+test("run: the agent finds show on its PATH, and it prints the batch's lines from the run's index file, in the owner's time", async t => {
+  const { runner, clock, sandbox, paths, state } = await openWith(t, [line.text(1042, '2026-11-09T15:44:00Z', 'coffee 120'), line.edit(1043, '2026-11-09T15:50:00Z', 1042, 'coffee 150 SHOW')])
+  const { outcome } = await runNext(runner, clock)
+  assert.deepEqual(outcome, { ok: true, cause: null })
+  const [seen] = sandbox.seen()
+  assert.equal(seen.show.folder, paths.agentRunBin('lifelog'))
+  assert.equal(seen.show.code, 0, seen.show.stderr)
+  const log = paths.dayLog('2026/11/09')
+  const stored = fs.readFileSync(log, 'utf8').split('\n')
+  assert.equal(
+    seen.show.stdout,
+    [
+      `1042  Mon 9 Nov 2026 21:14  ${log}:1`,
+      stored[0],
+      '',
+      `1043  Mon 9 Nov 2026 21:20  ${log}:2`,
+      stored[1],
+      `  points at 1042  Mon 9 Nov 2026 21:14  ${log}:1`,
+      `  ${stored[0]}`,
+      '',
+    ].join('\n'),
+  )
+  // The index file holds every line the runner had read, the 1,041 of filler among them.
+  const index = fs.readFileSync(paths.agentRunIndex('lifelog'), 'utf8').split('\n')
+  assert.equal(index.length, 1044)
+  assert.equal(index[1042], `1043 ${log}:2 edit 1042`)
+  // The run is what it was without show: both items reported, the cursor past them.
+  assert.equal(state().cursor, 1043)
+  assert.deepEqual(state().retry, [])
+})
+
 test('run: with internet access on, the policy and the prompt say so', async t => {
   const { runner, clock, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')], { settings: { agentInternet: true, zdr: false } })
   await runNext(runner, clock)

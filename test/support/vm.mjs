@@ -163,10 +163,12 @@ export function designFiles(data) {
   return piFiles(paths, { name: 'lifelog', reads: ['datastore/', 'agents/lifelog/'], writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'] })
 }
 
-// pi's environment, as the runner gives it (`piEnv`), with the key's placeholder.
-export function piEnv(vm, { tz = 'Asia/Kolkata' } = {}) {
+// pi's environment, as the runner gives it (`piEnv`), with the key's placeholder. `bin` is the run's
+// folder of the programs that ship with the runner, which the runner puts first on the `PATH`; the
+// tests that don't run them leave it out.
+export function piEnv(vm, { tz = 'Asia/Kolkata', bin } = {}) {
   return {
-    PATH: GUEST_PATH,
+    PATH: bin ? `${bin}:${GUEST_PATH}` : GUEST_PATH,
     HOME: '/root',
     LANG: 'C.UTF-8',
     TZ: tz,

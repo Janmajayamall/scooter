@@ -5,12 +5,17 @@
 // built from config/image/build.json, so they are also what to run again after upgrading either.
 
 import assert from 'node:assert/strict'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { makePaths } from '../../src/common/paths.mjs'
+import { prepareRun } from '../../src/runner/agentdir.mjs'
+import { openDatastore } from '../../src/runner/datastore.mjs'
+import { piEnv as runnerPiEnv } from '../../src/runner/run.mjs'
 import { createFakeModel } from '../support/fake-model.mjs'
 import { pinnedPiVersion, readBuildFile } from '../support/image.mjs'
+import { line, writeDatastore } from '../support/runner.mjs'
 import { atEnd, makeTestDir } from '../support/tmp.mjs'
 import {
   FUSE_MOUNT,
@@ -20,10 +25,12 @@ import {
   designFiles,
   makeDataDir,
   onPath,
+  piEnv,
   runIn,
   runPi,
   sh,
   startVm,
+  toolResults,
   vmSkipReason,
 } from '../support/vm.mjs'
 
@@ -599,6 +606,105 @@ test("VM 4: killing the starting process's group leaves no QEMU; killing the pro
       assert.ok(fs.readdirSync(sessions).length > 0, "the VM's entry in Gondolin's list should be left behind")
     }
   }
+})
+
+test("VM 7: a program the runner copies into run/ runs by its name from the PATH it gives, and from pi's bash tool, read-only, and TZ gives it the owner's time", options, async t => {
+  const dir = makeTestDir(t)
+  const data = makeDataDir(dir)
+  const paths = makePaths({ dataDir: path.join(dir, 'data'), configDir: path.join(dir, 'config') })
+  // A datastore of its own, laid out as the bridge writes it: times on either side of the two
+  // changes of the clocks in London in 2026, a photo, and an edit of it at midnight in Kolkata.
+  fs.rmSync(paths.datastore, { recursive: true })
+  writeDatastore(paths, [
+    line.text(1, '2026-03-29T00:59:00Z', 'before the clocks go forward'),
+    line.text(2, '2026-03-29T01:00:00Z', 'after'),
+    line.text(3, '2026-10-25T00:59:00Z', 'before the clocks go back'),
+    line.text(4, '2026-10-25T01:00:00Z', 'after'),
+    line.text(5, '2026-11-09T15:43:00Z', 'lunch', { files: [{ path: '5.jpg', mime: 'image/jpeg', bytes: 1 }] }),
+    line.edit(6, '2026-11-09T18:30:00Z', 5, 'lunch with Sam'),
+  ])
+  const datastore = openDatastore({ paths })
+  datastore.poll()
+  fs.mkdirSync(path.join(paths.configDir, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
+  const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }
+  // `run/` as the runner makes it for a run.
+  prepareRun({ paths, agent, protocol: '', index: datastore.index })
+  const bin = paths.agentRunBin('lifelog')
+  const env = tz => ({ ...runnerPiEnv({ timeZone: tz, binDir: bin }), ...(tz === null ? { TZ: undefined } : {}) })
+  const log = day => paths.dayLog(day)
+  const kolkata = [
+    `6  Tue 10 Nov 2026 00:00  ${log('2026/11/09')}:2`,
+    fs.readFileSync(log('2026/11/09'), 'utf8').split('\n')[1],
+    `  points at 5  Mon 9 Nov 2026 21:13  ${log('2026/11/09')}:1`,
+    `  ${fs.readFileSync(log('2026/11/09'), 'utf8').split('\n')[0]}`,
+    `    file ${paths.dayDir('2026/11/09')}/5.jpg`,
+    '',
+  ].join('\n')
+
+  const model = createFakeModel([{ tool: 'bash', args: { command: 'show 6; echo "exit $?"; show 7; echo "exit $?"' } }, { text: 'DONE: 6' }])
+  const vm = await startVm(t, { model, files: designFiles(data) })
+  const inAgent = (argv, environment) => runIn(vm, argv, { cwd: data.agent, env: Object.fromEntries(Object.entries(environment).filter(([, value]) => value !== undefined)) })
+
+  // Node in the image runs the copy, a file without an extension in ES module syntax, as a module,
+  // and says nothing of it on stderr.
+  const node = await inAgent(['node', '--version'], { PATH: GUEST_PATH })
+  assert.match(node.stdout, /^v\d+\.\d+\.\d+\n$/)
+  const [major, minor] = node.stdout.slice(1).split('.').map(Number)
+  assert.ok(major > 22 || (major === 22 && minor >= 12), `Node ${node.stdout.trim()} doesn't run a file without an extension as a module by its syntax`)
+
+  // By its name, from the PATH the runner gives: by `env`, as the sandbox runs pi, and from a
+  // shell, as pi's bash tool runs a command. TZ gives the owner's time, across their midnight.
+  for (const argv of [['show', '6'], ['bash', '-c', 'show 6'], ['sh', '-c', 'cd /tmp && show 6']]) {
+    const shown = await inAgent(argv, env('Asia/Kolkata'))
+    assert.equal(shown.exitCode, 0, `${argv.join(' ')}: ${shown.stderr}`)
+    assert.equal(shown.stdout, kolkata, argv.join(' '))
+    assert.equal(shown.stderr, '', argv.join(' '))
+  }
+  // Across both changes of the clocks, in a zone that has them.
+  const london = await inAgent(['show', '1', '2', '3', '4'], env('Europe/London'))
+  assert.equal(london.exitCode, 0, london.stderr)
+  assert.deepEqual(
+    london.stdout.split('\n').filter(text => /^\d /.test(text)),
+    [
+      `1  Sun 29 Mar 2026 00:59  ${log('2026/03/29')}:1`,
+      `2  Sun 29 Mar 2026 02:00  ${log('2026/03/29')}:2`,
+      `3  Sun 25 Oct 2026 01:59  ${log('2026/10/25')}:1`,
+      `4  Sun 25 Oct 2026 01:00  ${log('2026/10/25')}:2`,
+    ],
+  )
+  // The same as the host prints, which the tests of `show` hold to the runner's own time code.
+  const host = spawnSync(process.execPath, [path.join(bin, 'show'), '1', '2', '3', '4'], { env: { TZ: 'Europe/London' }, encoding: 'utf8' })
+  assert.equal(london.stdout, host.stdout)
+  // Without TZ it prints no time in another zone: it stops.
+  const noZone = await inAgent(['show', '6'], env(null))
+  assert.equal(noZone.exitCode, 2)
+  assert.equal(noZone.stdout, '')
+  assert.match(noZone.stderr, /^show: TZ isn't set to a time zone/)
+
+  // The program and the index file are read-only in the VM, as the rest of `run/` is.
+  for (const command of [
+    `echo x > ${bin}/show`,
+    `rm ${bin}/show`,
+    `chmod 600 ${bin}/show`,
+    `mv ${bin}/show ${bin}/old`,
+    `echo x > ${bin}/send`,
+    `echo x >> ${paths.agentRunIndex('lifelog')}`,
+    `rm ${paths.agentRunIndex('lifelog')}`,
+  ]) {
+    const result = await sh(vm, command)
+    assert.notEqual(result.exitCode, 0, `${command} should fail`)
+    assert.match(result.stderr, READ_ONLY, command)
+  }
+  assert.equal(fs.readFileSync(path.join(bin, 'show'), 'utf8'), fs.readFileSync(new URL('../../src/runner/vm/bin/show.mjs', import.meta.url), 'utf8'))
+  assert.deepEqual(fs.readdirSync(bin), ['show'])
+
+  // From pi's bash tool, with the environment the runner gives pi.
+  const result = await runPi(vm, { prompt: 'show me 6' }, { cwd: data.agent, env: piEnv(vm, { bin }) })
+  assert.equal(result.exitCode, 0, result.stderr)
+  const [bash] = toolResults(model.modelRequests.at(-1).body)
+  assert.equal(bash.isError, false, bash.text)
+  assert.equal(bash.text, `${kolkata}exit 0\n7  no such line\nexit 1\n`)
 })
 
 const needsGit = { ...options, skip: options.skip || (onPath('git') ? false : 'git is not installed') }
