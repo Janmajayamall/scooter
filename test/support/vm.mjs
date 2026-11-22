@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { viewProvider } from '../../src/runner/sandbox/view.mjs'
 import { OPENROUTER_HOST } from './fake-model.mjs'
 import { atEnd } from './tmp.mjs'
 
@@ -17,9 +18,9 @@ import { atEnd } from './tmp.mjs'
 const cacheHome = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scooter-vm-'))
 process.env.XDG_CACHE_HOME = cacheHome
 process.on('exit', () => fs.rmSync(cacheHome, { recursive: true, force: true }))
-const { VM, RealFSProvider, ReadonlyProvider, ShadowProvider, createHttpHooks, createShadowPathPredicate } = await import(
-  '@earendil-works/gondolin'
-)
+// Gondolin's module, for the tests that build its providers themselves.
+export const gondolin = await import('@earendil-works/gondolin')
+const { VM, RealFSProvider, ReadonlyProvider, ShadowProvider, createHttpHooks, createShadowPathPredicate } = gondolin
 
 // Where Gondolin lists the VMs that are running.
 export const SESSIONS_DIR = path.join(cacheHome, 'gondolin', 'sessions')
@@ -74,18 +75,22 @@ export function onPath(program) {
 
 // Boots a VM and returns it, started. It is closed when the test ends.
 //
-// `mounts` maps a path in the VM to `{ host, writable, hide }`: a folder on the host, read-only
-// unless `writable` is true, without the paths listed in `hide`, which are given from the mount's
-// own root, such as `/sessions`. `model` is a fake model that answers pi's requests; without one
-// the VM can reach no host at all. `fuseMount` is Gondolin's own mount point; pass null for its
-// default. `startTimeoutMs` is how long to wait for the VM to boot.
-export async function startVm(t, { mounts = {}, model, fuseMount = FUSE_MOUNT, startTimeoutMs } = {}) {
+// `files` is a run's `files`, as the runner gives the sandbox (`src/runner/sandbox/index.mjs`):
+// its root is mounted through the sandbox's own providers (`view.mjs`), at its own path, or at
+// `at` when that is given. `mounts` maps a path in the VM to `{ host, writable, hide }`, for a test
+// that shows what Gondolin's own providers do: a folder on the host, read-only unless `writable`
+// is true, without the paths listed in `hide`, which are given from the mount's own root, such as
+// `/sessions`. `model` is a fake model that answers pi's requests; without one the VM can reach no
+// host at all. `fuseMount` is Gondolin's own mount point; pass null for its default.
+// `startTimeoutMs` is how long to wait for the VM to boot.
+export async function startVm(t, { files, at, mounts = {}, model, fuseMount = FUSE_MOUNT, startTimeoutMs } = {}) {
   const hooks = createHttpHooks({
     allowedHosts: model ? [OPENROUTER_HOST] : [],
     secrets: model ? { OPENROUTER_API_KEY: { hosts: [OPENROUTER_HOST], value: FAKE_KEY } } : {},
     onRequest: model ? request => model.handle(request) : undefined,
   })
   const providers = {}
+  if (files) providers[at ?? files.root] = viewProvider(gondolin, files, new RealFSProvider(files.root))
   for (const [guestPath, { host, writable = false, hide = [] }] of Object.entries(mounts)) {
     let provider = new RealFSProvider(host)
     if (hide.length > 0) provider = new ShadowProvider(provider, { shouldShadow: createShadowPathPredicate(hide) })

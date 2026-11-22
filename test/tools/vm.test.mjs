@@ -252,6 +252,178 @@ test("VM 1: with Gondolin's default mount point, mounts under /data keep the VM 
   await assert.rejects(start, /startup timed out/)
 })
 
+// Every name under `dir`, with its kind, mode, links and contents: what a refused change must
+// leave as it was.
+function snapshot(dir) {
+  const found = {}
+  const walk = (folder, relative) => {
+    for (const name of fs.readdirSync(folder).sort()) {
+      const full = path.join(folder, name)
+      const inner = relative === '' ? name : `${relative}/${name}`
+      const stat = fs.lstatSync(full)
+      const kind = stat.isDirectory() ? 'folder' : stat.isSymbolicLink() ? `link ${fs.readlinkSync(full)}` : stat.isFile() ? 'file' : 'other'
+      found[inner] = `${kind} ${(stat.mode & 0o7777).toString(8)} ${stat.nlink} ${stat.isFile() ? fs.readFileSync(full, 'utf8') : ''}`
+      if (stat.isDirectory()) walk(full, inner)
+    }
+  }
+  walk(dir, '')
+  return found
+}
+
+test("VM 6: the sandbox's provider lets the VM change what writes names, files as well as folders, and nothing else", options, async t => {
+  const dir = makeTestDir(t)
+  const root = path.join(dir, 'root')
+  for (const folder of ['allowed/sub', 'empty', 'ro/empty', 'ro/secret']) fs.mkdirSync(path.join(root, folder), { recursive: true })
+  for (const [file, text] of [
+    ['allowed/old.txt', 'old\n'],
+    ['ro/keep.txt', 'keep\n'],
+    ['ro/secret/hidden.txt', 'hidden\n'],
+    ['file.txt', 'file\n'],
+    ['ro-file.txt', 'ro\n'],
+    ['unnamed.txt', 'unnamed\n'],
+  ]) {
+    fs.writeFileSync(path.join(root, file), text)
+  }
+  const files = {
+    root,
+    reads: [`${root}/ro`, `${root}/ro-file.txt`],
+    writes: [
+      { path: `${root}/allowed`, folder: true },
+      { path: `${root}/empty`, folder: true },
+      { path: `${root}/file.txt`, folder: false },
+      { path: `${root}/new.txt`, folder: false },
+    ],
+    hide: [`${root}/ro/secret`],
+  }
+  const vm = await startVm(t, { files })
+  const run = command => sh(vm, `cd ${root} && ${command}`)
+
+  // The VM sees what reads and writes name, and the folders that lead there, and nothing else.
+  assert.equal((await run('ls')).stdout, 'allowed\nempty\nfile.txt\nro\nro-file.txt\n')
+  assert.equal((await run('ls ro')).stdout, 'empty\nkeep.txt\n')
+  for (const command of ['cat unnamed.txt', 'cat ro/secret/hidden.txt']) {
+    const result = await run(command)
+    assert.notEqual(result.exitCode, 0, command)
+    assert.match(result.stderr, NOT_THERE, command)
+  }
+
+  // Each change outside what writes names is refused with "Read-only file system", and the host is
+  // as it was. The VM goes on.
+  for (const command of [
+    'echo x > ro/keep.txt',
+    'echo x >> ro/keep.txt',
+    'echo x > ro/new.txt',
+    'echo x > ro-file.txt',
+    'echo x > beside.txt',
+    'echo x > new.txt.bak',
+    'echo x > allowed/../ro/keep.txt',
+    'mkdir ro/d',
+    'mkdir new.txt',
+    'rmdir ro/empty',
+    'rm ro/keep.txt',
+    'rm ro-file.txt',
+    'mv ro/keep.txt allowed/moved.txt',
+    'mv allowed/old.txt ro/moved.txt',
+    'mv allowed/old.txt ro-file.txt',
+    'mv allowed allowed-2',
+    'ln ro/keep.txt allowed/hard',
+    'ln allowed/old.txt ro/hard',
+    'ln -s keep.txt ro/link',
+    'chmod 600 ro/keep.txt',
+    'chmod 600 ro-file.txt',
+    'truncate -s 0 ro/keep.txt',
+    'truncate -s 0 ro-file.txt',
+  ]) {
+    const before = snapshot(root)
+    const result = await run(command)
+    assert.notEqual(result.exitCode, 0, `${command} should fail`)
+    assert.match(result.stderr, READ_ONLY, command)
+    assert.deepEqual(snapshot(root), before, command)
+  }
+
+  // A program in the VM is given EROFS, as pi's tools would be.
+  const refused = await runIn(vm, ['node', '-e', `try { require('fs').writeFileSync('${root}/ro/keep.txt', 'x') } catch (error) { process.stdout.write(error.code) }`], {
+    env: { PATH: GUEST_PATH },
+  })
+  assert.equal(refused.stdout, 'EROFS')
+
+  // A link made where the run may write leads nowhere else: the VM follows it itself.
+  assert.equal((await run('ln -s ../ro/keep.txt allowed/to-keep && ln -s ../ro allowed/to-ro')).exitCode, 0)
+  for (const command of ['echo x > allowed/to-keep', 'echo x > allowed/to-ro/new.txt', 'chmod 600 allowed/to-keep', 'ln allowed/to-keep allowed/hard']) {
+    const result = await run(command)
+    assert.notEqual(result.exitCode, 0, command)
+    assert.match(result.stderr, READ_ONLY, command)
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'ro', 'keep.txt'), 'utf8'), 'keep\n')
+  assert.deepEqual(fs.readdirSync(path.join(root, 'ro')).sort(), ['empty', 'keep.txt', 'secret'])
+
+  // Inside a folder writes names, every change is allowed.
+  for (const command of [
+    'echo a > allowed/a.txt',
+    'echo b >> allowed/a.txt',
+    'mkdir allowed/d',
+    'rmdir allowed/d',
+    'mv allowed/a.txt allowed/sub/a.txt',
+    'ln allowed/sub/a.txt allowed/hard',
+    'ln -s a.txt allowed/sub/link',
+    'chmod 640 allowed/hard',
+    'truncate -s 1 allowed/hard',
+    'rm allowed/hard',
+    'echo c > allowed//sub/../c.txt',
+  ]) {
+    const result = await run(command)
+    assert.equal(result.exitCode, 0, `${command}: ${result.stderr}`)
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'allowed', 'sub', 'a.txt'), 'utf8'), 'a')
+  assert.equal(fs.statSync(path.join(root, 'allowed', 'sub', 'a.txt')).mode & 0o777, 0o640)
+  assert.equal(fs.readlinkSync(path.join(root, 'allowed', 'sub', 'link')), 'a.txt')
+  assert.equal(fs.readFileSync(path.join(root, 'allowed', 'c.txt'), 'utf8'), 'c\n')
+
+  // Gondolin's file system has no `mknod`: a FIFO or a device can't be made, there either.
+  for (const command of ['mkfifo allowed/pipe', 'mknod allowed/null c 1 3']) {
+    const result = await run(command)
+    assert.notEqual(result.exitCode, 0, command)
+    assert.match(result.stderr, /Not supported/, command)
+  }
+  assert.equal(fs.existsSync(path.join(root, 'allowed', 'pipe')), false)
+
+  // A file writes names can be written, truncated, given a mode, moved away and back, removed and
+  // made again; and one that isn't there yet can be made, where nothing beside it can.
+  for (const command of [
+    'echo f > file.txt',
+    'truncate -s 1 file.txt',
+    'chmod 640 file.txt',
+    'mv file.txt allowed/file.txt',
+    'mv allowed/file.txt file.txt',
+    'rm file.txt',
+    'echo again > file.txt',
+    'echo made > new.txt',
+  ]) {
+    const result = await run(command)
+    assert.equal(result.exitCode, 0, `${command}: ${result.stderr}`)
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'file.txt'), 'utf8'), 'again\n')
+  assert.equal(fs.readFileSync(path.join(root, 'new.txt'), 'utf8'), 'made\n')
+  assert.equal(fs.existsSync(path.join(root, 'beside.txt')), false)
+
+  // A folder writes names can be removed and made again, and nothing else put in its place; a
+  // file it names can't become a folder.
+  for (const [command, ok] of [
+    ['rmdir empty', true],
+    ['echo x > empty', false],
+    ['ln -s allowed empty', false],
+    ['mkdir empty', true],
+    ['rm new.txt', true],
+    ['mkdir new.txt', false],
+  ]) {
+    const result = await run(command)
+    assert.equal(result.exitCode === 0, ok, `${command}: ${result.stderr}`)
+    if (!ok) assert.match(result.stderr, READ_ONLY, command)
+  }
+  assert.equal(fs.lstatSync(path.join(root, 'empty')).isDirectory(), true)
+  assert.equal(fs.existsSync(path.join(root, 'new.txt')), false)
+})
+
 test('VM 2: a command runs from an argument list, in a given folder, with no shell in between', options, async t => {
   const dir = makeTestDir(t)
   const data = makeDataDir(dir)
