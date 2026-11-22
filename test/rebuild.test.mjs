@@ -150,8 +150,8 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   )
   assert.ok(seen.every(call => !call.prompt.includes('#7')))
   assert.match(seen[0].systemPrompt, /## memory\/preferences\.md\n\n\(empty\)/)
-  // Every skill.
-  assert.equal(seen[0].skills.length, 3)
+  // Every skill, after the runner's.
+  assert.equal(seen[0].skills.length, 4)
 
   // The views and memory, rebuilt, in one commit on the tagged one.
   assert.equal(gitOf(paths, 'rev-parse', TAG).trim(), before)

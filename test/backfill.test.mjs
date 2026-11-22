@@ -77,9 +77,10 @@ test('backfills: until is the live cursor when it starts, every message up to it
   )
   assert.equal(prompt[1], '[scooter] Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.')
   assert.match(first.prompt, /^#2 12:31 you sent: "Logged."$/m)
-  // Its own session for the day, the backfill's skill alone, and the live system prompt.
+  // Its own session for the day, the backfill's skill alone after the runner's, and the live
+  // system prompt.
   assert.equal(sessionOf(first), 'lifelog-backfill-people-1-2026-11-07')
-  assert.deepEqual(skillsOf(first), ['people'])
+  assert.deepEqual(skillsOf(first), ['scooter', 'people'])
   assert.match(first.systemPrompt, /You are lifelog\./)
   assert.equal(git('log', '-1', '--format=%s', '--name-only'), 'lifelog: backfill people-1 #1-#3\n\nviews/people.csv\n')
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 3, retry: [], skipped: [] })

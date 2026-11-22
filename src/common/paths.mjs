@@ -36,6 +36,11 @@ export function makePaths({ dataDir, configDir }) {
     agentRunSystem: name => path.join(agent(name), 'run', 'system.md'),
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
+    // The run's index file, the programs that ship with the runner, which the VM finds on its
+    // `PATH`, and the runner's own skill.
+    agentRunIndex: name => path.join(agent(name), 'run', 'index.txt'),
+    agentRunBin: name => path.join(agent(name), 'run', 'bin'),
+    agentRunSkills: name => path.join(agent(name), 'run', 'skills'),
     agentState: name => path.join(agent(name), 'state.json'),
     // Where the clean-up sets aside what an agent's `writes` names in its folder before it removes it:
     // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.

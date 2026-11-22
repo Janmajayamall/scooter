@@ -2,8 +2,8 @@
 //
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
 //    If a backup holds it, let go of `run.lock` and wait.
-// 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, and a copy of the
-//    current session.
+// 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, the runner's own skill
+//    and programs, the index file, and a copy of the current session.
 // 3. **Run** pi in the sandbox, with its command, what it sees and may change, its environment and
 //    the network policy.
 // 4. **After a successful run,** in this order: check the files pi left, staging them as the
@@ -60,10 +60,13 @@ export function piFiles(paths, agent, writes = agent.writes) {
   }
 }
 
-// pi's environment, apart from the key's placeholder, which the sandbox sets from the policy.
-export function piEnv({ timeZone }) {
+// pi's environment, apart from the key's placeholder, which the sandbox sets from the policy. The
+// programs that ship with the runner, in the run's `bin/` (`prepareRun`), come first on the `PATH`,
+// so the VM finds them by their names, and pi's tools do. The runner refuses a data folder whose
+// path holds a `:`, which would split it (`settings.mjs`).
+export function piEnv({ timeZone, binDir }) {
   return {
-    PATH: GUEST_PATH,
+    PATH: `${binDir}:${GUEST_PATH}`,
     HOME: GUEST_HOME,
     LANG: 'C.UTF-8',
     TZ: timeZone,
@@ -119,7 +122,7 @@ export function runSpec({ agent, settings, paths, prepared, sessionId: id, promp
   return {
     argv: [PI_PROGRAM, ...piArgs({ agent, prepared, sessionId: id, prompt })],
     cwd: paths.agentDir(agent.name),
-    env: piEnv({ timeZone: settings.timeZone }),
+    env: piEnv({ timeZone: settings.timeZone, binDir: paths.agentRunBin(agent.name) }),
     files: piFiles(paths, agent, writes),
     timeoutMs: agent.timeoutMinutes * MINUTE,
     policy: piPolicy({ agent, settings }),
@@ -193,7 +196,7 @@ function settleJob(job, state, outcome, timing) {
 // `ids`, for outbox entries; `index`, the datastore's; `state` and `stateFile`, null for a state
 // that isn't saved, as a rebuild keeps its own in memory; `log` and `clock`.
 export async function performRun(context) {
-  const { agent, settings, paths, sandbox, git, protocol, log, clock, state, job, signal } = context
+  const { agent, settings, paths, sandbox, git, protocol, index, log, clock, state, job, signal } = context
   const startedAt = clock.now()
   const lock = acquireRunLock({ paths, deadline: startedAt + agent.timeoutMinutes * MINUTE, clock })
   if (lock !== 'taken') return { state, outcome: 'waiting', why: lock }
@@ -203,7 +206,7 @@ export async function performRun(context) {
       : agent.session === 'daily'
         ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
-    const prepared = prepareRun({ paths, agent, protocol, sessionId: id, skills: job.skills })
+    const prepared = prepareRun({ paths, agent, protocol, index, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
     const task = job.kind === 'scheduled' ? job.at : undefined

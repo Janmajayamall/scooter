@@ -3,7 +3,8 @@
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
 //     views/, memory/          what `writes` names in the folder, in git (`agent.repository`)
 //     sessions/                pi's sessions, not in git; hidden from the VM
-//     run/                     not in git: system.md, config/ and session/
+//     run/                     not in git: system.md, config/, session/, index.txt, bin/ and
+//                              skills/
 //     state.json               the runner's state, not in git, 0600
 //
 // What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
@@ -12,11 +13,18 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { copyUntrustedFile, emptyFolder, ensureDir, removeTree } from '../common/files.mjs'
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
+import { RUNNER_SKILL } from './config.mjs'
 import { wayIsOpen } from './git.mjs'
 import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
+
+// What ships with the runner for every run's VM: the programs, which each run gets in `run/bin/`
+// under their names, and the runner's own skill, which it gets in `run/skills/`.
+const PROGRAMS = { show: fileURLToPath(new URL('./vm/bin/show.mjs', import.meta.url)) }
+const RUNNER_SKILL_DIR = fileURLToPath(new URL(`./vm/skills/${RUNNER_SKILL}`, import.meta.url))
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside what
 // `writes` names.
@@ -84,9 +92,30 @@ function copyTree(source, target) {
   }
 }
 
+// The index file's text: one line for each line of the datastore that `index` holds, in `seq`
+// order, `<seq> <log>:<line number> <kind>[ <seq it points at>]`, as
+// `1054 /data/datastore/2026/11/09/log.jsonl:216 edit 1051`. A line points at its `target`, or
+// else at the message it replies to, `replyTo`; only a line of a kind this version doesn't know can
+// have both. The paths are the host's, which the VM sees at the same paths. The reading check
+// holds the kind to a name and each `seq` to a whole number, so a line of the file can't be taken
+// for two, and the runner refuses a data folder whose path holds a line break (`settings.mjs`).
+// `show` reads it (`vm/bin/show.mjs`).
+export function indexFileText(index, paths) {
+  const lines = []
+  for (const { line, day, number } of index.entries()) {
+    const points = line.target ?? line.replyTo
+    lines.push(`${line.seq} ${paths.dayLog(day)}:${number} ${line.kind}${points === undefined ? '' : ` ${points}`}\n`)
+  }
+  return lines.join('')
+}
+
 // Builds `run/` for one run, from nothing:
 // - `config/`: a copy of the agent's prompt and of `skills` (all of the agent's by default), each
 //   at its path in the config folder, so pi only ever sees this run's copy;
+// - `skills/`: a copy of the skill that ships with the runner, which every run is given first;
+// - `bin/`: a copy of each program that ships with the runner, `show`, which the VM finds on its
+//   `PATH` (`piEnv` in `run.mjs`);
+// - `index.txt`: the index file, from `index`, the datastore's (`indexFileText`);
 // - `session/`: empty, with a copy of the session `sessionId` if the runner has one, as
 //   `sessions/<sessionId>.jsonl`. With `session: none`, `sessionId` is null;
 // - `system.md`: the protocol, the agent's prompt, and its memory as it is now.
@@ -96,8 +125,10 @@ function copyTree(source, target) {
 //
 // pi could write `run/session/` in the last run, and leave there what it liked, if the runner
 // stopped before it emptied the folder (`clearRunSession`), so `run/` is removed as anything pi
-// wrote is (`removeTree`): access taken back, no folder read whole, and however deep it goes.
-export function prepareRun({ paths, agent, protocol, sessionId = null, skills = agent.skills }) {
+// wrote is (`removeTree`): access taken back, no folder read whole, and however deep it goes. The
+// rest of `run/` is read-only in the VM, and the runner never reads any of it back: it is made
+// anew for each run.
+export function prepareRun({ paths, agent, protocol, index, sessionId = null, skills = agent.skills }) {
   const name = agent.name
   const runDir = paths.agentRun(name)
   const configDir = paths.agentRunConfig(name)
@@ -108,11 +139,25 @@ export function prepareRun({ paths, agent, protocol, sessionId = null, skills = 
   ensureDir(configDir, { mode: FOLDER_MODE })
   const promptCopy = path.join(configDir, agent.prompt.path)
   copyTree(agent.prompt.file, promptCopy)
-  const skillDirs = skills.map(skill => {
-    const copy = path.join(configDir, skill.path)
-    copyTree(skill.dir, copy)
-    return copy
-  })
+  const runnerSkill = path.join(paths.agentRunSkills(name), RUNNER_SKILL)
+  copyTree(RUNNER_SKILL_DIR, runnerSkill)
+  const skillDirs = [
+    runnerSkill,
+    ...skills.map(skill => {
+      const copy = path.join(configDir, skill.path)
+      copyTree(skill.dir, copy)
+      return copy
+    }),
+  ]
+
+  const binDir = paths.agentRunBin(name)
+  ensureDir(binDir, { mode: FOLDER_MODE })
+  for (const [program, source] of Object.entries(PROGRAMS)) {
+    const copy = path.join(binDir, program)
+    fs.copyFileSync(source, copy, fs.constants.COPYFILE_EXCL)
+    fs.chmodSync(copy, 0o700)
+  }
+  fs.writeFileSync(paths.agentRunIndex(name), indexFileText(index, paths), { mode: FILE_MODE })
 
   ensureDir(sessionDir, { mode: FOLDER_MODE })
   let sessionFile = null

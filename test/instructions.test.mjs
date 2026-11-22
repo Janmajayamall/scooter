@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { createIndex } from '../src/common/datastore/index.mjs'
 import { limits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { prepareRun } from '../src/runner/agentdir.mjs'
@@ -137,13 +138,13 @@ test("instructions: a run's system prompt is the protocol, then the prompt, then
   const [agent] = loadConfig({ paths }).agents
   fs.mkdirSync(paths.agentMemory('lifelog'), { recursive: true })
   fs.writeFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), '- 2026-11-09 (#1060): Track coffee and tea in meals.csv as "drink".\n')
-  const prepared = prepareRun({ paths, agent, protocol: loadProtocol(), sessionId: 'lifelog-2026-11-09' })
+  const prepared = prepareRun({ paths, agent, protocol: loadProtocol(), index: createIndex(), sessionId: 'lifelog-2026-11-09' })
   const system = fs.readFileSync(prepared.systemFile, 'utf8')
   const protocolAt = system.indexOf('# How you work with Scooter')
   const promptAt = system.indexOf('# You are lifelog')
   const memoryAt = system.indexOf('# Your memory\n\n## memory/preferences.md\n\n- 2026-11-09 (#1060)')
   assert.ok(protocolAt === 0 && promptAt > protocolAt && memoryAt > promptAt, `${protocolAt} ${promptAt} ${memoryAt}`)
-  assert.deepEqual(prepared.skillDirs, SKILLS.map(name => path.join(paths.agentRunConfig('lifelog'), 'skills', name)))
+  assert.deepEqual(prepared.skillDirs, [path.join(paths.agentRunSkills('lifelog'), 'scooter'), ...SKILLS.map(name => path.join(paths.agentRunConfig('lifelog'), 'skills', name))])
   for (const name of SKILLS) assert.equal(fs.readFileSync(path.join(paths.agentRunConfig('lifelog'), 'skills', name, 'SKILL.md'), 'utf8'), read('skills', name, 'SKILL.md'))
 })
 

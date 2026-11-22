@@ -115,6 +115,8 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
     'lifelog-2026-11-09',
     '--append-system-prompt',
     path.join(run, 'system.md'),
+    '--skill',
+    path.join(run, 'skills', 'scooter'),
     ...['expenses', 'runs', 'meals', 'travel', 'people'].flatMap(skill => ['--skill', path.join(run, 'config', 'skills', skill)]),
     '--',
   ])
@@ -123,7 +125,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   // pi's environment and nothing else, with a placeholder where the key would be.
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
   assert.deepEqual({ ...env, OPENROUTER_API_KEY: undefined }, {
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    PATH: `${path.join(run, 'bin')}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
     HOME: '/root',
     LANG: 'C.UTF-8',
     TZ: 'Asia/Kolkata',
@@ -144,7 +146,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   assert.equal(seen.sessionsVisible, false)
   assert.deepEqual(seen.sessionFiles, [])
   assert.match(seen.systemPrompt, /^# How you work with Scooter\n/)
-  assert.deepEqual(seen.skills, [true, true, true, true, true])
+  assert.deepEqual(seen.skills, [true, true, true, true, true, true])
   assert.equal(seen.cwd, agent)
   assert.deepEqual(seen.env, env)
 })
