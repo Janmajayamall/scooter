@@ -118,7 +118,8 @@ export function openRouterMessage(stderr, status) {
 // `setup`, `outage` or `other`, `reason` the short reason for the owner and the state, and
 // `status` OpenRouter's last status or null.
 //
-// An unexpected file, or an error in checking or committing the files, is pi's own failure, whatever the log says: it is what pi left that failed the run.
+// An unexpected file, or an error in checking or committing the files, is pi's own failure,
+// whatever the log says: it is what pi left that failed the run.
 //
 // The reason is OpenRouter's error whenever its last answer was one, in its own words when pi
 // printed them: also for a status that is neither a setup error nor an outage, such as a 400 or a
