@@ -72,13 +72,16 @@
 // |                        |                        | name in the first folder they name there           |
 // | `SHARED`               |                        | writes `shared.txt` in the first folder its writes |
 // |                        |                        | name outside the agent's folder                    |
+// | `SHOW`                 |                        | runs `show` with the batch's numbers, found on the |
+// |                        |                        | `PATH` it was given, as the agent would, and keeps |
+// |                        |                        | what it printed in what it saw                     |
 //
 // It writes OpenRouter's answers to the network log as the runner's policy would, in its format,
 // and keeps its session as pi 1.5.2 does. Every absolute path it
 // is given is a path in the VM: it finds it under `PI_STUB_ROOT`, the fake VM's folder. What it
 // saw is added to `calls.jsonl` in its control folder.
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { limits } from '../../src/common/limits.mjs'
@@ -171,6 +174,16 @@ const seen = {
   systemPrompt: options.systemPrompt ? fs.readFileSync(inVm(options.systemPrompt), 'utf8') : null,
   skills: options.skills.map(skill => fs.existsSync(inVm(path.join(skill, 'SKILL.md')))),
   prompt,
+}
+
+// `show`, found by its name on the `PATH` the stub was given, each folder of which is a path in the
+// VM, and run with the host's Node, as the VM's `env` would run it with the VM's, and with the
+// environment pi got, as pi's bash tool runs a program: `TZ`, and `ICU_TIMEZONE_FILES_DIR`, a path
+// in the VM that is the same path on the host.
+if (has('SHOW')) {
+  const folder = (process.env.PATH ?? '').split(':').find(dir => dir !== '' && fs.existsSync(inVm(path.join(dir, 'show'))))
+  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: seen.env, encoding: 'utf8' })
+  seen.show = run === null ? null : { folder, code: run.status, stdout: run.stdout, stderr: run.stderr }
 }
 
 // The session, as pi keeps it: found by its first line, which names the session and the folder;

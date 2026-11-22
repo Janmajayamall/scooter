@@ -72,7 +72,7 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
 | The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/view.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
 | The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
-| The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `config/prompts/lifelog.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
+| The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/protocol.md`, `src/runner/vm/skills/scooter/SKILL.md`, `src/runner/vm/bin/show.mjs`, `src/runner/vm/icu-tz/zoneinfo64.res`, `src/runner/vm/icu-tz/metaZones.res`, `src/runner/vm/icu-tz/timezoneTypes.res`, `src/runner/vm/icu-tz/windowsZones.res`, `src/runner/vm/icu-tz/release.txt`, `src/runner/vm/icu-tz/LICENSE`, `src/runner/vm/icu-tz/README.md`, `config/prompts/lifelog.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
 | Configuration and the CLI | [configuration.md](architecture/configuration.md) | `src/cli.mjs`, `src/common/settings.mjs`, `src/common/limits.mjs`, `src/runner/config.mjs`, `config/agents.yaml`, `bridge.env.example`, `runner.env.example` |
 | Install, native and Docker | [install.md](architecture/install.md) | `src/ops/setup.mjs`, `src/ops/doctor.mjs`, `deploy/systemd/scooter-bridge.service`, `deploy/systemd/scooter-runner.service`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` |
 
@@ -195,6 +195,8 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The network log line | runner → `scooter status`, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
 | The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
+| The index file | runner → `show`, pi | `src/runner/agentdir.mjs` | [The index file](architecture/run.md#the-index-file) |
+| The zone rules' `release.txt` | the repository → runner, `show` | `src/runner/vm/icu-tz/release.txt` | [The zone rules](architecture/agent.md#the-zone-rules) |
 | The answer | pi → runner | `src/runner/answer.mjs` | [Reading the answer](architecture/run.md#reading-the-answer) |
 | `agents.yaml` | owner → runner | `src/runner/config.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
 | The env files | owner → both services | `src/common/settings.mjs` | [The env files](architecture/configuration.md#the-env-files) |
@@ -283,6 +285,9 @@ The project's own names, each used one way in these documents.
 | intake | The core's half of receiving: records to lines |
 | store | The datastore's one writer, `src/bridge/store.mjs`. wacli's own is its message store |
 | index | What the bridge and the runner each keep in memory of the datastore: lines by `seq` and by channel ID, and what each message says now |
+| index file | `run/index.txt`: the runner's index as a file, written for each run, one line for each `seq` with where the line is, its kind and the line it points at |
+| `show` | The program that ships with the runner, which pi runs in its VM to print lines of the datastore by their `seq`, through the index file |
+| zone rules | ICU's time zone rules for one release of the tz database, which ship with the runner in `src/runner/vm/icu-tz/`, and which every Node in pi's VM converts times with, through each run's copy, `run/icu-tz/` |
 | webhook | wacli's post to the bridge, on loopback, for each message it receives |
 | catch-up | The bridge listing wacli's message store for what the webhook missed |
 | pairing | Linking wacli to the bot's number; wacli is linked when paired |
@@ -321,7 +326,7 @@ The project's own names, each used one way in these documents.
 
 | To change | Modules | Tests | Documents |
 |---|---|---|---|
-| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs` | [datastore](architecture/datastore.md), [The prompt](architecture/runner.md#the-prompt) |
+| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line, the runner's skill (`src/runner/vm/skills/scooter/SKILL.md`) | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs`, `test/instructions.test.mjs` | [datastore](architecture/datastore.md), [The prompt](architecture/runner.md#the-prompt), [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill) |
 | What becomes a line, attachments | `src/bridge/intake.mjs`, `src/bridge/channels/index.mjs` | `test/intake.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md), [datastore](architecture/datastore.md) |
 | WhatsApp: webhook, filters, owner matching, catch-up, downloads, `pair` | `src/bridge/channels/whatsapp.mjs` | `test/whatsapp.test.mjs`, `test/support/wacli-stub.mjs`, `test/tools/wacli.test.mjs` | [whatsapp](architecture/whatsapp.md) |
 | Email: the reader, parsing, the spool, the sender check, `email-check` | `src/mail/`, `src/bridge/channels/email.mjs` | `test/email.test.mjs`, `test/mail-reader.test.mjs`, `test/mail-imap.test.mjs`, `test/mail-parse.test.mjs` | [email](architecture/email.md) |
@@ -344,7 +349,9 @@ The project's own names, each used one way in these documents.
 | Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) |
 | The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/view.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
 | The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) |
-| The agent's instructions | `src/runner/protocol.md`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
+| The agent's instructions | `src/runner/protocol.md`, `src/runner/vm/skills/`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |
+| `show` or the index file | `src/runner/vm/bin/show.mjs`, `src/runner/agentdir.mjs`, `src/runner/vm/skills/scooter/SKILL.md` | `test/show.test.mjs`, `test/instructions.test.mjs`, `test/agentdir.test.mjs`, `test/tools/vm.test.mjs` | [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill), [The index file](architecture/run.md#the-index-file) |
+| The zone rules, or updating them | `src/runner/vm/icu-tz/`, `src/runner/vm/bin/show.mjs`, `src/runner/agentdir.mjs`, `src/runner/run.mjs` (`piEnv`), `src/runner/main.mjs` | `test/tools/icu-tz.test.mjs`, `test/show.test.mjs`, `test/agentdir.test.mjs`, `test/runner.test.mjs`, `test/tools/vm.test.mjs`, `test/sandbox.test.mjs` | [The zone rules](architecture/agent.md#the-zone-rules), [Environment](architecture/sandbox.md#environment) |
 | pi's version | `config/image/build.json`, `src/runner/sandbox/policy.mjs`, `test/fixtures/pi-requests/` (`test/tools/capture-pi-requests.mjs`) | `test/tools/pi.test.mjs`, `test/tools/fixtures.test.mjs`, `test/policy.test.mjs`, `test/image.test.mjs` | [Facts about pi 1.5.2](architecture/agent.md#facts-about-pi-152), [What pi sends](architecture/network-policy.md#what-pi-sends), [The VM image](architecture/sandbox.md#the-vm-image) |
 | Gondolin's version | `package.json`, `src/runner/sandbox/` | `test/tools/vm.test.mjs`, `test/sandbox.test.mjs`, `test/policy.test.mjs` | [Facts about Gondolin 0.14.0](architecture/sandbox.md#facts-about-gondolin-0140), [Facts about Gondolin's network](architecture/network-policy.md#facts-about-gondolins-network) |
 | The native install or Docker | `src/ops/`, `deploy/systemd/`, `Dockerfile`, `.dockerignore`, `compose.yaml`, `compose.kvm.yaml`, `compose.kvm-rootless.yaml` | `test/setup.test.mjs`, `test/doctor.test.mjs`, `test/units.test.mjs`, `test/docker.test.mjs` | [install](architecture/install.md), the [README](../README.md) |

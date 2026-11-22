@@ -5,12 +5,18 @@
 // built from config/image/build.json, so they are also what to run again after upgrading either.
 
 import assert from 'node:assert/strict'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { makePaths } from '../../src/common/paths.mjs'
+import { icuTzRelease, prepareRun } from '../../src/runner/agentdir.mjs'
+import { openDatastore } from '../../src/runner/datastore.mjs'
+import { piEnv as runnerPiEnv, piFiles } from '../../src/runner/run.mjs'
 import { createFakeModel } from '../support/fake-model.mjs'
+import { headerTimes } from '../support/icu-tz.mjs'
 import { pinnedPiVersion, readBuildFile } from '../support/image.mjs'
+import { fillerLines, line, writeDatastore } from '../support/runner.mjs'
 import { atEnd, makeTestDir } from '../support/tmp.mjs'
 import {
   FUSE_MOUNT,
@@ -20,10 +26,12 @@ import {
   designFiles,
   makeDataDir,
   onPath,
+  piEnv,
   runIn,
   runPi,
   sh,
   startVm,
+  toolResults,
   vmSkipReason,
 } from '../support/vm.mjs'
 
@@ -598,6 +606,198 @@ test("VM 4: killing the starting process's group leaves no QEMU; killing the pro
       const sessions = path.join(`${tmp}-cache`, 'gondolin', 'sessions')
       assert.ok(fs.readdirSync(sessions).length > 0, "the VM's entry in Gondolin's list should be left behind")
     }
+  }
+})
+
+test("VM 7: a program the runner copies into run/ runs by its name from the PATH it gives, and from pi's bash tool, read-only, with the zone rules that ship with the runner", options, async t => {
+  const dir = makeTestDir(t)
+  const data = makeDataDir(dir)
+  const paths = makePaths({ dataDir: path.join(dir, 'data'), configDir: path.join(dir, 'config') })
+  // A datastore of its own, laid out as the bridge writes it: a photo, and an edit of it at
+  // midnight in Kolkata.
+  fs.rmSync(paths.datastore, { recursive: true })
+  writeDatastore(paths, [
+    ...fillerLines(4),
+    line.text(5, '2026-11-09T15:43:00Z', 'lunch', { files: [{ path: '5.jpg', mime: 'image/jpeg', bytes: 1 }] }),
+    line.edit(6, '2026-11-09T18:30:00Z', 5, 'lunch with Sam'),
+  ])
+  const datastore = openDatastore({ paths })
+  datastore.poll()
+  fs.mkdirSync(path.join(paths.configDir, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
+  const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }
+  // `run/` as the runner makes it for a run.
+  prepareRun({ paths, agent, protocol: '', index: datastore.index })
+  const bin = paths.agentRunBin('lifelog')
+  const icuTz = paths.agentRunIcuTz('lifelog')
+  const release = icuTzRelease()
+  const env = tz => runnerPiEnv({ timeZone: tz, binDir: bin, icuTzDir: icuTz })
+  const log = day => paths.dayLog(day)
+  const kolkata = [
+    `6  Tue 10 Nov 2026 00:00 +05:30  ${log('2026/11/09')}:2`,
+    fs.readFileSync(log('2026/11/09'), 'utf8').split('\n')[1],
+    `  points at 5  Mon 9 Nov 2026 21:13 +05:30  ${log('2026/11/09')}:1`,
+    `  ${fs.readFileSync(log('2026/11/09'), 'utf8').split('\n')[0]}`,
+    `    file ${paths.dayDir('2026/11/09')}/5.jpg`,
+    '',
+  ].join('\n')
+
+  const model = createFakeModel([
+    { tool: 'bash', args: { command: 'show 6; echo "exit $?"; show 7; echo "exit $?"; node -p process.versions.tz; printenv ICU_TIMEZONE_FILES_DIR' } },
+    { text: 'DONE: 6' },
+  ])
+  const vm = await startVm(t, { model, files: designFiles(data) })
+  const inAgent = (argv, environment) => runIn(vm, argv, { cwd: data.agent, env: environment })
+
+  // By its name, from the PATH the runner gives: by `env`, as the sandbox runs pi, and from a
+  // shell, as pi's bash tool runs a command. The image's Node runs the copy, a file without an
+  // extension in ES module syntax, as a module, and says nothing of it on stderr. The time is the
+  // owner's, across their midnight.
+  for (const argv of [['show', '6'], ['bash', '-c', 'show 6'], ['sh', '-c', 'cd /tmp && show 6']]) {
+    const shown = await inAgent(argv, env('Asia/Kolkata'))
+    assert.equal(shown.exitCode, 0, `${argv.join(' ')}: ${shown.stderr}`)
+    assert.equal(shown.stdout, kolkata, argv.join(' '))
+    assert.equal(shown.stderr, '', argv.join(' '))
+  }
+  // The same as the host prints, with the same environment: the two Nodes convert with the same
+  // rules, those of the run's copy (`VM 8`).
+  const host = spawnSync(process.execPath, [path.join(bin, 'show'), '6'], { env: env('Asia/Kolkata'), encoding: 'utf8' })
+  assert.equal(host.stdout, kolkata)
+
+  // The program, the index file and the zone rules are read-only in the VM, as the rest of `run/`
+  // is.
+  for (const command of [
+    `echo x > ${bin}/show`,
+    `rm ${bin}/show`,
+    `chmod 600 ${bin}/show`,
+    `mv ${bin}/show ${bin}/old`,
+    `echo x > ${bin}/send`,
+    `echo x >> ${paths.agentRunIndex('lifelog')}`,
+    `rm ${paths.agentRunIndex('lifelog')}`,
+    `echo x > ${icuTz}/zoneinfo64.res`,
+    `echo 2020a > ${icuTz}/release.txt`,
+    `rm ${icuTz}/metaZones.res`,
+    `mv ${icuTz} ${bin}/icu-tz`,
+    `echo x > ${icuTz}/extra.res`,
+  ]) {
+    const result = await sh(vm, command)
+    assert.notEqual(result.exitCode, 0, `${command} should fail`)
+    assert.match(result.stderr, READ_ONLY, command)
+  }
+  assert.equal(fs.readFileSync(path.join(bin, 'show'), 'utf8'), fs.readFileSync(new URL('../../src/runner/vm/bin/show.mjs', import.meta.url), 'utf8'))
+  assert.deepEqual(fs.readdirSync(bin), ['show'])
+  for (const name of fs.readdirSync(new URL('../../src/runner/vm/icu-tz/', import.meta.url))) {
+    assert.deepEqual(fs.readFileSync(path.join(icuTz, name)), fs.readFileSync(new URL(`../../src/runner/vm/icu-tz/${name}`, import.meta.url)), name)
+  }
+
+  // From pi's bash tool, with the environment the runner gives pi: the variable reaches what the
+  // tool runs, and the Node there converts with the shipped rules.
+  const result = await runPi(vm, { prompt: 'show me 6' }, { cwd: data.agent, env: piEnv(vm, { bin, icuTz }) })
+  assert.equal(result.exitCode, 0, result.stderr)
+  const [bash] = toolResults(model.modelRequests.at(-1).body)
+  assert.equal(bash.isError, false, bash.text)
+  assert.equal(bash.text, `${kolkata}exit 0\n7  no such line\nexit 1\n${release}\n${icuTz}\n`)
+})
+
+test("VM 8: the image's Node converts with the zone rules that ship with the runner where pi's environment points it at them, and show prints the owner's time with them, or none", options, async t => {
+  const dir = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(dir, 'data'), configDir: path.join(dir, 'config') })
+  // The times the review of show found the image's own rules an hour off at, or without a time: in
+  // Vancouver and Coyhaique on 1 November 2026, Asunción on 1 April and Casablanca on 1 October;
+  // London's two changes of the clocks; and Kolkata's local mean time, an offset with seconds.
+  const ats = ['1850-01-01T00:00:00Z', '2026-03-29T00:59:00Z', '2026-03-29T01:00:00Z', '2026-04-01T00:30:00Z', '2026-10-01T00:30:00Z', '2026-10-25T00:59:00Z', '2026-10-25T01:00:00Z', '2026-11-01T12:30:00Z']
+  writeDatastore(
+    paths,
+    ats.map((at, n) => line.text(n + 1, at, 'x')),
+  )
+  const datastore = openDatastore({ paths })
+  datastore.poll()
+  fs.mkdirSync(path.join(paths.configDir, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
+  const prompt = { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }
+  // A run's `run/`, as the runner makes it; and two more, whose copy of the rules is then damaged
+  // on the host, where the VM can't: `zoneinfo64.res` cut to half, and changed by a byte.
+  for (const name of ['lifelog', 'cut', 'changed']) {
+    fs.mkdirSync(paths.agentDir(name), { recursive: true })
+    prepareRun({ paths, agent: { name, prompt, skills: [] }, protocol: '', index: datastore.index })
+  }
+  const zoneinfo = name => path.join(paths.agentRunIcuTz(name), 'zoneinfo64.res')
+  fs.truncateSync(zoneinfo('cut'), fs.statSync(zoneinfo('cut')).size / 2)
+  const bytes = fs.readFileSync(zoneinfo('changed'))
+  bytes[100_000] ^= 0xff
+  fs.writeFileSync(zoneinfo('changed'), bytes)
+  // And the rules as they ship, outside `run/`.
+  const other = path.join(paths.agentDir('lifelog'), 'other-icu-tz')
+  fs.cpSync(new URL('../../src/runner/vm/icu-tz/', import.meta.url), other, { recursive: true })
+  const vm = await startVm(t, { files: piFiles(paths, { name: 'lifelog', reads: ['datastore/', 'agents/'], writes: [] }) })
+
+  const release = icuTzRelease()
+  const cwd = paths.agentDir('lifelog')
+  const env = (tz, name = 'lifelog') => runnerPiEnv({ timeZone: tz, binDir: paths.agentRunBin(name), icuTzDir: paths.agentRunIcuTz(name) })
+  const tzOf = async environment => {
+    const result = await runIn(vm, ['node', '-p', 'process.versions.tz'], { cwd, env: environment })
+    assert.equal(result.exitCode, 0, result.stderr)
+    return result.stdout.trim()
+  }
+
+  // Started as the sandbox starts pi, with pi's environment: the shipped release. Without the
+  // variable: the image's own, which isn't.
+  assert.equal(await tzOf(env('Asia/Kolkata')), release)
+  const own = await runIn(vm, ['node', '-p', '`${process.versions.node} ICU ${process.versions.icu} tz ${process.versions.tz}`'], { env: { PATH: GUEST_PATH } })
+  t.diagnostic(`the image's Node without the variable: ${own.stdout.trim()}`)
+  assert.equal(await tzOf({ PATH: GUEST_PATH }) === release, false)
+
+  // In each zone, what the shipped rules give, by the runner's own time code in a Node given them,
+  // and what the host prints with the same environment.
+  const seqs = ats.map((_, n) => String(n + 1))
+  const headers = text =>
+    text
+      .split('\n')
+      .filter(row => /^\d {2}/.test(row))
+      .map(row => row.split('  ')[1])
+  for (const zone of ['America/Coyhaique', 'America/Vancouver', 'America/Asuncion', 'Africa/Casablanca', 'Europe/London', 'Asia/Kolkata']) {
+    const shown = await runIn(vm, ['show', ...seqs], { cwd, env: env(zone) })
+    assert.equal(shown.exitCode, 0, `${zone}: ${shown.stderr}`)
+    assert.deepEqual(headers(shown.stdout), headerTimes(zone, ats), zone)
+    const host = spawnSync(process.execPath, [path.join(paths.agentRunBin('lifelog'), 'show'), ...seqs], { env: env(zone), encoding: 'utf8' })
+    assert.equal(shown.stdout, host.stdout, zone)
+  }
+  // The review's, with the offset worked out from the conversion: the image's ICU 76 names
+  // Casablanca's offset of 0 `GMT`, where ICU 78 writes `GMT+00:00`.
+  const header = async (zone, seq) => headers((await runIn(vm, ['show', seq], { cwd, env: env(zone) })).stdout)[0]
+  assert.equal(await header('America/Vancouver', '8'), 'Sun 1 Nov 2026 05:30 -07:00')
+  assert.equal(await header('America/Coyhaique', '8'), 'Sun 1 Nov 2026 09:30 -03:00')
+  assert.equal(await header('America/Asuncion', '4'), 'Tue 31 Mar 2026 21:30 -03:00')
+  assert.equal(await header('Africa/Casablanca', '5'), 'Thu 1 Oct 2026 00:30 +00:00')
+  assert.equal(await header('Asia/Kolkata', '1'), 'Tue 1 Jan 1850 05:53 +05:53:28')
+
+  // Without the run's rules whole and in use, or without a zone they know, it prints nothing, and
+  // says which, with exit code 2.
+  const rules = paths.agentRunIcuTz('lifelog')
+  const without = (environment, name) => Object.fromEntries(Object.entries(environment).filter(([key]) => key !== name))
+  const refusals = [
+    ['lifelog', without(env('Asia/Kolkata'), 'ICU_TIMEZONE_FILES_DIR'), `ICU_TIMEZONE_FILES_DIR isn't set to the run's zone rules, ${rules}, so Node would convert with rules of its own`],
+    ['lifelog', { ...env('Asia/Kolkata'), ICU_TIMEZONE_FILES_DIR: other }, `ICU_TIMEZONE_FILES_DIR is ${other}, not the run's zone rules, ${rules}`],
+    ['lifelog', without(env('Asia/Kolkata'), 'TZ'), "TZ isn't set, so the owner's time can't be shown"],
+    ['lifelog', env('Mars/Olympus'), `TZ is Mars/Olympus, which the run's zone rules, tz ${release}, don't know as a time zone`],
+    ['changed', env('Asia/Kolkata', 'changed'), `the run's zone rules, ${paths.agentRunIcuTz('changed')}, are missing or damaged (zoneinfo64.res: not the file release.txt lists)`],
+  ]
+  for (const [name, environment, message] of refusals) {
+    const shown = await runIn(vm, ['show', '8'], { cwd: paths.agentDir(name), env: environment })
+    assert.deepEqual({ code: shown.exitCode, stdout: shown.stdout, stderr: shown.stderr }, { code: 2, stdout: '', stderr: `show: ${message}\n` }, message)
+  }
+  // Why the files are checked: the image's ICU takes a `zoneinfo64.res` changed by a byte as it is.
+  assert.equal(await tzOf(env('Asia/Kolkata', 'changed')), release)
+  // And one cut short leaves it no zone rules at all, or, now and then, makes it die as it starts,
+  // with a segmentation fault, before any of `show` runs: either way `show` prints no time, saying
+  // why when it gets to run. Tried by hand, 24 starts each with the file cut to half, to its first
+  // 1,000 bytes, to its first 64, and to all but its last 1,000: 7 of the 96 died.
+  for (let n = 0; n < 4; n++) {
+    const started = await runIn(vm, ['node', '-p', 'JSON.stringify(process.versions.tz)'], { cwd, env: env('Asia/Kolkata', 'cut') })
+    assert.ok(started.exitCode === 139 || (started.exitCode === 0 && started.stdout === '""\n'), JSON.stringify(started))
+    const cut = await runIn(vm, ['show', '8'], { cwd: paths.agentDir('cut'), env: env('Asia/Kolkata', 'cut') })
+    const said = `show: the run's zone rules, ${paths.agentRunIcuTz('cut')}, are missing or damaged (zoneinfo64.res: not the file release.txt lists)\n`
+    assert.ok(cut.stdout === '' && ((cut.exitCode === 2 && cut.stderr === said) || (cut.exitCode === 139 && cut.stderr === '')), JSON.stringify(cut))
   }
 })
 

@@ -48,6 +48,11 @@ export const TRIGGER_KINDS = ['on', 'at', 'backfill']
 // which can't be the folder that holds them.
 export const RUNNER_NAMES = ['state.json', 'sessions', 'run']
 
+// The name of the skill that ships with the runner, which every run is given beside the agent's own
+// (`prepareRun` in `agentdir.mjs`). pi offers the model a skill by its name, so no skill of the
+// agent's may have it.
+export const RUNNER_SKILL = 'scooter'
+
 // Where a clean-up sets aside what it throws away, beside the agents' folders
 // (`paths.agentDiscarded`): the runner's own, which `writes` can't name either.
 const DISCARDED = 'agents/.discarded'
@@ -332,6 +337,10 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
           const found = configPath(at('skills', n), value, 'skills/expenses')
           if (!found || !checkSkillFolder(at('skills', n), found)) return
           const skillName = path.posix.basename(found.path)
+          if (skillName === RUNNER_SKILL) {
+            fault(at('skills', n), `names a skill called ${RUNNER_SKILL}, the name of the skill that ships with the runner, which every run is given: each skill's folder needs a name of its own`)
+            return
+          }
           if (names.has(skillName)) {
             fault(at('skills', n), `names a skill called ${skillName}, as skills[${names.get(skillName)}] does: each skill's folder needs a name of its own`)
             return

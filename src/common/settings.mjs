@@ -310,6 +310,11 @@ export function loadSettings(side, { env = process.env } = {}) {
   }
 
   if (side === 'runner') {
+    // The VM's `PATH` names a folder in the data folder, the run's `bin/`, where `:` would split it;
+    // and each line of the run's index file names a log in it, where a line break would split that.
+    if (settings.dataDir !== undefined && /[:\p{Cc}]/u.test(settings.dataDir)) {
+      fault('DATA_DIR', "DATA_DIR can't hold a : or a control character, such as a line break: the runner puts a folder of it on its VMs' PATH, and a path of it on each line of a run's index file")
+    }
     const key = required('OPENROUTER_API_KEY')
     settings.openrouterApiKey =
       key === undefined || /^\S+$/.test(key) ? key : fault('OPENROUTER_API_KEY', "OPENROUTER_API_KEY can't contain spaces")

@@ -18,6 +18,7 @@ import { overrideLimits } from '../src/common/limits.mjs'
 import { readNetworkLog } from '../src/common/netlog.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { systemClock } from '../src/common/time.mjs'
+import { icuTzRelease } from '../src/runner/agentdir.mjs'
 import { openRunner } from '../src/runner/main.mjs'
 import { rebuildAgent } from '../src/runner/rebuild.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
@@ -655,7 +656,7 @@ function systemPromptOf(request) {
   return typeof system === 'string' ? system : system.map(part => part.text ?? '').join('\n')
 }
 
-test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the protocol, the prompt and the five skills, reads one, and files a message by it", options, async t => {
+test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the protocol, the prompt, the runner's skill and the five skills, reads one, finds show and the zone rules that ship with the runner, and files a message by it", options, async t => {
   const prepared = prepare(t)
   const { paths, settings, log } = prepared
   // The repository's own config folder, as `setup` copies it and Docker mounts it.
@@ -667,7 +668,8 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   const header = 'date,time,merchant,description,amount,currency,category,payment,split,note,source'
   const model = createFakeModel([
     { tool: 'read', args: { path: `${skills}/expenses/SKILL.md` } },
-    { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node' } },
+    { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node show' } },
+    { tool: 'bash', args: { command: 'node -p process.versions.tz; printenv ICU_TIMEZONE_FILES_DIR' } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: `${header}\n2026-11-09,21:20,Blue Tokai,coffee,150,INR,Food & drink,,,,#1\n` } },
     { text: 'NO_REPLY\nDONE: 1' },
   ])
@@ -686,23 +688,32 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   assert.deepEqual(outcome, { ok: true, cause: null })
 
   // The system prompt: the protocol, then the agent's prompt, then the memory, and pi's list of the
-  // five skills, each at its copy in run/config/, with the description its SKILL.md gives.
-  const [first, second, third] = model.modelRequests
+  // skills: the runner's, at its copy in run/skills/, then the five, each at its copy in
+  // run/config/, with the description its SKILL.md gives.
+  const [first, second, third, fourth] = model.modelRequests
   const system = systemPromptOf(first)
   const at = ['# How you work with Scooter', '# You are lifelog', '# Your memory'].map(heading => system.indexOf(heading))
   assert.ok(at[0] >= 0 && at[1] > at[0] && at[2] > at[1], JSON.stringify(at))
   const offered = [...system.matchAll(/<skill>\s*<name>(.*?)<\/name>\s*<description>(.*?)<\/description>\s*<location>(.*?)<\/location>/gs)]
-  assert.deepEqual(
-    offered.map(([, name, , location]) => [name, location]),
-    ['expenses', 'runs', 'meals', 'travel', 'people'].map(name => [name, `${skills}/${name}/SKILL.md`]),
-  )
+  const runnerSkill = new URL('../src/runner/vm/skills/scooter/SKILL.md', import.meta.url)
+  assert.deepEqual(offered.map(([, name, , location]) => [name, location]), [
+    ['scooter', path.join(paths.agentRunSkills('lifelog'), 'scooter', 'SKILL.md')],
+    ...['expenses', 'runs', 'meals', 'travel', 'people'].map(name => [name, `${skills}/${name}/SKILL.md`]),
+  ])
   for (const [, name, description] of offered) {
-    const own = /^description: (.*)$/m.exec(fs.readFileSync(new URL(`../config/skills/${name}/SKILL.md`, import.meta.url), 'utf8'))[1]
+    const file = name === 'scooter' ? runnerSkill : new URL(`../config/skills/${name}/SKILL.md`, import.meta.url)
+    const own = /^description: (.*)$/m.exec(fs.readFileSync(file, 'utf8'))[1]
     assert.equal(description.replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&'), own, name)
   }
-  // pi read the skill from its copy, and the programs the instructions name are in the image.
+  // pi read the skill from its copy; the programs the instructions name are in the image, and
+  // `show` is found in the run's copy, first on the PATH.
   assert.equal(toolResults(second.body)[0].text, fs.readFileSync(new URL('../config/skills/expenses/SKILL.md', import.meta.url), 'utf8'))
-  assert.equal(toolResults(third.body)[1].text.trim().split('\n').length, 6, toolResults(third.body)[1].text)
+  const found = toolResults(third.body)[1].text.trim().split('\n')
+  assert.equal(found.length, 7, found.join('\n'))
+  assert.equal(found.at(-1), path.join(paths.agentRunBin('lifelog'), 'show'))
+  // What pi's bash tool runs gets the variable, and its Node converts with the rules it names, the
+  // run's copy of those that ship with the runner.
+  assert.equal(toolResults(fourth.body)[2].text, `${icuTzRelease()}\n${paths.agentRunIcuTz('lifelog')}\n`)
 
   // What pi wrote, committed, and the ✅.
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })

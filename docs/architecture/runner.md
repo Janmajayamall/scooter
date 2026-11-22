@@ -42,7 +42,7 @@ In this order:
 6. The sandbox, which checks the image and picks the accelerator ([the sandbox](sandbox.md)). A sandbox that can't run as it is set up (`SandboxSetupError`) stops the runner with exit code 2. It opens after the clean-up, since it may make folders in `runner/tmp`.
 7. A leftover `run.lock`, removed and logged as `runner.lock_removed` ([The locks](exchange.md#the-locks)).
 8. The emulation notice, then `status.json` ([status.json](#statusjson)).
-9. The state at a start ([State](#state)), the datastore, and the protocol.
+9. The state at a start ([State](#state)), the datastore, and the protocol; and the release of the zone rules that ship for the VM, whose files are checked, and which is logged as `runner.zone_rules_differ`, with the runner's own, when the runner's Node's is another ([The zone rules](agent.md#the-zone-rules)).
 10. Where the runner keeps its own waits, the wait after a stop on an error ([Restarts](#restarts)); then the loop.
 
 Any other failure to start or to go on exits with 1.

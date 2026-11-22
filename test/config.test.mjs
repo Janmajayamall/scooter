@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
-import { ConfigError, loadConfig, parseConfig } from '../src/runner/config.mjs'
+import { ConfigError, RUNNER_SKILL, loadConfig, parseConfig } from '../src/runner/config.mjs'
 import { SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
 import { skipIfRoot } from './support/root.mjs'
 import { makeTestDir } from './support/tmp.mjs'
@@ -451,6 +451,25 @@ test('config: no prompt or skill lies inside another skill\'s folder, where thei
   fs.writeFileSync(path.join(configDir, 'skills', 'expenses-old', 'SKILL.md'), '---\nname: expenses-old\ndescription: Old expenses.\n---\n')
   const { agents } = parseConfig(base.replace('- skills/runs', '- skills/expenses-old'), { configDir })
   assert.deepEqual(agents[0].skills.map(skill => skill.name), ['expenses', 'expenses-old', 'meals', 'travel', 'people'])
+})
+
+test("config: no skill of the agent's has the name of the runner's own, which every run is given", t => {
+  const { configDir, faults } = setup(t)
+  const base = exampleYaml()
+  assert.equal(RUNNER_SKILL, 'scooter')
+  // Wherever its folder is, the skill's name is its folder's.
+  for (const folder of ['skills/scooter', 'more/scooter']) {
+    fs.mkdirSync(path.join(configDir, folder), { recursive: true })
+    fs.writeFileSync(path.join(configDir, folder, 'SKILL.md'), '---\nname: scooter\ndescription: Mine.\n---\n')
+    const named = faults(base.replace('- skills/runs', `- ${folder}`))
+    assert.equal(named.length, 1, folder)
+    assert.equal(named[0].field, 'agents.lifelog.skills[1]')
+    assert.match(named[0].message, /line 8: agents\.lifelog\.skills\[1\] names a skill called scooter, the name of the skill that ships with the runner, which every run is given: each skill's folder needs a name of its own$/)
+  }
+  // A name that only begins the same is a name of its own.
+  fs.mkdirSync(path.join(configDir, 'skills', 'scooter-notes'))
+  fs.writeFileSync(path.join(configDir, 'skills', 'scooter-notes', 'SKILL.md'), '---\nname: scooter-notes\ndescription: Notes.\n---\n')
+  assert.equal(parseConfig(base.replace('- skills/runs', '- skills/scooter-notes'), { configDir }).agents[0].skills[1].name, 'scooter-notes')
 })
 
 test('config: loadConfig reads agents.yaml from the config folder, names it when it can\'t, and holds paths to what the system takes in the data folder', t => {

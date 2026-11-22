@@ -242,7 +242,7 @@ A guess is marked ❓ at the start of a row's `note`, and the open questions are
 They are your files, in the config folder (`/etc/scooter/config` natively, `./config` in Docker): `agents.yaml`, the prompt `prompts/lifelog.md`, and a folder for each skill under `skills/`, each with a `SKILL.md`. The agent can't change them. Restart the runner after a change; it checks the files at its start, and refuses to start, naming the field, when something is wrong.
 
 - **The default `agents.yaml`** sends an evening check-in at 21:30 (`- at: "21:30"`). Remove that entry for a quieter bot.
-- **What the agent sees, changes and sends** is in `agents.yaml` too, as paths of the data folder, a folder ending in `/`: `reads`, by default the datastore and the agent's own folder; `writes`, by default `agents/lifelog/views/` and `agents/lifelog/memory/`, which is what the agent's git repository keeps; and `sends`, the channels its messages may go out on, by default `[whatsapp]`. The trigger `on: new-messages` names the `channels` whose messages it works on, by default `[whatsapp, email]`. The agent's VM can't change anything `writes` doesn't name. Nothing limits what they may name but the runner's own files in the agent's folder: a path of the datastore, the outbox or the runner's folder in `writes` is yours to choose, with what it gives the agent. A path of `writes` outside the agent's folder isn't in git, a failed run's changes there aren't undone, and it is in a backup only when it lies in a folder a backup holds ([Backups and restore](#backups-and-restore)).
+- **What the agent sees, changes and sends** is in `agents.yaml` too, as paths of the data folder, a folder ending in `/`: `reads`, by default the datastore and the agent's own folder; `writes`, by default `agents/lifelog/views/` and `agents/lifelog/memory/`, which is what the agent's git repository keeps; and `sends`, the channels its messages may go out on, by default `[whatsapp]`. The trigger `on: new-messages` names the `channels` whose messages it works on, by default `[whatsapp, email]`. The agent's VM can't change anything `writes` doesn't name. Nothing limits what they may name but what a file system can't take, a name longer than 255 bytes or a path longer than 4,095 bytes, the data folder's included, and, in `writes`, the runner's own files, in the agent's folder and in `agents/.discarded/` beside it, where a clean-up sets aside what it throws away: a path of the datastore, the outbox or the runner's folder in `writes` is yours to choose, with what it gives the agent. A path of `writes` outside the agent's folder isn't in git, a failed run's changes there aren't undone, and it is in a backup only when it lies in a folder a backup holds ([Backups and restore](#backups-and-restore)).
 - **To add a skill**, for a new view:
   1. Make a folder `skills/<name>/` with a `SKILL.md` whose frontmatter gives the folder's name as `name` and a `description` that says when to use it, then the instructions:
      ```markdown
@@ -252,11 +252,11 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
      ---
      Keep views/books.csv with the header date,title,author,status,note,source …
      ```
-     The name is lowercase letters, digits and single hyphens. Without a matching name and a description the runner refuses to start.
+     The name is lowercase letters, digits and single hyphens, and not `scooter`, which is the runner's own skill's. Without a matching name and a description the runner refuses to start.
   2. Add `skills/<name>` to the agent's `skills` in `agents.yaml`.
   3. Add a line for its view to the list in `prompts/lifelog.md`: `- books.csv: books read or started (skill: books)`.
   4. To file the messages from before the skill was added, add a `backfill` entry (see [Backfills](#backfills)).
-- **Upgrades:** the protocol the agent follows ships with the runner, and changes with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
+- **Upgrades:** the protocol the agent follows ships with the runner, and so do the runner's own skill, `scooter`, which says how to read the datastore, `show`, the command the agent reads a message with, and the time zone rules the agent's VM converts times with; they change with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
 
 ## Backups and restore
 
@@ -434,7 +434,7 @@ docker compose up -d
 
 ## Development
 
-The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
+The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19, git and `npm ci`. Switching users and setting owners is then skipped, with one warning. The runner commits with git, and its tests fail without it, rather than skip. The tests of `show` give Node the zone rules that ship with the runner through `ICU_TIMEZONE_FILES_DIR`, which Node's own builds take (`test/tools/icu-tz.test.mjs`). `DATA_DIR` and `CONFIG_DIR` point the services at folders of your own. How the code and its tests are written, and what "done" means, is in [AGENTS.md](AGENTS.md).
 
 **The suite** runs three ways. With wacli and restic installed, restic in the container too, every test runs in at least one of them, so only the three together check a change whole. A test that can't run where it is skips itself, and says why. Run one copy at a time: the test that runs `scooter bridge` as a process takes port 8787, and skips itself when the port is taken. The counts below were taken on 2026-11-22, on a machine with KVM, rootless Docker, and neither wacli nor restic installed.
 
@@ -442,24 +442,26 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   npm ci && npm test
   ```
-  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 825 tests, 768 passed, 57 skipped: 39 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 847 tests, 788 passed, 59 skipped: 41 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
 - **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 827 tests, 809 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 849 tests, 831 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3½ minutes. Without `sg kvm` the VMs run under emulation, many times slower.
 
   Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
   ```sh
   SCOOTER_TEST_IMAGE=~/scooter-test-image GONDOLIN_CPU=max,sgx=off sg kvm -c 'npm test'
   ```
-  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, all 19 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
+  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, all 21 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
 - **As root, in a container**, for what only root does: giving files away and running programs as other users, and, with `SCOOTER_ROOT_TESTS=1`, making users, as `setup`'s own test does. It needs Docker:
   ```sh
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
-  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 825 tests, 756 passed, 69 skipped: 39 for the image, 15 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 847 tests, 776 passed, 71 skipped: 41 for the image, 15 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+
+**The zone rules** the agent's VM converts times with ship in `src/runner/vm/icu-tz/`, for one release of the tz database, which `release.txt` names. To update them to a newer one, replace the four files and `release.txt` as [Updating them](docs/architecture/agent.md#updating-them) says, and run the suite.
 
 **The live checks** in `test/live/` are run by hand. `openrouter.mjs`, with the network, runs pi in a VM, through the runner and its policy, against the real OpenRouter with a dummy key, which must answer 401, while `https://example.com` is refused. `data-mounts.mjs`, in the runner's container, checks what a run sees and may change with the data under `/data`. Each file says how to run it. A test run in the runner's container that kills a QEMU needs tini as the container's first process, the image's entry point: `--entrypoint tini`, with `node …` as the command.
 

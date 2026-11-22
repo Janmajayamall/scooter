@@ -163,13 +163,17 @@ export function designFiles(data) {
   return piFiles(paths, { name: 'lifelog', reads: ['datastore/', 'agents/lifelog/'], writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'] })
 }
 
-// pi's environment, as the runner gives it (`piEnv`), with the key's placeholder.
-export function piEnv(vm, { tz = 'Asia/Kolkata' } = {}) {
+// pi's environment, as the runner gives it (`piEnv`), with the key's placeholder. `bin` is the run's
+// folder of the programs that ship with the runner, which the runner puts first on the `PATH`, and
+// `icuTz` its copy of ICU's zone rules, which `ICU_TIMEZONE_FILES_DIR` names; the tests that don't
+// use them leave them out.
+export function piEnv(vm, { tz = 'Asia/Kolkata', bin, icuTz } = {}) {
   return {
-    PATH: GUEST_PATH,
+    PATH: bin ? `${bin}:${GUEST_PATH}` : GUEST_PATH,
     HOME: '/root',
     LANG: 'C.UTF-8',
     TZ: tz,
+    ...(icuTz ? { ICU_TIMEZONE_FILES_DIR: icuTz } : {}),
     PI_SKIP_VERSION_CHECK: '1',
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',

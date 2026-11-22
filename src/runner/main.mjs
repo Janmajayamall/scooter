@@ -33,7 +33,7 @@ import { makePaths } from '../common/paths.mjs'
 import { createProc } from '../common/proc.mjs'
 import { RunnerStatusError, readRunnerStatus } from '../common/runnerstatus.mjs'
 import { systemClock } from '../common/time.mjs'
-import { ensureAgentDir } from './agentdir.mjs'
+import { ensureAgentDir, icuTzRelease } from './agentdir.mjs'
 import { backfillJob, finishBackfill } from './backfill.mjs'
 import { buildBatch, buildTaskPrompt } from './batch.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
@@ -80,7 +80,9 @@ export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
 // - `clock`, `log`, `proc`: tests give their own.
 // - `restartWaits`: whether the runner keeps its own waits between starts, where its service
 //   manager doesn't wait (`restarts.mjs`). `scooter runner` says, by its environment.
-export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }), restartWaits = false }) {
+// - `runnerTz`: the release of the tz database the runner's own Node converts times with; tests
+//   give another.
+export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }), restartWaits = false, runnerTz = process.versions.tz }) {
   const paths = makePaths(settings)
   const { agents } = loadConfig({ paths })
   // There is exactly one agent in v2.
@@ -126,6 +128,11 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     const datastore = openDatastore({ paths, clock })
     datastore.poll()
     const protocol = loadProtocol()
+    // The VM's Node converts times with the zone rules that ship with the runner, and the runner's
+    // own Node with its built-in ones; the two can be of different releases, which the owner
+    // accepts, so the log only says so.
+    const vmTz = icuTzRelease()
+    if (vmTz !== runnerTz) log.info('runner.zone_rules_differ', { runner: runnerTz, vm: vmTz })
     let waitingFor = null
 
     async function run(job, signal) {

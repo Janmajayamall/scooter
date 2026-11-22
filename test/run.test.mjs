@@ -115,18 +115,21 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
     'lifelog-2026-11-09',
     '--append-system-prompt',
     path.join(run, 'system.md'),
+    '--skill',
+    path.join(run, 'skills', 'scooter'),
     ...['expenses', 'runs', 'meals', 'travel', 'people'].flatMap(skill => ['--skill', path.join(run, 'config', 'skills', skill)]),
     '--',
   ])
   assert.match(spec.argv.at(-1), /^\[scooter\] Now: Monday 9 November 2026, 21:20 \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
 
   // pi's environment and nothing else, with a placeholder where the key would be.
-  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
+  assert.deepEqual(Object.keys(env).sort(), ['HOME', 'ICU_TIMEZONE_FILES_DIR', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
   assert.deepEqual({ ...env, OPENROUTER_API_KEY: undefined }, {
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    PATH: `${path.join(run, 'bin')}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
     HOME: '/root',
     LANG: 'C.UTF-8',
     TZ: 'Asia/Kolkata',
+    ICU_TIMEZONE_FILES_DIR: path.join(run, 'icu-tz'),
     PI_SKIP_VERSION_CHECK: '1',
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',
@@ -144,9 +147,40 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   assert.equal(seen.sessionsVisible, false)
   assert.deepEqual(seen.sessionFiles, [])
   assert.match(seen.systemPrompt, /^# How you work with Scooter\n/)
-  assert.deepEqual(seen.skills, [true, true, true, true, true])
+  assert.deepEqual(seen.skills, [true, true, true, true, true, true])
   assert.equal(seen.cwd, agent)
   assert.deepEqual(seen.env, env)
+})
+
+test("run: the agent finds show on its PATH, and it prints the batch's lines from the run's index file, in the owner's time", async t => {
+  const { runner, clock, sandbox, paths, state } = await openWith(t, [line.text(1042, '2026-11-09T15:44:00Z', 'coffee 120'), line.edit(1043, '2026-11-09T15:50:00Z', 1042, 'coffee 150 SHOW')])
+  const { outcome } = await runNext(runner, clock)
+  assert.deepEqual(outcome, { ok: true, cause: null })
+  const [seen] = sandbox.seen()
+  assert.equal(seen.show.folder, paths.agentRunBin('lifelog'))
+  assert.equal(seen.show.code, 0, seen.show.stderr)
+  const log = paths.dayLog('2026/11/09')
+  const stored = fs.readFileSync(log, 'utf8').split('\n')
+  assert.equal(
+    seen.show.stdout,
+    [
+      `1042  Mon 9 Nov 2026 21:14 +05:30  ${log}:1`,
+      stored[0],
+      '',
+      `1043  Mon 9 Nov 2026 21:20 +05:30  ${log}:2`,
+      stored[1],
+      `  points at 1042  Mon 9 Nov 2026 21:14 +05:30  ${log}:1`,
+      `  ${stored[0]}`,
+      '',
+    ].join('\n'),
+  )
+  // The index file holds every line the runner had read, the 1,041 of filler among them.
+  const index = fs.readFileSync(paths.agentRunIndex('lifelog'), 'utf8').split('\n')
+  assert.equal(index.length, 1044)
+  assert.equal(index[1042], `1043 ${log}:2 edit 1042`)
+  // The run is what it was without show: both items reported, the cursor past them.
+  assert.equal(state().cursor, 1043)
+  assert.deepEqual(state().retry, [])
 })
 
 test('run: with internet access on, the policy and the prompt say so', async t => {

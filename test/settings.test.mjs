@@ -426,7 +426,8 @@ test('settings: each fault in the runner\'s settings names its variable', () => 
     BATCH_SECONDS: ['0', '601', '8s', '2.5', '-8'],
     SESSION_ROLLOVER_HOUR: ['24', '4am', '-1'],
     SCOOTER_TZ: ['Nowhere/Land'],
-    DATA_DIR: ['relative/path'],
+    // A `:` would split the VMs' PATH, and a line break the lines of a run's index file.
+    DATA_DIR: ['relative/path', '/var/lib/scoo:ter', '/data\nmore', '/data\rmore', '/data\tmore', '/data\u0085more'],
   }
   for (const [variable, values] of Object.entries(bad)) {
     for (const value of values) {
@@ -435,6 +436,11 @@ test('settings: each fault in the runner\'s settings names its variable', () => 
     }
   }
   assert.ok(!faults('runner', { ...RUNNER, OPENROUTER_API_KEY: 'sk-or v1' }).OPENROUTER_API_KEY.includes('sk-or'))
+  assert.match(faults('runner', { ...RUNNER, DATA_DIR: '/a:b' }).DATA_DIR, /^DATA_DIR can't hold a : or a control character, such as a line break: the runner puts a folder of it on its VMs' PATH/)
+  // Spaces and other characters are a path's own; the bridge, whose programs take no PATH from it,
+  // takes a `:` as it did.
+  assert.equal(loadSettings('runner', { env: { ...RUNNER, DATA_DIR: '/my data/scooter ₹' } }).dataDir, '/my data/scooter ₹')
+  assert.equal(loadSettings('bridge', { env: { ...BRIDGE, DATA_DIR: '/var/lib/scoo:ter' } }).dataDir, '/var/lib/scoo:ter')
 })
 
 test('settings: every fault is reported at once', () => {

@@ -26,8 +26,9 @@ export const DIRECTIONS = ['in', 'out']
 export const SOURCES = ['whatsapp', 'email']
 export const TRUSTS = ['owner', 'external']
 
-// The fields, in the order a line is written.
-const FIELDS = ['seq', 'kind', 'dir', 'at', 'source', 'sourceId', 'trust', 'by', 'replyTo', 'target', 'text', 'files', 'media', 'data']
+// The fields, in the order a line is written. The runner's skill lists them in this order
+// (`src/runner/vm/skills/scooter/SKILL.md`), and a test holds it to them.
+export const FIELDS = ['seq', 'kind', 'dir', 'at', 'source', 'sourceId', 'trust', 'by', 'replyTo', 'target', 'text', 'files', 'media', 'data']
 
 // The fields each kind of line needs, beyond those every line has, for this version to act on it.
 const NEEDS = {

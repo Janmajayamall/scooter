@@ -8,6 +8,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { readLock, takeLock } from '../src/common/locks.mjs'
 import { readRunnerStatus } from '../src/common/runnerstatus.mjs'
+import { icuTzRelease } from '../src/runner/agentdir.mjs'
 import { openRunner, runRunner, startRunner } from '../src/runner/main.mjs'
 import { acquireRunLock } from '../src/runner/run.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
@@ -541,6 +542,27 @@ test('startup: a leftover run.lock is removed, and changes a run left uncommitte
   second.add(line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150'))
   assert.deepEqual((await runNext(second.runner, prepared.clock)).outcome, { ok: true, cause: null })
   assert.equal(second.git('log', '-1', '--format=%s'), 'lifelog: #1042\n')
+})
+
+test("startup: the runner says once in its log when its own Node's zone rules are another release than those that ship for the VM, and goes on", async t => {
+  const prepared = prepareTestRunner(t, { lines: fillerLines(1041), state: HANDLED, start: START })
+  const vm = icuTzRelease()
+  const start = async options => {
+    prepared.entries.length = 0
+    const runner = await openRunner({ settings: prepared.settings, openSandbox: async () => prepared.sandbox, clock: prepared.clock, log: prepared.log, proc: prepared.proc, ...options })
+    const said = prepared.entries.filter(entry => entry.event === 'runner.zone_rules_differ').map(({ level, runner, vm }) => ({ level, runner, vm }))
+    // It goes on: a round of the loop runs.
+    await runner.tick()
+    runner.close()
+    return said
+  }
+  // Another release: one line, with both.
+  assert.deepEqual(await start({ runnerTz: '2020a' }), [{ level: 'info', runner: '2020a', vm }])
+  // The same: none.
+  assert.deepEqual(await start({ runnerTz: vm }), [])
+  // By default, this Node's own.
+  assert.deepEqual(await start({}), process.versions.tz === vm ? [] : [{ level: 'info', runner: process.versions.tz, vm }])
+  assert.match(vm, /^\d{4}[a-z]+$/)
 })
 
 test('startup: trees whose paths pass what the system takes, in views/, run/session/ and what a clean-up set aside, don\'t keep the runner from starting', async t => {
