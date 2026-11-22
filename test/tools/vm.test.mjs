@@ -719,7 +719,9 @@ test("VM 9: send and mark, copied into run/bin/ as show is, run by their names f
   // What the agent types: a reply with quotes and a `$` in single quotes, a text with line breaks,
   // a `$` and backticks through a here-document, a send with no text at all, its marks, and writes
   // where neither program writes.
+  // One stream, so what the programs and the shell say on stderr keeps its place among the rest.
   const command = [
+    'exec 2>&1',
     `send --reply-to 1050 'He said "₹450, not $45".'; echo "exit $?"`,
     "send <<'END'",
     'Two lines,',
@@ -754,9 +756,9 @@ test("VM 9: send and mark, copied into run/bin/ as show is, run by their names f
       'exit 0',
       'mark: 1048 marked failed',
       'exit 0',
-      `/bin/bash: line 10: ${run}/index.txt: Read-only file system`,
+      `/bin/bash: line 11: ${run}/index.txt: Read-only file system`,
       'exit 1',
-      `/bin/bash: line 11: ${run}/marks-2.txt: Read-only file system`,
+      `/bin/bash: line 12: ${run}/marks-2.txt: Read-only file system`,
       'exit 1',
       'exit 0',
       '',
