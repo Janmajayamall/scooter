@@ -57,10 +57,11 @@ const isName = value => isString(value) && /^[a-z][a-z0-9-]*$/.test(value)
 const isBareName = value => isText(value) && !value.includes('/') && !value.startsWith('.')
 
 // Whether a value is what JSON can hold, and reads back as it was written: null, a boolean, a
-// string, a finite number, or a list or a plain object of such values.
+// string, a finite number but -0, which is written as 0, or a list without holes or a plain object
+// of such values.
 function isJson(value, seen = new Set()) {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true
-  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0)
   if (typeof value !== 'object' || seen.has(value)) return false
   const isList = Array.isArray(value)
   const proto = Object.getPrototypeOf(value)

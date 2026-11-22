@@ -130,6 +130,7 @@ test('datastore: what the store refuses to write, and why', () => {
     [{ ...good, data: 'quoted' }, /data must be/],
     [{ ...good, data: { n: NaN } }, /data must be/],
     [{ ...good, data: { n: Infinity } }, /data must be/],
+    [{ ...good, data: { n: -0 } }, /data must be/],
     [{ ...good, data: { n: 1n } }, /data must be/],
     [{ ...good, data: { gone: undefined } }, /data must be/],
     [{ ...good, data: { when: new Date(0) } }, /data must be/],
