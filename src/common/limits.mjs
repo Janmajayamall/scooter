@@ -157,16 +157,17 @@ const values = {
   MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped.
   GIT_CALL_TIMEOUT: 1 * MINUTE,
-  // The most what an agent's repository keeps, its `writes` in its folder, may hold together after a
-  // run, in bytes. pi can make a file of
-  // any size in an instant, all holes, and git reads every byte of a file to add it, so a run that
-  // leaves more fails before git reads anything, rather than git running past `GIT_CALL_TIMEOUT`.
+  // The most what an agent's repository keeps, its `writes` in its folder, may hold together after
+  // a run, in bytes. pi can make a file of any size in an instant, all holes, and git reads every
+  // byte of a file to add it, so a run that leaves more fails before git reads anything, rather
+  // than git running past `GIT_CALL_TIMEOUT`.
   // On the plan's Linux machine git adds this much in about 2 seconds, and the five default views
   // of a year at 20 rows a day, of about 70 bytes each, take about 0.5 MB.
   AGENT_FILES_MAX_BYTES: 100 * MB,
-  // The most files and folders what an agent's repository keeps may hold together after a run. pi can make
-  // hundreds of thousands in a run, and some of git's work grows faster than their number, such as
-  // taking them out of the index again, so a run that leaves more fails before git reads anything.
+  // The most files and folders what an agent's repository keeps may hold together after a run. pi
+  // can make hundreds of thousands in a run, and some of git's work grows faster than their number,
+  // such as taking them out of the index again, so a run that leaves more fails before git reads
+  // anything.
   // The default skills keep five CSV files, and the memory two more, which grow in rows, not in
   // number; git adds this many small files in about a tenth of a second on the plan's Linux machine.
   AGENT_FILES_MAX_COUNT: 20000,
