@@ -18,7 +18,8 @@
 // stops the runner, which would run the same batch again at its next start without counting one.
 // `run/session/` is emptied before the run is recorded, and on a failure what `writes` names in
 // the agent's folder is cleaned up after it, so nothing pi left takes room the clean-up or the
-// state needs: pi may have filled the disk. A clean-up that can't finish stops the runner, once the run is recorded.
+// state needs: pi may have filled the disk. A clean-up that can't finish stops the runner, once
+// the run is recorded.
 //
 // A replayed batch, of a rebuild or a backfill (`replay.mjs`), is a run like the
 // others, with its own session, skills and commit message, and three differences: it sends
