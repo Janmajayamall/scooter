@@ -506,6 +506,41 @@ test('run: what send queued goes out, quoted or about the newest item, then the 
   assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
 })
 
+test('run: an error writing the outbox at a message, before the state, records nothing; one at the ✅, after the state, leaves the run recorded and loses only the ✅', async t => {
+  const message = { type: 'text', by: 'lifelog', text: 'Filed #1042.', about: 1042, channels: ['whatsapp'] }
+  // The batch, which the stub marks done, with a message for SAY; the entry handed to the outbox
+  // that fails, the n-th; whether the run is recorded; and what the outbox holds afterwards.
+  for (const [name, text, fails, recorded, sent] of [
+    ['at the first message', 'coffee SAY', 1, false, []],
+    ['at the ✅, after one message', 'coffee SAY', 2, true, [message]],
+    ['at the ✅, the only entry', 'coffee 150', 1, true, []],
+  ]) {
+    await t.test(name, async t => {
+      const { runner, clock, state, outbox, paths } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', text)])
+      const before = state()
+      // Handing an entry over to the outbox ends in a rename into it, which fails as a full disk or
+      // a disk error would fail it.
+      const rename = fs.renameSync
+      let handed = 0
+      t.mock.method(fs, 'renameSync', (from, to) => {
+        if (path.dirname(to) === paths.outbox && ++handed === fails) throw Object.assign(new Error(`EIO: i/o error, rename '${from}' -> '${to}'`), { code: 'EIO' })
+        return rename(from, to)
+      })
+      // It stops the runner, as any error writing the outbox does.
+      await assert.rejects(runNext(runner, clock), { code: 'EIO' })
+      assert.equal(handed, fails)
+      assert.deepEqual(outbox(), sent)
+      if (recorded) {
+        assert.equal(state().cursor, 1042)
+        assert.deepEqual(state().retry, [])
+        assert.deepEqual(state().lastRun, { at: '2026-11-09T15:50:38Z', ok: true, seqs: [1042], durationMs: 0 })
+      } else {
+        assert.deepEqual(state(), before)
+      }
+    })
+  }
+})
+
 test("run: a --reply-to a number that doesn't exist, a reaction or a line Scooter sent is sent, without a quote or quoting Scooter's own line; numbers not in the batch are ignored and logged", async t => {
   const { runner, clock, outbox, state, entries } = await openWith(t, [
     line.sent(1042, '2026-11-09T15:49:00Z', 'Logged the cab.'),
