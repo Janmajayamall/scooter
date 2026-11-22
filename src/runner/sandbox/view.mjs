@@ -7,14 +7,17 @@
 // The sandbox mounts `root` through two providers of this module, over the one the sandbox gives
 // it (`inner`, a `RealFSProvider` of `root`, counted against the run's budget):
 //
-// - `ViewShadow`, Gondolin's `ShadowProvider` with what it lacks, `link`: a path that is hidden, or
-//   that is neither in an entry of `reads` or `writes` nor a folder that leads to one, isn't
-//   there. Reading it fails with ENOENT, and listings leave it out. A path that leads to such a
-//   path through a link on the host is taken as that path (`denySymlinkBypass`).
+// - `ViewShadow`, Gondolin's `ShadowProvider` with what it lacks or takes too far (`viewShadow`): a
+//   path that is hidden, or that is neither in an entry of `reads` or `writes` nor a folder that
+//   leads to one, isn't there. Reading it fails with ENOENT, and listings leave it out, also a
+//   listing through a link on the host. A path that leads to such a path through a link on the
+//   host is taken as that path (`denySymlinkBypass`); a link itself, which `lstat`, `readlink`,
+//   `unlink` and `rename` act on, is judged by its own name.
 // - `WritesProvider`, outermost, which refuses with EROFS every operation that changes something,
 //   unless `writes` lets the run change that path, as Gondolin's `ReadonlyProvider` refuses them
 //   all. It looks at the path the guest gave, and at the path the host would change, through
-//   whatever links the host would follow on the way, and both must be allowed.
+//   whatever links the host would follow on the way, and both must be allowed; nothing is done
+//   through a link that leads nowhere.
 //
 // An entry of `writes` is a file or a folder:
 // - **a folder** lets the run change everything in it, and the folder itself only by `mkdir`,
@@ -110,6 +113,18 @@ function opensForWriting(flags) {
   return typeof flags !== 'string' || /[wa+]/.test(flags)
 }
 
+// Whether there is a link at `host`, a path on the host.
+function isLinkOnHost(host) {
+  try {
+    return fs.lstatSync(host).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+// The path on the host of `p`, a path from the root.
+const hostPath = (rootReal, p) => (p === '/' ? rootReal : path.join(rootReal, p))
+
 // The provider that refuses what `writes` doesn't let the run change. `rootReal` is the root on
 // the host, with its links resolved, as `RealFSProvider` takes it.
 function writesProvider(gondolin, view, rootReal, backend) {
@@ -117,13 +132,17 @@ function writesProvider(gondolin, view, rootReal, backend) {
   // outside the root or can't be told: `follow` for an operation that follows a link at `p`
   // itself, as `open` and `chmod` do; otherwise only the links on the way to `p`'s folder count,
   // as for `unlink` and `rename`.
+  //
+  // A last name that is a link leading nowhere lands nowhere that can be told: the host would make
+  // what the link names, wherever that is, so nothing is done through it. The VM's kernel never
+  // asks that, since it follows a link itself.
   const landing = (p, follow) => {
-    const host = p === '/' ? rootReal : path.join(rootReal, p)
+    const host = hostPath(rootReal, p)
     if (follow) {
       try {
         return fromRoot(rootReal, fs.realpathSync(host))
       } catch (error) {
-        if (error.code !== 'ENOENT') return null
+        if (error.code !== 'ENOENT' || isLinkOnHost(host)) return null
       }
     }
     if (p === '/') return '/'
@@ -301,9 +320,40 @@ function writesProvider(gondolin, view, rootReal, backend) {
   return new WritesProvider()
 }
 
-// Gondolin's `ShadowProvider`, which has no `link`, with one that refuses a hidden path at either
-// end, as its other operations do.
-function viewShadow(gondolin, backend, shouldShadow) {
+// Gondolin's `ShadowProvider`, with what it lacks or takes too far. `hidden(p)` says whether the VM
+// doesn't see `p`, a normalized path from the root; `ShadowProvider` asks it of the path given, and
+// of where the host finds it, through every link on the way (`denySymlinkBypass`).
+// - `link`, which it lacks: refused when either end is hidden, as its other operations are.
+// - `readdir`: a name is left out when it is hidden in the folder given, as `ShadowProvider` has
+//   it, and also in the folder the host lists, where a link given as the folder leads. The VM's
+//   kernel lists a folder by its own path, but a request made to the service itself can name a
+//   link, and `RealFSProvider` lists what it leads to.
+// - `lstat`, `readlink`, `unlink` and `rename`, which act on a link itself, not on what it leads
+//   to: judged at the name, and where the host finds the name through the links on the way to its
+//   folder, but not through a link at the name. `ShadowProvider` follows that link too, so a link
+//   the run made to what it doesn't see could be neither seen, read, moved nor removed.
+function viewShadow(gondolin, backend, rootReal, hidden) {
+  // Where on the host the folder `p` is, as a path from the root, or null when that can't be told.
+  const real = p => {
+    try {
+      return fromRoot(rootReal, fs.realpathSync(hostPath(rootReal, p)))
+    } catch {
+      return null
+    }
+  }
+  // Whether the VM doesn't see the name `p` itself.
+  const nameHidden = p => {
+    if (hidden(p)) return true
+    if (p === '/') return false
+    const folder = real(posix.dirname(p))
+    return folder !== null && hidden(posix.join(folder, posix.basename(p)))
+  }
+  const entryName = entry => (typeof entry === 'string' ? entry : Buffer.isBuffer(entry) ? entry.toString() : entry.name)
+  const listed = (p, names) => {
+    const folder = real(p)
+    return folder === null || folder === p ? names : names.filter(entry => !hidden(posix.join(folder, entryName(entry))))
+  }
+
   class ViewShadow extends gondolin.ShadowProvider {
     async link(existing, name) {
       const [from, to] = [normalize(existing), normalize(name)]
@@ -319,8 +369,54 @@ function viewShadow(gondolin, backend, shouldShadow) {
       }
       return this.backend.linkSync(from, to)
     }
+    async readdir(p, options) {
+      return listed(normalize(p), await super.readdir(p, options))
+    }
+    readdirSync(p, options) {
+      return listed(normalize(p), super.readdirSync(p, options))
+    }
+    async lstat(given, options) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('ENOENT', 'lstat', p)
+      return this.backend.lstat(p, options)
+    }
+    lstatSync(given, options) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('ENOENT', 'lstat', p)
+      return this.backend.lstatSync(p, options)
+    }
+    async readlink(given, options) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('ENOENT', 'readlink', p)
+      return this.backend.readlink(p, options)
+    }
+    readlinkSync(given, options) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('ENOENT', 'readlink', p)
+      return this.backend.readlinkSync(p, options)
+    }
+    async unlink(given) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('EACCES', 'unlink', p)
+      return this.backend.unlink(p)
+    }
+    unlinkSync(given) {
+      const p = normalize(given)
+      if (nameHidden(p)) throw errnoError('EACCES', 'unlink', p)
+      return this.backend.unlinkSync(p)
+    }
+    async rename(oldPath, newPath) {
+      const [from, to] = [normalize(oldPath), normalize(newPath)]
+      if (nameHidden(from) || nameHidden(to)) throw errnoError('EXDEV', 'rename', `${from} -> ${to}`)
+      return this.backend.rename(from, to)
+    }
+    renameSync(oldPath, newPath) {
+      const [from, to] = [normalize(oldPath), normalize(newPath)]
+      if (nameHidden(from) || nameHidden(to)) throw errnoError('EXDEV', 'rename', `${from} -> ${to}`)
+      return this.backend.renameSync(from, to)
+    }
   }
-  return new ViewShadow(backend, { shouldShadow })
+  return new ViewShadow(backend, { shouldShadow: ({ path: p }) => hidden(normalize(p)) })
 }
 
 // The provider for a run's `files`, over `inner`, Gondolin's provider of `files.root` (with the
@@ -328,6 +424,15 @@ function viewShadow(gondolin, backend, shouldShadow) {
 export function viewProvider(gondolin, files, inner) {
   const view = viewOf(files)
   const rootReal = fs.realpathSync(files.root)
-  const shown = viewShadow(gondolin, inner, ({ path: p }) => !isShown(view, normalize(p)))
-  return writesProvider(gondolin, view, rootReal, shown)
+  // A path shown only because it leads to an entry is a folder on the way: a file there, as a
+  // change of `writes` can leave one, is no entry's, and isn't shown.
+  const isFolderOnHost = p => {
+    try {
+      return fs.statSync(hostPath(rootReal, p)).isDirectory()
+    } catch {
+      return false
+    }
+  }
+  const hidden = p => !isShown(view, p) || (!view.shown.some(entry => within(p, entry)) && !isFolderOnHost(p))
+  return writesProvider(gondolin, view, rootReal, viewShadow(gondolin, inner, rootReal, hidden))
 }

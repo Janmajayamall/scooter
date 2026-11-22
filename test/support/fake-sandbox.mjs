@@ -6,10 +6,11 @@
 // shows at its path there: a link to the host's file or folder, or, for a folder that holds a
 // hidden path, a folder of links to everything in it but that, with a link to where each path of
 // `writes` in it that isn't there yet would be. So, as in the VM, the agent's `sessions/` isn't
-// there at all, and what the stub makes where `writes` names reaches the host. What it doesn't do is keep the stub from changing what `writes`
-// doesn't name: it gives the stub the run's `writes` (`PI_STUB_WRITES`), and the stub writes only
-// there, as the VM would let it, noting each write it leaves out. The real VM's tests show the
-// sandbox holding pi to them (`test/tools/vm.test.mjs`, `test/sandbox.test.mjs`).
+// there at all, and what the stub makes where `writes` names reaches the host. What it doesn't do
+// is keep the stub from changing what `writes` doesn't name: it gives the stub the run's `writes`
+// (`PI_STUB_WRITES`), and the stub writes only there, as the VM would let it, noting each write it
+// leaves out. The real VM's tests show the sandbox holding pi to them (`test/tools/vm.test.mjs`,
+// `test/sandbox.test.mjs`).
 //
 // The stub gets the spec's environment, the secrets' placeholders, and a few `PI_STUB_*` variables
 // of its own, which it leaves out of what it records. Its output is kept as the real sandbox keeps

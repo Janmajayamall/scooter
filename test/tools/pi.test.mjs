@@ -442,7 +442,7 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
     assert.equal(worked.isError, false, worked.text)
   }
 
-  // pi's own tools see the agent's folder without `sessions/`, which the mounts hide.
+  // pi's own tools see the agent's folder without `sessions/`, which the sandbox hides.
   assert.equal(ls.text, 'memory/\nrun/\nstate.json\nviews/')
   assert.equal(find.text, 'expenses.csv')
   assert.equal(grep.text, 'preferences.md:1: - 2026-11-09 (#1040): Track coffee.')

@@ -41,6 +41,8 @@ test('status.json: the format, each fault naming its field', () => {
     [{ extra: 1 }, 'extra is not a field of the status'],
     // `scooter status` makes paths of the names.
     [{ agents: { '../etc': STATUS.agents.lifelog } }, 'agents must be named as agents.yaml names them, such as lifelog'],
+    [{ agents: { runner: STATUS.agents.lifelog } }, 'agents must be named as agents.yaml names them, such as lifelog'],
+    [{ agents: { bridge: STATUS.agents.lifelog } }, 'agents must be named as agents.yaml names them, such as lifelog'],
     [{ internet: undefined }, 'internet is missing'],
   ]
   for (const [changes, problem] of cases) {

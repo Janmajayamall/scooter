@@ -354,6 +354,14 @@ test("VM 6: the sandbox's provider lets the VM change what writes names, files a
   assert.equal(fs.readFileSync(path.join(root, 'ro', 'keep.txt'), 'utf8'), 'keep\n')
   assert.deepEqual(fs.readdirSync(path.join(root, 'ro')).sort(), ['empty', 'keep.txt', 'secret'])
 
+  // A link made to what the VM doesn't see is there, and can be listed and removed, while what it
+  // leads to stays out of sight.
+  assert.equal((await run('ln -s ../ro/secret allowed/s')).exitCode, 0)
+  assert.match((await run('ls -l allowed/s')).stdout, /allowed\/s -> \.\.\/ro\/secret/)
+  assert.match((await run('cat allowed/s/hidden.txt')).stderr, NOT_THERE)
+  assert.equal((await run('mv allowed/s allowed/sub/s && rm allowed/sub/s')).exitCode, 0)
+  assert.equal(fs.existsSync(path.join(root, 'allowed', 'sub', 's')), false)
+
   // Inside a folder writes names, every change is allowed.
   for (const command of [
     'echo a > allowed/a.txt',

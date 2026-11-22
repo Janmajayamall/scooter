@@ -13,8 +13,8 @@
 //   command returned, outside `run.lock`. The runner packs the repository itself (`pack`).
 //
 // The repository keeps what the agent's `writes` names in its folder (`agent.repository`, from
-// `config.mjs`): its entries, files or folders, a folder ending in `/`, such as `views/`. After each
-// run the runner checks what pi left there, commits it, or throws it away. A path of `writes`
+// `config.mjs`): its entries, files or folders, a folder ending in `/`, such as `views/`. After
+// each run the runner checks what pi left there, commits it, or throws it away. A path of `writes`
 // outside the agent's folder is none of the repository's, and the runner never reads it.
 //
 // pi chose every name, mode, size and depth there, and the number of files. So the check walks the

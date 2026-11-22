@@ -169,7 +169,7 @@ For context only (no action, no DONE):
 2. the agent's prompt, from the run's copy of the config folder;
 3. a `# Your memory` section with what `memory/preferences.md` and `memory/needs-review.md` hold, or "(empty)".
 
-Each memory file is opened without following a link, and only a regular file is read, at most `MEMORY_MAX_BYTES` of it; otherwise the section says the file wasn't read, or was cut and should be shortened. *Why:* pi writes `memory/`, as the default `writes` lets it. A run that leaves a link there fails and is cleaned up, but a runner stopped before the clean-up would read the link at its next run, and a link to `runner.env` would put the OpenRouter key into the prompt. A file that grew without bound would make every request too large, and no run could then shorten it.
+Each memory file is opened without following a link, and only a regular file is read, at most `MEMORY_MAX_BYTES` of it; otherwise the section says the file wasn't read, or was cut and should be shortened. When `memory` is itself a file, which `writes` may name as one, there is no memory file in it, and the section says "(empty)", as with no `memory/` at all: a path through a file names nothing. *Why:* pi writes `memory/`, as the default `writes` lets it. A run that leaves a link there fails and is cleaned up, but a runner stopped before the clean-up would read the link at its next run, and a link to `runner.env` would put the OpenRouter key into the prompt. A file that grew without bound would make every request too large, and no run could then shorten it. And an error there would stop every run before pi, without counting an attempt.
 
 ## Restarts
 

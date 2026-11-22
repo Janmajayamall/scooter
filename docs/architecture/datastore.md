@@ -2,7 +2,7 @@
 
 The datastore is Scooter's source of truth: every message in and out, appended and never changed. Everything else, the views, the memory, the sessions and the runner's state, is derived from it and can be rebuilt ([Why it is built this way](../ARCHITECTURE.md#why-it-is-built-this-way)). This document covers its layout, the format of a line, how lines are written, and how they are read back.
 
-The bridge is its one writer, through the store. Two read it: the runner, and pi through a read-only mount. It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
+The bridge is its one writer, through the store. Two read it: the runner, and pi, whose VM may read it and change none of it ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). It is the interface from the bridge to the runner, but not a queue: it holds no reader's position. The runner keeps its own, in its `state.json` ([State](runner.md#state)).
 
 Who owns its folders, and their modes, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners).
 

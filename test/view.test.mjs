@@ -231,3 +231,98 @@ test('view: what nothing names, and what is hidden, the VM neither sees nor list
   }
   await refusedWith('ENOENT', provider.readdir('/ro/secret'), 'listing a hidden folder')
 })
+
+test('view: a listing through a link on the host leaves out what the folder it lists hides, as a listing by its own path does', async t => {
+  const { root, provider } = layOut(t)
+  fs.symlinkSync('..', path.join(root, 'allowed', 'to-root'))
+  // Given straight to the service, a link is listed as the folder it leads to, judged there.
+  assert.deepEqual((await provider.readdir('/allowed/to-root')).sort(), ['allowed', 'empty', 'file.txt', 'folder.txt', 'ro'])
+  assert.deepEqual(provider.readdirSync('/allowed/to-root').sort(), ['allowed', 'empty', 'file.txt', 'folder.txt', 'ro'])
+  assert.deepEqual((await provider.readdir('/allowed/to-ro')).sort(), ['keep.txt'])
+  assert.deepEqual((await provider.readdir('/allowed/to-ro', { withFileTypes: true })).map(entry => entry.name).sort(), ['keep.txt'])
+  // What it leaves out can't be reached through the link either.
+  await refusedWith('ENOENT', provider.stat('/allowed/to-root/unnamed.txt'), 'a file nothing names, through the link')
+  await refusedWith('ENOENT', provider.readdir('/allowed/to-ro/secret'), 'a hidden folder, through the link')
+})
+
+test("view: a link that leads nowhere is never written through, by the provider's own check, and Gondolin's RealFSProvider refuses it too", async t => {
+  const { root, provider } = layOut(t)
+  // Each would make a file where the link leads, outside what the run may change.
+  const links = {
+    'to-new-in-ro': '../ro/new.txt',
+    'to-nowhere': '../nothing/x.txt',
+    'to-state': '../state.json',
+    'to-outside': '/nonexistent-scooter-test/x',
+    'to-link': 'to-new-in-ro',
+  }
+  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(root, 'allowed', name))
+  const real = new gondolin.RealFSProvider(root)
+  for (const name of Object.keys(links)) {
+    for (const flags of ['w', 'a', 'wx', 'w+', fs.constants.O_WRONLY | fs.constants.O_CREAT]) {
+      await refusedWith('EROFS', provider.open(`/allowed/${name}`, flags), `${name} ${flags}`)
+      // A fact about Gondolin 0.14.0: it takes a last name that is a link to nothing as ENOENT.
+      await refusedWith('ENOENT', real.open(`/allowed/${name}`, flags), `RealFSProvider: ${name} ${flags}`)
+    }
+  }
+  assert.deepEqual(fs.readdirSync(path.join(root, 'ro')).sort(), ['keep.txt', 'secret'])
+  assert.equal(fs.existsSync(path.join(root, 'state.json')), false)
+  assert.equal(fs.existsSync(path.join(root, 'nothing')), false)
+  // A link to a file inside writes that isn't there yet is refused too; the VM's kernel follows it
+  // itself, to a path that is allowed.
+  fs.symlinkSync('new-here.txt', path.join(root, 'allowed', 'to-new-here'))
+  await refusedWith('EROFS', provider.open('/allowed/to-new-here', 'w'), 'a link to a new file in writes')
+  const made = await provider.open('/allowed/new-here.txt', 'w')
+  await made.close()
+})
+
+test('view: a link the run made to what it doesn\'t see can be seen, read, moved and removed by its own name', async t => {
+  const { root, provider } = layOut(t)
+  await provider.symlink('../ro/secret', '/allowed/s')
+  await provider.symlink('../unnamed.txt', '/allowed/u')
+  for (const name of ['s', 'u', 'to-hidden', 'to-unnamed']) {
+    assert.equal((await provider.lstat(`/allowed/${name}`)).isSymbolicLink(), true, name)
+    assert.equal(provider.lstatSync(`/allowed/${name}`).isSymbolicLink(), true, name)
+  }
+  assert.equal(await provider.readlink('/allowed/s'), '../ro/secret')
+  assert.equal(provider.readlinkSync('/allowed/u'), '../unnamed.txt')
+  // What it leads to stays out of sight.
+  await refusedWith('ENOENT', provider.stat('/allowed/s'), 'what the link leads to')
+  await refusedWith('ENOENT', provider.readdir('/allowed/s'), 'listing what the link leads to')
+  await provider.rename('/allowed/s', '/allowed/sub/s')
+  provider.renameSync('/allowed/u', '/allowed/sub/u')
+  await provider.unlink('/allowed/sub/s')
+  provider.unlinkSync('/allowed/sub/u')
+  assert.deepEqual(fs.readdirSync(path.join(root, 'allowed', 'sub')), [])
+  assert.equal(fs.existsSync(path.join(root, 'ro', 'secret', 'hidden.txt')), true)
+  // A name that is hidden itself stays so, also given through a link on the way.
+  await refusedWith('ENOENT', provider.lstat('/ro/secret/hidden.txt'), 'a hidden name')
+  await refusedWith('ENOENT', provider.lstat('/allowed/to-ro/secret'), 'a hidden name, through a linked folder')
+  await refusedWith('ENOENT', provider.readlink('/unnamed.txt'), 'a name nothing names')
+  await refusedWith('EROFS', provider.unlink('/allowed/to-ro/secret/hidden.txt'), 'a hidden name removed through a linked folder')
+})
+
+test('view: a file on the way to an entry, as a change of writes can leave one, is no folder that leads there, and isn\'t shown', async t => {
+  const dir = makeTestDir(t)
+  const root = path.join(dir, 'root')
+  fs.mkdirSync(path.join(root, 'notes'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'notes', '2026'), 'a file of the owner\'s\n')
+  fs.writeFileSync(path.join(root, 'way'), 'another\n')
+  const files = {
+    root,
+    reads: [],
+    writes: [
+      { path: `${root}/notes/2026/books.csv`, folder: false },
+      { path: `${root}/way/inner/`, folder: true },
+    ],
+    hide: [],
+  }
+  const provider = viewProvider(gondolin, files, new gondolin.RealFSProvider(root))
+  assert.deepEqual((await provider.readdir('/')).sort(), ['notes'])
+  assert.deepEqual(await provider.readdir('/notes'), [])
+  for (const p of ['/notes/2026', '/way']) {
+    await refusedWith('ENOENT', provider.stat(p), p)
+    await refusedWith('ENOENT', provider.open(p, 'r'), p)
+  }
+  await refusedWith('EROFS', provider.open('/notes/2026', 'w'), 'the file on the way, written')
+  await refusedWith('EROFS', provider.unlink('/notes/2026'), 'the file on the way, removed')
+})
