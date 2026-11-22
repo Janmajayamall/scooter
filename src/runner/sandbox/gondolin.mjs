@@ -315,7 +315,6 @@ export async function openGondolinSandbox({ paths, settings, log, clock = system
         signal: exited ? (result.signal ?? null) : null,
         stdout: kept.stdout,
         stderr: kept.stderr,
-        stdoutCut: kept.stdoutCut,
         timedOut: why === 'timeout',
         wroteTooMuch: why === 'writes',
       }

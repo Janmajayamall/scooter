@@ -2,24 +2,34 @@
 //
 // 1. **Lock.** Take `run.lock`, recording when the run must be over, then look for `backup.lock`.
 //    If a backup holds it, let go of `run.lock` and wait.
-// 2. **Prepare** `run/`: the system prompt, a copy of the prompt and skills, the runner's own skill
-//    and programs, ICU's zone rules, the index file, and a copy of the current session.
+// 2. **Prepare** `run/`: a copy of the prompt and skills, the runner's own skill and programs,
+//    ICU's zone rules, the index file, a copy of the current session, and an empty `send/`.
 // 3. **Run** pi in the sandbox, with its command, what it sees and may change, its environment and
 //    the network policy.
-// 4. **After a successful run,** in this order: check the files pi left, staging them as the
-//    check's last step; commit; copy its session back; write the outbox entries; update the state.
-//    A crash part-way through only means the batch runs again.
-// 5. **After a failed run**: throw away its session and its changes, read why it failed from
-//    the network log, and update the state, with a notice for the first failure in a row.
+// 4. **After a run that passed,** pi exiting with 0 and its files passing the check, in this
+//    order: check the files pi left, staging them as the check's last step; commit; copy its
+//    session back; write to the outbox the messages `send` queued; update the state from the marks
+//    `mark` wrote; then, in quiet mode, write a reaction for each message marked done that no
+//    message answered. Then the repository is packed if it needs it.
+// 5. **After a failed run**: throw away its session, what it queued and marked, and its changes;
+//    read why it failed from the network log, and update the state, with a notice for the first
+//    failure in a row. Every line it was given has used an attempt, as its cause says.
 // 6. **Release** the lock.
+//
+// Nothing in pi's output decides anything: the runner reads what `send` and `mark` left, and only
+// once the run has passed (`report.mjs`).
 //
 // Everything from the check to the commit reads what pi left, so an error there, such as a git
 // command that times out, fails the run like an unexpected file, and counts an attempt: it never
 // stops the runner, which would run the same batch again at its next start without counting one.
-// `run/session/` is emptied before the run is recorded, and on a failure what `writes` names in
-// the agent's folder is cleaned up after it, so nothing pi left takes room the clean-up or the
-// state needs: pi may have filled the disk. A clean-up that can't finish stops the runner, once
-// the run is recorded.
+// What the run could write in `run/` is cleared before the run is recorded (`clearRunWrites`),
+// and on a failure what `writes` names in the agent's folder is cleaned up after it, so nothing pi
+// left takes room the clean-up, the outbox or the state needs: pi may have filled the disk. A
+// clean-up that can't finish stops the runner, once the run is recorded.
+//
+// A crash between the commit and the state only means the lines are given again, and the agent may
+// then send a second time what it sent. One between the state and the reactions loses that run's
+// reactions: its lines are done, and a reaction says only that.
 //
 // A replayed batch, of a rebuild or a backfill (`replay.mjs`), is a run like the
 // others, with its own session, skills and commit message, and three differences: it sends
@@ -29,12 +39,13 @@
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
 import { lockExists, releaseLock, takeLock } from '../common/locks.mjs'
+import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
-import { clearRunSession, keepSession, prepareRun } from './agentdir.mjs'
-import { answerEntries, droppedTexts, parseAnswer, reportsOf, shortReason } from './answer.mjs'
+import { clearRunWrites, keepSession, prepareRun } from './agentdir.mjs'
 import { settleBackfill } from './backfill.mjs'
 import { failureNotice, givenUpNotice, isFirstFailure, readFailureCause, settleBatch, settleTask } from './failures.mjs'
+import { ackEntries, marksOf, readMarks, readSends, sendEntries, shortReason } from './report.mjs'
 import { GUEST_HOME, GUEST_PATH, OPENROUTER_HOST, PI_PROGRAM } from './sandbox/index.mjs'
 import { saveState, sessionId } from './state.mjs'
 
@@ -48,15 +59,21 @@ export const PI_TOOLS = 'read,bash,edit,write,grep,find,ls'
 
 // What the VM sees of the data folder, mounted at its own path, and what it may change (`files`,
 // `sandbox/index.mjs`): what the agent's `reads` and `writes` name, and `run/`, which a run needs
-// whatever they say; changes only to `writes`, the run's own unless given, and to `run/session/`;
-// and never `sessions/`.
+// whatever they say; changes only to `writes`, the run's own unless given, and to the run's own
+// places in `run/`, `session/`, `send/` and `marks.txt`; and never `sessions/`.
 export function piFiles(paths, agent, writes = agent.writes) {
   const full = entry => path.join(paths.dataDir, entry.replace(/\/$/, ''))
+  const name = agent.name
   return {
     root: paths.dataDir,
-    reads: [...agent.reads, ...agent.writes].map(full).concat(paths.agentRun(agent.name)),
-    writes: [...writes.map(entry => ({ path: full(entry), folder: entry.endsWith('/') })), { path: paths.agentRunSession(agent.name), folder: true }],
-    hide: [paths.agentSessions(agent.name)],
+    reads: [...agent.reads, ...agent.writes].map(full).concat(paths.agentRun(name)),
+    writes: [
+      ...writes.map(entry => ({ path: full(entry), folder: entry.endsWith('/') })),
+      { path: paths.agentRunSession(name), folder: true },
+      { path: paths.agentRunSend(name), folder: true },
+      { path: paths.agentRunMarks(name), folder: false },
+    ],
+    hide: [paths.agentSessions(name)],
   }
 }
 
@@ -91,8 +108,9 @@ export function piPolicy({ agent, settings }) {
 }
 
 // pi's command, with what milestone 0 found: every kind of discovery off, MCP included; the
-// session by its ID in `run/session/`, or none; the system prompt and the skills from `run/`; and
-// the prompt as one argument after `--`, so nothing in it can pass for a flag.
+// session by its ID in `run/session/`, or none; the run's copy of the agent's prompt, which pi
+// appends to its own system prompt, and the skills, from `run/`; and the prompt as one argument
+// after `--`, so nothing in it can pass for a flag.
 export function piArgs({ agent, prepared, sessionId: id, prompt }) {
   return [
     '-p',
@@ -112,7 +130,7 @@ export function piArgs({ agent, prepared, sessionId: id, prompt }) {
     PI_TOOLS,
     ...(id === null ? ['--no-session'] : ['--session-dir', prepared.sessionDir, '--session-id', id]),
     '--append-system-prompt',
-    prepared.systemFile,
+    prepared.promptFile,
     ...prepared.skillDirs.flatMap(dir => ['--skill', dir]),
     '--',
     prompt,
@@ -195,11 +213,11 @@ function settleJob(job, state, outcome, timing) {
 // or `{ ok, cause }` for a run that finished: `cause` is null after a success, and otherwise
 // `setup`, `outage` or `other` (`failureCause`).
 //
-// Context: `agent`, `settings`, `paths`; `sandbox`; `git` for the agent's folder; `protocol`;
-// `ids`, for outbox entries; `index`, the datastore's; `state` and `stateFile`, null for a state
-// that isn't saved, as a rebuild keeps its own in memory; `log` and `clock`.
+// Context: `agent`, `settings`, `paths`; `sandbox`; `git` for the agent's folder; `ids`, for
+// outbox entries; `index`, the datastore's; `state` and `stateFile`, null for a state that isn't
+// saved, as a rebuild keeps its own in memory; `log` and `clock`.
 export async function performRun(context) {
-  const { agent, settings, paths, sandbox, git, protocol, index, log, clock, state, job, signal } = context
+  const { agent, settings, paths, sandbox, git, index, log, clock, state, job, signal } = context
   const startedAt = clock.now()
   const lock = acquireRunLock({ paths, deadline: startedAt + agent.timeoutMinutes * MINUTE, clock })
   if (lock !== 'taken') return { state, outcome: 'waiting', why: lock }
@@ -209,7 +227,7 @@ export async function performRun(context) {
       : agent.session === 'daily'
         ? sessionId(agent.name, { now: startedAt, timeZone: settings.timeZone, rolloverHour: settings.sessionRolloverHour })
         : null
-    const prepared = prepareRun({ paths, agent, protocol, index, sessionId: id, skills: job.skills })
+    const prepared = prepareRun({ paths, agent, index, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
     const task = job.kind === 'scheduled' ? job.at : undefined
@@ -224,17 +242,17 @@ export async function performRun(context) {
     }
     const endedAt = clock.now()
     if (signal?.aborted) {
-      clearRunSession({ paths, agent, log })
+      clearRunWrites({ paths, agent, log })
       await git.discardChanges()
       log.info('runner.run_stopped', { agent: agent.name, job: job.kind, ms: endedAt - startedAt })
       return { state, outcome: 'stopped' }
     }
 
-    // A run whose answer was cut, or that wrote more than a run may, failed, whatever pi's exit code.
-    const exited = !result.error && result.code === 0 && !result.stdoutCut && !result.wroteTooMuch
+    // A run that wrote more than a run may failed, whatever pi's exit code. Nothing pi printed counts.
+    const exited = !result.error && result.code === 0 && !result.wroteTooMuch
     const files = exited ? await commitFiles(context) : null
     const timing = { now: endedAt, startedAt, durationMs: Math.max(0, Math.round(endedAt - startedAt)) }
-    if (files !== null && files.committed !== undefined) return await afterSuccess(context, { result, sessionId: id, seqs, timing, committed: files.committed })
+    if (files !== null && files.committed !== undefined) return await afterSuccess(context, { sessionId: id, seqs, timing, committed: files.committed })
     return await afterFailure(context, { result, files, seqs, timing })
   } finally {
     releaseLock(paths.runLock)
@@ -258,49 +276,59 @@ async function commitFiles({ agent, git, log, job }) {
   }
 }
 
-// After the commit: the session, the outbox, the state; then, outside what the run depends
-// on, the repository is packed if it needs it.
-async function afterSuccess(context, { result, sessionId: id, seqs, timing, committed }) {
+// After the commit: the session; the outbox, from what `send` queued; the state, from what `mark`
+// wrote; the reactions; then, outside what the run depends on, the repository is packed if it needs
+// it. What `send` and `mark` left is read before anything is written, and cleared with the rest of
+// what the run could write in `run/`, so it takes no room the outbox or the state needs.
+//
+// - The messages: at most `RUN_MAX_SENDS` go out, the first ones; the rest, and what isn't a
+//   message `send` writes, are dropped and counted in the log. A replay's, and with `sends: []`
+//   every one, are dropped too: a replay sends nothing.
+// - The marks: a line the run wasn't given is ignored and logged, and a scheduled run's marks
+//   all are, since it is given none.
+async function afterSuccess(context, { sessionId: id, seqs, timing, committed }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
-  const answer = parseAnswer(result.stdout)
-  if (answer.unreadable > 0) log.warn('runner.answer_unreadable', { agent: agent.name, lines: answer.unreadable })
-  const dropped = droppedTexts(answer, agent)
-  if (dropped > 0) log.warn('runner.answer_texts_dropped', { agent: agent.name, texts: dropped })
-
   const session = id === null ? 'none' : await keepSession({ paths, agent, sessionId: id, log })
-  clearRunSession({ paths, agent, log })
+  const sends = readSends(paths.agentRunSend(agent.name))
+  const marks = readMarks(paths.agentRunMarks(agent.name))
+  clearRunWrites({ paths, agent, log })
+
+  if (sends.error !== null) log.warn('runner.sends_unreadable', { agent: agent.name, error: sends.error })
+  const silent = isReplay(job) || agent.sends.length === 0
+  const dropped = { past: sends.past, refused: sends.refused, silent: silent ? sends.messages.length : 0 }
+  if (dropped.past + dropped.refused + dropped.silent > 0) log.warn('runner.sends_dropped', { agent: agent.name, ...dropped })
+  if (marks.refused !== null) log.warn('runner.marks_refused', { agent: agent.name, error: marks.refused })
+  if (marks.unreadable > 0) log.warn('runner.marks_unreadable', { agent: agent.name, lines: marks.unreadable })
+
+  const marked = marksOf(marks, seqs)
+  if (marked.unknown.length > 0) log.warn('runner.marks_unknown', { agent: agent.name, count: marked.unknown.length, seqs: marked.unknown.slice(0, limits.LOGGED_SEQS_MAX) })
+  const about = job.batch ? job.batch.newest : null
+  const { entries: texts, answered } = silent ? { entries: [], answered: new Set() } : sendEntries({ messages: sends.messages, agent, index, about })
 
   let next
-  let entries
-  let reports = null
+  const notices = []
   if (job.batch) {
-    reports = reportsOf(answer, seqs)
-    if (reports.unknown.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reports.unknown })
-    // A replay is silent: its texts, `REPLY_TO` and `NO_REPLY` are ignored.
-    entries = isReplay(job) ? [] : answerEntries({ answer, agent, index, about: job.batch.newest, done: reports.done })
-    const settled = settleJob(job, state, { ok: true, done: reports.done, failed: reports.failed }, timing)
+    const settled = settleJob(job, state, { ok: true, done: marked.done, failed: marked.failed }, timing)
     next = settled.state
-    if (settled.givenUp.length > 0 && !isReplay(job)) entries.push(givenUpNotice(index, settled.givenUp))
+    if (settled.givenUp.length > 0 && !isReplay(job)) notices.push(givenUpNotice(index, settled.givenUp))
   } else {
-    const reported = [...new Set([...answer.done, ...answer.failed.map(entry => entry.seq)])].sort((a, b) => a - b)
-    // A task has no items to report on.
-    if (reported.length > 0) log.warn('runner.answer_unknown', { agent: agent.name, seqs: reported })
-    entries = answerEntries({ answer, agent, index })
     next = settleJob(job, state, { ok: true }, timing).state
   }
+  const reactions = job.batch && !isReplay(job) ? ackEntries({ agent, index, done: marked.done, answered }) : []
 
-  for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
+  for (const entry of [...texts, ...notices]) await writeOutboxEntry({ paths, ids, entry })
   if (stateFile !== null) saveState(stateFile, next)
+  for (const entry of reactions) await writeOutboxEntry({ paths, ids, entry })
   log.info('runner.run_finished', {
     agent: agent.name,
     job: job.kind,
     ok: true,
     ms: timing.durationMs,
-    done: reports?.done.size,
-    failed: reports?.failed.size,
-    notReported: reports ? seqs.length - reports.done.size - reports.failed.size : undefined,
-    texts: entries.filter(entry => entry.type === 'text').length,
-    reactions: entries.filter(entry => entry.type === 'react').length,
+    done: job.batch ? marked.done.size : undefined,
+    failed: job.batch ? marked.failed.size : undefined,
+    notMarked: job.batch ? seqs.length - marked.done.size - marked.failed.size : undefined,
+    texts: texts.length,
+    reactions: reactions.length,
     committed,
     session,
   })
@@ -315,11 +343,12 @@ async function afterSuccess(context, { result, sessionId: id, seqs, timing, comm
 }
 
 // After a failed run: throw it away, find why it failed, and count it. `files` is what `commitFiles` found,
-// or null when pi itself failed. `run/session/` is emptied first: it frees room, which the clean-up
-// needs to make the folders again if pi filled the disk.
+// or null when pi itself failed. What the run could write in `run/` is cleared first, unread: what
+// it queued goes nowhere, and what it marked settles nothing. Clearing frees room, which the
+// clean-up needs to make the folders again if pi filled the disk.
 async function afterFailure(context, { result, files, seqs, timing }) {
   const { agent, paths, git, ids, log, index, state, stateFile, job } = context
-  clearRunSession({ paths, agent, log })
+  clearRunWrites({ paths, agent, log })
   let cleanup = null
   try {
     await git.discardChanges()
@@ -335,7 +364,6 @@ async function afterFailure(context, { result, files, seqs, timing }) {
     status: failure.status,
     exitCode: result.code,
     timedOut: result.timedOut,
-    stdoutCut: result.stdoutCut || undefined,
     wroteTooMuch: result.wroteTooMuch || undefined,
     // A name pi chose, cut as the reason is: it could hold a message's words.
     file: unexpected === null ? undefined : shortReason(unexpected),

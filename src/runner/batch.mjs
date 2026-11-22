@@ -64,7 +64,8 @@ export function selectCandidates({ agent, lane, index, now, upTo = index.lastSeq
 //
 // `items` are in `seq` order, with those brought in by an edit or deletion (`origin` `retry` or
 // `failed`). `context` is in `seq` order. `covered` is where the lane's cursor goes once the run is
-// over, at most `upTo`, and `newest` the newest item, which an answer's plain text is `about`.
+// over, at most `upTo`, and `newest` the newest item, which a message `send` queued without
+// `--reply-to` is `about`.
 export function assembleBatch({ agent, lane, index, upTo = index.lastSeq }, candidates, fresh) {
   const items = new Map(candidates.map(candidate => [candidate.seq, candidate]))
   for (const candidate of candidates) {

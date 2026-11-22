@@ -29,13 +29,14 @@ export function makePaths({ dataDir, configDir }) {
     // The agents' folders.
     agents: data('agents'),
     agentDir: agent,
-    // The folder of the memory files that the runner puts in the system prompt.
-    agentMemory: name => path.join(agent(name), 'memory'),
     agentSessions: name => path.join(agent(name), 'sessions'),
     agentRun: name => path.join(agent(name), 'run'),
-    agentRunSystem: name => path.join(agent(name), 'run', 'system.md'),
     agentRunConfig: name => path.join(agent(name), 'run', 'config'),
     agentRunSession: name => path.join(agent(name), 'run', 'session'),
+    // What `send` and `mark` leave for the runner, the run's two places in `run/` but its session
+    // that it may write: a folder of the messages to send, and the file of the marks.
+    agentRunSend: name => path.join(agent(name), 'run', 'send'),
+    agentRunMarks: name => path.join(agent(name), 'run', 'marks.txt'),
     // The run's index file, the programs that ship with the runner, which the VM finds on its
     // `PATH`, the runner's own skill, and ICU's zone rules, which the VM's Node converts times with.
     agentRunIndex: name => path.join(agent(name), 'run', 'index.txt'),

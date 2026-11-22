@@ -151,10 +151,6 @@ const values = {
   // thousands, each a line the runner and `scooter status` read.
   RUN_REQUESTS_MAX: 1000,
   RUN_REFUSALS_LOGGED_MAX: 100,
-  // The most of each memory file, `preferences.md` and `needs-review.md`, that goes into the
-  // agent's system prompt. pi writes them, and one that grew without bound would make every run's
-  // request too large, with no run left that could shorten it.
-  MEMORY_MAX_BYTES: 64 * KB,
   // The longest a git command of the runner may take before it is stopped.
   GIT_CALL_TIMEOUT: 1 * MINUTE,
   // The most what an agent's repository keeps, its `writes` in its folder, may hold together after
@@ -174,16 +170,27 @@ const values = {
   // The largest session file copied back from a run. pi wrote it, and the whole session goes to
   // the model on every request, so a larger one couldn't be sent anyway.
   SESSION_MAX_BYTES: 100 * MB,
-  // The longest reason kept in `state.json` or quoted in a notice, in characters: the agent's own
-  // reason on a `FAILED` line, or OpenRouter's error. Both come from outside the
+  // The longest reason kept in `state.json` or quoted in a notice, in characters: the reason the
+  // agent gave a line it marked failed, or OpenRouter's error. Both come from outside the
   // runner's code.
   REASON_MAX_CHARS: 200,
   // How much of a message's text a notice quotes to name it, in characters.
   NOTICE_QUOTE_CHARS: 40,
-  // The most texts one answer of the agent's sends: more than a full batch needs, a question about
-  // each of its 20 items and a few lines besides. The rest are dropped and counted in the log, so
-  // a misled run can't flood the owner's chat.
-  ANSWER_MAX_TEXTS: 25,
+  // The most numbers a log line names of those a run marked and wasn't given, the lowest; it counts
+  // them all. The marks file can hold tens of thousands, and a log line of them would be cut by the
+  // system's log.
+  LOGGED_SEQS_MAX: 20,
+  // The most messages one run of the agent's sends, of those `send` queued, the first ones: more
+  // than a full batch needs, a question about each of its 20 items and a few lines besides. The
+  // rest are dropped and counted in the log, so a misled run can't flood the owner's chat.
+  RUN_MAX_SENDS: 25,
+  // The largest message `send` queued, and the largest marks file of a run, that the runner reads,
+  // as files pi wrote. Of a text, only the first `TEXT_MAX_CHARS` characters go out, which take at
+  // most 84 KB as `send` writes them, each as a JSON escape of six bytes; a mark is a line of tens
+  // of bytes, or a few hundred with its reason, and a batch has a few tens of lines. A larger one is
+  // refused, so pi can't make the runner read without end.
+  SEND_ENTRY_MAX_BYTES: 1 * MB,
+  MARKS_MAX_BYTES: 256 * KB,
   // pi's VMs: their memory and how many processors they get. pi, its tools and the files it
   // reads run in the memory, and so do the VM's `/tmp` and `/root`, which can each take half of it.
   VM_MEMORY_BYTES: 2 * 1024 * MB,
@@ -193,9 +200,9 @@ const values = {
   // emulation; Gondolin's own limit is 2 minutes, which a VM that never starts would spend at
   // every try.
   VM_START_TIMEOUT: 1 * MINUTE,
-  // The most of pi's output the sandbox keeps: the start of stdout, which is pi's answer, and the
-  // end of stderr, where OpenRouter's error is. With `-p` pi prints only its answer, a
-  // few kilobytes, and nothing else bounds it. An answer cut here fails the run as pi's own failure.
+  // The most of a program's output the sandbox keeps: the start of stdout, and the end of stderr,
+  // where OpenRouter's error is when the program is pi. The runner reads none of pi's stdout; the
+  // tests read what the programs they run in a VM print. Nothing else bounds what a program prints.
   SANDBOX_STDOUT_MAX_BYTES: 1 * MB,
   SANDBOX_STDERR_MAX_BYTES: 64 * KB,
   // The most one run may write where it may write, what its `writes` names and `run/session/`, in

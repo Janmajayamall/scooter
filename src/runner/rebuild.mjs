@@ -26,7 +26,7 @@
 //    owner's days, `Now:` each batch's own time, a session for each day, each batch taking
 //    `run.lock` and giving way to `backup.lock`. Its progress is a lane it keeps in memory, the
 //    live lane's fields of a state that is never saved, and it handles failures as the runner
-//    does: items not reported are tried again a minute later, and given up on after
+//    does: items not marked are tried again a minute later, and given up on after
 //    `MAX_ATTEMPTS`; a setup error or an outage pauses it until the next try. It waits for an item
 //    to be tried again before it takes the items after it, so the history is replayed in its order,
 //    and a rule the owner sent is learned before the days after it are filed. Nothing goes
@@ -59,7 +59,6 @@ import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { wayIsOpen } from './git.mjs'
 import { holdRunnerFolder, readyAgentFolder } from './main.mjs'
-import { loadProtocol } from './prompt.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
 import { acquireRunLock, performRun } from './run.mjs'
 import { SandboxSetupError } from './sandbox/index.mjs'
@@ -106,7 +105,7 @@ function batchReport({ job, day, after, outcome, now, timeZone }) {
   if (outcome.ok) parts.push('done')
   else if (outcome.cause === 'other') parts.push(`failed (${waiting[0]?.reason ?? after.failed.find(entry => seqs.has(entry.seq))?.reason})`)
   else parts.push(`paused (${after.paused.reason}) until ${shortLocalTime(parseIsoSeconds(after.paused.next), now, timeZone)}`)
-  if (outcome.ok && waiting.length > 0) parts.push(`not reported, tried again: ${seqList(waiting.map(entry => entry.seq))}`)
+  if (outcome.ok && waiting.length > 0) parts.push(`not marked, tried again: ${seqList(waiting.map(entry => entry.seq))}`)
   else if (outcome.cause === 'other' && waiting.length > 0) parts.push('tried again in a minute')
   if (givenUp.length > 0) parts.push(`given up on: ${seqList(givenUp)}`)
   return `${head} ${parts.join('; ')}.`
@@ -150,7 +149,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
 
     const until = index.lastSeq
     const tag = rebuildTag(clock.now())
-    const context = { agent, settings, paths, sandbox, git, protocol: loadProtocol(), ids: createIds(clock), log, clock, index, stateFile: null, signal }
+    const context = { agent, settings, paths, sandbox, git, ids: createIds(clock), log, clock, index, stateFile: null, signal }
     const reset = rebuiltState(before, agent, until)
     let state = { ...reset, cursor: 0 }
     let batches = 0
