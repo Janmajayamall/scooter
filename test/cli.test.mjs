@@ -222,6 +222,35 @@ test("cli: backfill looks at who runs it before the runner's settings are read: 
   assert.equal(fs.readdirSync(paths.agentJobs('lifelog')).length, 2)
 })
 
+test("cli: doctor looks at who runs it before the runner's settings are read: another user, who can't read runner.env, is refused and told how to run it, nothing read or made", async t => {
+  const { runnerUser, envFile, file, env, files, unreadable } = nativeInstall(t)
+  const uid = process.getuid()
+  const how = inDocker() ? 'docker compose run --rm runner doctor' : 'sudo -u scooter-runner scooter doctor'
+
+  // Another user than the runner's, root among them: refused, exit 2, with the command to run, and
+  // runner.env, which it can't read, not read.
+  runnerUser(uid + 1)
+  envFile(false)
+  const before = files()
+  assert.deepEqual(await run(['doctor'], { env }), {
+    code: 2,
+    out: '',
+    err: `scooter doctor: doctor checks what the runner can reach, so it runs as scooter-runner, not as uid ${uid}: ${how}\n`,
+  })
+  assert.deepEqual(files(), before)
+
+  // As the runner's user, and where there is no such user, as in development, the settings are read
+  // after the look: one it can't read is said, before any check.
+  for (const runner of [uid, null]) {
+    runnerUser(runner)
+    assert.deepEqual(await run(['doctor'], { env }), {
+      code: 2,
+      out: '',
+      err: `scooter doctor: ${file} can't be read (${unreadable})\nscooter doctor: OPENROUTER_API_KEY is required\n`,
+    })
+  }
+})
+
 test('cli: a command\'s result is the exit code', async () => {
   const commands = {
     fails: { side: 'host', usage: 'fails', where: 'the host', summary: 'Fails', load: async () => async () => 3 },

@@ -58,6 +58,7 @@ export const COMMANDS = {
     usage: 'doctor',
     where: 'runner',
     summary: 'Check what the runner needs, and change nothing',
+    wrongUser: async () => (await import('./ops/doctor.mjs')).wrongUser,
     // Its checks of the config, the image, the accelerator and a VM's boot are the runner's own
     // code, which `src/ops` doesn't import.
     load: async () => {
