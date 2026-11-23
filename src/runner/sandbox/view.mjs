@@ -52,6 +52,9 @@ function normalize(p) {
   return clean.length > 1 && clean.endsWith('/') ? clean.slice(0, -1) : clean
 }
 
+// What `real`, in `viewShadow`, gives for a folder outside the root.
+const OUTSIDE = Symbol('outside the root')
+
 // The path from `root` of `full`, an absolute host path inside it, or null when it isn't inside.
 function fromRoot(root, full) {
   const relative = path.relative(root, full)
@@ -331,26 +334,36 @@ function writesProvider(gondolin, view, rootReal, backend) {
 // - `lstat`, `readlink`, `unlink` and `rename`, which act on a link itself, not on what it leads
 //   to: judged at the name, and where the host finds the name through the links on the way to its
 //   folder, but not through a link at the name. `ShadowProvider` follows that link too, so a link
-//   the run made to what it doesn't see could be neither seen, read, moved nor removed.
+//   the run made to what it doesn't see could be neither seen, read, moved nor removed. A name
+//   whose folder a link on the way leads out of the root is hidden: `RealFSProvider` resolves
+//   these four by the path alone, and would answer for the host's own files there.
 function viewShadow(gondolin, backend, rootReal, hidden) {
-  // Where on the host the folder `p` is, as a path from the root, or null when that can't be told.
+  // Where on the host the folder `p` is, as a path from the root; `OUTSIDE` when it is outside the
+  // root, through a link on the way; or null when that can't be told, as for a folder that isn't
+  // there, through which the host reaches nothing either.
   const real = p => {
+    let full
     try {
-      return fromRoot(rootReal, fs.realpathSync(hostPath(rootReal, p)))
+      full = fs.realpathSync(hostPath(rootReal, p))
     } catch {
       return null
     }
+    return fromRoot(rootReal, full) ?? OUTSIDE
   }
-  // Whether the VM doesn't see the name `p` itself.
+  // Whether the VM doesn't see the name `p` itself. A name in a folder that a link on the way leads
+  // out of the root is one: `RealFSProvider` would answer `lstat` and `readlink` there for the
+  // host's own files.
   const nameHidden = p => {
     if (hidden(p)) return true
     if (p === '/') return false
     const folder = real(posix.dirname(p))
+    if (folder === OUTSIDE) return true
     return folder !== null && hidden(posix.join(folder, posix.basename(p)))
   }
   const entryName = entry => (typeof entry === 'string' ? entry : Buffer.isBuffer(entry) ? entry.toString() : entry.name)
   const listed = (p, names) => {
     const folder = real(p)
+    if (folder === OUTSIDE) return []
     return folder === null || folder === p ? names : names.filter(entry => !hidden(posix.join(folder, entryName(entry))))
   }
 
