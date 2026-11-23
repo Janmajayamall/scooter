@@ -427,7 +427,7 @@ docker compose run --rm --entrypoint ls runner /data/agents/lifelog/jobs/
 docker compose run --rm --entrypoint rm runner /data/agents/lifelog/jobs/20261123T101500123-0001.json
 ```
 
-What the job filed so far stays, committed. To go back to before it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-backfill-20261123T101500123-0001` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's own record of your messages isn't changed by either.
+What the job filed so far stays, committed. To go back to before it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-backfill-20261123T101500123-0001` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's own record of your messages isn't changed by either. The reset also takes away what the agent filed from messages that arrived since the job started, and those aren't filed again: send them again, or run a backfill `--from` the first of them.
 
 ## When something goes wrong
 
