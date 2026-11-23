@@ -402,9 +402,18 @@ sudo -u scooter-runner scooter backfill --agent-file /etc/scooter/config/lifelog
 docker compose run --rm runner backfill --agent-file /config/lifelog-try.yaml --from 2026-11-01
 ```
 
-Its views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooterIts views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooter/agents/lifelog-try/views`. It takes `--from` and no other flag: the file gives its skills, writes and prompts. Its memory, in its own folder, starts empty, and learns again the rules you sent as messages as it goes over them.
+Its views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooter/agents/lifelog-try/views`. It takes `--from` and no other flag: the file gives its skills, writes and prompts.
 
-n as runs do after such a failure: every 30 minutes for a refusal, and a restart of the runner doesn't bring the next try forward. You get one notice when it starts to wait, `scooter status` shows the wait and why, and your messages are handled as usual meanwhile; a job you queued after it waits for it. Fix the cause, or remove the job's file to cancel it (see [Cancelling a job](#cancelling-a-job)).
+Its folder stays when the job is over, in the backups too, and a later job under the same name goes on in it, with the views and the memory the earlier one left. To try again from empty, give the agent another name, or remove its folder first, while no job of it is there:
+
+```sh
+sudo -u scooter-runner rm -r /var/lib/scooter/agents/lifelog-try
+docker compose run --rm --entrypoint rm runner -r /data/agents/lifelog-try
+```
+
+In a new folder its memory starts empty, and learns again the rules you sent as messages as it goes over them.
+
+If its model fails, because OpenRouter refuses it, as a key whose guardrail allows only lifelog's model does, or is down, the job waits on its own, and tries again as runs do after such a failure: every 30 minutes for a refusal, and a restart of the runner doesn't bring the next try forward. You get one notice when it starts to wait, `scooter status` shows the wait and why, and your messages are handled as usual meanwhile; a job you queued after it waits for it. Fix the cause, or remove the job's file to cancel it (see [Cancelling a job](#cancelling-a-job)).
 
 ### Cancelling a job
 
