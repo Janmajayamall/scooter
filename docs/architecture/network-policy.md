@@ -16,7 +16,7 @@ In `runner.env`:
 |---|---|---|
 | `OPENROUTER_API_KEY` | required | The key the runner swaps in on pi's requests to OpenRouter ([The key](#the-key)). It never enters pi's VM |
 | `OPENROUTER_ZDR` | `on` | `on` sends every request to OpenRouter only to endpoints that keep no prompts or responses ([Zero data retention](#zero-data-retention)) |
-| `AGENT_INTERNET` | `off` | `on` lets pi reach public HTTPS websites through the policy, which logs every request ([Hosts](#hosts)). The prompt tells the agent which ([The prompt](runner.md#the-prompt)), and `scooter status` shows it, from `status.json` ([status.json](runner.md#statusjson)) |
+| `AGENT_INTERNET` | `off` | `on` lets pi reach public HTTPS websites through the policy, which logs every request ([Hosts](#hosts)). A prompt can tell the agent which, with `$internet$` ([The prompt](runner.md#the-prompt)), and `scooter status` shows it, from `status.json` ([status.json](runner.md#statusjson)) |
 
 `AGENT_INTERNET` is the runner's setting alone. *Why:* the bridge's side needs to know it only for `scooter status`, and a second copy in `bridge.env` could disagree with the one the runner uses.
 

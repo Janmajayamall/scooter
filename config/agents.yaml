@@ -20,13 +20,25 @@ agents:
     reply_mode: quiet                    # quiet or confirm
     ack_reaction: "✅"                   # reaction on handled messages in quiet mode; "" for none
     timeout_minutes: 10
+    # When the agent runs, and the message pi is given for each run, its prompt. The runner fills
+    # in each $variable$ of a prompt: $now$, $user.timezone$, $user.currency$, $reply_mode$,
+    # $internet$, $agent.dir$, $datastore.dir$, $seq.unread$, $seq.retry$ and $run.writes$.
     run:
       - on: new-messages                 # every batch of new messages
         channels: [whatsapp, email]      # from these channels
+        prompt: |
+          Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
+          Your folder: $agent.dir$
+          The datastore: $datastore.dir$
+          This run may change: $run.writes$
+          Given before: $seq.retry$
+          New: $seq.unread$
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
-        task: >-
-          Evening check-in. List in a few lines what you filed today,
-          mention anything that looks missing, and list the open questions.
-      # - backfill: people-1             # fills a newly added view from the whole datastore
-      #   skill: people
+        tag: check-in                    # names the task in the log and in a notice of its failure
+        prompt: >-
+          Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled
+          task from your configuration, not a message from the owner: send the owner, in a few
+          lines, what you filed today, anything that looks missing, and the open questions.
+      # - backfill: people-1             # fills a newly added view from the whole datastore,
+      #   skill: people                  # with the prompt of the trigger for new messages
       #   writes: [agents/lifelog/views/people.csv]   # what it may change

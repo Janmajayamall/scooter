@@ -10,7 +10,7 @@ import test from 'node:test'
 import { lockExists, readLock, releaseLock, takeLock } from '../src/common/locks.mjs'
 import { openRunner } from '../src/runner/main.mjs'
 import { RebuildError, rebuildAgent, rebuildTag, runRebuild } from '../src/runner/rebuild.mjs'
-import { line, writeDatastore } from './support/runner.mjs'
+import { NEW_MESSAGES_PROMPT, line, writeDatastore } from './support/runner.mjs'
 import { MINUTE, SECOND, gitOf, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
@@ -32,6 +32,7 @@ function rebuildYaml() {
     run:
       - on: new-messages
         channels: [whatsapp, email]
+        prompt: ${JSON.stringify(NEW_MESSAGES_PROMPT)}
       - backfill: people-1
         skill: people
         writes: [agents/lifelog/views/people.csv]
@@ -116,7 +117,7 @@ function beforeEachRun(sandbox, before) {
 
 const state = paths => JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
 
-test("rebuild: it stops at the seq that was newest when it started, so later messages get normal replies; Now: is each batch's own time, and batches don't cross the owner's days", async t => {
+test("rebuild: it stops at the seq that was newest when it started, so later messages get normal replies; $now$ is each batch's own time, and batches don't cross the owner's days", async t => {
   const prepared = await prepare(t)
   const { paths, sandbox } = prepared
   assert.equal(state(paths).backfill.id, 'people-1')
@@ -140,15 +141,15 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.deepEqual(
     seen.map(call => call.prompt.split('\n')[0]),
     [
-      '[scooter] Now: Saturday 7 November 2026, 21:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
-      '[scooter] Now: Sunday 8 November 2026, 10:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
+      'Now: Saturday 7 November 2026, 21:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
+      'Now: Sunday 8 November 2026, 10:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
     ],
   )
   assert.deepEqual(
     seen.map(call => call.argv[call.argv.indexOf('--session-id') + 1]),
     ['lifelog-rebuild-2026-11-07', 'lifelog-rebuild-2026-11-08'],
   )
-  assert.ok(seen.every(call => !call.prompt.includes('#7')))
+  assert.ok(seen.every(call => !/\b7\b/.test(call.prompt.split('\n').slice(2).join('\n'))))
   // pi's system prompt has the agent's prompt alone: the memory, emptied, is the agent's to read.
   assert.equal(seen[0].systemPrompt, 'You are lifelog.\n')
   // Every skill, after the runner's.
@@ -162,7 +163,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
   assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'views')), ['notes.csv'])
   assert.equal(
     fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8'),
-    'seq,text\n1,"#1 21:30 text: \\"ran 5k\\""\n4,"#4 09:30 text: \\"start tracking coffee MEMORY\\""\n6,"#6 10:30 text: \\"coffee 120\\""\n',
+    'seq,text\n1,"ran 5k"\n4,"start tracking coffee MEMORY"\n6,"coffee 120"\n',
   )
   assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'memory'), 'preferences.md'), 'utf8'), '- 2026-11-09 (#1): Track coffee.\n')
   // Its sessions served it alone, and the old one is gone.
@@ -317,7 +318,7 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
   assert.deepEqual([after.cursor, after.retry, after.paused], [3, [], undefined])
   assert.equal(
     fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8'),
-    'seq,text\n1,"#1 09:30 text: \\"coffee 120\\" (attempt 1 of 4)"\n3,"#3 10:30 text: \\"lunch 300\\""\n',
+    'seq,text\n1,"coffee 120"\n3,"lunch 300"\n',
   )
   assert.deepEqual(outboxOf(paths), [])
 })
@@ -365,7 +366,7 @@ test('rebuild: its own steps take run.lock and give way to a backup, as its batc
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild\n')
 })
 
-test('rebuild: an item not marked is tried again before the days after it, which are never its context', async t => {
+test('rebuild: an item not marked is tried again before the days after it, at its own time', async t => {
   const lines = [
     line.text(1, '2026-11-07T07:00:00Z', 'from now on, tea is a drink IGNORE'), // Sat 7 Nov, 12:30
     line.sent(2, '2026-11-07T07:01:00Z', 'Noted.'),
@@ -382,10 +383,9 @@ test('rebuild: an item not marked is tried again before the days after it, which
     sandbox.seen().map(call => call.items),
     [[1], [1], [1], [1], [3], [5]],
   )
-  for (const call of sandbox.seen().slice(0, 4)) {
-    assert.match(call.prompt, /^\[scooter\] Now: Saturday 7 November 2026, 12:30 /)
-    assert.match(call.prompt, /^#2 12:31 you sent: "Noted\."$/m)
-    assert.ok(!call.prompt.includes('Logged tea'))
+  for (const [n, call] of sandbox.seen().slice(0, 4).entries()) {
+    assert.match(call.prompt, /^Now: Saturday 7 November 2026, 12:30 /)
+    assert.match(call.prompt, n === 0 ? /^Given before: none\nNew: 1$/m : new RegExp(`^Given before: 1 \\(attempt ${n + 1} of 4\\)\nNew: none$`, 'm'))
   }
 })
 

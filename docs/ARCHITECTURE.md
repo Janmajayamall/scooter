@@ -46,8 +46,8 @@ The principles, which hold everywhere:
 
 1. The owner sends a receipt photo to the bot. wacli, a linked device of the bot's number, receives it and posts a signed webhook to the bridge on loopback ([The webhook](architecture/whatsapp.md#the-webhook)).
 2. The WhatsApp channel checks the signature and drops anything that isn't the owner's ([From a message to a record](architecture/whatsapp.md#from-a-message-to-a-record)). Intake downloads the photo, and the store gives the message the next `seq` and appends one line to the datastore ([Intake](architecture/bridge.md#intake), [Writing](architecture/datastore.md#writing)).
-3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch and a prompt, takes the run lock, boots a fresh VM and runs pi in it ([When the agent runs](architecture/runner.md#when-the-agent-runs), [A run](architecture/run.md#a-run), [A VM for each run](architecture/sandbox.md#a-vm-for-each-run)).
-4. pi reads the photo from the datastore, which is mounted read-only, updates `views/expenses.csv`, and runs `mark done 1042` ([send and mark](architecture/agent.md#send-and-mark)). Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
+3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch, fills in the prompt of the trigger `on: new-messages` with the batch's numbers, here 1042, takes the run lock, boots a fresh VM and runs pi in it ([When the agent runs](architecture/runner.md#when-the-agent-runs), [The prompt](architecture/runner.md#the-prompt), [A run](architecture/run.md#a-run), [A VM for each run](architecture/sandbox.md#a-vm-for-each-run)).
+4. pi reads line 1042 with `show`, and the photo from the datastore, which is mounted read-only, updates `views/expenses.csv`, and runs `mark done 1042` ([send and mark](architecture/agent.md#send-and-mark)). Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
 5. The runner checks the files pi left, commits them, updates its state from pi's marks, and writes an outbox entry, here a ✅ reaction ([After a successful run](architecture/run.md#after-a-successful-run), [What send and mark leave](architecture/run.md#what-send-and-mark-leave), [Outbox entries](architecture/exchange.md#outbox-entries)).
 6. The bridge takes the outbox entry, sends the reaction through wacli, and appends an `out` line to the datastore ([Sending an entry](architecture/delivery.md#sending-an-entry)).
 
@@ -88,7 +88,7 @@ The exchange, the folder the two services coordinate through, is a component of 
 | Scooter's own code | The bridge and the runner | Holds the secrets. The bridge's process loads no third-party library; the runner's loads `yaml` and Gondolin |
 | Third-party programs that face the outside | wacli; the email reader, with `imapflow` and `postal-mime` | Their own users, their own folders, only their own settings. What they hand over is validated |
 | A third-party program with the bridge's privileges | restic | Pinned and checksummed ([Running restic](architecture/backups.md#running-restic)) |
-| The agent | pi, and the model behind it | No secrets, no network of its own, and only what `writes` names, its session, and its places in `run/` for `send` and `mark`, to write. What it writes passes the file check and git, and what `send` and `mark` leave is read as files it controls; nothing it prints is read |
+| The agent | pi, and the model behind it | No secrets, no network of its own, and only what `writes` names, its session, and its places in `run/` for `send` and `mark`, to write. What it writes passes the file check and git, and what `send` and `mark` leave is read as files it controls; nothing it prints decides anything, and of a run that fails only the last line on stderr is read, for OpenRouter's own words |
 | Content | Text in images, PDFs, documents, forwarded messages, quoted email and web pages | Data, never instructions. The runner's skill tells the model so; the sandbox limits what a misled model can do |
 
 *Cost of the programs that face the outside:* wacli and the email reader can reach the internet. A malicious version of either, or of a library the reader uses, could send out what it holds, the WhatsApp session and the messages it handles, or the mailbox's password and the emails, and could hand the bridge fake messages from the owner.
@@ -194,7 +194,7 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The bridge's `status.json` | bridge → `scooter status` | `src/bridge/status.mjs` | [The bridge's status.json](architecture/bridge.md#the-bridges-statusjson) |
 | The network log line | runner → `scooter status`, owner | `src/common/netlog.mjs` | [The log](architecture/network-policy.md#the-log) |
 | The sandbox interface | runner ↔ sandbox | `src/runner/sandbox/index.mjs` | [The sandbox interface](architecture/sandbox.md#the-sandbox-interface) |
-| The prompt | runner → pi | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
+| The prompt | runner → pi: a trigger's `prompt`, its variables filled in | `src/runner/prompt.mjs` | [The prompt](architecture/runner.md#the-prompt) |
 | The index file | runner → `show`, pi | `src/runner/agentdir.mjs` | [The index file](architecture/run.md#the-index-file) |
 | The zone rules' `release.txt` | the repository → runner, `show` | `src/runner/vm/icu-tz/release.txt` | [The zone rules](architecture/agent.md#the-zone-rules) |
 | What `send` and `mark` leave | `send`, `mark` → runner | `src/runner/report.mjs` | [What send and mark leave](architecture/run.md#what-send-and-mark-leave) |
@@ -309,9 +309,12 @@ The project's own names, each used one way in these documents.
 | config folder | `CONFIG_DIR`: the owner's `agents.yaml`, prompt, skills and the VM image's build file |
 | env file | `bridge.env` or `runner.env`: a service's settings |
 | owner's day | A date in `SCOOTER_TZ` |
-| work item | An `in` line from a channel the agent's triggers for new messages name, of kind `message`, `edit` or `delete`, that this version knows |
+| work item | An `in` line from a channel the agent's triggers for new messages name, of kind `message`, `edit` or `delete`, that this version knows. A message already deleted is one the runner settles itself, and never gives |
 | batch | The work items one run is given |
-| run | One run of pi, in one VM, on one batch or task |
+| run | One run of pi, in one VM, on one batch or scheduled task |
+| trigger | An entry of an agent's `run` in `agents.yaml`, which says when it runs: on new messages of its `channels`, at a time, or a backfill ([agents.yaml](architecture/configuration.md#agentsyaml)) |
+| prompt | The message pi is given for a run: the `prompt` of the trigger that starts it, with its variables, such as `$now$` and `$seq.unread$`, filled in. The agent's prompt is another: the file of the config folder, such as `prompts/lifelog.md`, that pi appends to its system prompt |
+| scheduled task | The run of a trigger `at` a time, such as the evening check-in, which is given no lines, and named by its trigger's `tag`, such as `check-in` |
 | view | A file lifelog keeps in its `views/`, such as `expenses.csv`, which its `writes` names. The runner doesn't know views: they are the agent's prompt's and skills' |
 | memory | Lifelog's `memory/`: the owner's standing instructions and the open questions, which lifelog's prompt tells the agent to read first. The runner doesn't read it |
 | `reads`, `writes` | What `agents.yaml` lets an agent's VM see, and change: files and folders of the data folder ([agents.yaml](architecture/configuration.md#agentsyaml)) |
@@ -327,7 +330,7 @@ The project's own names, each used one way in these documents.
 
 | To change | Modules | Tests | Documents |
 |---|---|---|---|
-| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line, the runner's skill (`src/runner/vm/skills/scooter/SKILL.md`) | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs`, `test/instructions.test.mjs` | [datastore](architecture/datastore.md), [The prompt](architecture/runner.md#the-prompt), [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill) |
+| The line format | `src/common/datastore/line.mjs`, `src/bridge/store.mjs`, `src/common/datastore/index.mjs`, every reader of a line, the runner's skill (`src/runner/vm/skills/scooter/SKILL.md`) | `test/datastore.test.mjs`, `test/intake.test.mjs`, `test/batch.test.mjs`, `test/instructions.test.mjs` | [datastore](architecture/datastore.md), [show, and the runner's skill](architecture/agent.md#show-and-the-runners-skill) |
 | What becomes a line, attachments | `src/bridge/intake.mjs`, `src/bridge/channels/index.mjs` | `test/intake.test.mjs`, `test/bridge.test.mjs` | [bridge](architecture/bridge.md), [datastore](architecture/datastore.md) |
 | WhatsApp: webhook, filters, owner matching, catch-up, downloads, `pair` | `src/bridge/channels/whatsapp.mjs` | `test/whatsapp.test.mjs`, `test/support/wacli-stub.mjs`, `test/tools/wacli.test.mjs` | [whatsapp](architecture/whatsapp.md) |
 | Email: the reader, parsing, the spool, the sender check, `email-check` | `src/mail/`, `src/bridge/channels/email.mjs` | `test/email.test.mjs`, `test/mail-reader.test.mjs`, `test/mail-imap.test.mjs`, `test/mail-parse.test.mjs` | [email](architecture/email.md) |
@@ -345,7 +348,7 @@ The project's own names, each used one way in these documents.
 | A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [The CLI](architecture/configuration.md#the-cli), and the document of the component it belongs to |
 | `agents.yaml` | `src/runner/config.mjs`, `config/agents.yaml` | `test/config.test.mjs`, `test/instructions.test.mjs` | [agents.yaml](architecture/configuration.md#agentsyaml) |
 | The runner's start, loop and restarts | `src/runner/main.mjs`, `src/runner/restarts.mjs`, `src/runner/status.mjs` | `test/runner.test.mjs`, `test/restarts.test.mjs`, `test/runnerfiles.test.mjs` | [the runner](architecture/runner.md) |
-| When the agent runs, the batch, the prompt | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs` | [the runner](architecture/runner.md) |
+| When the agent runs, the batch, the prompt and its variables | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/config.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs`, `test/config.test.mjs` | [the runner](architecture/runner.md) |
 | What `send` and `mark` leave, after a run, failures | `src/runner/report.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/report.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs`, `test/tools/git.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
 | Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) |
 | The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/view.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |

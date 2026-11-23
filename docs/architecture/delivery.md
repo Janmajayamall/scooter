@@ -77,7 +77,7 @@ After each message that goes out, an `out` line is appended: the channel as `sou
 - A message the channel gave no ID for is logged without `sourceId`, and not sent again.
 - If the datastore already holds a line with that ID, the `out` line is logged without it (`outbox.id_taken`). *Why:* if wacli answered a reaction with the ID of the message reacted to, every ✅ would go out and none would be recorded.
 
-*Why `out` lines:* the datastore then has both sides of the conversation, and the agent sees its own earlier replies as context, which is what stops duplicates after a batch that is tried again.
+*Why `out` lines:* the datastore then has both sides of the conversation: the agent can read its own earlier replies there, with `show`, and a reply of the owner's to one points at it, which `show` prints with it ([show, and the runner's skill](agent.md#show-and-the-runners-skill)).
 
 ## Waiting and failed sends
 

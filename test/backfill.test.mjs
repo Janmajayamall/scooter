@@ -8,8 +8,8 @@ import path from 'node:path'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { backfillIntro, backfillSummary, countRows, settleBackfill } from '../src/runner/backfill.mjs'
-import { line, writeConfig } from './support/runner.mjs'
+import { backfillSummary, countRows, settleBackfill } from '../src/runner/backfill.mjs'
+import { NEW_MESSAGES_PROMPT, line, writeConfig } from './support/runner.mjs'
 import { MINUTE, SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -31,6 +31,7 @@ function backfillYaml({ backfill = true, writes = '[agents/lifelog/views/people.
     run:
       - on: new-messages
         channels: [whatsapp, email]
+        prompt: ${JSON.stringify(NEW_MESSAGES_PROMPT)}
 ${backfill ? `      - backfill: people-1\n        skill: people\n        writes: ${writes}\n` : ''}`
 }
 
@@ -66,17 +67,21 @@ test('backfills: until is the live cursor when it starts, every message up to it
   const { runner, clock, state, outbox, git, views, add, paths, sandbox, entries } = await openBackfill(t, { words: { 3: 'UNSURE', 4: 'SAY', 5: 'FAIL' } })
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 0, retry: [], skipped: [] })
 
-  // Saturday: #1 and #3, with #2, which Scooter sent, as context.
+  // Saturday: #1 and #3; #2, which Scooter sent, is passed over. The prompt is the one for new
+  // messages, of that day's time, with what the backfill may change.
   assert.deepEqual(await runner.tick(), { action: { kind: 'backfill', id: 'people-1' }, outcome: { ok: true, cause: null } })
   const [first] = sandbox.seen()
   assert.deepEqual(first.items, [1, 3])
-  const prompt = first.prompt.split('\n')
   assert.equal(
-    prompt[0],
-    `Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only ${paths.dataDir}/agents/lifelog/views/people.csv.`,
+    first.prompt,
+    `Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
+Your folder: ${paths.agentDir('lifelog')}
+The datastore: ${paths.datastore}
+This run may change: ${paths.agentDir('lifelog')}/views/people.csv
+Given before: none
+New: 1 3
+`,
   )
-  assert.equal(prompt[1], '[scooter] Now: Saturday 7 November 2026, 17:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.')
-  assert.match(first.prompt, /^#2 12:31 you sent: "Logged."$/m)
   // Its own session for the day, the backfill's skill alone after the runner's, and the agent's
   // prompt of live runs.
   assert.equal(sessionOf(first), 'lifelog-backfill-people-1-2026-11-07')
@@ -94,7 +99,7 @@ test('backfills: until is the live cursor when it starts, every message up to it
   assert.deepEqual(sandbox.seen()[1].items, [4, 5])
   assert.deepEqual(entries.filter(entry => entry.event === 'runner.sends_dropped').map(entry => entry.silent), [2])
   assert.equal(sessionOf(sandbox.seen()[1]), 'lifelog-backfill-people-1-2026-11-08')
-  assert.match(sandbox.seen()[1].prompt.split('\n')[1], /Now: Sunday 8 November 2026, 19:30 /)
+  assert.match(sandbox.seen()[1].prompt, /^Now: Sunday 8 November 2026, 19:30 /)
   assert.equal(git('log', '-1', '--format=%s'), 'lifelog: backfill people-1 #4-#5\n')
   assert.deepEqual(state().backfill, { id: 'people-1', until: 5, cursor: 5, retry: [], skipped: [5] })
   assert.deepEqual(outbox(), [])
@@ -174,6 +179,11 @@ test("backfills: a batch's VM may change only the backfill's writes: a write any
     { path: paths.agentRunMarks('lifelog'), folder: false },
   ])
   for (const folder of ['views', 'memory']) assert.ok(files.reads.includes(path.join(agent, folder)), folder)
+  // Its prompt is that of the trigger for new messages, filled in for the batch: its time, its
+  // lines, and what it may change, as the VM has it.
+  const [call] = sandbox.seen()
+  assert.match(call.prompt, /^Now: Saturday 7 November 2026, 17:30 \(Asia\/Kolkata\)\./)
+  assert.ok(call.prompt.includes(`This run may change: ${path.join(agent, 'views', 'people.csv')}\nGiven before: none\nNew: 1 3\n`), call.prompt)
   // The VM refuses the writes anywhere else, which the stub stands for: the view outside them,
   // and the memory.
   assert.deepEqual(sandbox.refused(), [path.join(agent, 'views', 'notes.csv'), path.join(agent, 'memory', 'preferences.md')])
@@ -247,16 +257,6 @@ test('backfills: a setup error pauses every run without a notice, and the items 
 // ---------------------------------------------------------------------------------------------
 // The parts
 
-test('backfill: the prompt line names what a batch may change, as the VM has it', () => {
-  const paths = makePaths({ dataDir: '/data', configDir: '/config' })
-  const entry = { id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] }
-  assert.equal(
-    backfillIntro(entry, paths),
-    'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only /data/agents/lifelog/views/people.csv and /data/agents/lifelog/views/people/.',
-  )
-  assert.equal(backfillIntro({ ...entry, writes: ['agents/lifelog/views/people.csv'] }, paths).endsWith(' Change only /data/agents/lifelog/views/people.csv.'), true)
-})
-
 test("backfill: counting a CSV's rows, and those marked ❓", () => {
   assert.deepEqual(countRows(''), { rows: 0, unsure: 0 })
   assert.deepEqual(countRows('date,person,note\n'), { rows: 0, unsure: 0 })
@@ -314,6 +314,7 @@ test("backfill: a batch's outcome settles the backfill's lane, as a live batch's
       { seq: 12, origin: 'new', attempt: 1 },
       { seq: 13, origin: 'new', attempt: 1 },
     ],
+    settled: [],
     covered: 14,
   }
   const now = Date.parse('2026-11-09T15:50:00Z')
@@ -345,5 +346,14 @@ test("backfill: a batch's outcome settles the backfill's lane, as a live batch's
   assert.equal(down.state.paused.cause, 'outage')
   assert.deepEqual(down.state.lastRun, LAST_RUN)
   // A run that gets through ends the pause.
-  assert.equal(settleBackfill(down.state, { items: [], covered: 14 }, { ok: true, done: new Set(), failed: new Map() }, { now }).state.paused, undefined)
+  assert.equal(settleBackfill(down.state, { items: [], settled: [], covered: 14 }, { ok: true, done: new Set(), failed: new Map() }, { now }).state.paused, undefined)
+
+  // A message deleted since it was given, which the batch settles, leaves the lane's retries, and
+  // its skipped, whatever comes of the run.
+  const withDeleted = { ...state, backfill: { ...backfill, retry: [...backfill.retry, { seq: 9, attempts: 1, due: '2026-11-09T16:00:00Z', reason: 'not marked' }], skipped: [2, 7, 8] } }
+  for (const outcome of [{ ok: true, done: new Set([4, 7, 11, 12, 13]), failed: new Map() }, { ok: false, cause: 'other', reason: 'timed out' }]) {
+    const deleted = settleBackfill(withDeleted, { ...batch, settled: [8, 9] }, outcome, { now })
+    assert.ok(!deleted.state.backfill.retry.some(entry => entry.seq === 9))
+    assert.ok(!deleted.state.backfill.skipped.includes(8))
+  }
 })

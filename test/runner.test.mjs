@@ -15,7 +15,7 @@ import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { deepTree } from './support/deep-tree.mjs'
 import { createFakeSandbox } from './support/fake-sandbox.mjs'
 import { actFull, holds } from './support/full-disk.mjs'
-import { exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
+import { CHECK_IN_PROMPT, exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
 import { MINUTE, SECOND, gitOf, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd } from './support/tmp.mjs'
 
@@ -40,14 +40,14 @@ async function runNext(runner, clock) {
 test('failures: a crash discards the run\'s changes, counts an attempt, and sends one notice for the first failure in a row', async t => {
   const { runner, clock, state, outbox, git, views, add, paths, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
   await runNext(runner, clock)
-  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"coffee 150"\n')
   outbox({ take: true })
 
   // pi files #1043 and changes the view, then crashes: the view is as it was committed.
   add(line.text(1043, '2026-11-09T15:51:00Z', 'lunch 300 MEMORY'))
   sandbox.behave({ crash: 3 })
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
-  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"coffee 150"\n')
   assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
   assert.deepEqual(state().retry, [{ seq: 1043, attempts: 1, due: '2026-11-09T15:51:46Z', reason: 'pi exited with code 3' }])
@@ -373,14 +373,20 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
 // ---------------------------------------------------------------------------------------------
 // Tasks and sessions
 
-test('tasks: the evening check-in runs at 21:30 with its task, sends its text on its own, and is done for the day', async t => {
-  const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
+test('tasks: the evening check-in runs at 21:30 with its prompt, is logged by its tag, sends its text on its own, and is done for the day', async t => {
+  const { runner, clock, state, outbox, sandbox, git, entries } = await openWith(t, [], { yaml: exampleYaml() })
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
   await clock.advance(10 * MINUTE - 30 * SECOND)
   const { action, outcome } = await runner.tick()
   assert.equal(action.kind, 'scheduled')
   assert.deepEqual(outcome, { ok: true, cause: null })
-  assert.match(sandbox.runs[0].spec.argv.at(-1), /\n\nScheduled task \(from your configuration, not a message from the owner\):\nEvening check-in\./)
+  // Its trigger's prompt, filled in: it gives no lines.
+  assert.equal(sandbox.runs[0].spec.argv.at(-1), CHECK_IN_PROMPT.replace('$now$', 'Monday 9 November 2026, 21:30').replace('$user.timezone$', 'Asia/Kolkata').replace('$reply_mode$', 'quiet'))
+  // The log names the task by its tag: `at` is the time of the log's own line.
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'runner.run_started'),
+    [{ at: '2026-11-09T16:00:00Z', level: 'info', component: 'test', event: 'runner.run_started', agent: 'lifelog', job: 'scheduled', seqs: [], tag: 'check-in', session: 'lifelog-2026-11-09' }],
+  )
   // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL, if sends names it.
   assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.', channels: ['whatsapp'] }])
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
@@ -404,7 +410,7 @@ test('tasks: a scheduled task that fails for its own reasons waits for its next 
   assert.deepEqual((await late.runner.tick()).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(late.state().scheduled, { '21:30': '2026-11-09' })
   assert.equal(late.sandbox.runs.length, 1)
-  assert.deepEqual(late.outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the scheduled task 21:30 (pi exited with code 2). It runs again at its next time." }])
+  assert.deepEqual(late.outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the scheduled task check-in (pi exited with code 2). It runs again at its next time." }])
 
   const outage = await openWith(t, [], { start: '2026-11-09T15:59:59Z' })
   outage.sandbox.behave({ openrouter: 502 })
@@ -434,7 +440,7 @@ test('tasks: a scheduled task that a setup error holds back is still the next tr
   const restarted = await startTestRunner(t, prepared)
   assert.deepEqual(restarted.state().scheduled, { '21:30': '2026-11-08' })
   const { action, outcome } = await restarted.runner.tick()
-  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', date: '2026-11-09', task: action.task })
+  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09', prompt: CHECK_IN_PROMPT })
   assert.deepEqual(outcome, { ok: true, cause: null })
   assert.equal(state().paused, undefined)
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
@@ -645,6 +651,19 @@ test('startup: one runner per data folder, and a bad agents.yaml stops it with e
   const code = await runRunner({ settings: { ...prepared.settings, dataDir: path.join(prepared.root, 'other') }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock })
   assert.equal(code, 2)
   assert.match(err, /^scooter runner: .*agents\.yaml, line \d+: agents\.lifelog\.reply_mode must be quiet or confirm\n$/)
+
+  // A prompt's variable the runner doesn't know, and one that its settings and paths make too
+  // long once filled in, are faults of agents.yaml too, at the start, before anything runs.
+  fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('New: $seq.unread$', 'New: $seq.new$'))
+  err = ''
+  assert.equal(await runRunner({ settings: { ...prepared.settings, dataDir: path.join(prepared.root, 'other') }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock }), 2)
+  assert.match(err, /^scooter runner: .*agents\.yaml, line \d+: agents\.lifelog\.run\[0\]\.prompt holds \$seq\.new\$, which is no variable the runner knows: /)
+  fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('New: $seq.unread$', () => `New: $seq.unread$ ${'$agent.dir$ '.repeat(800)}`))
+  err = ''
+  const deep = path.join(prepared.root, 'other', 'a'.repeat(100))
+  assert.equal(await runRunner({ settings: { ...prepared.settings, dataDir: deep }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock }), 2)
+  assert.match(err, /agents\.lifelog\.run\[0\]\.prompt can make a prompt of \d+ bytes, filled in with the longest values its variables can take, where pi can be given 98304 at most/)
+  assert.ok(!fs.existsSync(path.join(deep, 'agents')))
 })
 
 // ---------------------------------------------------------------------------------------------

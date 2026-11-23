@@ -1,34 +1,40 @@
 // A stub of pi, which the fake sandbox runs as a local process in place of the real one.
 // It takes pi's command line, reads the prompt, and picks what to do from keywords
-// in the messages, as the real pi would act on the model's answer:
+// in the lines it was given, as the real pi would act on the model's answer. It takes their numbers
+// from the prompt's lines `New:` and `Given before:`, as the tests' prompt for new messages gives
+// them (`exampleYaml` in `runner.mjs`), and reads each line as stored, through the run's index file,
+// as the agent can. A run whose prompt gives no number is a scheduled one.
 //
-// | In an item's text | It                                                                      |
+// | In a line         | It                                                                      |
 // |-------------------|-------------------------------------------------------------------------|
-// | (nothing)         | adds a row for the item to `views/notes.csv`, and marks it done         |
+// | (nothing)         | adds a row for the line to `views/notes.csv`, and marks it done         |
 // | `IGNORE`          | doesn't mark it                                                         |
 // | `FAIL`            | marks it failed, and sends why                                          |
 // | `ASK`             | notes a question in `memory/needs-review.md`, sends it with             |
-// |                   | `--reply-to` the item, and marks the item done                          |
+// |                   | `--reply-to` the line, and marks the line done                          |
 // | `SAY`             | files it, and sends a message that says so                              |
 // | `UNSURE`          | files it with a ❓ in its row                                           |
-// | `OUTSIDE`         | in a backfill's batch, also tries to file it in `views/notes.csv`,      |
-// |                   | which the backfill may not change                                       |
+// | `OUTSIDE`         | also tries to file it in `views/notes.csv`, which a backfill's batch    |
+// |                   | may not change                                                          |
+//
+// `{"words": ["FAIL"]}` in `behavior.json`, below, puts such a keyword in every line.
 //
 // It marks and sends as the agent does, through the programs that ship with the runner, `mark`
 // and `send`, found on the `PATH` it was given and run with the host's Node, as `show` is with
 // `SHOW`. Then it prints a last message, which nothing reads. A scheduled task gets a message
 // sent, "Today: nothing missing."
 //
-// A backfill's batch, whose prompt starts with `Backfill`, files each item in the first CSV file
-// its `writes` names instead of `views/notes.csv`.
+// A row for a line is its number and its text. Where its run may not write `views/notes.csv`, as a
+// backfill's batch may not, it files each line in the first CSV file its `writes` names instead.
 //
 // It writes only what the run's `writes` names (`PI_STUB_WRITES`), as the VM lets pi: a row, a line
 // or what a keyword leaves, which it would write anywhere else, is left out, and its path noted in
 // `refused.txt` in its control folder, as the VM refuses such a write and the run goes on. A
 // keyword such as `FIFO` leaves what the VM can't make, for the runner's checks.
 //
-// Anywhere in the items or the task, or in `behavior.json` in its control folder, which a test can
-// change between runs, where `{"words": ["FILELINK"]}` also stands for any keyword below:
+// Anywhere in the lines it was given, or in a scheduled run's prompt, or in `behavior.json` in its
+// control folder, which a test can change between runs, where `{"words": ["FILELINK"]}` also
+// stands for any keyword below:
 //
 // | Keyword                | `behavior.json`        | It                                                 |
 // |------------------------|------------------------|----------------------------------------------------|
@@ -127,26 +133,20 @@ for (let n = 0; n < args.length; n++) {
   else if (arg === '--provider' || arg === '--tools') n++
 }
 
-// The items of the prompt, and its task.
-const SECTIONS = {
-  'New messages:': 'new',
-  'Retrying (not handled yet):': 'retrying',
-  'For context only (no action, nothing to mark):': 'context',
-  'Scheduled task (from your configuration, not a message from the owner):': 'task',
+// The lines it was given, each `{ seq, text }`, `text` the line as stored, read through the run's
+// index file, whose line N is that of `seq` N, and the log it names. A scheduled run has none, and
+// its prompt is its task.
+const numbersAfter = label => {
+  const listed = new RegExp(`^${label}: (.*)$`, 'm').exec(prompt ?? '')?.[1] ?? 'none'
+  return listed === 'none' ? [] : [...listed.matchAll(/(\d+)(?: \(attempt \d+ of \d+\))?/g)].map(match => Number(match[1]))
 }
-const items = []
-let task = ''
-let section = null
-for (const line of (prompt ?? '').split('\n')) {
-  if (Object.hasOwn(SECTIONS, line)) {
-    section = SECTIONS[line]
-    continue
-  }
-  const head = /^#(\d+) /.exec(line)
-  if ((section === 'new' || section === 'retrying') && head) items.push({ seq: Number(head[1]), text: line })
-  else if ((section === 'new' || section === 'retrying') && line.startsWith('      ') && items.length > 0) items.at(-1).text += `\n${line}`
-  else if (section === 'task') task += `${line}\n`
-}
+const given = [...numbersAfter('New'), ...numbersAfter('Given before')]
+const indexRows = given.length === 0 ? [] : fs.readFileSync(inVm(path.join(guestCwd, 'run', 'index.txt')), 'utf8').split('\n')
+const items = given.map(seq => {
+  const [, log, number] = /^\d+ (.*):(\d+) [a-z]+(?: \d+)?$/.exec(indexRows[seq - 1])
+  return { seq, text: fs.readFileSync(inVm(log), 'utf8').split('\n')[Number(number) - 1] }
+})
+const task = items.length === 0 ? (prompt ?? '') : ''
 const everything = [...items.map(item => item.text), task].join('\n')
 
 // Whether the run may write `guest`, a path in the VM: what its `writes` names, a folder with all
@@ -162,9 +162,6 @@ const readlinkOrNull = file => {
 }
 const guestOf = file => `/${path.relative(ROOT, file)}`
 
-// A backfill's batch, and the CSV file it files in.
-const backfill = (prompt ?? '').startsWith('Backfill (from your configuration')
-const backfillFile = backfill ? (WRITES.find(write => !write.folder && write.path.endsWith('.csv'))?.path ?? null) : null
 let behavior = {}
 try {
   behavior = JSON.parse(fs.readFileSync(path.join(CONTROL, 'behavior.json'), 'utf8'))
@@ -320,15 +317,15 @@ function act() {
   const plain = []
   const replies = []
   for (const item of items) {
-    const word = name => new RegExp(`\\b${name}\\b`).test(item.text)
+    const word = name => (behavior.words ?? []).includes(name) || new RegExp(`\\b${name}\\b`).test(item.text)
     if (word('IGNORE')) continue
     if (word('FAIL')) {
       failed.push(item.seq)
       plain.push(`I couldn't read #${item.seq}.`)
       continue
     }
-    const row = `${item.seq},${JSON.stringify(`${word('UNSURE') ? '❓ ' : ''}${item.text.split('\n')[0]}`)}\n`
-    const files = backfill ? [...(backfillFile ? [backfillFile] : []), ...(word('OUTSIDE') ? [viewsNotes] : [])] : [notesFile]
+    const row = `${item.seq},${JSON.stringify(`${word('UNSURE') ? '❓ ' : ''}${JSON.parse(item.text).text ?? ''}`)}\n`
+    const files = new Set([notesFile, ...(word('OUTSIDE') ? [viewsNotes] : [])])
     for (const file of files) append(file, row, 'seq,text\n')
     if (word('ASK')) {
       append(path.join(guestCwd, 'memory', 'needs-review.md'), `- #${item.seq}: work or personal?\n`)

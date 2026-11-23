@@ -17,7 +17,8 @@
 // checked, with the default `reads` and `writes`: the agent's folder and the datastore at their
 // paths under /data, read-only but for views/, memory/ and run/session/; sessions/ not there;
 // nothing else of the data folder or the config; and Gondolin's own file system at
-// /run/gondolin-vfs, not at /data.
+// /run/gondolin-vfs, not at /data. The run may write run/send/ and run/marks.txt too, which this
+// check doesn't look at: `VM 9` in `test/tools/vm.test.mjs` does.
 // It writes one file, in run/session/, which every run empties, and removes it. It prints what it
 // found, and exits with 1 if anything wasn't so.
 
@@ -76,7 +77,7 @@ try {
     argv: ['/bin/sh', '-c', SCRIPT],
     cwd: '/',
     env: { PATH: GUEST_PATH },
-    files: piFiles(paths, loadConfig({ paths }).agents.find(each => each.name === 'lifelog')),
+    files: piFiles(paths, loadConfig({ paths, settings }).agents.find(each => each.name === 'lifelog')),
     timeoutMs: 5 * 60_000,
     policy: { model: 'none', internet: false, zdr: true, secrets: {} },
   })

@@ -5,19 +5,22 @@
 // asks it whenever no run is in progress, and does what it says. In order:
 //
 // 1. **Paused**: nothing until the next try.
-// 2. **New messages:** work items after the cursor, or retries that are due, once the owner has
-//    been quiet for `BATCH_SECONDS`. A work item is of a channel a trigger `on: new-messages`
+// 2. **New messages:** work items to give after the cursor, or retries that are due, once the owner
+//    has been quiet for `BATCH_SECONDS`. A work item is of a channel a trigger `on: new-messages`
 //    names in its `channels`, so without such a trigger there is none.
 // 3. **Scheduled tasks** whose time has come since they were last dealt with. One that comes due
 //    during a run or a pause waits, and runs afterwards.
-// 4. **A backfill batch**, only when nothing live is waiting: no work items after the cursor, quiet
-//    or not, and no due retries. When its work is done, the backfill finishes.
+// 4. **A backfill batch**, only when nothing live is waiting: no work items to give after the
+//    cursor, quiet or not, and no due retries. When its work is done, the backfill finishes.
 // 5. Otherwise, nothing.
+//
+// A message that is already deleted is never given: the runner settles it itself, and gives only
+// its deletion (`assembleBatch` in `batch.mjs`). So it is no work to give here, and starts no run.
 
 import { isKnown } from '../common/datastore/line.mjs'
 import { previousLocalTime, localDate, parseIsoSeconds } from '../common/time.mjs'
 
-// The kinds of line that are work for the agent. Everything else is context or skipped.
+// The kinds of line that are work for the agent. Everything else is passed over.
 const WORK_KINDS = ['message', 'edit', 'delete']
 
 // Whether a line is a work item for an agent whose triggers name `channels`: an incoming message,
@@ -28,43 +31,55 @@ export function isWorkItem(line, channels) {
   return isKnown(line) && line.dir === 'in' && WORK_KINDS.includes(line.kind) && channels.includes(line.source)
 }
 
-// The `seq` of each work item after `after`, up to `upTo` (the newest line by default), in order.
+// Whether the line `seq` is a message that is already deleted, by the index as the runner has read
+// it.
+export function isDeletedMessage(index, seq) {
+  return index.get(seq)?.line.kind === 'message' && Boolean(index.current(seq)?.deletedIn)
+}
+
+// Whether the line `seq` is one to give the agent: a work item, but not a message that is already
+// deleted.
+export function isToGive(index, seq, channels) {
+  const entry = index.get(seq)
+  return entry !== undefined && isWorkItem(entry.line, channels) && !isDeletedMessage(index, seq)
+}
+
+// The `seq` of each work item to give after `after`, up to `upTo` (the newest line by default), in
+// order.
 export function workItemsAfter(index, channels, after, upTo = index.lastSeq) {
   const seqs = []
   for (let seq = after + 1; seq <= upTo; seq++) {
-    const entry = index.get(seq)
-    if (entry && isWorkItem(entry.line, channels)) seqs.push(seq)
+    if (isToGive(index, seq, channels)) seqs.push(seq)
   }
   return seqs
 }
 
-// Whether there is a work item after `after`, up to `upTo`.
+// Whether there is a work item to give after `after`, up to `upTo`.
 export function hasWorkAfter(index, channels, after, upTo = index.lastSeq) {
   for (let seq = after + 1; seq <= upTo; seq++) {
-    const entry = index.get(seq)
-    if (entry && isWorkItem(entry.line, channels)) return true
+    if (isToGive(index, seq, channels)) return true
   }
   return false
 }
 
 // The entries of a retry list that are due at `now`, by `seq`. An entry whose line isn't a work
 // item of this agent, which only a changed `channels` or a damaged state would give, is never due:
-// it would start runs with nothing in them.
+// it would start runs with nothing in them. Nor is a message that has been deleted since, which the
+// next batch settles.
 export function dueRetries(retry, index, channels, now) {
-  return retry
-    .filter(entry => parseIsoSeconds(entry.due) <= now && index.get(entry.seq) && isWorkItem(index.get(entry.seq).line, channels))
-    .sort((a, b) => a.seq - b.seq)
+  return retry.filter(entry => parseIsoSeconds(entry.due) <= now && isToGive(index, entry.seq, channels)).sort((a, b) => a.seq - b.seq)
 }
 
-// The scheduled task that is due at `now`, as `{ at, date, task }`, or null. `date` is the owner's
-// date of the occurrence that came due: the runner records it in `scheduled` once the task has run.
-// An `at` the state has no date for is never due; `startupState` gives every one a date.
+// The scheduled task that is due at `now`, as `{ at, tag, date, prompt }`, or null: its trigger's
+// `at`, `tag` and `prompt`, and `date`, the owner's date of the occurrence that came due, which the
+// runner records in `scheduled` once the task has run. An `at` the state has no date for is never
+// due; `startupState` gives every one a date.
 export function dueScheduled(agent, state, { now, timeZone }) {
-  for (const { at, schedule, task } of agent.run.scheduled) {
+  for (const { at, tag, schedule, prompt } of agent.run.scheduled) {
     const done = state.scheduled[at]
     if (done === undefined) continue
     const date = localDate(previousLocalTime(schedule, timeZone, now), timeZone)
-    if (date > done) return { at, date, task }
+    if (date > done) return { at, tag, date, prompt }
   }
   return null
 }
@@ -72,7 +87,7 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 // What to do next. Returns one of:
 //
 //   { kind: 'messages' }               run a batch of messages (`buildBatch`)
-//   { kind: 'scheduled', at, date, task }
+//   { kind: 'scheduled', at, tag, date, prompt }
 //   { kind: 'backfill', id }           run a batch of the backfill in progress
 //   { kind: 'backfill-finished', id }  the backfill has covered everything up to `until`
 //   { kind: 'idle', reason }           nothing now: `paused`, `quiet` (messages wait for the owner
@@ -101,7 +116,9 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
     if (hasWorkAfter(index, agent.channels, backfill.cursor, upTo) || dueRetries(backfill.retry, index, agent.channels, now).length > 0) {
       return { kind: 'backfill', id: backfill.id }
     }
-    if (backfill.retry.length === 0) return { kind: 'backfill-finished', id: backfill.id }
+    // A message deleted since it was given waits for nothing: the runner settles it, and it goes
+    // with the backfill's lane.
+    if (backfill.retry.every(entry => isDeletedMessage(index, entry.seq))) return { kind: 'backfill-finished', id: backfill.id }
   }
   return { kind: 'idle', reason: 'nothing' }
 }

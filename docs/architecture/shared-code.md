@@ -60,7 +60,7 @@ The first five are what the bridge, as root, uses in a folder another user contr
 
 ## Logging
 
-Every log line is one JSON object on stderr: `at`, `level`, `component`, `event` and the caller's fields. stderr leaves stdout to the CLI commands that print results.
+Every log line is one JSON object on stderr: `at`, `level`, `component`, `event` and the caller's fields. stderr leaves stdout to the CLI commands that print results. Those four names are the line's own: a caller's field named `at`, `level`, `component` or `event` is left out, so a caller gives what it logs other names, as `runner.run_started` gives a scheduled task as its `tag`, not its time.
 
 - **Logs carry no content:** IDs, kinds, sizes and timings, never message text or file contents. That rule is the caller's to keep, in every component, and three things here make the common slips harmless:
   - a field named `text` or `data`, the content fields of a datastore line, is written as `[withheld]`, so logging a whole line leaks nothing. `data` is withheld whatever it holds: a line a reader took can hold a list of strings there, which would otherwise be logged as it is ([data](datastore.md#data));

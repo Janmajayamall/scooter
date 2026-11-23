@@ -15,7 +15,7 @@
 // `data` is a JSON object that only the agent reads: what a channel keeps of a line that isn't on
 // every channel's lines and that Scooter's code doesn't act on, such as an email's subject. The
 // datastore doesn't look into it. A reader that takes something from it all the same checks it
-// first (`dataText`, `dataFlag`).
+// first (`dataText`).
 //
 // The rule from here on: stop writing a kind, a channel or a field, and keep reading it.
 
@@ -213,12 +213,6 @@ export function isKnown(line) {
 export function dataText(line, name) {
   const data = line.data
   return isObject(data) && Object.hasOwn(data, name) && isString(data[name]) ? data[name] : undefined
-}
-
-// Whether a line's `data` holds `true` under `name`, as `dataText` reads it.
-export function dataFlag(line, name) {
-  const data = line.data
-  return isObject(data) && Object.hasOwn(data, name) && data[name] === true
 }
 
 // The text of a line as it goes into `log.jsonl`, with its line break. Throws a `DatastoreError`

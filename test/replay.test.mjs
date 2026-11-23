@@ -1,6 +1,6 @@
 // Replayed batches, which a rebuild and a backfill share:
-// one of the owner's days per batch, `Now:` each batch's own time, a session for each
-// day, and where a replay stops.
+// one of the owner's days per batch, `$now$` each batch's own time, the prompt of a live batch with
+// what the replay may change, a session for each day, and where a replay stops.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -14,7 +14,16 @@ import { indexOf, line } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', channels: ['whatsapp', 'email'], replyMode: 'quiet', session: 'daily', run: { newMessages: [{ channels: ['whatsapp', 'email'] }], scheduled: [], backfill: [] } }
+// Its prompt for new messages gives the time, the lines and what the run may change.
+const PROMPT = 'Now: $now$\nNew: $seq.unread$\nGiven before: $seq.retry$\nMay change: $run.writes$\n'
+const AGENT = {
+  name: 'lifelog',
+  channels: ['whatsapp', 'email'],
+  replyMode: 'quiet',
+  session: 'daily',
+  writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'],
+  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: PROMPT }], scheduled: [], backfill: [] },
+}
 // When the replay looks at its retries: long after every message.
 const LATER = Date.parse('2026-11-18T10:00:00Z')
 
@@ -30,8 +39,9 @@ const LINES = [
   line.text(7, '2026-11-09T15:00:00Z', 'today was long'), // Mon 9 Nov, 20:30
 ]
 
-function replay({ lines = LINES, lane = { ...initialAgentState() }, until = 7, timeZone = 'Asia/Kolkata', now = LATER, intro } = {}) {
-  return buildReplayBatch({ agent: AGENT, lane, until, index: indexOf(lines), paths: PATHS, now, timeZone, homeCurrency: 'INR', internet: false, intro })
+function replay({ lines = LINES, lane = { ...initialAgentState() }, until = 7, timeZone = 'Asia/Kolkata', now = LATER, writes } = {}) {
+  const settings = { timeZone, homeCurrency: 'INR', agentInternet: false }
+  return buildReplayBatch({ agent: AGENT, lane, until, index: indexOf(lines), paths: PATHS, settings, now, writes })
 }
 
 // Every batch of a replay of `lines` from the start, each run as if it had succeeded.
@@ -48,7 +58,7 @@ function replayAll(options = {}) {
 const seqsOf = built => built.batch.items.map(item => item.seq)
 const firstLine = prompt => prompt.split('\n')[0]
 
-test("replay: batches don't cross the owner's days, and Now: is each batch's own time", () => {
+test("replay: batches don't cross the owner's days, and $now$ is each batch's own time", () => {
   const batches = replayAll()
   assert.deepEqual(
     batches.map(built => [built.day, seqsOf(built), built.batch.covered]),
@@ -58,30 +68,19 @@ test("replay: batches don't cross the owner's days, and Now: is each batch's own
       ['2026-11-09', [7], 7],
     ],
   )
-  // `Now:` is the time of the batch's newest item, so its items are all from "today".
+  // `$now$` is the time of the batch's newest item, so its items are all from "today".
   assert.deepEqual(
     batches.map(built => firstLine(built.prompt)),
-    [
-      '[scooter] Now: Saturday 7 November 2026, 23:50 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
-      '[scooter] Now: Sunday 8 November 2026, 09:00 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
-      '[scooter] Now: Monday 9 November 2026, 20:30 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.',
-    ],
+    ['Now: Saturday 7 November 2026, 23:50', 'Now: Sunday 8 November 2026, 09:00', 'Now: Monday 9 November 2026, 20:30'],
   )
   assert.deepEqual(
     batches.map(built => built.time),
     ['2026-11-07T18:20:00Z', '2026-11-08T03:30:00Z', '2026-11-09T15:00:00Z'].map(Date.parse),
   )
-  assert.equal(
-    batches[0].prompt.split('\n').slice(3).join('\n'),
-    `New messages:
-#1 21:30 text: "ran 5k"
-#3 23:50 text: "late coffee"
-
-For context only (no action, nothing to mark):
-#2 21:31 you sent: "Logged."`,
-  )
-  // A message just after midnight is of the next day, and its time is "today"'s.
-  assert.match(batches[1].prompt, /^#4 00:10 text: "midnight snack"$/m)
+  // The prompt of a live batch: the lines' numbers, and what the replay's runs may change.
+  assert.equal(batches[0].prompt, 'Now: Saturday 7 November 2026, 23:50\nNew: 1 3\nGiven before: none\nMay change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\n')
+  // A message just after midnight is of the next day.
+  assert.match(batches[1].prompt, /^New: 4 6$/m)
 
   // The days are the owner's: in New York, #3, #4 and #6 are all on Saturday 7 November.
   const york = replayAll({ timeZone: 'America/New_York' })
@@ -105,11 +104,11 @@ test('replay: it stops at until, and the cursor never passes it', () => {
       [[4, 6], 6],
     ],
   )
-  // Lines past `until` aren't even context.
+  // Lines past `until` aren't covered.
   const withReply = [...LINES.slice(0, 4), line.sent(5, '2026-11-07T18:41:00Z', 'Noted.')]
-  assert.deepEqual(replayAll({ lines: withReply, until: 4 }).map(built => [seqsOf(built), built.batch.context]), [
-    [[1, 3], [2]],
-    [[4], []],
+  assert.deepEqual(replayAll({ lines: withReply, until: 4 }).map(built => [seqsOf(built), built.batch.covered]), [
+    [[1, 3], 3],
+    [[4], 4],
   ])
   assert.equal(replay({ lane: { ...initialAgentState(), cursor: 6 }, until: 6 }), null)
 })
@@ -127,15 +126,15 @@ test('replay: at most 20 items, due retries first, each batch of one day', () =>
   const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 3, attempts: 1, due: '2026-11-17T10:00:00Z', reason: 'not marked' }] }
   const built = replay({ lane })
   assert.deepEqual([built.day, built.batch.items, built.batch.covered], ['2026-11-07', [{ seq: 3, origin: 'retry', attempt: 2 }], 6])
-  assert.match(built.prompt, /^\[scooter\] Now: Saturday 7 November 2026, 23:50 /)
-  assert.match(built.prompt, /Retrying \(not handled yet\):\n#3 23:50 text: "late coffee" \(attempt 2 of 4\)/)
+  assert.match(built.prompt, /^Now: Saturday 7 November 2026, 23:50$/m)
+  assert.match(built.prompt, /^New: none\nGiven before: 3 \(attempt 2 of 4\)$/m)
   // Once it is done, 9 November.
   assert.deepEqual(seqsOf(replay({ lane: { ...lane, retry: [] } })), [7])
   // Not due yet: 9 November goes first.
   assert.deepEqual(seqsOf(replay({ lane, now: Date.parse('2026-11-17T09:59:00Z') })), [7])
 })
 
-test('replay: an edit brings in the message it changes, from another day, which is shown with its date', () => {
+test('replay: an edit brings in the message it changes, from another day', () => {
   // #1, of 7 November, waits in the lane's retries; #8 edits it on 9 November.
   const lines = [...LINES, line.edit(8, '2026-11-09T15:10:00Z', 1, 'ran 6k')]
   const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 1, attempts: 1, due: '2026-11-19T10:00:00Z', reason: 'not marked' }] }
@@ -146,19 +145,31 @@ test('replay: an edit brings in the message it changes, from another day, which 
     { seq: 7, origin: 'new', attempt: 1 },
     { seq: 8, origin: 'new', attempt: 1 },
   ])
-  assert.match(built.prompt, /^\[scooter\] Now: Monday 9 November 2026, 20:40 /)
-  assert.match(built.prompt, /^#1 Sat 7 Nov 21:30 text: "ran 6k" \(edited in #8\) \(attempt 2 of 4\)$/m)
+  assert.match(built.prompt, /^Now: Monday 9 November 2026, 20:40$/m)
+  assert.match(built.prompt, /^New: 7 8\nGiven before: 1 \(attempt 2 of 4\)$/m)
 
   // And from what the lane gave up on, which starts it again at attempt 1.
   const failed = { ...lane, retry: [], failed: [{ seq: 1, at: '2026-11-09T10:00:00Z', reason: 'not handled after 4 attempts' }] }
   assert.deepEqual(replay({ lines, lane: failed, until: 8 }).batch.items[0], { seq: 1, origin: 'failed', attempt: 1 })
 })
 
-test("replay: a backfill's prompt starts with its line", () => {
-  const intro = 'Backfill (from your configuration, not a message from the owner): file these messages for the people skill only. Change only views/people.csv.'
-  const built = replay({ intro })
-  assert.equal(built.prompt.split('\n')[0], intro)
-  assert.match(built.prompt.split('\n')[1], /^\[scooter\] Now: Saturday 7 November 2026, 23:50 /)
+test("replay: a backfill's prompt is a live batch's, with what the backfill may change", () => {
+  const built = replay({ writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] })
+  assert.equal(built.prompt, 'Now: Saturday 7 November 2026, 23:50\nNew: 1 3\nGiven before: none\nMay change: /data/agents/lifelog/views/people.csv /data/agents/lifelog/views/people/\n')
+})
+
+test('replay: a message deleted later in history is never given, and its deletion is, on its own day', () => {
+  // #1, of 7 November, deleted on 9 November.
+  const lines = [...LINES, line.delete(8, '2026-11-09T15:10:00Z', 1)]
+  const batches = replayAll({ lines, until: 8 })
+  assert.deepEqual(
+    batches.map(built => [built.day, seqsOf(built), built.batch.covered]),
+    [
+      ['2026-11-07', [3], 3],
+      ['2026-11-08', [4, 6], 6],
+      ['2026-11-09', [7, 8], 8],
+    ],
+  )
 })
 
 test('replay: a session for each of the owner\'s days, and only a replay\'s own sessions go when it is over', t => {

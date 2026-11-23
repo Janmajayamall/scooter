@@ -127,8 +127,8 @@ test('state: the session ID is the agent and the session\'s day', () => {
 test('state: at startup, scheduled tasks already past wait for their next time, and the rest is set up', () => {
   const agent = agentWith({
     scheduled: [
-      { at: '21:30', schedule: { weekday: null, hour: 21, minute: 30 }, task: 'Check in.' },
-      { at: 'Sun 18:00', schedule: { weekday: 7, hour: 18, minute: 0 }, task: 'Weekly.' },
+      { at: '21:30', tag: 'check-in', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: 'Check in.' },
+      { at: 'Sun 18:00', tag: 'weekly', schedule: { weekday: 7, hour: 18, minute: 0 }, prompt: 'Weekly.' },
     ],
   })
   const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-01', '07:00': '2026-11-08' } }
@@ -148,8 +148,8 @@ test('state: at startup, a pause is tried again at once', () => {
 test('state: at startup during a pause, scheduled tasks keep their dates, so one the pause holds back is still due', () => {
   const agent = agentWith({
     scheduled: [
-      { at: '21:30', schedule: { weekday: null, hour: 21, minute: 30 }, task: 'Check in.' },
-      { at: '07:00', schedule: { weekday: null, hour: 7, minute: 0 }, task: 'Morning.' },
+      { at: '21:30', tag: 'check-in', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: 'Check in.' },
+      { at: '07:00', tag: 'morning', schedule: { weekday: null, hour: 7, minute: 0 }, prompt: 'Morning.' },
     ],
   })
   const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-08' }, paused: EXAMPLE.paused }

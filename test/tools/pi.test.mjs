@@ -458,3 +458,39 @@ test('pi 8: pi and all seven tools work when pi was installed without its instal
   assert.match(refused.text, /EROFS: read-only file system/)
   assert.equal(fs.readFileSync(`${agent}/state.json`, 'utf8'), '{"cursor":1049}\n')
 })
+
+test('pi 9: the prompt after -- reaches the model as it is, whatever it starts with, but for @, which pi takes as a file to attach, and /skill:, which it replaces with the skill', options, async t => {
+  const dir = makeTestDir(t)
+  const data = makeDataDir(dir)
+  const model = createFakeModel(Array(8).fill({ text: 'Filed it.' }))
+  const vm = await startVm(t, { model, files: designFiles(data) })
+  const userText = async prompt => {
+    const seenBefore = model.modelRequests.length
+    const result = await runPi(vm, { prompt, skills: [data.skill] }, { cwd: data.agent })
+    const sent = model.modelRequests.length > seenBefore ? conversationOf(model.modelRequests.at(-1)) : []
+    return { result, sent }
+  }
+
+  // A path, as a variable of the prompt can start it, a command of pi's interactive screen, a flag,
+  // `$` and the patterns a JavaScript replacement reads, line breaks and quotes: each as it is.
+  for (const prompt of [`${data.agent} is your folder.`, '/compact', '/expenses', '!ls', '-p --help', '$now$ costs $5; $$ $& $1 $`', 'New: 1050 1051\nGiven before: none\n"quoted"']) {
+    const { result, sent } = await userText(prompt)
+    assert.equal(result.exitCode, 0, result.stderr)
+    assert.deepEqual(sent, [['user', prompt]])
+  }
+
+  // `@` first makes the whole argument a file to attach: pi looks for it in its working folder,
+  // and with none there, fails before any request.
+  const missing = await userText('@lifelog: new messages')
+  assert.equal(missing.result.exitCode, 1)
+  assert.equal(missing.result.stderr, `Error: File not found: ${data.agent}/lifelog: new messages\n`)
+  assert.deepEqual(missing.sent, [])
+  // Anywhere else it is a character like any other.
+  const later = await userText('Ask @sam.')
+  assert.deepEqual(later.sent, [['user', 'Ask @sam.']])
+
+  // `/skill:` and the name of a skill pi was given puts the skill's text in the message.
+  const skill = await userText('/skill:expenses please')
+  assert.equal(skill.result.exitCode, 0, skill.result.stderr)
+  assert.match(skill.sent[0][1], /^<skill name="expenses" location="[^"]+\/run\/config\/skills\/expenses\/SKILL\.md">\n[\s\S]*Add one row for each expense\.\n<\/skill>\n\nplease$/)
+})

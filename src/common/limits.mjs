@@ -13,7 +13,9 @@ const MB = 1024 * KB
 const values = {
   // The most messages in one batch, retries first.
   BATCH_MAX_ITEMS: 20,
-  // The largest prompt. It's one command-line argument, and Linux refuses one over 128 KB.
+  // The longest a trigger's prompt may be, filled in with the longest values its variables can
+  // take, which `agents.yaml` is held to at the start. It's one command-line argument, and Linux
+  // refuses one over 128 KB.
   PROMPT_MAX_BYTES: 96 * KB,
   // Attempts before a message moves to `failed`.
   MAX_ATTEMPTS: 4,
@@ -40,7 +42,7 @@ const values = {
   CHUNK_CHARS: 3500,
   // The longest text one outbox entry sends, in characters: four chunks of `CHUNK_CHARS`, which go
   // out as four to eight messages, since a text is cut at a break in the second half of each
-  // chunk. A longer one is cut, with a line that says so, when it is written. The agent's answers
+  // chunk. A longer one is cut, with a line that says so, when it is written. The agent's texts
   // are its own to make as long as it likes, and one text of a megabyte would otherwise take the
   // bot number half an hour of sending, one message every `SEND_INTERVAL`.
   TEXT_MAX_CHARS: 14000,

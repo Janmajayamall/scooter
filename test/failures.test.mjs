@@ -259,15 +259,9 @@ test('failures: a setup error pauses runs, tried every 30 minutes; an outage aft
 // ---------------------------------------------------------------------------------------------
 // The state after a run
 
-const BATCH_LINES = [
-  line.text(1, '2026-11-09T15:00:00Z', 'coffee 120'),
-  line.text(2, '2026-11-09T15:01:00Z', 'lunch 300'),
-  line.text(3, '2026-11-09T15:02:00Z', 'ran 5k'),
-  line.sent(4, '2026-11-09T15:03:00Z', 'Noted.'),
-  line.text(5, '2026-11-09T15:04:00Z', 'tea 40'),
-]
+// A batch of the lines 1 to 5, of which 4 is a message Scooter sent.
 const STATE = { ...initialAgentState(), cursor: 0 }
-const batchOf = (items, covered = 5) => ({ items: items.map(([seq, origin, attempt]) => ({ seq, origin, attempt })), context: [4], covered, newest: items.at(-1)[0] })
+const batchOf = (items, covered = 5, settled = []) => ({ items: items.map(([seq, origin, attempt]) => ({ seq, origin, attempt })), settled, covered, newest: items.at(-1)[0] })
 const ok = (done, failed = {}) => ({ ok: true, done: new Set(done), failed: new Map(Object.entries(failed).map(([seq, reason]) => [Number(seq), reason])) })
 
 test('state: after a success, items marked done go, those marked failed go to failed, the rest wait a minute; the cursor covers the batch', () => {
@@ -343,6 +337,29 @@ test('state: a failure of pi\'s own counts an attempt for every item; a setup er
   assert.equal(settleBatch(wasPaused, batch, { ok: false, cause: 'outage', reason: 'x' }, TIMING).state.paused.tries, 2)
 })
 
+test('state: a message already deleted that the batch settles leaves retry and failed, whatever comes of the run, and uses no attempt', () => {
+  const state = {
+    ...STATE,
+    cursor: 3,
+    retry: [
+      { seq: 1, attempts: 2, due: '2026-11-09T16:40:00Z', reason: 'not marked' },
+      { seq: 3, attempts: 1, due: '2026-11-09T16:40:00Z', reason: 'not marked' },
+    ],
+    failed: [{ seq: 2, at: '2026-11-09T15:00:00Z', reason: 'x' }],
+  }
+  // #1 and #2 were deleted, in #4 and #5, which the batch gives.
+  const batch = batchOf([[4, 'new', 1], [5, 'new', 1]], 5, [1, 2])
+  for (const outcome of [ok([4, 5]), ok([]), { ok: false, cause: 'other', reason: 'timed out' }, { ok: false, cause: 'setup', reason: 'OpenRouter answered 401' }]) {
+    const { state: next, givenUp } = settleBatch(state, batch, outcome, TIMING)
+    assert.deepEqual(givenUp, [])
+    assert.ok(!next.retry.some(entry => entry.seq === 1 || entry.seq === 2), JSON.stringify(outcome))
+    assert.deepEqual(next.failed, [])
+    // #3 waits as it did: the runner settles no line because of another.
+    assert.deepEqual(next.retry.find(entry => entry.seq === 3), state.retry[1])
+    assert.deepEqual(next.lastRun.seqs, [4, 5])
+  }
+})
+
 test('state: failed keeps its newest FAILED_KEEP', t => {
   atEnd(t, overrideLimits({ FAILED_KEEP: 3 }))
   const state = { ...STATE, cursor: 3, failed: [10, 11, 12].map(seq => ({ seq, at: '2026-11-09T10:00:00Z', reason: 'old' })) }
@@ -388,11 +405,13 @@ test('notices: the first failure, with its short reason', () => {
     "⚠️ I couldn't process your last messages (OpenRouter: No endpoints found matching your data policy). Runs are paused until this is fixed. I'll try again every 30 minutes.",
   )
   assert.equal(text({ kind: 'messages' }, { cause: 'outage', reason: 'OpenRouter answered 503' }), "⚠️ I couldn't process your last messages (OpenRouter answered 503). I'll try again.")
-  assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'other', reason: 'timed out' }), "⚠️ I couldn't run the scheduled task 21:30 (timed out). It runs again at its next time.")
-  assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'outage', reason: 'x' }), "⚠️ I couldn't run the scheduled task 21:30 (x). I'll try again.")
+  // A scheduled task is named by its tag.
+  const task = { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09' }
+  assert.equal(text(task, { cause: 'other', reason: 'timed out' }), "⚠️ I couldn't run the scheduled task check-in (timed out). It runs again at its next time.")
+  assert.equal(text(task, { cause: 'outage', reason: 'x' }), "⚠️ I couldn't run the scheduled task check-in (x). I'll try again.")
   assert.equal(
-    text({ kind: 'scheduled', at: '21:30' }, { cause: 'setup', reason: 'OpenRouter answered 401' }),
-    "⚠️ I couldn't run the scheduled task 21:30 (OpenRouter answered 401). Runs are paused until this is fixed. I'll try again every 30 minutes.",
+    text(task, { cause: 'setup', reason: 'OpenRouter answered 401' }),
+    "⚠️ I couldn't run the scheduled task check-in (OpenRouter answered 401). Runs are paused until this is fixed. I'll try again every 30 minutes.",
   )
 })
 

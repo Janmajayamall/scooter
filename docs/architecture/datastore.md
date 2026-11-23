@@ -9,7 +9,7 @@ Who owns its folders, and their modes, is in [Folders and their owners](../ARCHI
 ## Files
 
 - `src/bridge/store.mjs`: the store, the only writer.
-- `src/common/datastore/line.mjs`: the line format and its two checks, the store's `checkLine` and a reader's `checkReadLine`; which lines this version knows, `isKnown`; and reading `data`, `dataText` and `dataFlag`.
+- `src/common/datastore/line.mjs`: the line format and its two checks, the store's `checkLine` and a reader's `checkReadLine`; which lines this version knows, `isKnown`; and reading `data`, `dataText`.
 - `src/common/datastore/index.mjs`: the index the bridge and the runner each keep.
 - `src/common/datastore/reader.mjs`: reading the lines back, by polling.
 
@@ -79,9 +79,9 @@ Examples:
 | `forwarded` | a WhatsApp `message`, when true | the WhatsApp channel | `true`: the message was forwarded, so it's someone else's words |
 | `emoji` | a `reaction` | the WhatsApp channel for the owner's, delivery for Scooter's ([`out` lines](delivery.md#out-lines)) | The reaction; `""` means it was removed |
 
-*Why these four:* none is on every channel's lines, email having no reactions, and Scooter's code acts on none of them. The owner, on 2026-11-21: "I think `emoji` can move into `data` since it's very text messenger channel specific. Email does not have emoji." Three things of the runner's and the bridge's show one: the agent's prompt ([The prompt](runner.md#the-prompt)), the `✅ Email:` text ([Choosing the channel](delivery.md#choosing-the-channel)) and the notice about a message given up on ([Notices](run.md#notices)). *Why the rest stays top-level:* `text` and `files`, since the store names and copies the files, and tells a repeated edit from a new one by its text; `media`, since the notice about a message given up on reads it; and `trust` and `by`, since the core sets one or the other on every line of every channel.
+*Why these four:* none is on every channel's lines, email having no reactions, and Scooter's code acts on none of them. The owner, on 2026-11-21: "I think `emoji` can move into `data` since it's very text messenger channel specific. Email does not have emoji." Two things of the runner's and the bridge's show one, an email's subject: the `✅ Email:` text ([Choosing the channel](delivery.md#choosing-the-channel)) and the notice about a message given up on ([Notices](run.md#notices)). The agent reads the rest in the line, with `show` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)); the prompt shows nothing of a line ([The prompt](runner.md#the-prompt)). *Why the rest stays top-level:* `text` and `files`, since the store names and copies the files, and tells a repeated edit from a new one by its text; `media`, since the notice about a message given up on reads it; and `trust` and `by`, since the core sets one or the other on every line of every channel.
 
-**What reads `data` checks it first,** since neither check looks into it: `data` can be missing, a list or a string, and hold anything under any name, on a line written by hand or by another version. `dataText` gives what it holds under a name only when `data` is an object and that is a string, and `dataFlag` only `true`; anything else counts as not there, and nothing is taken from what an object inherits. So an email whose subject isn't a string shows as `email ""` in the prompt and as `✅ Email: (no subject)`, and a reaction without an emoji as `reacted to #1046`.
+**What reads `data` checks it first,** since neither check looks into it: `data` can be missing, a list or a string, and hold anything under any name, on a line written by hand or by another version. `dataText` gives what it holds under a name only when `data` is an object and that is a string; anything else counts as not there, and nothing is taken from what an object inherits. So an email whose subject isn't a string shows as `✅ Email: (no subject)`, and as `email ""` in the notice about a message given up on.
 
 ### Reading a line
 
@@ -98,7 +98,7 @@ A field it doesn't know is ignored, at the top level or in a file or `media`, an
 **A line this version knows** (`isKnown`) is one of its kinds and channels, with the fields its kind needs: a message its `text`, an edit its `target` and `text`, a deletion and a reaction their `target`. Any other line is kept in the index by its `seq`, and passed over, as the runner passes over a line that isn't work ([The index](#the-index)):
 
 - it is no message to edit, delete or react to, and the store refuses a line that points at it as its target ([Writing](#writing)); a message that replies to it keeps its `seq` as `replyTo` ([Intake](bridge.md#intake)), which the index file and `show` follow, as for any line;
-- the runner gives it to the agent neither as work nor as context, and its cursor goes past it ([State](runner.md#state));
+- the runner doesn't give it to the agent as work, and its cursor goes past it ([State](runner.md#state));
 - `scooter status` counts it neither as the newest message nor as one pending ([scooter status](bridge.md#scooter-status));
 - a text that replies to it goes to its channel, or to `DEFAULT_CHANNEL` when that channel is gone, unquoted, and a reaction to it is dropped ([Choosing the channel](delivery.md#choosing-the-channel)).
 

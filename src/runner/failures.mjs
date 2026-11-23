@@ -228,6 +228,8 @@ export function isFirstFailure(state) {
 // - **A setup error or an outage:** every item waits in `retry` for the next try, its attempts as
 //   they were. It is due at once: the pause holds every run back until the next try, which comes
 //   sooner when the runner restarts.
+// - **A message already deleted** that the batch settles (`settled`, `assembleBatch`) leaves
+//   `retry`, and `failed`, in every case.
 //
 // An item brought in from `failed` leaves it and starts again at attempt 1. `failed` keeps
 // its newest `FAILED_KEEP`. The cursor moves past the batch in every case: what the batch didn't
@@ -242,10 +244,12 @@ export function settleBatch(state, batch, outcome, { now, startedAt, durationMs 
 // What a batch's outcome does to its lane's items, as `settleBatch` describes it: a lane is
 // `{ cursor, retry, failed }` (`batch.mjs`), with `failed` as `[{ seq, at, reason }]`. Returns
 // `{ lane, givenUp }`, the lane afterwards and the items that ran out of attempts, in order.
-// Live runs and a backfill's batches settle their own lanes so.
+// Live runs and a backfill's batches settle their own lanes so. The messages already deleted that
+// the batch settles (`settled`) leave `retry` and `failed` whatever came of the run: they weren't
+// given.
 export function settleLane(lane, batch, outcome, { now }) {
   const at = isoSeconds(now)
-  const inBatch = new Set(batch.items.map(item => item.seq))
+  const inBatch = new Set([...batch.items.map(item => item.seq), ...batch.settled])
   const retry = lane.retry.filter(entry => !inBatch.has(entry.seq))
   const failed = lane.failed.filter(entry => !inBatch.has(entry.seq))
   const givenUp = []
@@ -276,7 +280,7 @@ export function settleLane(lane, batch, outcome, { now }) {
 }
 
 // The state after a scheduled task (the plan's rule for milestone 4). `task` is
-// `{ kind: 'scheduled', at, date }`.
+// `{ kind: 'scheduled', at, tag, date }`.
 //
 // - A task that fails on a setup error or an outage stays due, and is the next try.
 // - A task that ran, or failed for another reason, is done for its date: it runs again at its next
@@ -293,9 +297,9 @@ export function settleTask(state, task, outcome, { now, startedAt, durationMs })
 const minutes = ms => Math.round(ms / 60000)
 
 // The notice of the first failure in a row. `job` is `{ kind: 'messages' }`, or the task as for
-// `settleTask`; `failure` what `failureCause` returned.
+// `settleTask`, which the notice names by its tag; `failure` what `failureCause` returned.
 export function failureNotice(job, { cause, reason }) {
-  const what = job.kind === 'scheduled' ? `run the scheduled task ${job.at}` : 'process your last messages'
+  const what = job.kind === 'scheduled' ? `run the scheduled task ${job.tag}` : 'process your last messages'
   let next
   if (cause === 'setup') next = `Runs are paused until this is fixed. I'll try again every ${minutes(limits.SETUP_RETRY_WAIT)} minutes.`
   else if (cause === 'outage' || job.kind === 'messages') next = "I'll try again."

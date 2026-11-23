@@ -6,8 +6,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
+import { limits } from '../src/common/limits.mjs'
 import { ConfigError, RUNNER_SKILL, loadConfig, parseConfig } from '../src/runner/config.mjs'
-import { SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
+import { longestValues } from '../src/runner/prompt.mjs'
+import { CHECK_IN_PROMPT, NEW_MESSAGES_PROMPT, SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
 import { skipIfRoot } from './support/root.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
@@ -27,6 +29,9 @@ function setup(t, options) {
   }
   return { root, configDir, parse, faults }
 }
+
+// The runner's settings that fill in a prompt's variables.
+const SETTINGS = { timeZone: 'Asia/Kolkata', homeCurrency: 'INR', agentInternet: false }
 
 // The example's text with one setting's line changed: `key: old value` becomes `key: value`.
 const change = (text, key, value) => text.replace(new RegExp(`^(\\s*)${key}:.*$`, 'm'), `$1${key}: ${value}`)
@@ -53,14 +58,8 @@ test('config: the example config is read as it stands', t => {
     ackReaction: '✅',
     timeoutMinutes: 10,
     run: {
-      newMessages: [{ channels: ['whatsapp', 'email'] }],
-      scheduled: [
-        {
-          at: '21:30',
-          schedule: { weekday: null, hour: 21, minute: 30 },
-          task: 'Evening check-in. List in a few lines what you filed today, mention anything that looks missing, and list the open questions.',
-        },
-      ],
+      newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }],
+      scheduled: [{ at: '21:30', tag: 'check-in', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: CHECK_IN_PROMPT }],
       backfill: [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv'] }],
     },
   })
@@ -88,9 +87,11 @@ test('config: what else is accepted', t => {
   // An unquoted time is a string in YAML 1.2, not a number of minutes as in YAML 1.1.
   const runs = `    run:
       - at: 09:05
-        task: Morning.
+        tag: morning
+        prompt: Morning.
       - at: Sun 18:00
-        task: Weekly review.
+        tag: weekly-review-2
+        prompt: Weekly review.
       - backfill: people-1
         skill: people
         writes: [agents/lifelog/views/people.csv, agents/lifelog/views/people/]
@@ -99,10 +100,10 @@ test('config: what else is accepted', t => {
   assert.deepEqual(run.newMessages, [])
   assert.deepEqual(channels, [])
   assert.deepEqual(
-    run.scheduled.map(entry => [entry.at, entry.schedule]),
+    run.scheduled.map(entry => [entry.at, entry.tag, entry.schedule]),
     [
-      ['09:05', { weekday: null, hour: 9, minute: 5 }],
-      ['Sun 18:00', { weekday: 7, hour: 18, minute: 0 }],
+      ['09:05', 'morning', { weekday: null, hour: 9, minute: 5 }],
+      ['Sun 18:00', 'weekly-review-2', { weekday: 7, hour: 18, minute: 0 }],
     ],
   )
   assert.deepEqual(run.backfill, [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] }])
@@ -187,26 +188,40 @@ test('config: each error in `run` names the entry and the field', t => {
     ['    run: new-messages\n', 'agents.lifelog.run', /must be a list of when the agent runs/],
     ['      - new-messages\n', 'agents.lifelog.run[0]', /must be a map with one of on, at or backfill/],
     ['      - on: new-messages\n        at: "21:30"\n', 'agents.lifelog.run[0]', /must have exactly one of on, at or backfill/],
-    ['      - task: Something.\n', 'agents.lifelog.run[0]', /must have exactly one of/],
-    ['      - on: old-messages\n        channels: [whatsapp]\n', 'agents.lifelog.run[0].on', /must be new-messages/],
+    ['      - prompt: Something.\n', 'agents.lifelog.run[0]', /must have exactly one of/],
+    ['      - on: old-messages\n        channels: [whatsapp]\n        prompt: New.\n', 'agents.lifelog.run[0].on', /must be new-messages/],
     ['      - on: new-messages\n', 'agents.lifelog.run[0].channels', /is missing/],
-    ['      - on: new-messages\n        channels: []\n', 'agents.lifelog.run[0].channels', /must list whatsapp or email, or both, once each$/],
+    ['      - on: new-messages\n        channels: [whatsapp]\n', 'agents.lifelog.run[0].prompt', /is missing/],
+    ['      - on: new-messages\n        channels: [whatsapp]\n        task: New.\n', 'agents.lifelog.run[0].task', /doesn't belong with on/],
+    ['      - on: new-messages\n        channels: []\n        prompt: New.\n', 'agents.lifelog.run[0].channels', /must list whatsapp or email, or both, once each$/],
     ['      - on: new-messages\n        channels: [sms]\n', 'agents.lifelog.run[0].channels', /must list whatsapp or email/],
     ['      - on: new-messages\n        channels: [email, email]\n', 'agents.lifelog.run[0].channels', /once each/],
     [
-      '      - on: new-messages\n        channels: [whatsapp, email]\n      - on: new-messages\n        channels: [email]\n',
+      '      - on: new-messages\n        channels: [whatsapp, email]\n        prompt: One.\n      - on: new-messages\n        channels: [email]\n        prompt: Two.\n',
       'agents.lifelog.run[1].channels',
       /names email, which agents\.lifelog\.run\[0\]\.channels names too: a channel starts the runs of one trigger at most/,
     ],
-    ['      - at: "25:00"\n        task: Late.\n', 'agents.lifelog.run[0].at', /must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"/],
-    ['      - at: "sun 18:00"\n        task: Weekly.\n', 'agents.lifelog.run[0].at', /must be a time/],
-    ['      - at: "21:30"\n        task: One.\n      - at: "21:30"\n        task: Two.\n', 'agents.lifelog.run[1].at', /is 21:30, which another entry has too/],
-    ['      - at: "21:30"\n', 'agents.lifelog.run[0].task', /is missing/],
-    ['      - at: "21:30"\n        task: "  "\n', 'agents.lifelog.run[0].task', /must be the task, as text/],
-    ['      - at: "21:30"\n        task: Check in.\n        skill: people\n', 'agents.lifelog.run[0].skill', /doesn't belong with at/],
-    ['      - at: "21:30"\n        task: Check in.\n        channels: [whatsapp]\n', 'agents.lifelog.run[0].channels', /doesn't belong with at/],
+    ['      - at: "25:00"\n        prompt: Late.\n', 'agents.lifelog.run[0].at', /must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"/],
+    ['      - at: "sun 18:00"\n        prompt: Weekly.\n', 'agents.lifelog.run[0].at', /must be a time/],
+    // Two triggers may not share an `at`, whatever their tags: it is the state's key.
+    ['      - at: "21:30"\n        tag: one\n        prompt: One.\n      - at: "21:30"\n        tag: two\n        prompt: Two.\n', 'agents.lifelog.run[1].at', /is 21:30, which another entry has too/],
+    // Every scheduled trigger has a tag, of lowercase letters, digits and hyphens, each its own.
+    ['      - at: "21:30"\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /is missing/],
+    ['      - at: "21:30"\n        tag: Check-in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens, such as check-in$/],
+    ['      - at: "21:30"\n        tag: check in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: -check-in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: 2130\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: ""\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: check-in\n        prompt: One.\n      - at: "07:00"\n        tag: check-in\n        prompt: Two.\n', 'agents.lifelog.run[1].tag', /is check-in, which another entry has too$/],
+    ['      - on: new-messages\n        channels: [whatsapp]\n        tag: new\n        prompt: New.\n', 'agents.lifelog.run[0].tag', /doesn't belong with on/],
+    ['      - backfill: b1\n        skill: people\n        tag: b1\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].tag', /doesn't belong with backfill/],
+    ['      - at: "21:30"\n', 'agents.lifelog.run[0].prompt', /is missing/],
+    ['      - at: "21:30"\n        prompt: "  "\n', 'agents.lifelog.run[0].prompt', /must be the message pi is given for the run, as text/],
+    ['      - at: "21:30"\n        task: Check in.\n', 'agents.lifelog.run[0].task', /doesn't belong with at/],
+    ['      - at: "21:30"\n        prompt: Check in.\n        skill: people\n', 'agents.lifelog.run[0].skill', /doesn't belong with at/],
+    ['      - at: "21:30"\n        prompt: Check in.\n        channels: [whatsapp]\n', 'agents.lifelog.run[0].channels', /doesn't belong with at/],
     ['      - backfill: People!\n        skill: people\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].backfill', /must be an ID of lowercase letters, digits and hyphens/],
-    ['      - backfill: b1\n        skill: people\n        writes: [agents/lifelog/views/x.csv]\n        task: Also this.\n', 'agents.lifelog.run[0].task', /doesn't belong with backfill/],
+    ['      - backfill: b1\n        skill: people\n        writes: [agents/lifelog/views/x.csv]\n        prompt: Also this.\n', 'agents.lifelog.run[0].prompt', /doesn't belong with backfill/],
     ['      - backfill: b1\n        skill: swimming\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].skill', /must name one of the agent's skills/],
     ['      - backfill: b1\n        skill: people\n        writes: agents/lifelog/views/people.csv\n', 'agents.lifelog.run[0].writes', /must be a list of what the backfill may change/],
     ['      - backfill: b1\n        skill: people\n        writes: []\n', 'agents.lifelog.run[0].writes', /must be a list/],
@@ -228,11 +243,18 @@ test('config: each error in `run` names the entry and the field', t => {
     assert.ok(problem, `${field}: ${JSON.stringify(problems)}`)
     assert.match(problem.message, message, field)
   }
+  // Every fault of the scheduled triggers at once: a tag another has too among them, also when the
+  // other's time is at fault.
+  const scheduled = faults(withRun('      - at: "25:00"\n        tag: check-in\n        prompt: One.\n      - at: "07:00"\n        tag: check-in\n        prompt: "$nwo$"\n      - at: "08:00"\n        tag: Morning\n'))
+  assert.deepEqual(scheduled.map(problem => problem.field).sort(), ['agents.lifelog.run[0].at', 'agents.lifelog.run[1].prompt', 'agents.lifelog.run[1].tag', 'agents.lifelog.run[2].prompt', 'agents.lifelog.run[2].tag'])
 
   // More than one trigger for new messages, each with channels of its own.
   const { parse } = setup(t)
-  const two = parse(withRun('      - on: new-messages\n        channels: [email]\n      - on: new-messages\n        channels: [whatsapp]\n')).agents[0]
-  assert.deepEqual(two.run.newMessages, [{ channels: ['email'] }, { channels: ['whatsapp'] }])
+  const two = parse(withRun('      - on: new-messages\n        channels: [email]\n        prompt: Emails.\n      - on: new-messages\n        channels: [whatsapp]\n        prompt: Messages.\n')).agents[0]
+  assert.deepEqual(two.run.newMessages, [
+    { channels: ['email'], prompt: 'Emails.' },
+    { channels: ['whatsapp'], prompt: 'Messages.' },
+  ])
   assert.deepEqual(two.channels, ['email', 'whatsapp'])
 
   // What a backfill may change lies in what the agent may: each path in a folder of the agent's
@@ -475,18 +497,104 @@ test("config: no skill of the agent's has the name of the runner's own, which ev
 test('config: loadConfig reads agents.yaml from the config folder, names it when it can\'t, and holds paths to what the system takes in the data folder', t => {
   const { root, configDir } = setup(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir })
-  assert.equal(loadConfig({ paths }).agents[0].name, 'lifelog')
+  const load = () => loadConfig({ paths, settings: SETTINGS })
+  assert.equal(load().agents[0].name, 'lifelog')
   fs.rmSync(paths.agentsYaml)
-  assert.throws(() => loadConfig({ paths }), error => error instanceof ConfigError && error.message === `${paths.agentsYaml} can't be read (ENOENT)`)
+  assert.throws(load, error => error instanceof ConfigError && error.message === `${paths.agentsYaml} can't be read (ENOENT)`)
   fs.writeFileSync(paths.agentsYaml, change(exampleYaml(), 'session', 'weekly'))
-  assert.throws(() => loadConfig({ paths }), error => error.message.startsWith(`${paths.agentsYaml}, line `))
+  assert.throws(load, error => error.message.startsWith(`${paths.agentsYaml}, line `))
 
   // A path of reads or writes that, in the data folder, would pass what the system takes as a
   // path: the runner couldn't make it.
   const deep = Array.from({ length: 17 }, () => 'a'.repeat(250)).join('/')
   fs.writeFileSync(paths.agentsYaml, change(exampleYaml(), 'writes', `[agents/lifelog/views/, agents/lifelog/${deep}/]`))
   assert.throws(
-    () => loadConfig({ paths }),
+    load,
     error => error instanceof ConfigError && error.problems.length === 1 && /agents\.lifelog\.writes\[1\] makes, in the data folder, a path of more than 4095 bytes, which the system doesn't take/.test(error.message),
   )
+})
+
+// The example's text with the evening check-in's prompt in place of its own.
+const withCheckIn = (text, prompt) => text.replace(/^( {8}prompt: )>-\n(?: {10}.*\n)+/m, (whole, key) => `${key}${prompt}\n`)
+
+test("config: a trigger's prompt is text pi can be given, and holds no variable the runner doesn't know", t => {
+  const { parse, faults } = setup(t)
+  const base = exampleYaml()
+  // A `$` that starts no variable is the owner's text; every variable the runner knows is taken.
+  const own = 'Costs $5, or US$ 6; $$ and $ now$ and $1x$ are text. $now$ $user.timezone$ $user.currency$ $reply_mode$ $internet$ $agent.dir$ $datastore.dir$ $seq.unread$ $seq.retry$ $run.writes$'
+  assert.equal(parse(withCheckIn(base, JSON.stringify(own))).agents[0].run.scheduled[0].prompt, own)
+  // A prompt that starts with a space, a line break or a `/`, which pi takes as text.
+  for (const prompt of ['" @sam"', '"\\n@sam"', '"/compact"']) assert.equal(parse(withCheckIn(base, prompt)).agents[0].run.scheduled[0].prompt, JSON.parse(prompt), prompt)
+
+  const cases = [
+    ['"$nwo$ and $user.zone$, and $nwo$ again"', /holds \$nwo\$ or \$user\.zone\$, which are no variables the runner knows: they are \$now\$, \$user\.timezone\$, .* or \$run\.writes\$$/],
+    ['"Today: $Now$"', /holds \$Now\$, which is no variable the runner knows/],
+    ['"$constructor$ $toString$"', /holds \$constructor\$ or \$toString\$, which are no variables/],
+    ['"@lifelog, the evening check-in"', /starts with @, which makes pi take the whole prompt as the name of a file to attach/],
+    ['"Check in.\\0"', /holds the character U\+0000, which a command line can't carry/],
+    ['"Check in. \\uD83D"', /holds half of a pair of UTF-16 surrogates/],
+    ['""', /must be the message pi is given for the run, as text/],
+    ['"  \\n "', /must be the message pi is given for the run, as text/],
+    ['7', /must be the message pi is given for the run, as text/],
+    ['[a, b]', /must be the message pi is given for the run, as text/],
+  ]
+  for (const [prompt, message] of cases) {
+    const problems = faults(withCheckIn(base, prompt))
+    const problem = problems.find(candidate => candidate.field === 'agents.lifelog.run[1].prompt')
+    assert.ok(problem, `${prompt}: ${JSON.stringify(problems)}`)
+    assert.match(problem.message, message, prompt)
+    assert.match(problem.message, /^agents\.yaml, line \d+: agents\.lifelog\.run\[1\]\.prompt /)
+  }
+  // The line is the field's own.
+  const lineOfPrompt = base.split('\n').findIndex(text => text.includes('prompt: >-')) + 1
+  assert.equal(faults(withCheckIn(base, '"$nwo$"'))[0].line, lineOfPrompt)
+  // The same for a trigger for new messages.
+  const messages = faults(base.replace('New: $seq.unread$', 'New: $seq.new$'))
+  assert.deepEqual(messages.map(problem => problem.field), ['agents.lifelog.run[0].prompt'])
+  // Every fault at once: a trigger's prompt at fault, and a channel another trigger names too.
+  const second = '      - on: new-messages\n        channels: [email]\n        prompt: "@email"\n'
+  const both = faults(base.replace('      - at: "21:30"', at => `${second}${at}`).replace('New: $seq.unread$', 'New: $seq.new$'))
+  assert.deepEqual(both.map(problem => problem.field).sort(), ['agents.lifelog.run[0].prompt', 'agents.lifelog.run[1].channels', 'agents.lifelog.run[1].prompt'])
+})
+
+test("config: a trigger's prompt, filled in with the longest values its variables can take, is within PROMPT_MAX_BYTES, a backfill's writes and the settings counted", t => {
+  const { configDir } = setup(t)
+  const dataDir = '/data'
+  const faultsOf = (text, settings = SETTINGS) => {
+    try {
+      parseConfig(text, { configDir, dataDir, settings, file: 'agents.yaml' })
+      return []
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error
+      return error.problems
+    }
+  }
+  const base = exampleYaml({ backfill: true })
+  // The example's own prompts are far within it.
+  assert.deepEqual(faultsOf(base), [])
+
+  // A prompt of its own text, a byte within the limit and a byte past it, as a scheduled task's.
+  const agent = { name: 'lifelog', replyMode: 'quiet', writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'] }
+  const nowMost = longestValues({ agent, paths: makePaths({ dataDir, configDir }), settings: SETTINGS }).now
+  const within = `$now$${'x'.repeat(limits.PROMPT_MAX_BYTES - nowMost)}`
+  assert.deepEqual(faultsOf(withCheckIn(base, `"${within}"`)), [])
+  const past = faultsOf(withCheckIn(base, `"${within}x"`))
+  assert.deepEqual(past.map(problem => problem.field), ['agents.lifelog.run[1].prompt'])
+  assert.match(past[0].message, new RegExp(`can make a prompt of ${limits.PROMPT_MAX_BYTES + 1} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it$`))
+  // A variable counts as the longest it can be: each line's number as the largest a seq can be.
+  const numbers = `"${'$seq.unread$ '.repeat(Math.ceil(limits.PROMPT_MAX_BYTES / (limits.BATCH_MAX_ITEMS * 17)))}"`
+  assert.equal(faultsOf(withCheckIn(base, numbers)).length, 1)
+  // Without the data folder or the settings, as only some tests parse it, the lengths aren't held.
+  assert.deepEqual(faultsOf(withCheckIn(base, numbers), null), [])
+
+  // The settings' values count: a time zone's name, many times over.
+  const zones = `"${'$user.timezone$'.repeat(Math.floor(limits.PROMPT_MAX_BYTES / 'Asia/Kolkata'.length))}"`
+  assert.deepEqual(faultsOf(withCheckIn(base, zones)), [])
+  assert.equal(faultsOf(withCheckIn(base, zones), { ...SETTINGS, timeZone: 'America/Argentina/ComodRivadavia' }).length, 1)
+
+  // The prompt for new messages is a backfill's too, filled in with the backfill's writes, which
+  // can be longer than the agent's own; a scheduled task's isn't.
+  const files = Array.from({ length: 450 }, (_, n) => `agents/lifelog/views/${'f'.repeat(200)}-${n}.csv`)
+  const longBackfill = base.replace('writes: [agents/lifelog/views/people.csv]', `writes: [${files.join(', ')}]`)
+  assert.deepEqual(faultsOf(withCheckIn(longBackfill, '"$run.writes$"')).map(problem => problem.field), ['agents.lifelog.run[0].prompt'])
 })

@@ -203,7 +203,7 @@ test('bridge: a signed webhook goes through the runner and comes back as a quote
   const { at: time, ...rest } = reply
   assert.deepEqual(rest, { seq: 2, kind: 'message', dir: 'out', source: 'whatsapp', sourceId: 'SENT1', by: 'lifelog', replyTo: 1, text: 'Work or personal?' })
   assert.ok(Date.parse(time) > Date.parse('2026-11-09T15:50:30Z'))
-  // The runner sees its own reply as context, and has nothing more to do.
+  // The runner passes over its own reply, and has nothing more to do.
   assert.deepEqual(both.state().retry, [])
   assert.equal(both.state().cursor, 1)
   await both.runner.tick()
@@ -230,22 +230,12 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   assert.deepEqual([memo.source, memo.data, memo.files.map(file => file.path)], ['email', { subject: 'Call with Sam' }, ['2.eml', '2-2.m4a']])
 
   assert.deepEqual((await both.runNext()).outcome, { ok: true, cause: null })
-  // The agent read the whole emails and the recording from the datastore.
+  // The agent was given the two emails' numbers, and read them as stored: nothing of an email is
+  // in the prompt.
   const [seen] = both.sandbox.seen()
-  const day = path.join(both.paths.datastore, '2026/11/09')
-  assert.ok(
-    seen.prompt.endsWith(
-      [
-        'New messages:',
-        `#1 21:12 email "Dinner at Bombay Canteen": "Dinner with Sam, 3200. ASK"`,
-        `      whole email ${day}/1.eml`,
-        `#2 21:42 email "Call with Sam": "Recording from today's call.\\n\\n\\n\\nSent from my iPhone"`,
-        `      attachment "Call with Sam.m4a" ${day}/2-2.m4a (audio/x-m4a)`,
-        `      whole email ${day}/2.eml`,
-      ].join('\n'),
-    ),
-    seen.prompt,
-  )
+  assert.deepEqual(seen.items, [1, 2])
+  assert.ok(seen.prompt.endsWith('Given before: none\nNew: 1 2\n'), seen.prompt)
+  for (const words of ['Bombay', 'Call with Sam', '.eml', 'ASK']) assert.ok(!seen.prompt.includes(words), words)
   // A question about the receipt, and a ✅ for the memo.
   assert.deepEqual(both.outbox(), [
     { type: 'text', by: 'lifelog', channels: ['whatsapp'], text: 'Work or personal?', replyTo: 1 },
@@ -281,9 +271,8 @@ test('bridge: both services start on a datastore that holds lines this version d
   assert.deepEqual(both.state().lastRun.seqs, [1, 4, 6, 7, 8])
   assert.deepEqual([both.state().cursor, both.state().retry, both.state().failed], [9, [], []])
   const [seen] = both.sandbox.seen()
-  assert.ok(seen.prompt.includes('#6 21:05 email "": "receipt"'), seen.prompt)
-  assert.ok(seen.prompt.includes('#9 21:08 the owner reacted to #1'), seen.prompt)
-  assert.ok(!/#2 |#3 |#5 |\/status|"hi"/.test(seen.prompt), seen.prompt)
+  assert.ok(seen.prompt.endsWith('Given before: none\nNew: 1 4 6 7 8\n'), seen.prompt)
+  assert.ok(!/\/status|"hi"|receipt/.test(seen.prompt), seen.prompt)
   await both.deliver()
   // Its ✅s: reactions on WhatsApp, and a text for each email, whose subject isn't a string.
   assert.deepEqual(both.stub.callsOf('send react').map(call => call.args[call.args.indexOf('--id') + 1]), ['W1', 'W4', 'W8'])
