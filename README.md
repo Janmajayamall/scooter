@@ -241,7 +241,7 @@ A guess is marked ❓ at the start of a row's `note`, and the open questions are
 
 They are your files, in the config folder (`/etc/scooter/config` natively, `./config` in Docker): `agents.yaml`, the prompt `prompts/lifelog.md`, and a folder for each skill under `skills/`, each with a `SKILL.md`. The agent can't change them. The prompt tells the agent to read its memory and the runner's own skill, `scooter`, before anything else: the runner shows it neither, and the skill says how it marks each message and sends you one. Restart the runner after a change; it checks the files at its start, and refuses to start, naming the field, when something is wrong.
 
-- **What the agent is told for each run** is the `prompt` of the entry under `run` that starts it, in `agents.yaml`. The runner fills in its variables, and adds nothing: a run for new messages is given their numbers, and the agent reads each with `show`.
+- **What the agent is told for each run** is the `prompt` of the entry under `run` that starts it, in `agents.yaml`. The runner fills in its variables, and adds nothing: a run for new messages is given their numbers, and the agent reads each with `show`. A message you deleted before the agent was given it isn't given: only its deletion is.
 
   | Variable | Holds |
   |---|---|
@@ -249,7 +249,7 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
   | `$user.timezone$`, `$user.currency$` | `SCOOTER_TZ` and `HOME_CURRENCY` |
   | `$reply_mode$`, `$internet$` | `quiet` or `confirm`; `on` or `off` |
   | `$agent.dir$`, `$datastore.dir$` | The agent's folder and the datastore, as the agent's VM has them |
-  | `$seq.unread$` | The numbers of the new messages, such as `1051 1054 1060`, or `none` |
+  | `$seq.unread$` | The numbers of the new lines, your messages, edits and deletions, such as `1051 1054 1060`, or `none` |
   | `$seq.retry$` | The numbers of those given before and not finished, each with its attempt, such as `1047 (attempt 2 of 4)`, or `none` |
   | `$run.writes$` | What the run may change, as the agent's VM has it |
 
