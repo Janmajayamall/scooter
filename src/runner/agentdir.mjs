@@ -2,16 +2,17 @@
 //
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
 //     views/, memory/          what `writes` names in the folder, in git (`agent.repository`)
-//     sessions/                pi's sessions, not in git; hidden from the VM
+//     sessions/                pi's sessions, not in git; hidden from the agent's own runs
 //     run/                     not in git: config/, session/, send/, marks.txt, index.txt, bin/,
 //                              skills/ and icu-tz/
 //     jobs/                    the jobs of `scooter backfill` that run the agent, not in git;
-//                              hidden from the VM
+//                              hidden from the agent's own runs
 //     state.json               the runner's state, not in git, 0600
 //
-// What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
-// with `run/` read-only but for `run/session/`, `run/send/` and `run/marks.txt`, and never
-// `sessions/` or `jobs/` (`piFiles` in `run.mjs`). Everything in it belongs to the runner's user.
+// What a run of the agent sees of the folder, and may change, is what the agent's `reads` and
+// `writes` name, with `run/` read-only but for `run/session/`, `run/send/` and `run/marks.txt`,
+// and never `sessions/` or `jobs/` (`piFiles` in `run.mjs`). Another agent's run whose `reads`
+// names the folder sees it whole. Everything in it belongs to the runner's user.
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'

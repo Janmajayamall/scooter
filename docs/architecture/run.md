@@ -20,7 +20,7 @@ A run is one run of pi, in one VM, on one batch or scheduled task, from the lock
 
 ## The session's copy
 
-- **Sessions belong to the runner.** They are kept in `sessions/`, as `sessions/<session ID>.jsonl`, which pi never sees ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). Before a run, `run/session/` holds only a copy of the current session, if there is one, under that name, and only if it is a regular file.
+- **Sessions belong to the runner.** They are kept in `sessions/`, as `sessions/<session ID>.jsonl`, which the agent's own runs never see ([What a run sees and may change](sandbox.md#what-a-run-sees-and-may-change)). Before a run, `run/session/` holds only a copy of the current session, if there is one, under that name, and only if it is a regular file.
 - **After a successful run**, once the files are committed, `keepSession` takes from `run/session/` the newest file pi named itself, `…_<session ID>.jsonl`, or else the copy, which pi continued, and copies it to `sessions/<session ID>.jsonl` with `copyUntrustedFile` ([Files another program controls](shared-code.md#files-another-program-controls)), up to `SESSION_MAX_BYTES`. It reads the folder as a stream, so millions of names cost time, not memory. Anything else in the folder is ignored. Any error is a refusal: a file it can't open, such as one pi made unreadable, a name that isn't UTF-8, a link, a socket, a folder it can't list, a full disk. A refusal is logged as `runner.session_refused`, with the error's code; the run still counts as a success, and the session kept before stays.
 - **After a failed run** nothing is copied back.
 - **Either way**, `run/session/` is emptied before the run is recorded, after a failed run before the clean-up, since pi could have filled the disk there, and so are `run/send/` and `run/marks.txt`, after a run that passed once they are read (`clearRunWrites`). Each folder stays, so emptying it makes nothing. An error in emptying one is logged as `runner.run_left`, naming it, and the next run's `prepareRun` removes `run/` whole ([A run](#a-run)). A start clears the three the same way, before it makes any folder ([Starting up](runner.md#starting-up)).
@@ -176,7 +176,7 @@ These rules, and those of [After a successful run](#after-a-successful-run), ans
 | Path | Holds | In git |
 |---|---|---|
 | what `writes` names in it | with the default configuration, `views/`, with `expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`, and `memory/`, with `preferences.md` and `needs-review.md` ([Memory](agent.md#memory)) | yes |
-| `sessions/` | pi's sessions, hidden from the VM ([The session's copy](#the-sessions-copy)) | no |
+| `sessions/` | pi's sessions, hidden from the agent's own runs ([The session's copy](#the-sessions-copy)) | no |
 | `run/` | made again before each run: `config/`, `skills/`, `bin/`, `icu-tz/`, `index.txt`, `session/` and `send/`, and `marks.txt` once `mark` makes it ([A run](#a-run)) | no |
 | `state.json` | the runner's state ([State](runner.md#state)) | no |
 
