@@ -1,6 +1,6 @@
-// Replayed batches, which a rebuild and a backfill share:
-// one of the owner's days per batch, `$now$` each batch's own time, the prompt of a live batch with
-// what the replay may change, a session for each day, and where a replay stops.
+// Replayed batches, a job's of `scooter backfill`:
+// one of the owner's days per batch, `$now$` each batch's own time, the prompt of a live batch or
+// the job's own, with what the job may change, a session for each day, and where a job stops.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -8,7 +8,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { buildReplayBatch, ownersDay, removeReplaySessions, replaySessionId } from '../src/runner/replay.mjs'
+import { buildReplayBatch, jobOfSession, ownersDay, removeJobSessions, replaySessionId } from '../src/runner/replay.mjs'
 import { createTestLog } from './support/log.mjs'
 import { indexOf, line } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
@@ -22,7 +22,7 @@ const AGENT = {
   replyMode: 'quiet',
   session: 'daily',
   writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'],
-  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: PROMPT }], scheduled: [], backfill: [] },
+  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: PROMPT }], scheduled: [] },
 }
 // When the replay looks at its retries: long after every message.
 const LATER = Date.parse('2026-11-18T10:00:00Z')
@@ -39,9 +39,9 @@ const LINES = [
   line.text(7, '2026-11-09T15:00:00Z', 'today was long'), // Mon 9 Nov, 20:30
 ]
 
-function replay({ lines = LINES, lane = { ...initialAgentState() }, until = 7, timeZone = 'Asia/Kolkata', now = LATER, writes } = {}) {
+function replay({ lines = LINES, lane = { ...initialAgentState() }, until = 7, timeZone = 'Asia/Kolkata', now = LATER, writes, template } = {}) {
   const settings = { timeZone, homeCurrency: 'INR', agentInternet: false }
-  return buildReplayBatch({ agent: AGENT, lane, until, index: indexOf(lines), paths: PATHS, settings, now, writes })
+  return buildReplayBatch({ agent: AGENT, lane, until, index: indexOf(lines), paths: PATHS, settings, now, writes, template })
 }
 
 // Every batch of a replay of `lines` from the start, each run as if it had succeeded.
@@ -153,9 +153,13 @@ test('replay: an edit brings in the message it changes, from another day', () =>
   assert.deepEqual(replay({ lines, lane: failed, until: 8 }).batch.items[0], { seq: 1, origin: 'failed', attempt: 1 })
 })
 
-test("replay: a backfill's prompt is a live batch's, with what the backfill may change", () => {
-  const built = replay({ writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] })
+test("replay: a job's prompt is a live batch's, or the job's own, with what the job may change", () => {
+  const writes = ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/']
+  const built = replay({ writes })
   assert.equal(built.prompt, 'Now: Saturday 7 November 2026, 23:50\nNew: 1 3\nGiven before: none\nMay change: /data/agents/lifelog/views/people.csv /data/agents/lifelog/views/people/\n')
+  // `--prompt`: the job's own text, filled in as a trigger's is; the agent's isn't used.
+  const own = replay({ writes, template: 'File only what belongs in $run.writes$. Lines: $seq.unread$ ($now$). $5 stays.' })
+  assert.equal(own.prompt, 'File only what belongs in /data/agents/lifelog/views/people.csv /data/agents/lifelog/views/people/. Lines: 1 3 (Saturday 7 November 2026, 23:50). $5 stays.')
 })
 
 test('replay: a message deleted later in history is never given, and its deletion is, on its own day', () => {
@@ -172,29 +176,32 @@ test('replay: a message deleted later in history is never given, and its deletio
   )
 })
 
-test('replay: a session for each of the owner\'s days, and only a replay\'s own sessions go when it is over', t => {
-  assert.equal(replaySessionId(AGENT, { day: '2026-11-07' }), 'lifelog-rebuild-2026-11-07')
-  assert.equal(replaySessionId(AGENT, { day: '2026-11-07', backfill: 'people-1' }), 'lifelog-backfill-people-1-2026-11-07')
-  assert.equal(replaySessionId({ ...AGENT, session: 'none' }, { day: '2026-11-07' }), null)
+test("replay: a session for each of the owner's days, of the job's own, and only the sessions of a job that is over go", t => {
+  const job = '20261123T101500123-0001'
+  assert.equal(replaySessionId(AGENT, { day: '2026-11-07', job }), 'lifelog-backfill-20261123T101500123-0001-2026-11-07')
+  assert.equal(replaySessionId({ ...AGENT, session: 'none' }, { day: '2026-11-07', job }), null)
+  assert.equal(jobOfSession('lifelog', 'lifelog-backfill-20261123T101500123-0001-2026-11-07.jsonl'), job)
+  for (const name of ['lifelog-2026-11-07.jsonl', 'lifelog-backfill-people-1-2026-11-07.jsonl', 'lifelog-backfill-20261123T101500123-0001-notes.jsonl', 'other-backfill-20261123T101500123-0001-2026-11-07.jsonl']) {
+    assert.equal(jobOfSession('lifelog', name), null, name)
+  }
 
   const paths = makePaths({ dataDir: makeTestDir(t), configDir: '/config' })
   const dir = paths.agentSessions('lifelog')
   fs.mkdirSync(dir, { recursive: true })
+  const other = '20261123T101500123-0002'
   const names = [
     'lifelog-2026-11-07.jsonl',
     'lifelog-2026-11-07-1.jsonl',
-    'lifelog-rebuild-2026-11-07.jsonl',
-    'lifelog-rebuild-2026-11-08.jsonl',
-    'lifelog-rebuild-notes.jsonl',
-    'lifelog-backfill-people-1-2026-11-07.jsonl',
-    'lifelog-backfill-people-1-2-2026-11-07.jsonl',
+    `lifelog-backfill-${job}-2026-11-07.jsonl`,
+    `lifelog-backfill-${job}-2026-11-08.jsonl`,
+    `lifelog-backfill-${job}-notes.jsonl`,
+    `lifelog-backfill-${other}-2026-11-07.jsonl`,
   ]
   for (const name of names) fs.writeFileSync(path.join(dir, name), '{}\n')
   const { log } = createTestLog()
-  assert.equal(removeReplaySessions({ paths, agent: AGENT, log }), 2)
-  assert.equal(removeReplaySessions({ paths, agent: AGENT, backfill: 'people-1', log }), 1)
-  assert.deepEqual(fs.readdirSync(dir).sort(), ['lifelog-2026-11-07-1.jsonl', 'lifelog-2026-11-07.jsonl', 'lifelog-backfill-people-1-2-2026-11-07.jsonl', 'lifelog-rebuild-notes.jsonl'])
+  assert.equal(removeJobSessions({ paths, agentName: 'lifelog', isOver: id => id === job, log }), 2)
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['lifelog-2026-11-07-1.jsonl', 'lifelog-2026-11-07.jsonl', `lifelog-backfill-${job}-notes.jsonl`, `lifelog-backfill-${other}-2026-11-07.jsonl`])
   // No sessions folder is no matter.
   fs.rmSync(dir, { recursive: true })
-  assert.equal(removeReplaySessions({ paths, agent: AGENT, log }), 0)
+  assert.equal(removeJobSessions({ paths, agentName: 'lifelog', isOver: () => true, log }), 0)
 })

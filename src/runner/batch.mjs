@@ -20,13 +20,13 @@
 // The runner settles no other line because of another: an edit's mark doesn't settle its message.
 //
 // A batch is drawn from a **lane**: `{ cursor, retry, failed }`, a cursor, the items waiting to be
-// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own;
-// a backfill from its own, with `skipped` as `failed`; and a rebuild from a state it
-// keeps in memory. `upTo` is the last line a lane's work reaches: the newest line for live
-// runs, and the `seq` a replay stops at (`replay.mjs`).
+// tried again, and those given up on, each with its `seq`. Live runs draw from the state's own,
+// and a job of `scooter backfill` from its own, in its job file, with `skipped` as `failed`.
+// `upTo` is the last line a lane's work reaches: the newest line for live runs, and the `seq` a
+// job stops at (`replay.mjs`).
 //
 // The prompt is the `prompt` of the first trigger `on: new-messages`, in the order of `run`, that
-// names the channel of one of the batch's lines, filled in (`prompt.mjs`).
+// names the channel of one of the batch's lines, filled in (`prompt.mjs`); or a job's own.
 
 import { limits } from '../common/limits.mjs'
 import { promptValues, renderPrompt } from './prompt.mjs'
@@ -82,10 +82,11 @@ export function triggerOf(agent, items, index) {
 }
 
 // The prompt of `batch`, a run of `agent` at `now` that may change `writes`, the agent's own or a
-// backfill's.
-export function batchPrompt({ agent, batch, index, paths, settings, now, writes = agent.writes }) {
-  const { prompt } = triggerOf(agent, batch.items, index)
-  return renderPrompt(prompt, promptValues({ agent, paths, settings, now, items: batch.items, writes }))
+// job's: `template`, a job's own prompt, or else that of the trigger the batch's lines say, filled
+// in.
+export function batchPrompt({ agent, batch, index, paths, settings, now, writes = agent.writes, template = null }) {
+  const text = template ?? triggerOf(agent, batch.items, index).prompt
+  return renderPrompt(text, promptValues({ agent, paths, settings, now, items: batch.items, writes }))
 }
 
 // The next batch of messages and its prompt, or null when there is nothing to give the agent.

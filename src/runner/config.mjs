@@ -24,13 +24,14 @@
 //         - at: "21:30"                      # or "Sun 18:00"
 //           tag: check-in                    # names the task in the log and its notices
 //           prompt: "Now: $now$. Evening check-in."
-//         - backfill: people-1
-//           skill: people
-//           writes: [agents/lifelog/views/people.csv]
 //
 // Every field is required except `thinking` and `reads`. A key the format doesn't have is a fault,
 // so that a misspelled one isn't ignored without a word. So is a variable the runner doesn't know,
 // in a trigger's `prompt` (`prompt.mjs`).
+//
+// `scooter backfill` reads its arguments against it, and the file of an agent given with
+// `--agent-file`, which is one agent in this format (`parseConfig` with `agentFile`); and the
+// runner checks a job's prompt as it checks a trigger's (`jobPromptProblems`).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -45,14 +46,14 @@ import { VARIABLES, longestPrompt, longestValues, variablesIn } from './prompt.m
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 export const SESSIONS = ['daily', 'none']
 export const REPLY_MODES = ['quiet', 'confirm']
-export const TRIGGER_KINDS = ['on', 'at', 'backfill']
+export const TRIGGER_KINDS = ['on', 'at']
 
 // The names in an agent's folder that the runner keeps for itself, besides the names that start
-// with a dot, `.git` and `.gitignore` among them: its state, the sessions and `run/`. `writes`
-// can't name them, or hold the folder: a run that could change them could stop the runner, or
-// rewrite its record, and the clean-up and the commit work on what `writes` names in the folder,
-// which can't be the folder that holds them.
-export const RUNNER_NAMES = ['state.json', 'sessions', 'run']
+// with a dot, `.git` and `.gitignore` among them: its state, the sessions, `run/` and the jobs of
+// `scooter backfill`. `writes` can't name them, or hold the folder: a run that could change them
+// could stop the runner, rewrite its record, or ask it for a job, and the clean-up and the commit
+// work on what `writes` names in the folder, which can't be the folder that holds them.
+export const RUNNER_NAMES = ['state.json', 'sessions', 'run', 'jobs']
 
 // The name of the skill that ships with the runner, which every run is given beside the agent's own
 // (`prepareRun` in `agentdir.mjs`). pi offers the model a skill by its name, so no skill of the
@@ -70,16 +71,15 @@ const NAME_MAX_BYTES = 255
 const PATH_MAX_BYTES = 4095
 
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
-// A backfill's ID, which goes into session names, commit messages and the state; and a scheduled
-// trigger's tag, which names its task in the log and in the owner's notices.
-const ID_FORM = /^[a-z0-9][a-z0-9-]*$/
+// A scheduled trigger's tag, which names its task in the log and in the owner's notices.
+const TAG_FORM = /^[a-z0-9][a-z0-9-]*$/
 // An OpenRouter model ID, such as `anthropic/claude-sonnet-5.5`, `~anthropic/claude-sonnet-latest`
 // or `google/gemma-3-4b-it:free`. Every model in pi's catalog has this form (milestone 0, pi 6).
 const MODEL_ID = /^~?[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/
 
 const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'writes', 'sends', 'session', 'reply_mode', 'ack_reaction', 'timeout_minutes', 'run']
 const OPTIONAL_KEYS = ['thinking', 'reads']
-const TRIGGER_KEYS = { on: ['on', 'channels', 'prompt'], at: ['at', 'tag', 'prompt'], backfill: ['backfill', 'skill', 'writes'] }
+const TRIGGER_KEYS = { on: ['on', 'channels', 'prompt'], at: ['at', 'tag', 'prompt'] }
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value) && !Buffer.isBuffer(value)
 
@@ -106,6 +106,95 @@ function dataPath(value) {
   const parts = value.split('/').slice(0, folder ? -1 : undefined)
   if (parts.length === 0 || parts.some(part => part === '' || part === '.' || part === '..')) return null
   return `${parts.join('/')}${folder ? '/' : ''}`
+}
+
+// A list of paths in the data folder, each cleaned (`dataPath`), none twice, and none in a file
+// another names, which holds nothing; and none with a name or a whole, in the data folder
+// `dataDir` when it is given, longer than the system takes. Each fault goes to `fault(parts,
+// what)`, `parts` being the path to the field and `what` the words that follow its name. Returns
+// the list, with null in the place of a fault.
+function checkDataPaths(parts, value, example, { dataDir, fault }) {
+  if (!Array.isArray(value)) {
+    fault(parts, `must be a list of paths in the data folder, such as [${example}]`)
+    return []
+  }
+  const found = []
+  value.forEach((item, n) => {
+    const entry = dataPath(item)
+    const twice = entry === null ? -1 : found.findIndex(other => other !== null && bare(other) === bare(entry))
+    const long = entry === null ? undefined : bare(entry).split('/').find(part => Buffer.byteLength(part) > NAME_MAX_BYTES)
+    const tooDeep = entry !== null && dataDir !== null && Buffer.byteLength(path.join(dataDir, entry)) > PATH_MAX_BYTES
+    if (entry === null) fault([...parts, n], `must be a path in the data folder, such as ${example}: relative to it, without a ., .. or empty part, and a folder ending in /`)
+    else if (twice !== -1) fault([...parts, n], `is ${entry}, which ${parts.at(-1)}[${twice}] names too`)
+    else if (long !== undefined) fault([...parts, n], `has a name of ${Buffer.byteLength(long)} bytes, where a file system takes ${NAME_MAX_BYTES} at most`)
+    else if (tooDeep) fault([...parts, n], `makes, in the data folder, a path of more than ${PATH_MAX_BYTES} bytes, which the system doesn't take`)
+    found.push(entry === null || twice !== -1 || long !== undefined || tooDeep ? null : entry)
+  })
+  found.forEach((entry, n) => {
+    const file = entry === null ? undefined : found.find(other => other !== null && !isFolder(other) && bare(entry).startsWith(`${other}/`))
+    if (file === undefined) return
+    fault([...parts, n], `is ${entry}, which lies in ${file}, a file`)
+    found[n] = null
+  })
+  return found
+}
+
+// What a job of `scooter backfill` may change, `--writes`, checked as `writes` is, and each in the
+// agent's own `writes`, the same file, or in a folder it names: a job narrows what the agent may
+// change, and the sandbox holds its runs to it. Returns `{ writes, problems }`: the paths, cleaned,
+// and what is wrong, as statements that name each path by its place, `--writes 2` counting from 1.
+export function checkJobWrites(agent, values, { dataDir }) {
+  const problems = []
+  const fault = (parts, what) => problems.push(`--writes ${parts.at(-1) + 1} ${what}`)
+  const example = `agents/${agent.name}/views/books.csv`
+  const found = checkDataPaths(['writes'], values, example, { dataDir, fault })
+  const writes = found.filter((write, n) => {
+    if (write === null) return false
+    if (agent.writes.some(own => isWithin(write, own))) return true
+    fault(['writes', n], `is ${write}, which isn't in the writes of ${agent.name}: a job may change only what its agent may`)
+    return false
+  })
+  return { writes, problems }
+}
+
+// What is wrong with a prompt, the message pi is given for a run: a trigger's in `agents.yaml`, or
+// a job's. As the words that follow the field's name, such as `holds $nwo$, which is no variable
+// the runner knows: …`; none when it can be given.
+export function promptProblems(value) {
+  if (typeof value !== 'string' || value.trim() === '') return ['must be the message pi is given for the run, as text']
+  const problems = []
+  // A command line can't hold U+0000: the run could never start. Nor is half of a pair of UTF-16
+  // surrogates, which YAML's escapes can give, a character it can be sent as.
+  if (value.includes('\0')) problems.push("holds the character U+0000, which a command line can't carry")
+  if (!value.isWellFormed()) problems.push('holds half of a pair of UTF-16 surrogates, which is no character a command line can carry')
+  // pi 1.5.2 takes an argument that starts with `@` as a file to attach, even after `--`, and
+  // fails without one (`pi 9` in `test/tools/pi.test.mjs`). No variable's value starts with it.
+  if (value.startsWith('@')) problems.push('starts with @, which makes pi take the whole prompt as the name of a file to attach: start it with anything else')
+  const unknown = [...new Set(variablesIn(value).filter(name => !VARIABLES.includes(name)))]
+  if (unknown.length > 0) {
+    const names = unknown.map(name => `$${name}$`)
+    problems.push(`holds ${list(names)}, which ${unknown.length === 1 ? 'is no variable' : 'are no variables'} the runner knows: they are ${list(VARIABLES.map(name => `$${name}$`))}`)
+  }
+  return problems
+}
+
+// The words that say a prompt filled in can make `most` bytes, past what pi can be given, or null.
+function tooLong(most) {
+  return most <= limits.PROMPT_MAX_BYTES
+    ? null
+    : `can make a prompt of ${most} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it`
+}
+
+// What is wrong with the prompt of a job's runs, `template`, for a job of `agent` that may change
+// `writes`: what is wrong with any prompt, and whether, filled in with the longest values its
+// variables can take, it is within `PROMPT_MAX_BYTES`, with `$run.writes$` the job's. A job is
+// given its own prompt, `--prompt`, or the agent's trigger for new messages; `$run.writes$` is
+// what tells their lengths apart. As words that follow the prompt's name.
+export function jobPromptProblems({ agent, template, writes, paths, settings }) {
+  const problems = promptProblems(template)
+  if (problems.length > 0) return problems
+  const problem = tooLong(longestPrompt(template, longestValues({ agent, paths, settings, writes })))
+  return problem === null ? [] : [problem]
 }
 
 // What the agent's repository keeps: the entries of `writes` in the agent's own folder, as paths
@@ -140,8 +229,12 @@ function isInside(dir, target) {
 // to, `dataDir`, when given, the data folder, against whose path a path of `reads` and `writes` is
 // measured, and `file` names the file in messages. With `dataDir` and `settings`, the runner's,
 // it also holds each trigger's `prompt`, filled in with the longest values its variables can take,
-// within `PROMPT_MAX_BYTES`: the runner, `rebuild` and `doctor` give both (`loadConfig`). Returns
-// the configuration:
+// within `PROMPT_MAX_BYTES`: the runner, `scooter backfill` and `doctor` give both (`loadConfig`).
+// With `agentFile`, `{ taken }`, the text is the file of an agent given to `scooter backfill
+// --agent-file`, one agent in this format, which also: has a name none of `taken`, the agents of
+// `agents.yaml`, has; writes only in its own folder, `agents/<name>/`; sends nothing; and has a
+// trigger for new messages, whose prompt and channels its job's runs go by. Returns the
+// configuration:
 //
 //   { agents: [agent] }
 //
@@ -149,7 +242,7 @@ function isInside(dir, target) {
 //
 //   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }],
 //     reads, writes, repository, sends, channels, session, replyMode, ackReaction, timeoutMinutes,
-//     run: { newMessages: [{ channels, prompt }], scheduled: [{ at, tag, schedule, prompt }], backfill: [{ id, skill, writes }] } }
+//     run: { newMessages: [{ channels, prompt }], scheduled: [{ at, tag, schedule, prompt }] } }
 //
 // `thinking` is null when it isn't given. A path of the config folder is kept as written, cleaned
 // (`path`), and as the file or folder it names (`file`, `dir`). A skill's `name` is its folder's
@@ -159,7 +252,7 @@ function isInside(dir, target) {
 // new messages name, in order. A trigger's `prompt` is its text, as written. A scheduled trigger's
 // `tag` is as written, and `schedule` what `parseLocalTime` returns. Throws a `ConfigError` that
 // lists every fault.
-export function parseConfig(text, { configDir, dataDir = null, settings = null, file = 'agents.yaml' }) {
+export function parseConfig(text, { configDir, dataDir = null, settings = null, file = 'agents.yaml', agentFile = null }) {
   const problems = []
   const lineCounter = new LineCounter()
   const doc = parseDocument(text, { version: '1.2', schema: 'core', uniqueKeys: true, prettyErrors: true, lineCounter })
@@ -268,33 +361,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     return null
   }
 
-  // A list of paths in the data folder, each cleaned (`dataPath`), none twice, and none in a file
-  // another names, which holds nothing. Returns the list, with null in the place of a fault.
-  function dataPaths(parts, value, example) {
-    if (!Array.isArray(value)) {
-      fault(parts, `must be a list of paths in the data folder, such as [${example}]`)
-      return []
-    }
-    const found = []
-    value.forEach((item, n) => {
-      const entry = dataPath(item)
-      const twice = entry === null ? -1 : found.findIndex(other => other !== null && bare(other) === bare(entry))
-      const long = entry === null ? undefined : bare(entry).split('/').find(part => Buffer.byteLength(part) > NAME_MAX_BYTES)
-      const tooDeep = entry !== null && dataDir !== null && Buffer.byteLength(path.join(dataDir, entry)) > PATH_MAX_BYTES
-      if (entry === null) fault([...parts, n], `must be a path in the data folder, such as ${example}: relative to it, without a ., .. or empty part, and a folder ending in /`)
-      else if (twice !== -1) fault([...parts, n], `is ${entry}, which ${parts.at(-1)}[${twice}] names too`)
-      else if (long !== undefined) fault([...parts, n], `has a name of ${Buffer.byteLength(long)} bytes, where a file system takes ${NAME_MAX_BYTES} at most`)
-      else if (tooDeep) fault([...parts, n], `makes, in the data folder, a path of more than ${PATH_MAX_BYTES} bytes, which the system doesn't take`)
-      found.push(entry === null || twice !== -1 || long !== undefined || tooDeep ? null : entry)
-    })
-    found.forEach((entry, n) => {
-      const file = entry === null ? undefined : found.find(other => other !== null && !isFolder(other) && bare(entry).startsWith(`${other}/`))
-      if (file === undefined) return
-      fault([...parts, n], `is ${entry}, which lies in ${file}, a file`)
-      found[n] = null
-    })
-    return found
-  }
+  const dataPaths = (parts, value, example) => checkDataPaths(parts, value, example, { dataDir, fault })
 
   // A list of channels, each once: one at least, or, with `empty`, none at all.
   function channelList(parts, value, { empty = false } = {}) {
@@ -304,36 +371,11 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
   }
 
   // A trigger's `prompt`: text that isn't blank, which pi can be given as its message, with no
-  // variable the runner doesn't know. Returns it, or null after a fault.
+  // variable the runner doesn't know (`promptProblems`). Returns it, or null after a fault.
   function promptOf(parts, value) {
-    if (typeof value !== 'string' || value.trim() === '') {
-      fault(parts, 'must be the message pi is given for the run, as text')
-      return null
-    }
-    let ok = true
-    // A command line can't hold U+0000: the run could never start. Nor is half of a pair of UTF-16
-    // surrogates, which YAML's escapes can give, a character it can be sent as.
-    if (value.includes('\0')) {
-      fault(parts, 'holds the character U+0000, which a command line can\'t carry')
-      ok = false
-    }
-    if (!value.isWellFormed()) {
-      fault(parts, 'holds half of a pair of UTF-16 surrogates, which is no character a command line can carry')
-      ok = false
-    }
-    // pi 1.5.2 takes an argument that starts with `@` as a file to attach, even after `--`, and
-    // fails without one (`pi 9` in `test/tools/pi.test.mjs`). No variable's value starts with it.
-    if (value.startsWith('@')) {
-      fault(parts, "starts with @, which makes pi take the whole prompt as the name of a file to attach: start it with anything else")
-      ok = false
-    }
-    const unknown = [...new Set(variablesIn(value).filter(name => !VARIABLES.includes(name)))]
-    if (unknown.length > 0) {
-      const names = unknown.map(name => `$${name}$`)
-      fault(parts, `holds ${list(names)}, which ${unknown.length === 1 ? 'is no variable' : 'are no variables'} the runner knows: they are ${list(VARIABLES.map(name => `$${name}$`))}`)
-      ok = false
-    }
-    return ok ? value : null
+    const found = promptProblems(value)
+    for (const what of found) fault(parts, what)
+    return found.length === 0 ? value : null
   }
 
   function agentOf(name, raw) {
@@ -457,34 +499,52 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       agent.timeoutMinutes = value
     }
 
-    agent.run = { newMessages: [], scheduled: [], backfill: [] }
+    agent.run = { newMessages: [], scheduled: [] }
     if (raw.run !== undefined) {
       if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages, channels: [whatsapp], prompt: "New: $seq.unread$"}]')
       else raw.run.forEach((entry, n) => triggerOf(agent, at('run', n), entry))
     }
     agent.channels = agent.run.newMessages.flatMap(trigger => trigger.channels)
     if (settings !== null && dataDir !== null) checkPromptLengths(agent)
+    if (agentFile !== null) checkFileAgent(agent, raw)
     return agent
+  }
+
+  // What an agent given in a file must be besides (`agentFile`). Its job runs history over its own
+  // folder, beside the agents of `agents.yaml`, and sends nothing, as every job's runs send
+  // nothing; and its runs are given the prompt of its trigger for new messages, with the lines of
+  // that trigger's channels.
+  function checkFileAgent(agent, raw) {
+    const at = (...rest) => ['agents', agent.name, ...rest]
+    if (agentFile.taken.includes(agent.name)) fault(at(), 'is the name of an agent of agents.yaml: an agent given in a file needs a name of its own, and runs in a folder of its own')
+    const own = `agents/${agent.name}/`
+    if (Array.isArray(raw.writes)) {
+      raw.writes.forEach((value, n) => {
+        const write = dataPath(value)
+        if (write !== null && !write.startsWith(own)) fault(at('writes', n), `is ${write}, which isn't in ${own}: an agent given in a file writes only in its own folder`)
+      })
+    }
+    if (Array.isArray(raw.sends) && raw.sends.length > 0) fault(at('sends'), 'must be []: an agent given in a file sends nothing')
+    if (Array.isArray(raw.run) && !raw.run.some(entry => isObject(entry) && entry.on !== undefined)) {
+      fault(at('run'), 'must have a trigger on: new-messages: its prompt is what the job\'s runs are given, and its channels say which lines are their work')
+    }
   }
 
   // Each trigger's prompt, filled in with the longest values its variables can take, is one
   // command-line argument, which Linux refuses at 128 KB (`pi 7` in `test/tools/pi.test.mjs`):
-  // it must be within `PROMPT_MAX_BYTES`. A backfill's batches are given the prompt of a trigger
-  // for new messages, with its own `writes`.
+  // it must be within `PROMPT_MAX_BYTES`. A job's runs, which may change less than the agent, are
+  // checked when the job is written and when it is taken (`jobPromptProblems`).
   function checkPromptLengths(agent) {
     const paths = makePaths({ dataDir, configDir })
     // A `reply_mode` that is missing or wrong is a fault of its own: the longest stands for it.
     const longestMode = REPLY_MODES.reduce((longest, mode) => (mode.length > longest.length ? mode : longest))
     const common = { agent: { ...agent, replyMode: agent.replyMode ?? longestMode }, paths, settings }
-    const forMessages = longestValues({ ...common, writesLists: [agent.writes, ...agent.run.backfill.map(entry => entry.writes)] })
-    const forScheduled = longestValues(common)
-    const triggers = [...agent.run.newMessages.map(trigger => [trigger, forMessages]), ...agent.run.scheduled.map(trigger => [trigger, forScheduled])]
-    for (const [trigger, longest] of triggers) {
+    const longest = longestValues(common)
+    for (const trigger of [...agent.run.newMessages, ...agent.run.scheduled]) {
       // A prompt at fault is one already.
       if (trigger.prompt === null) continue
-      const most = longestPrompt(trigger.prompt, longest)
-      if (most <= limits.PROMPT_MAX_BYTES) continue
-      fault([...fieldOf.get(trigger), 'prompt'], `can make a prompt of ${most} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it`)
+      const problem = tooLong(longestPrompt(trigger.prompt, longest))
+      if (problem !== null) fault([...fieldOf.get(trigger), 'prompt'], problem)
     }
   }
 
@@ -519,7 +579,8 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       return
     }
 
-    if (kind === 'at') {
+    // A scheduled trigger.
+    {
       const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
       // The tag names the task in the log and in the owner's notices, where its time can't: the
       // log keeps `at` for the time of its own line. It is checked whatever else is at fault in
@@ -528,7 +589,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       if (entry.tag !== undefined) {
         const seen = tagsSeen.get(agent.name) ?? new Set()
         tagsSeen.set(agent.name, seen)
-        if (typeof entry.tag !== 'string' || !ID_FORM.test(entry.tag)) fault([...parts, 'tag'], 'must be a tag of lowercase letters, digits and hyphens, such as check-in')
+        if (typeof entry.tag !== 'string' || !TAG_FORM.test(entry.tag)) fault([...parts, 'tag'], 'must be a tag of lowercase letters, digits and hyphens, such as check-in')
         else if (seen.has(entry.tag)) fault([...parts, 'tag'], `is ${entry.tag}, which another entry has too`)
         else tag = entry.tag
         if (typeof entry.tag === 'string') seen.add(entry.tag)
@@ -540,40 +601,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       const trigger = { at: entry.at, tag, schedule, prompt }
       fieldOf.set(trigger, parts)
       run.scheduled.push(trigger)
-      return
     }
-
-    // A backfill.
-    const id = entry.backfill
-    if (typeof id !== 'string' || !ID_FORM.test(id)) {
-      return fault([...parts, 'backfill'], 'must be an ID of lowercase letters, digits and hyphens, such as people-1')
-    }
-    if (run.backfill.some(other => other.id === id)) return fault([...parts, 'backfill'], `is ${id}, which another backfill entry has too`)
-    let ok = true
-    if (entry.skill !== undefined && !agent.skills.some(skill => skill.name === entry.skill)) {
-      fault([...parts, 'skill'], "must name one of the agent's skills, by its folder's name, such as people")
-      ok = false
-    }
-    // What the backfill may change, which narrows what the agent may: each path in the agent's own
-    // `writes`, as the sandbox enforces for its runs.
-    let writes = []
-    if (entry.writes !== undefined) {
-      const example = `agents/${agent.name}/views/people.csv`
-      if (!Array.isArray(entry.writes) || entry.writes.length === 0) {
-        fault([...parts, 'writes'], `must be a list of what the backfill may change, such as [${example}]`)
-        ok = false
-      } else {
-        writes = dataPaths([...parts, 'writes'], entry.writes, example)
-        writes.forEach((write, n) => {
-          if (write === null) ok = false
-          else if (!agent.writes.some(own => isWithin(write, own))) {
-            fault([...parts, 'writes', n], `is ${write}, which isn't in the agent's writes: a backfill may change only what the agent may`)
-            ok = false
-          }
-        })
-      }
-    }
-    if (ok && entry.skill !== undefined && entry.writes !== undefined) run.backfill.push({ id, skill: entry.skill, writes })
   }
 
   if (!isObject(top)) {

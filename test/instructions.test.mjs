@@ -401,7 +401,7 @@ test("runner's skill: what it says of a run is what the runner does: what a run 
   said('one line at a time: everything after its number is its reason')
   said(`Scooter sends at most ${limits.RUN_MAX_SENDS} messages of one run, the first ones, and drops the rest.`)
   // What the agent's document says it describes.
-  for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'internet access is `on`', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'in a backfill or a rebuild, nothing you send goes out']) said(words)
+  for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'internet access is `on`', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'in a backfill, nothing you send goes out']) said(words)
   // It names no section of a prompt the runner no longer renders.
   for (const words of ['New messages:', 'Retrying', 'For context only', 'Scheduled task (from']) assert.ok(!RUNNER_SKILL_FILE.includes(words), words)
 })

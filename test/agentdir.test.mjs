@@ -55,8 +55,8 @@ test('agent folder: made on the first start, with git, a .gitignore and one comm
   for (const folder of [paths.agents, dir, path.join(paths.agentDir('lifelog'), 'views'), path.join(paths.agentDir('lifelog'), 'memory'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
     assert.equal(modeOf(folder), 0o700, folder)
   }
-  assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), '/sessions/\n/run/\n/state.json\n')
-  assert.equal(GITIGNORE, '/sessions/\n/run/\n/state.json\n')
+  assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), '/sessions/\n/run/\n/jobs/\n/state.json\n')
+  assert.equal(GITIGNORE, '/sessions/\n/run/\n/jobs/\n/state.json\n')
 
   const commit = git(dir, 'cat-file', '-p', 'HEAD')
   assert.match(commit, /^author Scooter <scooter@localhost> 1794238982 \+0000$/m)

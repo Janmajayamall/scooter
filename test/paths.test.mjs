@@ -28,6 +28,7 @@ test('paths: the data folder\'s folders, as they are in Docker', () => {
     agentRunSkills: '/data/agents/lifelog/run/skills',
     agentRunIcuTz: '/data/agents/lifelog/run/icu-tz',
     agentState: '/data/agents/lifelog/state.json',
+    agentJobs: '/data/agents/lifelog/jobs',
     agentDiscarded: '/data/agents/.discarded/lifelog',
     agentsDiscarded: '/data/agents/.discarded',
     exchange: '/data/exchange',

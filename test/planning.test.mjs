@@ -46,7 +46,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
   const { agents: [agent] } = loadConfig({ paths, settings: SETTINGS })
   await ensureAgentDir({ paths, name: agent.name, git: createGit({ proc: createProc({ log, clock }), dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock }), log })
   const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: SETTINGS.timeZone })
-  saveState(stateFile, started.state)
+  saveState(stateFile, started)
   const datastore = openDatastore({ paths, clock })
   assert.equal(datastore.poll(), 1054)
 
@@ -111,7 +111,7 @@ test('planning: the evening check-in comes due at 21:30, after the messages, wit
   const { paths, stateFile, clock } = setup(t)
   const { agents: [agent] } = loadConfig({ paths, settings: SETTINGS })
   // The runner starts at 21:20; the check-in hasn't come due today.
-  saveState(stateFile, startupState({ ...exampleState(), cursor: 1054, retry: [] }, agent, { now: clock.now(), timeZone: SETTINGS.timeZone }).state)
+  saveState(stateFile, startupState({ ...exampleState(), cursor: 1054, retry: [] }, agent, { now: clock.now(), timeZone: SETTINGS.timeZone }))
   const datastore = openDatastore({ paths, clock })
   datastore.poll()
   const ask = () =>

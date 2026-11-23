@@ -1,5 +1,6 @@
 // The prompt: the message pi is given for a run. It is the `prompt` of the trigger that starts the
-// run, as the owner wrote it in `agents.yaml`, with its variables filled in, and nothing else:
+// run, as the owner wrote it in `agents.yaml`, or a job's own, `--prompt` of `scooter backfill`,
+// with its variables filled in, and nothing else:
 //
 //   prompt: |
 //     Now: $now$ ($user.timezone$). Reply mode: $reply_mode$.
@@ -86,7 +87,7 @@ function retryList(items) {
 // The value of each variable for a run of `agent`:
 // - `now`: the run's time, in milliseconds; a replayed batch gives its own (`replay.mjs`);
 // - `items`: the batch's items, `{ seq, origin, attempt }` (`batch.mjs`), none for a scheduled run;
-// - `writes`: what the run may change, the agent's `writes` or a backfill's;
+// - `writes`: what the run may change, the agent's `writes` or a job's;
 // - `settings`: the runner's, for `SCOOTER_TZ`, `HOME_CURRENCY` and `AGENT_INTERNET`;
 // - `paths`: what `makePaths` returns; a path in the data folder is the same inside the VM.
 export function promptValues({ agent, paths, settings, now, items = [], writes = agent.writes }) {
@@ -121,8 +122,8 @@ const NOW_MAX_BYTES = Math.max(...WEEKDAYS.map(bytes)) + Math.max(...MONTHS.map(
 const longestList = (count, each, separator) => (count === 0 ? bytes(NONE) : Math.max(bytes(NONE), count * each + (count - 1) * bytes(separator)))
 
 // The longest value each variable can take in a run of `agent`, in bytes, for prompts of runs
-// whose `writes` is one of `writesLists`: the agent's own, or a backfill's.
-export function longestValues({ agent, paths, settings, writesLists = [agent.writes] }) {
+// that may change `writes`: the agent's own, or a job's.
+export function longestValues({ agent, paths, settings, writes = agent.writes }) {
   const known = promptValues({ agent, paths, settings, now: 0 })
   const retryEach = bytes(`${'9'.repeat(NUMBER_MAX_BYTES)} (attempt ${'9'.repeat(NUMBER_MAX_BYTES)} of ${limits.MAX_ATTEMPTS})`)
   return {
@@ -130,7 +131,7 @@ export function longestValues({ agent, paths, settings, writesLists = [agent.wri
     now: NOW_MAX_BYTES,
     'seq.unread': longestList(limits.BATCH_MAX_ITEMS, NUMBER_MAX_BYTES, ' '),
     'seq.retry': longestList(2 * limits.BATCH_MAX_ITEMS, retryEach, ', '),
-    'run.writes': Math.max(...writesLists.map(writes => bytes(writesList(paths, writes)))),
+    'run.writes': bytes(writesList(paths, writes)),
   }
 }
 

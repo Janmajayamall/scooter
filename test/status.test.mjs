@@ -63,8 +63,6 @@ const STATE = {
     { seq: 1, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
     { seq: 3, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
   ],
-  backfill: { id: 'people-1', until: 3, cursor: 1, retry: [], skipped: [] },
-  backfillDone: [],
   scheduled: {},
   lastRun: { at: '2026-11-09T15:48:00Z', ok: false, seqs: [2], durationMs: 48211 },
   paused: { since: '2026-11-09T15:48:50Z', cause: 'setup', reason: 'OpenRouter: No endpoints found matching your data policy', next: '2026-11-09T16:18:50Z', tries: 1 },
@@ -83,6 +81,21 @@ function setup(t) {
     fs.appendFileSync(paths.networkLog(date), entries.map(formatNetworkLogLine).join(''))
   }
   return { root, paths, status, write, netlog }
+}
+
+// A job of `scooter backfill`, as the runner writes it once it has started.
+const JOB = {
+  id: '20261109T150000000-0001',
+  agent: 'lifelog',
+  written: '2026-11-09T15:00:00Z',
+  from: 1,
+  skills: ['people'],
+  writes: ['agents/lifelog/views/people.csv'],
+  empty: false,
+  holdLive: false,
+  prompt: null,
+  agentFile: null,
+  progress: { started: '2026-11-09T15:00:05Z', until: 3, cursor: 1, given: 1, retry: [], skipped: [] },
 }
 
 const request = (id, at, host = 'openrouter.ai') => ({ id, at, event: 'request', host, method: 'POST', path: '/api/v1/messages' })
@@ -109,6 +122,7 @@ test('status: the bridge\'s part as it last wrote it, the runner\'s settings, th
   write(paths.bridgeStatus, BRIDGE)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
+  write(path.join(paths.agentJobs('lifelog'), `${JOB.id}.json`), JOB)
   // Within the last 24 hours: three requests to two hosts, with what came of them, and one refused
   // and four more a run only counted. One older is left out.
   netlog('2026-11-08', [request('20261108T155000000-0001', '2026-11-08T15:50:00Z'), request('20261108T160000000-0001', '2026-11-08T16:00:00Z')])
@@ -139,7 +153,8 @@ test('status: the bridge\'s part as it last wrote it, the runner\'s settings, th
       // #4 and its edit #6 are after the cursor and from WhatsApp; the email isn't read; the
       // reaction isn't work.
       'Messages: 2 pending, 1 retrying, 2 failed.',
-      'Backfill people-1: at #1 of #3.',
+      '',
+      'Backfill 20261109T150000000-0001 of lifelog: at #1 of #3, 1 line given, 0 given up on, 0 to try again.',
       '',
       BRIDGE.backups,
     ].join('\n'),
@@ -178,7 +193,7 @@ test('status: the same files in another time zone', t => {
   const { status, write, paths } = setup(t)
   write(paths.bridgeStatus, { ...BRIDGE, channels: { whatsapp: 'WhatsApp: linked' } })
   write(paths.runnerStatus, { ...STATUS, accel: 'emulation', zdr: false, internet: true, imageBuiltAt: null })
-  const { paused: _, backfill: __, ...running } = STATE
+  const { paused: _, ...running } = STATE
   write(paths.agentState('lifelog'), { ...running, lastRun: { at: '2026-11-09T15:48:00Z', ok: true, seqs: [], durationMs: 185_000 } })
   assert.equal(
     status({ timeZone: 'America/New_York' }),
@@ -278,19 +293,77 @@ test('status: the runner\'s files, and the folders they are in, are read without
   assert.match(linked, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
 })
 
+test("status: the jobs of scooter backfill, oldest first, of every agent's folder, each as far as it has got, and those that can't be read said to be so, nothing read through a link", t => {
+  const { status, write, paths } = setup(t)
+  write(paths.bridgeStatus, BRIDGE)
+  write(paths.runnerStatus, STATUS)
+  write(paths.agentState('lifelog'), STATE)
+  const jobs = name => paths.agentJobs(name)
+  // Written in this order: one waiting with --hold-live; an agent given in a file, started; one
+  // started with --hold-live, which gave up on two and has one to try again.
+  const waiting = { ...JOB, id: '20261109T150100000-0001', holdLive: true, progress: null, from: 812 }
+  const tried = { ...JOB, id: '20261109T150200000-0001', agent: 'lifelog-try', skills: null, writes: null, agentFile: 'agents:\n  lifelog-try: {}\n' }
+  const held = {
+    ...JOB,
+    id: '20261109T150300000-0001',
+    holdLive: true,
+    progress: { ...JOB.progress, cursor: 3, given: 3, retry: [{ seq: 2, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }], skipped: [1, 3] },
+  }
+  write(path.join(jobs('lifelog'), `${waiting.id}.json`), waiting)
+  write(path.join(jobs('lifelog-try'), `${tried.id}.json`), tried)
+  write(path.join(jobs('lifelog'), `${held.id}.json`), held)
+  // Not a job: JSON that isn't one, one in another agent's folder than it says, a name that isn't a
+  // job's, a link to a job, a folder by a job's name; and what is passed over: a temporary file of
+  // an atomic write, a folder whose name no agent can have, and an agent's folder that is a link.
+  write(path.join(jobs('lifelog'), '20261109T150400000-0001.json'), { ...JOB, id: '20261109T150400000-0001', from: 0 })
+  write(path.join(jobs('lifelog'), '20261109T150500000-0001.json'), { ...JOB, id: '20261109T150500000-0001', agent: 'lifelog-try' })
+  write(path.join(jobs('lifelog'), 'notes.txt'), 'x')
+  const elsewhere = path.join(paths.dataDir, 'elsewhere.json')
+  write(elsewhere, { ...JOB, id: '20261109T150600000-0001' })
+  fs.symlinkSync(elsewhere, path.join(jobs('lifelog'), '20261109T150600000-0001.json'))
+  fs.mkdirSync(path.join(jobs('lifelog'), '20261109T150700000-0001.json'))
+  write(path.join(jobs('lifelog'), '.tmp-20261109T150800000-0001.json-1-1'), JOB)
+  write(path.join(paths.agents, '.discarded', 'jobs', `${JOB.id}.json`), JOB)
+  fs.mkdirSync(path.join(paths.dataDir, 'other', 'jobs'), { recursive: true })
+  writeFileAtomic(path.join(paths.dataDir, 'other', 'jobs', `${JOB.id}.json`), JSON.stringify({ ...JOB, agent: 'linked' }))
+  fs.symlinkSync(path.join(paths.dataDir, 'other'), path.join(paths.agents, 'linked'))
+
+  const text = status()
+  const lines = text.split('\n').filter(line => line.startsWith('Backfill'))
+  assert.deepEqual(lines, [
+    'Backfill 20261109T150100000-0001 of lifelog: waiting to start, from #812; live runs will wait for it.',
+    'Backfill 20261109T150200000-0001 of lifelog-try: at #1 of #3, 1 line given, 0 given up on, 0 to try again.',
+    'Backfill 20261109T150300000-0001 of lifelog: at #3 of #3, 3 lines given, 2 given up on, 1 to try again; live runs wait for it.',
+    "Backfill 20261109T150400000-0001 of lifelog: its file can't be read (not a job).",
+    "Backfill 20261109T150500000-0001 of lifelog: its file can't be read (not a job).",
+    "Backfill 20261109T150600000-0001 of lifelog: its file can't be read (EUNTRUSTED).",
+    "Backfill 20261109T150700000-0001 of lifelog: its file can't be read (EUNTRUSTED).",
+    "Backfill notes.txt of lifelog: no job's file is named so, so the runner takes nothing from it.",
+  ])
+  // The jobs come after the agent, before the backups.
+  assert.ok(text.indexOf('Messages:') < text.indexOf('Backfill') && text.indexOf('Backfill') < text.indexOf(BRIDGE.backups))
+
+  // The agents' folder a link: said, and nothing read through it.
+  fs.renameSync(paths.agents, path.join(paths.dataDir, 'agents-moved'))
+  fs.symlinkSync(path.join(paths.dataDir, 'agents-moved'), paths.agents)
+  assert.match(status(), /^Backfills: their folders can't be read \(EUNTRUSTED\)\.$/m)
+})
+
 test('status: a control or format character, or a line separator, in what another user wrote, such as a reason, is printed as U+FFFD, and can\'t start a line of its own', t => {
   const { status, write, paths } = setup(t)
   const escape = '\u001b]2;owned\u0007\u001b[2J'
   write(paths.bridgeStatus, { ...BRIDGE, backups: `Backups: the last, 03:30, failed (restic backup: ${escape}).` })
   write(paths.runnerStatus, { ...STATUS, restart: { stops: 1, until: '2026-11-09T16:20:00Z', reason: `E${escape}` } })
-  write(paths.agentState('lifelog'), { ...STATE, paused: { ...STATE.paused, reason: `fine\nlifelog: last run 21:19, ok, 9 messages, 1 s.\r${escape}` }, backfill: { ...STATE.backfill, id: `x${escape}` } })
+  write(paths.agentState('lifelog'), { ...STATE, paused: { ...STATE.paused, reason: `fine\nlifelog: last run 21:19, ok, 9 messages, 1 s.\r${escape}` } })
+  // A name in the jobs' folder that is no job's, which the runner's user chose.
+  write(path.join(paths.agentJobs('lifelog'), `x${escape}.json`), JOB)
   const text = status()
   assert.doesNotMatch(text, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/)
   assert.equal(text.split('\n').filter(text => text.startsWith('lifelog:')).length, 1)
   const shown = '\uFFFD]2;owned\uFFFD\uFFFD[2J'
   assert.match(text, new RegExp(`^The runner waits until 21:50 before it goes on: it stopped on an error \\(E${shown.replace(/[[\]]/g, '\\$&')}\\)\\. Restarting it ends the wait\\.$`, 'm'))
   assert.ok(text.includes(`Runs are paused since 21:18: fine\uFFFDlifelog: last run 21:19, ok, 9 messages, 1 s.\uFFFD${shown}. Next try 21:48.`))
-  assert.ok(text.includes(`Backfill x${shown}: at #1 of #3.`))
+  assert.ok(text.includes(`Backfill x${shown}.json of lifelog: no job's file is named so, so the runner takes nothing from it.`))
   assert.ok(text.endsWith(`Backups: the last, 03:30, failed (restic backup: ${shown}).`))
   // A format character, such as the one that shows the rest of a line right to left, and the line
   // and paragraph separators.
@@ -343,8 +416,7 @@ test('status: a line this version doesn\'t know is read, and is neither the newe
   const index = readIndex(paths)
   assert.equal(index.lastSeq, 8)
   write(paths.runnerStatus, { ...STATUS, agents: { lifelog: { ...STATUS.agents.lifelog, channels: ['whatsapp', 'email'] } } })
-  const { backfill, ...state } = STATE
-  write(paths.agentState('lifelog'), { ...state, cursor: 1, retry: [], failed: [] })
+  write(paths.agentState('lifelog'), { ...STATE, cursor: 1, retry: [], failed: [] })
   const text = statusText({ now: NOW, settings: { timeZone: 'Asia/Kolkata' }, paths, index })
   assert.match(text, /^Newest message: #2, 19:40, on email$/m)
   assert.match(text, /^Messages: 1 pending, 0 retrying, 0 failed\.$/m)

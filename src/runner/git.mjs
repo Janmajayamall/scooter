@@ -78,9 +78,9 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
 
   // Runs `git <args>` and returns `{ code, stdout }`. Rejects when it exits with another code than
   // those in `codes`, or times out after `timeout`. The error names the command, not what git
-  // printed, which can name the agent's files.
-  async function run(args, { codes = [0], timeout = limits.GIT_CALL_TIMEOUT } = {}) {
-    const result = await proc.run('git', [...CONFIG, ...args], { env: env(), cwd: dir, timeout })
+  // printed, which can name the agent's files. `input` is text for its standard input.
+  async function run(args, { codes = [0], timeout = limits.GIT_CALL_TIMEOUT, input = null } = {}) {
+    const result = await proc.run('git', [...CONFIG, ...args], { env: env(), cwd: dir, timeout, input })
     if (result.timedOut || !codes.includes(result.code)) {
       const reason = result.timedOut ? 'timed out' : `exit code ${result.code}`
       throw Object.assign(new Error(`git ${args[0]}: ${reason}`), { code: 'EGIT', exitCode: result.code, timedOut: result.timedOut })
@@ -206,20 +206,18 @@ export function createGit({ proc, dir, entries = [], discardDir, log, clock = sy
       return true
     },
 
-    // The last commit's ID.
-    async head() {
-      return (await run(['rev-parse', '--verify', 'HEAD'])).stdout.trim()
+    // Whether the tag `name` is there.
+    async hasTag(name) {
+      return (await run(['rev-parse', '--verify', '--quiet', `refs/tags/${name}`], { codes: [0, 1] })).code === 0
     },
 
-    // Tags the last commit `name`, as a rebuild does first. A name already taken fails.
-    async tag(name) {
-      await run(['tag', name, 'HEAD'])
-    },
-
-    // Makes `commit` the branch's last commit again, leaving the index and the files as they are,
-    // so that the next commit holds every change since `commit` (`git reset --soft`).
-    async resetTo(commit) {
-      await run(['reset', '--soft', '--quiet', commit])
+    // Tags the last commit `name`, with `message`, as a job does before it changes anything: an
+    // annotated tag, whose message is kept as it is given, every line of it, a line that starts
+    // with `#` among them (`--cleanup=verbatim`; `git: an annotated tag…` in
+    // `test/tools/git.test.mjs`). It goes to git on its standard input, so it can be as long as a
+    // prompt. A name already taken fails.
+    async tag(name, message) {
+      await run(['tag', '-a', '--cleanup=verbatim', '-F', '-', name, 'HEAD'], { input: message })
     },
 
     // Packs the repository's loose objects when git finds there are enough of them (`git gc
@@ -359,9 +357,8 @@ const exists = full => lstatOrNull(full) !== null
 // it can't search, or a file, would stop it. So an entry whose way is blocked is passed over, as
 // one that isn't there, before anything is set aside, made, staged, checked, emptied or read at
 // it, and what blocks it is left as it is: it isn't the runner's to remove. The clean-up,
-// staging, the check, a rebuild's emptying and a backfill's summary all judge so. A folder the
-// runner can search but not write doesn't block the way: what that costs is in `run.md`, under A
-// change of writes.
+// staging, the check and a job's `--empty` all judge so. A folder the runner can search but not
+// write doesn't block the way: what that costs is in `run.md`, under A change of writes.
 export function wayIsOpen(dir, entry) {
   let folder = dir
   for (const name of pathOf(entry).split('/').slice(0, -1)) {

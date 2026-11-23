@@ -9,9 +9,9 @@ import fs from 'node:fs'
 import net from 'node:net'
 
 // What holds the runner's socket, `runner/runner.sock`, so that only one of them works on a data
-// folder at a time: the runner, a rebuild and `build-image`. A runner started during
-// a rebuild would remove the rebuild's `run.lock` and throw its work away.
-export const RUNNER_SOCKET_HOLDERS = 'runner, rebuild or build-image'
+// folder at a time: the runner and `build-image`. A second runner would run the same batches, and
+// `build-image` replaces the VM image the runner's VMs boot from.
+export const RUNNER_SOCKET_HOLDERS = 'runner or build-image'
 
 // Whether something listens on the Unix socket `file`. A connection is made into the socket's
 // queue by the system, so a holder whose own work keeps it from taking connections still answers,

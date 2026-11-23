@@ -135,16 +135,12 @@ export const COMMANDS = {
     summary: 'Restore a backup, the latest unless one is named, into RESTORE_TARGET',
     load: async () => (await import('./bridge/backup.mjs')).runRestore,
   },
-  rebuild: {
+  backfill: {
     side: 'runner',
-    usage: 'rebuild <agent>',
-    where: 'runner, with the runner stopped',
-    summary: 'Rebuild what an agent\'s writes names in its folder from the whole datastore',
-    // Its batches run in Gondolin VMs, as the runner's do.
-    load: async () => {
-      const [{ runRebuild }, { openGondolinSandbox }] = await Promise.all([import('./runner/rebuild.mjs'), import('./runner/sandbox/gondolin.mjs')])
-      return ({ args, settings, stdout, stderr }) => runRebuild({ args, settings, stdout, stderr, openSandbox: openGondolinSandbox })
-    },
+    usage: 'backfill <agent> [flags]',
+    where: 'runner',
+    summary: 'Queue a job that runs an agent, or one given in a file, over history; scooter backfill alone lists its flags',
+    load: async () => (await import('./runner/enqueue.mjs')).runBackfill,
   },
 }
 

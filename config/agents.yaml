@@ -39,6 +39,3 @@ agents:
           Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled
           task from your configuration, not a message from the owner: send the owner, in a few
           lines, what you filed today, anything that looks missing, and the open questions.
-      # - backfill: people-1             # fills a newly added view from the whole datastore,
-      #   skill: people                  # with the prompt of the trigger for new messages
-      #   writes: [agents/lifelog/views/people.csv]   # what it may change

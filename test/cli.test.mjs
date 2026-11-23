@@ -40,7 +40,7 @@ test('cli: the CLI\'s commands, each with its side', () => {
     snapshots: 'bridge',
     check: 'bridge',
     restore: 'bridge',
-    rebuild: 'runner',
+    backfill: 'runner',
   })
   for (const [name, command] of Object.entries(COMMANDS)) {
     assert.ok(command.usage.startsWith(name), name)
