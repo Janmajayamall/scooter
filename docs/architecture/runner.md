@@ -62,7 +62,7 @@ The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the 
 1. **Nothing while paused** ([Failures](run.md#failures)) until the next try: no batches, scheduled tasks or steps of a job.
 2. **New messages**, of the channels the triggers `on: new-messages` name: when there are work items to give after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without such a trigger no line is work, and messages wait. A message already deleted is no work to give ([The batch](#the-batch)), so it starts no run.
 3. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
-4. **A step of a job of `scooter backfill`**, its start, a batch or its message, only when nothing live is waiting; a job with `--hold-live` comes before 2 and 3 instead, until it has finished ([When a job runs](backfill.md#when-a-job-runs)). Before each round the runner looks at the jobs' files, and takes one when it holds none ([Taking a job](backfill.md#taking-a-job)).
+4. **A step of a job of `scooter backfill`**, its start, a batch or its message, only when nothing live is waiting; a job with `--hold-live` comes before 2 and 3 instead, until it has finished ([When a job runs](backfill.md#when-a-job-runs)). A job of an agent given in a file that waits after a setup error or an outage of its own gives no batch until its next try. Before each round the runner looks at the jobs' files, and takes one when it holds none ([Taking a job](backfill.md#taking-a-job)).
 
 *Why this order:* messages before a scheduled task, because the evening check-in reports what was filed; a job last, so that it never holds up live work, unless the owner asks for that with `--hold-live`.
 
@@ -88,7 +88,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - `cursor` is the highest `seq` the runner has dealt with, by giving it to the agent or by skipping it. Everything after it is new.
 - An item in `retry` may have 0 `attempts`: after a setup error or an outage, a new item waits there with its count unchanged.
 - `paused` exists only while a setup error or an outage holds runs back: `{ since, cause, reason, next, tries }`, `cause` being `setup` or `outage`, and `tries` the failed tries in a row.
-- A job of `scooter backfill` keeps its own lane, its cursor, its retries and what it gave up on, in its own file, not here ([The job's file](backfill.md#the-jobs-file)); its batches change only `paused` here.
+- A job of `scooter backfill` keeps its own lane, its cursor, its retries and what it gave up on, in its own file, not here ([The job's file](backfill.md#the-jobs-file)); its batches change only `paused` here, and those of an agent given in a file not even that: such a job keeps its own wait in its file.
 - `lastRun` is `{ at, ok, seqs, durationMs }`, `at` being the run's start. A scheduled task is a live run too, with no `seqs`.
 - An agent that has never run has `cursor` 0, empty lists, `scheduled` `{}`, and `lastRun` null.
 - Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.

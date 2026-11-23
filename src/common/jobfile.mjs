@@ -15,7 +15,7 @@
 //     "agentFile": null,
 //     "progress": {"started": "2026-11-23T10:15:03Z", "until": 1890, "cursor": 1203, "given": 391,
 //                  "retry": [{"seq": 1201, "attempts": 1, "due": "2026-11-23T11:02:00Z", "reason": "not marked"}],
-//                  "skipped": [1031]}
+//                  "skipped": [1031], "wait": null}
 //   }
 //
 // - `id`: the job's name, as `createIds` makes one, so the names sort in the order the jobs were
@@ -33,25 +33,29 @@
 //   `empty` and `holdLive`.
 // - `progress`: null until the job has started. Then when it started, the `seq` it stops at, its
 //   cursor, how many lines it has given, the lines to be tried again, and those it gave up on: the
-//   lane its batches are drawn from, as the state's own is for live runs.
+//   lane its batches are drawn from, as the state's own is for live runs. And `wait`: null, or,
+//   for an agent given in a file, while a setup error or an outage of its own holds the job back,
+//   `{ since, cause, reason, next, tries }`, as the state's `paused` is; always null for an agent of
+//   `agents.yaml`, whose failures pause every run.
 //
 // `scooter backfill` writes the file, and the runner alone changes it after that, atomically.
 // `scooter status` reads it, which is why its format is here.
 //
 // Every field above is needed, of its form, and a fault names the field; a job of an agent given
 // in a file has none of the others' flags. A field the runner doesn't know is ignored, at the top,
-// in `progress` or in a retry: the owner decided so on 2026-11-23, so that a file can hold more
-// than this version reads, as long as what it needs is there.
+// in `progress`, in `wait` or in a retry: the owner decided so on 2026-11-23, so that a file can
+// hold more than this version reads, as long as what it needs is there.
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { PAUSE_CAUSES } from './agentstate.mjs'
 import { checkOwnFolder, isId, readUntrustedFile } from './files.mjs'
 import { limits } from './limits.mjs'
 import { isAgentName } from './runnerstatus.mjs'
 import { parseIsoSeconds } from './time.mjs'
 
 const FIELDS = ['id', 'agent', 'written', 'from', 'skills', 'writes', 'empty', 'holdLive', 'prompt', 'agentFile', 'progress']
-const PROGRESS_FIELDS = ['started', 'until', 'cursor', 'given', 'retry', 'skipped']
+const PROGRESS_FIELDS = ['started', 'until', 'cursor', 'given', 'retry', 'skipped', 'wait']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isCount = value => Number.isSafeInteger(value) && value >= 0
@@ -119,6 +123,12 @@ export function checkJob(job) {
         if (!Array.isArray(progress.skipped) || !progress.skipped.every(isSeq)) fault('progress.skipped', 'a list of seqs')
         else if (new Set(progress.skipped).size !== progress.skipped.length) problems.push('progress.skipped holds a seq twice')
       }
+      if (progress.wait !== undefined && progress.wait !== null) {
+        // Only the job of an agent given in a file waits on its own; another's failures pause
+        // every run (`run.mjs`).
+        if (job.agentFile === null) fault('progress.wait', 'null for an agent of agents.yaml, whose failures pause every run')
+        else problems.push(...waitProblems('progress.wait', progress.wait))
+      }
     }
   }
   return problems
@@ -158,6 +168,17 @@ function retryProblems(field, value, cursor) {
   const seqs = value.map(item => item?.seq)
   if (new Set(seqs).size !== seqs.length) problems.push(`${field} holds a seq twice`)
   return problems
+}
+
+// What is wrong with a job's wait, as with the state's `paused` (`agentstate.mjs`).
+function waitProblems(field, value) {
+  return fieldProblems(field, value, {
+    since: [isTime, 'a UTC time to the second'],
+    cause: [cause => PAUSE_CAUSES.includes(cause), `one of ${PAUSE_CAUSES.join(', ')}`],
+    reason: [isText, "a string that isn't empty"],
+    next: [isTime, 'a UTC time to the second'],
+    tries: [isSeq, 'a whole number, 1 or more'],
+  })
 }
 
 // Something is wrong with a job's file. The message names the file and the fields.

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { statusText } from '../src/bridge/status.mjs'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { readJob } from '../src/common/jobfile.mjs'
 import { overrideLimits } from '../src/common/limits.mjs'
@@ -75,6 +76,22 @@ const sessionOf = call => call.argv[call.argv.indexOf('--session-id') + 1]
 const skillsOf = call => call.argv.flatMap((arg, n) => (arg === '--skill' ? [path.basename(call.argv[n + 1])] : []))
 const PEOPLE = ['--skills', 'people', '--writes', 'agents/lifelog/views/people.csv']
 
+// An agent given in a file, `lifelog-try`, with its prompt in the config folder, as the README
+// has one. Returns the file's path.
+function tryAgentFile(prepared) {
+  fs.writeFileSync(path.join(prepared.paths.configDir, 'prompts', 'try.md'), 'You are a try.\n')
+  const agentFile = path.join(prepared.root, 'try.yaml')
+  fs.writeFileSync(
+    agentFile,
+    jobYaml()
+      .replace('  lifelog:', '  lifelog-try:')
+      .replace('prompts/lifelog.md', 'prompts/try.md')
+      .replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog-try/views/]')
+      .replace('sends: [whatsapp]', 'sends: []'),
+  )
+  return agentFile
+}
+
 // ---------------------------------------------------------------------------------------------
 // As the runner runs it
 
@@ -89,7 +106,7 @@ test('backfill: a job is taken at the next look, tagged, and covers every line u
   const head = git('rev-parse', 'HEAD').trim()
   assert.equal(git('rev-parse', `before-backfill-${job.id}^{commit}`).trim(), head)
   assert.equal(git('cat-file', 'tag', `before-backfill-${job.id}`).split('\n\n').slice(1).join('\n\n'), tagMessage(job))
-  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 0, given: 0, retry: [], skipped: [] })
+  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 0, given: 0, retry: [], skipped: [], wait: null })
   assert.ok(entries.some(entry => entry.event === 'runner.job_started' && entry.job === job.id && entry.until === 5))
 
   // Saturday: #1 and #3; #2, which Scooter sent, is passed over. The prompt is the one for new
@@ -113,7 +130,7 @@ New: 1 3
   assert.deepEqual(skillsOf(first), ['scooter', 'people'])
   assert.match(first.systemPrompt, /You are lifelog\./)
   assert.equal(git('log', '-1', '--format=%s', '--name-only'), `lifelog: backfill ${job.id} #1-#3\n\nviews/people.csv\n`)
-  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 3, given: 2, retry: [], skipped: [] })
+  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 3, given: 2, retry: [], skipped: [], wait: null })
   // Silent, and the live runs' own record is left alone.
   assert.deepEqual(outbox(), [])
   assert.deepEqual(state().lastRun, LAST_RUN)
@@ -126,7 +143,7 @@ New: 1 3
   assert.deepEqual(entries.filter(entry => entry.event === 'runner.sends_dropped').map(entry => entry.silent), [2])
   assert.equal(sessionOf(sandbox.seen()[1]), `lifelog-backfill-${job.id}-2026-11-08`)
   assert.match(sandbox.seen()[1].prompt, /^Now: Sunday 8 November 2026, 19:30 /)
-  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 5, given: 4, retry: [], skipped: [5] })
+  assert.deepEqual(jobOn(file).progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 5, given: 4, retry: [], skipped: [5], wait: null })
   assert.deepEqual(outbox(), [])
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')).sort(), [`lifelog-backfill-${job.id}-2026-11-07.jsonl`, `lifelog-backfill-${job.id}-2026-11-08.jsonl`])
   assert.deepEqual(itemsSeen(sandbox), [
@@ -469,6 +486,97 @@ test('backfill: a setup error pauses every run without a notice, and the items k
   assert.deepEqual(jobOn(file).progress.cursor, 3)
 })
 
+test("backfill: a setup error or an outage of an agent given in a file holds back its job alone, in the job's file, across a restart, with one notice; live runs go on meanwhile", async t => {
+  const { prepared, runner, clock, state, outbox, sandbox, add, paths } = await open(t)
+  const { job, file } = await queue(prepared, ['--agent-file', tryAgentFile(prepared)])
+  const progress = () => jobOn(file, 'lifelog-try').progress
+  const shown = () => statusText({ now: clock.now(), settings: prepared.settings, paths, index: new Error('not read here') }).split('\n').find(text => text.startsWith('Backfill'))
+  assert.deepEqual((await runner.tick()).action, { kind: 'backfill-start', id: job.id })
+
+  // Its model refuses the key, as a guardrail that allows only lifelog's would: the job waits, in
+  // its file, its lines with their attempts unchanged; the pause of every run is left alone.
+  sandbox.behave({ openrouter: 403 })
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill', id: job.id }, outcome: { ok: false, cause: 'setup' } })
+  assert.equal(state().paused, undefined)
+  const { wait } = progress()
+  assert.deepEqual([wait.cause, wait.tries, Date.parse(wait.next) - Date.parse(wait.since)], ['setup', 1, 30 * MINUTE])
+  assert.match(wait.reason, /403/)
+  assert.deepEqual(
+    progress().retry.map(entry => [entry.seq, entry.attempts]),
+    [
+      [1, 0],
+      [3, 0],
+    ],
+  )
+  // One notice, the runner's own, which names the job.
+  const notices = outbox({ take: true })
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].by, 'runner')
+  assert.equal(
+    notices[0].text,
+    `⚠️ Backfill ${job.id} of lifelog-try couldn't run a batch (${wait.reason}). It waits until this is fixed, and tries again every 30 minutes; your messages are handled as usual meanwhile, and later backfills wait for it. Remove its file to cancel it.`,
+  )
+  // scooter status shows the wait: since when, why, and the next try.
+  assert.equal(shown(), `Backfill ${job.id} of lifelog-try: at #3 of #5, 2 lines given, 0 given up on, 2 to try again. It waits since 21:20: ${wait.reason}. Next try 21:50.`)
+
+  // A live message that arrives meanwhile is handled at once, after the owner's quiet period.
+  sandbox.behave(null)
+  add(line.text(6, '2026-11-09T15:51:00Z', 'tea'))
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'quiet' })
+  await clock.advance(8 * SECOND)
+  assert.deepEqual(await runner.tick(), { action: { kind: 'messages' }, outcome: { ok: true, cause: null } })
+  assert.deepEqual(outbox({ take: true }), [{ type: 'react', by: 'lifelog', target: 6, emoji: '✅', channels: ['whatsapp'] }])
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'backfill-waits' })
+
+  // Across a restart the wait stands: a start doesn't bring the job's next try forward.
+  await runner.close()
+  const again = await startTestRunner(t, prepared)
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'idle', reason: 'backfill-waits' })
+  assert.deepEqual(progress().wait, wait)
+
+  // Its next try fails too: the wait goes on, and no second notice goes out.
+  await clock.advance(30 * MINUTE)
+  sandbox.behave({ openrouter: 403 })
+  assert.deepEqual(await again.runner.tick(), { action: { kind: 'backfill', id: job.id }, outcome: { ok: false, cause: 'setup' } })
+  assert.deepEqual([progress().wait.since, progress().wait.tries], [wait.since, 2])
+  assert.deepEqual(outbox(), [])
+  assert.equal(state().paused, undefined)
+
+  // Once its model answers, the wait ends, and the job goes on to its end.
+  await clock.advance(30 * MINUTE)
+  sandbox.behave(null)
+  assert.deepEqual(await again.runner.tick(), { action: { kind: 'backfill', id: job.id }, outcome: { ok: true, cause: null } })
+  assert.equal(progress().wait, null)
+  assert.deepEqual((await again.runner.tick()).outcome, { ok: true, cause: null })
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'backfill-finished', id: job.id })
+  assert.deepEqual(outbox({ take: true }), [{ type: 'text', by: 'runner', text: `Backfill ${job.id} of lifelog-try finished: it was given 4 lines, and gave up on none.` }])
+  assert.deepEqual(itemsSeen(sandbox), [[1, 3], [6], [1, 3], [1, 3], [4, 5]])
+})
+
+test("backfill: an outage of an agent given in a file's job waits as an outage's tries do, and a batch that gets through, or fails on its own, ends the wait", async t => {
+  const { prepared, runner, clock, state, outbox, sandbox } = await open(t)
+  const { job, file } = await queue(prepared, ['--agent-file', tryAgentFile(prepared)])
+  const progress = () => jobOn(file, 'lifelog-try').progress
+  await runner.tick()
+  sandbox.behave({ openrouter: 503 })
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'outage' })
+  const first = progress().wait
+  assert.deepEqual([first.cause, first.tries, Date.parse(first.next) - Date.parse(first.since)], ['outage', 1, MINUTE])
+  assert.match(outbox({ take: true })[0].text, new RegExp(`^⚠️ Backfill ${job.id} of lifelog-try couldn't run a batch \\(.*\\)\\. It waits, and tries again; your messages are handled as usual meanwhile`))
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'backfill-waits' })
+  await clock.advance(MINUTE)
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'outage' })
+  assert.deepEqual([progress().wait.tries, Date.parse(progress().wait.next) - clock.now()], [2, 5 * MINUTE])
+  // pi's own failure means OpenRouter answered: the wait ends, and the lines count an attempt.
+  await clock.advance(5 * MINUTE)
+  sandbox.behave({ crash: 3 })
+  assert.deepEqual((await runner.tick()).outcome, { ok: false, cause: 'other' })
+  assert.equal(progress().wait, null)
+  assert.deepEqual(progress().retry.map(entry => entry.attempts), [1, 1])
+  assert.deepEqual(outbox(), [])
+  assert.equal(state().paused, undefined)
+})
+
 test('backfill: jobs run one at a time, in the order they were written, a job of an agent given in a file among them, which runs in a folder of its own', async t => {
   const { prepared, runner, sandbox, paths, git, outbox } = await open(t, { lines: [line.text(6, '2026-11-09T15:00:00Z', 'tea')], state: { ...HANDLED, cursor: 6 } })
   const config = paths.configDir
@@ -701,8 +809,8 @@ test("backfill: a full disk when the job's file is saved after a batch stops the
 // ---------------------------------------------------------------------------------------------
 // The parts
 
-test("backfill: a batch's outcome settles the job's lane, as a live batch's settles the live one, and counts the lines given", () => {
-  const progress = { started: '2026-11-09T15:00:00Z', until: 50, cursor: 10, given: 7, retry: [{ seq: 4, attempts: 3, due: '2026-11-09T15:00:00Z', reason: 'not marked' }], skipped: [2, 7] }
+test("backfill: a batch's outcome settles the job's lane, as a live batch's settles the live one, and counts the lines given; for an agent given in a file, its own wait too", () => {
+  const progress = { started: '2026-11-09T15:00:00Z', until: 50, cursor: 10, given: 7, retry: [{ seq: 4, attempts: 3, due: '2026-11-09T15:00:00Z', reason: 'not marked' }], skipped: [2, 7], wait: null }
   assert.deepEqual(jobLane(progress), { cursor: 10, retry: progress.retry, failed: [{ seq: 2 }, { seq: 7 }] })
   // #4 on its fourth attempt, #7 brought back from skipped by an edit, and #11 to #13 new.
   const batch = {
@@ -725,6 +833,7 @@ test("backfill: a batch's outcome settles the job's lane, as a live batch's sett
     given: 10,
     retry: [{ seq: 13, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }],
     skipped: [2, 4, 12],
+    wait: null,
   })
   assert.deepEqual(ok.givenUp, [4])
 
@@ -750,6 +859,19 @@ test("backfill: a batch's outcome settles the job's lane, as a live batch's sett
     const deleted = settleJobBatch(withDeleted, { ...batch, settled: [8, 9] }, outcome, { now })
     assert.ok(!deleted.progress.retry.some(entry => entry.seq === 9))
     assert.ok(!deleted.progress.skipped.includes(8))
+  }
+
+  // For an agent of agents.yaml the job's wait stays null, whatever comes: its failures pause every
+  // run. For an agent given in a file, a setup error or an outage starts or continues its wait, as
+  // they do a pause, and a batch that gets through to OpenRouter ends it.
+  assert.equal(down.progress.wait, null)
+  const outage = { ok: false, cause: 'outage', reason: "OpenRouter didn't answer" }
+  const waits = settleJobBatch(progress, batch, outage, { now, alone: true }).progress.wait
+  assert.deepEqual(waits, { since: '2026-11-09T15:50:00Z', cause: 'outage', reason: "OpenRouter didn't answer", next: '2026-11-09T15:51:00Z', tries: 1 })
+  const later = Date.parse('2026-11-09T15:51:00Z')
+  assert.deepEqual(settleJobBatch({ ...progress, wait: waits }, batch, outage, { now: later, alone: true }).progress.wait, { ...waits, next: '2026-11-09T15:56:00Z', tries: 2 })
+  for (const outcome of [{ ok: true, done: new Set(), failed: new Map() }, { ok: false, cause: 'other', reason: 'timed out' }]) {
+    assert.equal(settleJobBatch({ ...progress, wait: waits }, batch, outcome, { now: later, alone: true }).progress.wait, null)
   }
 })
 

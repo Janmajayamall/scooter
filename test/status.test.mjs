@@ -95,7 +95,7 @@ const JOB = {
   holdLive: false,
   prompt: null,
   agentFile: null,
-  progress: { started: '2026-11-09T15:00:05Z', until: 3, cursor: 1, given: 1, retry: [], skipped: [] },
+  progress: { started: '2026-11-09T15:00:05Z', until: 3, cursor: 1, given: 1, retry: [], skipped: [], wait: null },
 }
 
 const request = (id, at, host = 'openrouter.ai') => ({ id, at, event: 'request', host, method: 'POST', path: '/api/v1/messages' })
@@ -293,17 +293,18 @@ test('status: the runner\'s files, and the folders they are in, are read without
   assert.match(linked, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
 })
 
-test("status: the jobs of scooter backfill, oldest first, of every agent's folder, each as far as it has got, a field it doesn't know ignored, and those that can't be read said to be so, nothing read through a link", t => {
+test("status: the jobs of scooter backfill, oldest first, of every agent's folder, each as far as it has got and whether it waits, a field it doesn't know ignored, and those that can't be read said to be so, nothing read through a link", t => {
   const { status, write, paths } = setup(t)
   write(paths.bridgeStatus, BRIDGE)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
   const jobs = name => paths.agentJobs(name)
   // Written in this order: one waiting with --hold-live; an agent given in a file, started, which
-  // holds a field the runner doesn't know; one started with --hold-live, which gave up on two and
-  // has one to try again.
+  // waits after a setup error of its own, and holds a field the runner doesn't know; one started
+  // with --hold-live, which gave up on two and has one to try again.
   const waiting = { ...JOB, id: '20261109T150100000-0001', holdLive: true, progress: null, from: 812 }
-  const tried = { ...JOB, id: '20261109T150200000-0001', agent: 'lifelog-try', skills: null, writes: null, agentFile: 'agents:\n  lifelog-try: {}\n', later: true }
+  const wait = { since: '2026-11-09T15:48:00Z', cause: 'setup', reason: 'OpenRouter answered 403', next: '2026-11-09T16:18:00Z', tries: 1 }
+  const tried = { ...JOB, id: '20261109T150200000-0001', agent: 'lifelog-try', skills: null, writes: null, agentFile: 'agents:\n  lifelog-try: {}\n', later: true, progress: { ...JOB.progress, wait } }
   const held = {
     ...JOB,
     id: '20261109T150300000-0001',
@@ -333,7 +334,7 @@ test("status: the jobs of scooter backfill, oldest first, of every agent's folde
   const lines = text.split('\n').filter(line => line.startsWith('Backfill'))
   assert.deepEqual(lines, [
     'Backfill 20261109T150100000-0001 of lifelog: waiting to start, from #812; live runs will wait for it.',
-    'Backfill 20261109T150200000-0001 of lifelog-try: at #1 of #3, 1 line given, 0 given up on, 0 to try again.',
+    'Backfill 20261109T150200000-0001 of lifelog-try: at #1 of #3, 1 line given, 0 given up on, 0 to try again. It waits since 21:18: OpenRouter answered 403. Next try 21:48.',
     'Backfill 20261109T150300000-0001 of lifelog: at #3 of #3, 3 lines given, 2 given up on, 1 to try again; live runs wait for it.',
     "Backfill 20261109T150400000-0001 of lifelog: its file can't be read (not a job).",
     "Backfill 20261109T150500000-0001 of lifelog: its file can't be read (not a job).",

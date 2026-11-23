@@ -23,29 +23,38 @@ function documentExample() {
 
 const EXAMPLE = documentExample()
 const AGENT_FILE = 'agents:\n  lifelog-try: {}\n'
-// A job of an agent given in a file, started.
-const GIVEN = { ...EXAMPLE, agent: 'lifelog-try', skills: null, writes: null, agentFile: AGENT_FILE }
+// A job of an agent given in a file, started, and waiting after a setup error of its own.
+const WAITING = {
+  ...EXAMPLE,
+  agent: 'lifelog-try',
+  skills: null,
+  writes: null,
+  agentFile: AGENT_FILE,
+  progress: { ...EXAMPLE.progress, wait: { since: '2026-11-23T11:00:00Z', cause: 'setup', reason: 'OpenRouter answered 403', next: '2026-11-23T11:30:00Z', tries: 1 } },
+}
 
 const without = (object, name) => Object.fromEntries(Object.entries(object).filter(([key]) => key !== name))
 const withProgress = changes => ({ ...EXAMPLE, progress: { ...EXAMPLE.progress, ...changes } })
 const withRetry = changes => withProgress({ retry: [{ ...EXAMPLE.progress.retry[0], ...changes }] })
+const withWait = wait => ({ ...WAITING, progress: { ...WAITING.progress, wait } })
 
-test("job file: the document's example is a job, not started or started, and one of an agent given in a file", () => {
+test("job file: the document's example is a job, not started or started, and one that waits", () => {
   assert.equal(EXAMPLE.id, '20261123T101500123-0001')
   assert.deepEqual(checkJob(EXAMPLE), [])
   assert.deepEqual(checkJob({ ...EXAMPLE, progress: null }), [])
-  assert.deepEqual(checkJob(GIVEN), [])
+  assert.deepEqual(checkJob(WAITING), [])
   assert.deepEqual(checkJob({ ...EXAMPLE, skills: null, writes: null, empty: true, holdLive: true, prompt: '# Books\n$run.writes$\n' }), [])
 })
 
-test("job file: a field the runner doesn't know is ignored, at the top, in progress and in a retry, and readJob keeps it as it is", t => {
+test("job file: a field the runner doesn't know is ignored, at the top, in progress, in a retry and in a wait, and readJob keeps it as it is", t => {
   const job = {
-    ...GIVEN,
+    ...WAITING,
     later: { anything: [1, 2] },
     progress: {
-      ...GIVEN.progress,
+      ...WAITING.progress,
       notes: 'x',
-      retry: [{ ...GIVEN.progress.retry[0], tried: ['2026-11-23T11:00:00Z'] }],
+      retry: [{ ...WAITING.progress.retry[0], tried: ['2026-11-23T11:00:00Z'] }],
+      wait: { ...WAITING.progress.wait, model: 'anthropic/claude-opus-5.5' },
     },
   }
   assert.deepEqual(checkJob(job), [])
@@ -91,7 +100,7 @@ test('job file: each field a job needs, missing or of another form, is a fault t
 })
 
 test('job file: an agent given in a file has none of the flags of an agent of agents.yaml', () => {
-  const given = GIVEN
+  const given = { ...EXAMPLE, agent: 'lifelog-try', skills: null, writes: null, agentFile: AGENT_FILE }
   assert.deepEqual(checkJob(given), [])
   assert.deepEqual(checkJob({ ...given, skills: ['books'] }), ['skills must be null for an agent given in a file'])
   assert.deepEqual(checkJob({ ...given, writes: ['agents/lifelog-try/views/'] }), ['writes must be null for an agent given in a file'])
@@ -100,8 +109,8 @@ test('job file: an agent given in a file has none of the flags of an agent of ag
   assert.deepEqual(checkJob({ ...given, holdLive: true }), ['holdLive must be false for an agent given in a file'])
 })
 
-test("job file: each field of a started job's progress and of a retry, missing or of another form, is a fault that names it", () => {
-  for (const name of ['started', 'until', 'cursor', 'given', 'retry', 'skipped']) {
+test("job file: each field of a started job's progress, of a retry and of a wait, missing or of another form, is a fault that names it", () => {
+  for (const name of ['started', 'until', 'cursor', 'given', 'retry', 'skipped', 'wait']) {
     assert.deepEqual(checkJob({ ...EXAMPLE, progress: without(EXAMPLE.progress, name) }), [`progress.${name} is missing`], name)
   }
   const progress = [
@@ -115,6 +124,7 @@ test("job file: each field of a started job's progress and of a retry, missing o
     [{ skipped: 1031 }, 'progress.skipped must be a list of seqs'],
     [{ skipped: [0] }, 'progress.skipped must be a list of seqs'],
     [{ skipped: [1031, 1031] }, 'progress.skipped holds a seq twice'],
+    [{ wait: 'setup' }, 'progress.wait must be null for an agent of agents.yaml, whose failures pause every run'],
   ]
   for (const [changes, fault] of progress) assert.deepEqual(checkJob(withProgress(changes)), [fault], JSON.stringify(changes))
 
@@ -133,6 +143,21 @@ test("job file: each field of a started job's progress and of a retry, missing o
   for (const [changes, fault] of retry) assert.deepEqual(checkJob(withRetry(changes)), [fault], JSON.stringify(changes))
   const twice = EXAMPLE.progress.retry[0]
   assert.deepEqual(checkJob(withProgress({ retry: [twice, twice] })), ['progress.retry holds a seq twice'])
+
+  for (const name of ['since', 'cause', 'reason', 'next', 'tries']) {
+    assert.deepEqual(checkJob(withWait(without(WAITING.progress.wait, name))), [`progress.wait.${name} is missing`], name)
+  }
+  const wait = [
+    [{ since: 1 }, 'progress.wait.since must be a UTC time to the second'],
+    [{ cause: 'other' }, 'progress.wait.cause must be one of setup, outage'],
+    [{ reason: '' }, "progress.wait.reason must be a string that isn't empty"],
+    [{ next: '2026-11-23' }, 'progress.wait.next must be a UTC time to the second'],
+    [{ tries: 0 }, 'progress.wait.tries must be a whole number, 1 or more'],
+  ]
+  for (const [changes, fault] of wait) assert.deepEqual(checkJob(withWait({ ...WAITING.progress.wait, ...changes })), [fault], JSON.stringify(changes))
+  assert.deepEqual(checkJob(withWait([])), ['progress.wait must be an object'])
+  // An agent of agents.yaml never waits on its own: its failures pause every run.
+  assert.deepEqual(checkJob(withProgress({ wait: WAITING.progress.wait })), ['progress.wait must be null for an agent of agents.yaml, whose failures pause every run'])
 })
 
 test("job file: readJob refuses a file that isn't JSON, isn't a job, or isn't the job its name and its folder say, and one that isn't a file to read, naming the file", t => {

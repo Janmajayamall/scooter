@@ -46,7 +46,7 @@ function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now
 // A job the runner holds, started with `progress`, or not started without it.
 function jobWith({ id = '20261109T155000000-0001', holdLive = false, progress = null, channels = ['whatsapp', 'email'] } = {}) {
   const lane = progress === null ? null : { cursor: progress.cursor, retry: progress.retry ?? [], failed: [] }
-  return { id, holdLive, started: progress !== null, lane, until: progress?.until ?? null, channels }
+  return { id, holdLive, started: progress !== null, lane, until: progress?.until ?? null, wait: progress?.wait ?? null, channels }
 }
 
 const HANDLED = { ...initialAgentState(), cursor: 3 }
@@ -295,6 +295,23 @@ test("triggers: a job's steps run only when nothing live is waiting: its start, 
   assert.deepEqual(ask({ agent, state: handled, lines, job: onEmail }), { kind: 'backfill-finished', id })
   const withEmail = [...lines, { ...line.email(6, '2026-11-09T15:30:00Z', 'Hi', 'x'), day: undefined }]
   assert.deepEqual(ask({ agent, state: { ...handled, cursor: 6 }, lines: withEmail, job: jobWith({ progress: { until: 6, cursor: 0 }, channels: ['email'] }) }), { kind: 'backfill', id })
+})
+
+test("triggers: a job that waits after a setup error or an outage of its own gives no batch before its next try, and holds nothing live back", () => {
+  const agent = agentWith({ scheduled: [['21:30', 'Check in.']] })
+  const lines = [...EARLIER, line.text(4, '2026-11-09T15:40:00Z', 'met sam')]
+  const id = '20261109T155000000-0001'
+  const state = { ...initialAgentState(), cursor: 3, scheduled: { '21:30': '2026-11-09' } }
+  const wait = { since: '2026-11-09T15:40:00Z', cause: 'setup', reason: 'OpenRouter answered 403', next: '2026-11-09T16:10:00Z', tries: 1 }
+  const retry = [{ seq: 1, attempts: 0, due: '2026-11-09T15:40:00Z', reason: 'OpenRouter answered 403' }]
+  const waiting = jobWith({ progress: { until: 3, cursor: 1, retry, wait } })
+  // Live work goes first, as for any job; the job's batch waits for its next try.
+  assert.deepEqual(ask({ agent, state, lines, job: waiting }), { kind: 'messages' })
+  const handled = { ...state, cursor: 4 }
+  assert.deepEqual(ask({ agent, state: handled, lines, job: waiting }), { kind: 'idle', reason: 'backfill-waits' })
+  assert.deepEqual(ask({ agent, state: handled, lines, now: '2026-11-09T16:10:00Z', job: waiting }), { kind: 'backfill', id })
+  // A job whose work is done finishes, wait or not: its message is the runner's own.
+  assert.deepEqual(ask({ agent, state: handled, lines, job: jobWith({ progress: { until: 3, cursor: 3, wait } }) }), { kind: 'backfill-finished', id })
 })
 
 test('triggers: a job with --hold-live comes before live runs and scheduled tasks until it has finished, and replays in order', () => {

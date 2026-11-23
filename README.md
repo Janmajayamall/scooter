@@ -223,7 +223,7 @@ sudo scooter status                        # natively
 docker compose run --rm bridge status      # Docker
 ```
 
-It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; each backfill, and how far it has got; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down, and `scooter status` doesn't say so either: it shows when the runner last started, the agent's last run and the messages pending, which only get older and more while it is down. The logs say whether it runs ([When something goes wrong](#when-something-goes-wrong)).
+It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; each backfill, how far it has got, and whether it waits after a failure of its own; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down, and `scooter status` doesn't say so either: it shows when the runner last started, the agent's last run and the messages pending, which only get older and more while it is down. The logs say whether it runs ([When something goes wrong](#when-something-goes-wrong)).
 
 **The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
@@ -327,7 +327,7 @@ docker compose run --rm runner backfill lifelog …        # Docker
 It runs as the runner's user, as above. Run as another, `sudo scooter backfill` among them, it writes nothing, exits with 2, and gives the command to run.
 
 - **Where it starts and stops:** at your first message, or `--from 2026-11-09`, the UTC date a message was stored, or `--from 812`, a message's number; and at the last message the agent had handled when the job started. Live runs handle what comes after.
-- **Live messages go first:** without `--hold-live`, the job works only while nothing live is waiting, so a new message is answered as usual, at most one batch later.
+- **Live messages go first:** without `--hold-live`, the job works only while nothing live is waiting, so a new message is answered as usual, at most one batch later. If a batch of the job fails because OpenRouter refuses the key or is down, runs pause, live ones too, as after a live run's failure, without a notice: the job uses the agent's own model, so your messages would fail the same way, and their first failure tells you. A job of an agent of its own, given in a file, waits on its own instead, and your messages go on (see [Trying a prompt with an agent of its own](#trying-a-prompt-with-an-agent-of-its-own)).
 - **Before it changes anything** it tags the agent's last commit `before-backfill-<ID>`. The tag keeps what you asked and the prompt the job used: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog cat-file tag before-backfill-<ID>`. Each of its batches commits as `lifelog: backfill <ID> #812-#831`.
 - **When it has finished** you get one message: "Backfill 20261123T101500123-0001 of lifelog finished: it was given 143 lines, and gave up on #1031 and #1207." `scooter status` shows each job until then, and how far it has got.
 
@@ -402,7 +402,9 @@ sudo -u scooter-runner scooter backfill --agent-file /etc/scooter/config/lifelog
 docker compose run --rm runner backfill --agent-file /config/lifelog-try.yaml --from 2026-11-01
 ```
 
-Its views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooter/agents/lifelog-try/views`. It takes `--from` and no other flag: the file gives its skills, writes and prompts. Its memory, in its own folder, starts empty, and learns again the rules you sent as messages as it goes over them.
+Its views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooterIts views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooter/agents/lifelog-try/views`. It takes `--from` and no other flag: the file gives its skills, writes and prompts. Its memory, in its own folder, starts empty, and learns again the rules you sent as messages as it goes over them.
+
+n as runs do after such a failure: every 30 minutes for a refusal, and a restart of the runner doesn't bring the next try forward. You get one notice when it starts to wait, `scooter status` shows the wait and why, and your messages are handled as usual meanwhile; a job you queued after it waits for it. Fix the cause, or remove the job's file to cancel it (see [Cancelling a job](#cancelling-a-job)).
 
 ### Cancelling a job
 

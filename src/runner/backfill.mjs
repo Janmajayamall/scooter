@@ -24,7 +24,10 @@
 //   one of the owner's days each, `$now$` the time of the batch's newest item, a session of its own
 //   for each day, the job's skills, `writes` and prompt. A batch's outcome settles the lane as a
 //   live one's settles the live lane (`settleLane`), with what it gave up on in `skipped`. Its
-//   failures send no notice and leave `lastRun` alone; a setup error or an outage pauses every run.
+//   failures leave `lastRun` alone. A setup error or an outage pauses every run, without a notice,
+//   for a job of an agent of `agents.yaml`, whose model live runs use too; for an agent given in a
+//   file, it holds back that job alone, in its own `wait`, which a start doesn't bring forward, and
+//   the runner sends one notice when the wait starts.
 // - **When it has finished** (`finishJob`), its cursor at `until` and nothing left to try again, the
 //   owner gets one message, which says how many lines the job was given and which it gave up on.
 //   Then its file goes, and its sessions. The message is written before the file goes, so a crash
@@ -49,7 +52,7 @@ import { releaseLock } from '../common/locks.mjs'
 import { writeOutboxEntry } from '../common/outbox.mjs'
 import { isoSeconds } from '../common/time.mjs'
 import { ConfigError, checkJobWrites, jobPromptProblems, parseConfig, repositoryPaths } from './config.mjs'
-import { settleLane } from './failures.mjs'
+import { jobWaitNotice, settleLane, waitAfterRun } from './failures.mjs'
 import { createGit, wayIsOpen } from './git.mjs'
 import { ensureAgentDir } from './agentdir.mjs'
 import { buildReplayBatch, removeJobSessions, replaySessionId } from './replay.mjs'
@@ -66,13 +69,16 @@ export function jobLane(progress) {
 }
 
 // The job's progress after a batch: its lane settled as a live one is (`settleLane`), with what was
-// given up on in `skipped`, and the lines given for the first time counted. Returns
+// given up on in `skipped`, and the lines given for the first time counted. With `alone`, for a
+// job of an agent given in a file, its own wait too, which a setup error or an outage starts or
+// continues, as they do the pause of every run for another job (`waitAfterRun`). Returns
 // `{ progress, givenUp }`.
-export function settleJobBatch(progress, batch, outcome, { now }) {
+export function settleJobBatch(progress, batch, outcome, { now, alone = false }) {
   const { lane, givenUp } = settleLane(jobLane(progress), batch, outcome, { now })
   const skipped = [...new Set(lane.failed.map(entry => entry.seq))]
   const given = progress.given + batch.items.filter(item => item.origin === 'new').length
-  return { progress: { ...progress, cursor: lane.cursor, given, retry: lane.retry, skipped }, givenUp }
+  const wait = alone ? waitAfterRun(progress.wait, outcome, { now }) : progress.wait
+  return { progress: { ...progress, cursor: lane.cursor, given, retry: lane.retry, skipped, wait }, givenUp }
 }
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -285,6 +291,7 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
         started: progress !== null,
         lane: progress === null ? null : jobLane(progress),
         until: progress?.until ?? null,
+        wait: progress?.wait ?? null,
         channels: held.agent.channels,
       }
     },
@@ -303,7 +310,7 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
           await git.commitStaged(`${agent.name}: backfill ${job.id}, from empty`)
         }
         const until = agent === own ? state.cursor : index.lastSeq
-        const progress = { started: isoSeconds(clock.now()), until, cursor: job.from - 1, given: 0, retry: [], skipped: [] }
+        const progress = { started: isoSeconds(clock.now()), until, cursor: job.from - 1, given: 0, retry: [], skipped: [], wait: null }
         if (save(progress)) log.info('runner.job_started', { agent: agent.name, job: job.id, from: job.from, until, tag, empty: job.empty || undefined })
       } finally {
         releaseLock(paths.runLock)
@@ -316,6 +323,8 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
       const { progress } = job
       const built = buildReplayBatch({ agent, lane: jobLane(progress), until: progress.until, index, paths, settings, now, writes: held.writes, template: held.template })
       if (built === null) return null
+      // An agent given in a file has a model of its own: its failures hold back its job alone.
+      const alone = agent !== own
       return {
         agent,
         git,
@@ -327,7 +336,13 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
           sessionId: replaySessionId(agent, { day: built.day, job: job.id }),
           skills: held.skills,
           writes: held.writes,
-          settle: (outcome, timing) => settleJobBatch(progress, built.batch, outcome, timing),
+          alone,
+          // The job's progress after the batch, and the notice of a wait that starts with it.
+          settle: (outcome, timing) => {
+            const settled = settleJobBatch(progress, built.batch, outcome, { ...timing, alone })
+            const starts = progress.wait === null && settled.progress.wait !== null
+            return { ...settled, notice: starts ? jobWaitNotice(job, settled.progress.wait) : null }
+          },
           save: next => {
             if (held?.id === job.id) save(next)
           },

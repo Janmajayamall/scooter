@@ -33,11 +33,13 @@
 //
 // A batch of a job of `scooter backfill` (`backfill.mjs`, `replay.mjs`) is a run like the others,
 // with its own session, skills, prompt and commit message, and four differences: it sends
-// nothing, neither texts, reactions nor notices; it may change only what the job may, which the
-// sandbox holds it to; it may be a run of an agent given in a file, which has a folder of its own;
-// and it settles the job's own lane, in the job's file, which is saved before the state, and
-// leaves `lastRun` alone. A crash between the two loses only the pause the batch started or ended,
-// which a start tries again at once.
+// nothing, neither texts, reactions nor notices of its own; it may change only what the job may,
+// which the sandbox holds it to; it may be a run of an agent given in a file, which has a folder of
+// its own; and it settles the job's own lane, in the job's file, which is saved before the state,
+// and leaves `lastRun` alone. A crash between the two loses only the pause the batch started or
+// ended, which a start tries again at once. A batch of an agent given in a file leaves the pause
+// alone: its setup errors and outages make its job wait, in the job's file, and the runner sends
+// one notice of its own when the wait starts.
 
 import path from 'node:path'
 import { ensureDir } from '../common/files.mjs'
@@ -194,11 +196,12 @@ export function commitMessage(agentName, job) {
 
 // What a run of `job` does to the state, for each kind: live batches settle the live lane, tasks
 // their dates, and a job's batches the job's own lane (`job.settle`), and of the state only the
-// pause. Returns `{ state, givenUp, progress }`, `progress` being the job's after the batch, or
-// undefined for a live run.
+// pause, unless the job's agent is given in a file, whose job waits on its own. Returns
+// `{ state, givenUp, progress, notice }`, `progress` being the job's after the batch, or undefined
+// for a live run, and `notice` that of a job's wait that starts, or null.
 function settleJob(job, state, outcome, timing) {
   if (job.kind === 'messages') return settleBatch(state, job.batch, outcome, timing)
-  if (job.kind === 'backfill') return { ...job.settle(outcome, timing), state: pauseAfterRun(state, outcome, timing) }
+  if (job.kind === 'backfill') return { ...job.settle(outcome, timing), state: job.alone ? state : pauseAfterRun(state, outcome, timing) }
   return { state: settleTask(state, job, outcome, timing), givenUp: [] }
 }
 
@@ -206,13 +209,15 @@ function settleJob(job, state, outcome, timing) {
 //
 //   { kind: 'messages', batch, prompt }            from `buildBatch`
 //   { kind: 'scheduled', at, tag, date, prompt }   from `nextAction` and `scheduledPrompt`
-//   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes, settle, save }
+//   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes, alone, settle, save }
 //                                                  a job's batch, from `batch` of `createJobs` (`backfill.mjs`)
 //
 // A job's batch names its session, null for none, the skills pi gets and what it may change,
-// which the sandbox lets through in place of the agent's own `writes`; `settle(outcome, timing)`
-// gives the job's progress after the batch, `{ progress, givenUp }`, and `save(progress)` writes it
-// to the job's file.
+// which the sandbox lets through in place of the agent's own `writes`; `alone`, for a job of an
+// agent given in a file, whose setup errors and outages hold back the job alone, in its own wait,
+// and leave the pause of every run as it is; `settle(outcome, timing)` gives the job's progress
+// after the batch, `{ progress, givenUp, notice }`, `notice` being that of a wait that starts, or
+// null, and `save(progress)` writes it to the job's file.
 //
 // `outcome` is `waiting` (a backup holds its lock, or `run.lock` is another's, and nothing ran),
 // `stopped` (the runner is stopping, `signal` aborted the run, and its changes were thrown away,
@@ -380,10 +385,13 @@ async function afterFailure(context, { result, files, seqs, timing }) {
   const next = settled.state
   const entries = []
   // A replay's failures send no notice, and its batches don't count in the live runs'
-  // row of failures, which `lastRun` keeps.
+  // row of failures, which `lastRun` keeps; but for the runner's own, when the job of an agent
+  // given in a file starts to wait.
   if (!isReplay(job)) {
     if (isFirstFailure(state)) entries.push(failureNotice(job, failure))
     if (settled.givenUp.length > 0) entries.push(givenUpNotice(index, settled.givenUp))
+  } else if (settled.notice) {
+    entries.push(settled.notice)
   }
   for (const entry of entries) await writeOutboxEntry({ paths, ids, entry })
   if (settled.progress) job.save(settled.progress)

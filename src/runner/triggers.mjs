@@ -14,7 +14,9 @@
 //    no work items to give after the cursor, quiet or not, no due retries and no scheduled task.
 //    First its start, then its batches; when its work is done, it finishes. A job with
 //    `--hold-live` comes before 2 and 3 instead, until it has finished: live runs wait for it,
-//    and it waits for a line to be tried again before it takes the lines after it.
+//    and it waits for a line to be tried again before it takes the lines after it. A job that
+//    waits after a setup error or an outage of its own, which only one of an agent given in a
+//    file does, gives no batch until its wait's next try.
 // 5. Otherwise, nothing.
 //
 // A message that is already deleted is never given: the runner settles it itself, and gives only
@@ -96,7 +98,9 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 //   { kind: 'backfill-finished', id }  the job has covered everything up to where it stops
 //   { kind: 'idle', reason }           nothing now: `paused`, `quiet` (messages wait for the owner
 //                                      to be quiet), `backfill` (a job that holds live runs back
-//                                      waits for a line to be tried again), or `nothing`
+//                                      waits for a line to be tried again), `backfill-waits` (the
+//                                      job waits after a setup error or an outage of its own), or
+//                                      `nothing`
 //
 // Input:
 // - `agent`: the agent's config (`config.mjs`); `state`: its state; `index`: the datastore's.
@@ -129,13 +133,15 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
 // batch would give it.
 //
 // A job with `--hold-live` replays in order: while a line waits to be tried again, it takes
-// nothing, also when another is due, and waits, as live runs wait for it.
+// nothing, also when another is due, and waits, as live runs wait for it. A job whose `wait`
+// holds it back gives no batch before the wait's next try.
 function jobAction(job, index, now) {
   if (!job.started) return { kind: 'backfill-start', id: job.id }
-  const { lane, until, channels } = job
+  const { lane, until, channels, wait = null } = job
   const waiting = lane.retry.filter(entry => isToGive(index, entry.seq, channels))
   if (job.holdLive && waiting.some(entry => parseIsoSeconds(entry.due) > now)) return { kind: 'idle', reason: 'backfill' }
   if (dueRetries(lane.retry, index, channels, now).length > 0 || hasWorkAfter(index, channels, lane.cursor, Math.min(until, index.lastSeq))) {
+    if (wait !== null && now < parseIsoSeconds(wait.next)) return { kind: 'idle', reason: 'backfill-waits' }
     return { kind: 'backfill', id: job.id }
   }
   if (waiting.length === 0) return { kind: 'backfill-finished', id: job.id }

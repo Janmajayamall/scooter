@@ -300,8 +300,10 @@ function newestMessage(index) {
 }
 
 // What the report says of a job of `scooter backfill`, an entry of `listJobFiles`: where it has
-// got, or that it waits to start.
-function jobLine(entry) {
+// got, and whether it waits after a setup error or an outage of its own, since when, why and the
+// next try, as for a pause; or that it waits to start. `atText` gives a time of the file as the
+// report shows times.
+function jobLine(entry, atText) {
   const name = `Backfill ${entry.id ?? entry.name} of ${entry.agent}`
   if (entry.id === null) return `${name}: no job's file is named so, so the runner takes nothing from it.`
   let job
@@ -313,7 +315,9 @@ function jobLine(entry) {
   const held = job.holdLive ? '; live runs wait for it' : ''
   const { progress } = job
   if (progress === null) return `${name}: waiting to start, from #${job.from}${job.holdLive ? '; live runs will wait for it' : ''}.`
-  return `${name}: at #${progress.cursor} of #${progress.until}, ${plural(progress.given, 'line')} given, ${progress.skipped.length} given up on, ${progress.retry.length} to try again${held}.`
+  const { wait } = progress
+  const waits = wait === null ? '' : ` It waits since ${atText(wait.since)}: ${wait.reason}. Next try ${atText(wait.next)}.`
+  return `${name}: at #${progress.cursor} of #${progress.until}, ${plural(progress.given, 'line')} given, ${progress.skipped.length} given up on, ${progress.retry.length} to try again${held}.${waits}`
 }
 
 // The report of `scooter status`. Options:
@@ -408,7 +412,7 @@ export function statusText({ now, settings, paths, index }) {
   try {
     const jobs = listJobFiles(paths)
     if (jobs.length > 0) lines.push('')
-    for (const entry of jobs) lines.push(jobLine(entry))
+    for (const entry of jobs) lines.push(jobLine(entry, atText))
   } catch (error) {
     lines.push('', `Backfills: their folders can't be read (${error.code ?? error.name}).`)
   }
