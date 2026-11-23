@@ -209,7 +209,7 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
   )
   assert.equal(modeOf(path.join(run, 'index.txt')), 0o600)
 
-  // A new day's session: nothing to copy. A backfill gets its own skill alone, with the runner's.
+  // A new day's session: nothing to copy. A job given --skills gets those alone, with the runner's.
   const other = prepareRun({ paths, index: NO_LINES, agent: agent(), sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
   assert.equal(other.sessionFile, null)
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), [])

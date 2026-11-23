@@ -1,7 +1,7 @@
 // Routing: which channel each outbox entry goes to, and
 // what is quoted. `replyTo` and `about` follow their line's channel; a reply about an email reaches
 // `DEFAULT_CHANNEL` without a quote; a reaction to an email becomes a `✅ Email:` text; notices,
-// scheduled tasks and the backfill summary go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that
+// scheduled tasks and a backfill's message go to `DEFAULT_CHANNEL`; and a `DEFAULT_CHANNEL` that
 // can't send stops the bridge at startup.
 
 import assert from 'node:assert/strict'
@@ -76,7 +76,7 @@ test('routing: a reply about an email reaches DEFAULT_CHANNEL without a quote', 
 test('routing: a line that doesn\'t exist, or a text with neither replyTo nor about, goes to DEFAULT_CHANNEL', () => {
   assert.deepEqual(route(text({ replyTo: 999 })), ['whatsapp', null, 'hello'])
   assert.deepEqual(route(text({ about: 999 })), ['whatsapp', null, 'hello'])
-  // Notices, scheduled tasks, the backfill summary and the bridge's own messages have neither.
+  // Notices, scheduled tasks, a backfill's message and the bridge's own messages have neither.
   assert.deepEqual(route(text()), ['whatsapp', null, 'hello'])
   for (const by of ['runner', 'bridge']) assert.deepEqual(route(own(by)), ['whatsapp', null, 'hello'])
 })

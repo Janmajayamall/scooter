@@ -20,7 +20,7 @@ import { makePaths } from '../src/common/paths.mjs'
 import { systemClock } from '../src/common/time.mjs'
 import { icuTzRelease } from '../src/runner/agentdir.mjs'
 import { openRunner } from '../src/runner/main.mjs'
-import { rebuildAgent } from '../src/runner/rebuild.mjs'
+import { queueJob } from '../src/runner/enqueue.mjs'
 import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { piFiles } from '../src/runner/run.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
@@ -250,7 +250,7 @@ test("sandbox: what a run's VM sees, at the host's paths, may be changed only wh
   assert.equal(fs.readFileSync(path.join(agent, 'state.json'), 'utf8'), '{}\n')
 })
 
-test("sandbox: writes that name one file, a folder in another entry, and a path outside the agent's folder, each as the VM may change it; and a backfill's narrower writes", options, async t => {
+test("sandbox: writes that name one file, a folder in another entry, and a path outside the agent's folder, each as the VM may change it; and a job's narrower writes, with the jobs' folder hidden", options, async t => {
   const prepared = prepare(t)
   const { paths } = prepared
   const sandbox = await openTestSandbox(t, prepared)
@@ -301,14 +301,28 @@ test("sandbox: writes that name one file, a folder in another entry, and a path 
   assert.equal(fs.readFileSync(path.join(paths.dataDir, 'notes', 'todo.md'), 'utf8'), '- one\nx\n')
   assert.equal(fs.existsSync(path.join(agent, 'views', 'expenses.csv')), true)
 
-  // A backfill's batch: the agent's writes are seen, and only the backfill's changed.
+  // A job's batch: the agent's writes are seen, and only the job's changed; the jobs' folder, in
+  // the agent's, which reads names, is never seen, as the sessions aren't.
+  fs.mkdirSync(path.join(agent, 'jobs'))
+  fs.writeFileSync(path.join(agent, 'jobs', '20261109T155000000-0001.json'), '{}\n')
   const narrow = piFiles(paths, AGENT, ['agents/lifelog/views/people.csv'])
-  const backfill = await outcomes(narrow, [`touch ${agent}/views/people.csv`, `sh -c 'echo x >> ${agent}/views/expenses.csv'`, `test -s ${agent}/views/expenses.csv`, `touch ${agent}/memory/new.md`])
-  assert.deepEqual(backfill, {
+  const job = await outcomes(narrow, [
+    `touch ${agent}/views/people.csv`,
+    `sh -c 'echo x >> ${agent}/views/expenses.csv'`,
+    `test -s ${agent}/views/expenses.csv`,
+    `touch ${agent}/memory/new.md`,
+    `test -e ${agent}/jobs/20261109T155000000-0001.json`,
+    `ls ${agent}/jobs`,
+    `test -e ${agent}/sessions/lifelog-2026-11-08.jsonl`,
+  ])
+  assert.deepEqual(job, {
     [`touch ${agent}/views/people.csv`]: 'ok',
     [`sh -c echo x >> ${agent}/views/expenses.csv`]: 'refused',
     [`test -s ${agent}/views/expenses.csv`]: 'ok',
     [`touch ${agent}/memory/new.md`]: 'refused',
+    [`test -e ${agent}/jobs/20261109T155000000-0001.json`]: 'refused',
+    [`ls ${agent}/jobs`]: 'refused',
+    [`test -e ${agent}/sessions/lifelog-2026-11-08.jsonl`]: 'refused',
   })
   assert.equal(fs.readFileSync(path.join(agent, 'views', 'expenses.csv'), 'utf8'), 'date,amount\n')
 })
@@ -765,49 +779,56 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
 })
 
-test("sandbox: a rebuild's batch through the real sandbox: $now$ is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
+test("sandbox: a job's batch through the real sandbox: its own prompt, with $now$ the message's own time, reaches the model, pi reads the line and writes the view it may, and nothing is sent", options, async t => {
   const prepared = prepare(t)
   const { paths, settings, log } = prepared
-  // The rebuild makes the agent's folder itself; the datastore holds one message of Sunday.
+  // The runner makes the agent's folder itself; the datastore holds one message of Sunday.
   fs.rmSync(paths.agents, { recursive: true })
   fs.rmSync(paths.datastore, { recursive: true })
   writeDatastore(paths, [line.text(1, '2026-11-08T05:00:00Z', 'coffee 120 at Blue Tokai', { sourceId: '3EB0E2E0000000000002' })])
   const sunday = path.join(paths.datastore, '2026', '11', '08', 'log.jsonl')
+  const promptFile = path.join(prepared.root, 'expenses.md')
+  fs.writeFileSync(promptFile, 'Backfill for expenses. Now: $now$. File only what belongs in $run.writes$.\nGiven before: $seq.retry$\nNew: $seq.unread$\n')
+  // Its state, as live runs left it: #1 handled.
+  fs.mkdirSync(paths.agentDir('lifelog'), { recursive: true })
+  fs.writeFileSync(paths.agentState('lifelog'), JSON.stringify({ cursor: 1, retry: [], failed: [], scheduled: {}, lastRun: null }))
+  const { job, file } = await queueJob({ args: ['lifelog', '--writes', 'agents/lifelog/views/expenses.csv', '--prompt', promptFile], settings, clock: systemClock })
   const model = createFakeModel([
     { tool: 'read', args: { path: sunday } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n' } },
     { tool: 'bash', args: { command: "send 'Filed the coffee.'; mark done 1" } },
     { text: 'Filed it.' },
   ])
-  const said = []
-  const result = await rebuildAgent({
+  const runner = await openRunner({
     settings,
-    agentName: 'lifelog',
     clock: systemClock,
     log,
-    say: text => said.push(text),
     openSandbox: async options => openTestSandbox(t, { ...prepared, ...options, network: await fakeModelNetwork(t, model, options) }),
   })
-  assert.deepEqual({ ...result, tag: undefined }, { stopped: false, tag: undefined, until: 1, cursor: 1, batches: 1, failed: [] })
-  assert.match(result.tag, /^before-rebuild-\d{8}T\d{6}Z$/)
+  atEnd(t, () => runner.close())
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill-start', id: job.id }, outcome: 'started' })
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill', id: job.id }, outcome: { ok: true, cause: null } })
 
-  // The prompt has the message's own time and its number, and pi read its line, which its VM sees
-  // read-only.
+  // The prompt is the job's own, with the message's own time and its number, and pi read its line,
+  // which its VM sees read-only.
   const [first, second] = model.modelRequests
-  assert.match(JSON.stringify(first.body), /Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
-  assert.match(JSON.stringify(first.body), /Given before: none\\nNew: 1\\n/)
+  assert.match(JSON.stringify(first.body), /Backfill for expenses\. Now: Sunday 8 November 2026, 10:30\. File only what belongs in [^ ]*\/agents\/lifelog\/views\/expenses\.csv\.\\nGiven before: none\\nNew: 1\\n/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000002/)
-  // One commit on the tagged one, the view in it, its session gone, and nothing sent: what the
-  // batch queued with send is dropped.
+  // One commit on the tagged one, the view in it; and nothing sent: what the batch queued with
+  // send is dropped.
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
-  assert.equal(await git('log', '--format=%s'), 'lifelog: rebuild\nlifelog: initial commit\n')
-  assert.equal(await git('rev-parse', 'HEAD^'), await git('rev-parse', result.tag))
-  assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n')
-  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+  assert.equal(await git('log', '--format=%s'), `lifelog: backfill ${job.id} #1\nlifelog: initial commit\n`)
+  assert.equal(await git('rev-parse', 'HEAD^'), await git('rev-parse', `before-backfill-${job.id}^{commit}`))
+  assert.equal(fs.readFileSync(path.join(paths.agentDir('lifelog'), 'views', 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-08,10:30,Blue Tokai,120,INR,#1\n')
   assert.ok(!fs.existsSync(paths.outbox) || fs.readdirSync(paths.outbox).length === 0)
   const state = JSON.parse(fs.readFileSync(paths.agentState('lifelog'), 'utf8'))
   assert.deepEqual([state.cursor, state.lastRun], [1, null])
-  assert.equal(said.at(-1), 'Rebuilt lifelog up to #1, in 1 batch, committed as "lifelog: rebuild".')
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).progress.cursor, 1)
+  // Its message, the runner's own; and its sessions go.
+  assert.deepEqual((await runner.tick()).action, { kind: 'backfill-finished', id: job.id })
+  const outbox = fs.readdirSync(paths.outbox).map(id => JSON.parse(fs.readFileSync(path.join(paths.outbox, id, 'entry.json'), 'utf8')))
+  assert.deepEqual(outbox, [{ type: 'text', by: 'runner', text: `Backfill ${job.id} of lifelog finished: it was given 1 line, and gave up on none.` }])
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 })
 
 test("sandbox: pi in a VM reaches OpenRouter through the policy, OpenRouter answers 401, and the runner takes it as a setup error", options, async t => {
