@@ -1,5 +1,6 @@
-// What the agent is told: the prompt, which is pi's user message, and
-// `run/system.md`, which is appended to pi's system prompt.
+// What the agent is told in a run: the prompt, which is pi's user message. pi's system prompt is
+// pi's own, with the agent's prompt of the config folder appended, the run's copy of it
+// (`prepareRun` in `agentdir.mjs`).
 //
 // The prompt shows each item as it is now, with times in the owner's time zone:
 //
@@ -14,7 +15,7 @@
 //   Retrying (not handled yet):
 //   #1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
 //
-//   For context only (no action, no DONE):
+//   For context only (no action, nothing to mark):
 //   #1049 21:05 you sent: "Logged ₹340 Uber."
 //   #1048 21:04 the owner reacted 👍 to #1046
 //
@@ -23,7 +24,6 @@
 // `batch.mjs` keeps it within `PROMPT_MAX_BYTES`, and a text too long for that is shown cut,
 // followed by where the whole of it is.
 
-import fs from 'node:fs'
 import path from 'node:path'
 import { dataFlag, dataText } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
@@ -36,7 +36,7 @@ const pad = number => String(number).padStart(2, '0')
 export const SECTIONS = {
   new: 'New messages:',
   retrying: 'Retrying (not handled yet):',
-  context: 'For context only (no action, no DONE):',
+  context: 'For context only (no action, nothing to mark):',
   task: 'Scheduled task (from your configuration, not a message from the owner):',
 }
 
@@ -260,70 +260,4 @@ export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep
 // The prompt of a scheduled task: the task instead of messages.
 export function renderTaskPrompt(task, { header }) {
   return fitToLimit(`${header}\n\n${SECTIONS.task}\n${task.trim()}`)
-}
-
-// ---------------------------------------------------------------------------------------------
-// The system prompt, `run/system.md`
-
-// The protocol, which ships with the runner because the runner parses what it describes.
-export function loadProtocol() {
-  return fs.readFileSync(new URL('./protocol.md', import.meta.url), 'utf8')
-}
-
-// Reads a memory file for the system prompt. Returns null when there is none, and otherwise
-// `{ text, cut }`, with at most `MEMORY_MAX_BYTES` of it.
-//
-// pi writes the memory folder. A run that leaves a link or anything but a file there fails, and is
-// cleaned up, but a runner stopped before the clean-up would find it at its next run. So the
-// file is opened without following a link, and must be a regular file: otherwise a link to the
-// runner's env file would put the OpenRouter key into the prompt. And `memory` itself can be a
-// file, which `writes` may name as one (`ENOTDIR`): then there is no memory file, as when there is
-// no folder, since a path that runs through a file names nothing. Thrown, that would stop every
-// run before pi, without counting an attempt.
-export function readMemoryFile(file) {
-  const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK
-  let fd
-  try {
-    fd = fs.openSync(file, flags)
-  } catch (error) {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
-    if (error.code === 'ELOOP' || error.code === 'EMLINK') return { text: '(not a regular file, so not read)', cut: false }
-    throw error
-  }
-  try {
-    if (!fs.fstatSync(fd).isFile()) return { text: '(not a regular file, so not read)', cut: false }
-    const max = limits.MEMORY_MAX_BYTES
-    const buffer = Buffer.alloc(max + 1)
-    let filled = 0
-    while (filled < buffer.length) {
-      const count = fs.readSync(fd, buffer, filled, buffer.length - filled, null)
-      if (count === 0) break
-      filled += count
-    }
-    const cut = filled > max
-    // A character split by the cut decodes as U+FFFD, which is dropped.
-    const text = buffer.subarray(0, Math.min(filled, max)).toString('utf8')
-    return { text: cut ? text.replace(/\uFFFD+$/, '') : text, cut }
-  } finally {
-    fs.closeSync(fd)
-  }
-}
-
-// `run/system.md`: the protocol, then the agent's prompt, then a `# Your memory` section with
-// the current contents of `memory/preferences.md` and `memory/needs-review.md`, or "(empty)".
-// `preferences` and `needsReview` are what `readMemoryFile` returns.
-export function renderSystemPrompt({ protocol, prompt, preferences, needsReview }) {
-  const memory = (name, read) => {
-    const heading = `## memory/${name}`
-    if (read === null || read.text.trim() === '') return `${heading}\n\n(empty)`
-    const note = read.cut ? `\n\n(The file is longer than ${limits.MEMORY_MAX_BYTES} bytes, and only its beginning is shown. Shorten it.)` : ''
-    return `${heading}\n\n${read.text.trimEnd()}${note}`
-  }
-  return [
-    protocol.trimEnd(),
-    prompt.trimEnd(),
-    '# Your memory',
-    memory('preferences.md', preferences),
-    memory('needs-review.md', needsReview),
-  ].join('\n\n') + '\n'
 }

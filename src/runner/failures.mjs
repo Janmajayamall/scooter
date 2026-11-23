@@ -14,9 +14,7 @@
 // | other   | pi crashed or timed out while OpenRouter was    | Each item counts an attempt, and is |
 // |         | answering, or it left an unexpected file, or    | due again a minute later            |
 // |         | files that couldn't be checked or committed,    |                                     |
-// |         | or wrote too much, or answered at too great a   |                                     |
-// |         | length, or a backfill's batch changed what it   |                                     |
-// |         | may not                                         |                                     |
+// |         | or wrote too much                               |                                     |
 //
 // Neither a setup error nor an outage counts an attempt: the batch's items wait in `retry` for the
 // next try, with their counts unchanged, so nothing they hold up ends in `failed`.
@@ -28,7 +26,7 @@ import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { scanNetworkLog } from '../common/netlog.mjs'
 import { isoSeconds } from '../common/time.mjs'
-import { shortReason } from './answer.mjs'
+import { shortReason } from './report.mjs'
 import { OPENROUTER_HOST } from './sandbox/index.mjs'
 
 export const SETUP_STATUSES = [401, 402, 403, 404]
@@ -131,10 +129,8 @@ export function openRouterMessage(stderr, status) {
 export function failureCause({ result, unexpected = null, filesError = null, answer = null }) {
   const status = answer?.status ?? null
   if (result.error) return { cause: 'setup', reason: "the VM couldn't start", status }
-  // What pi did, whatever OpenRouter answered: its VM was closed for writing too much, or its
-  // answer was longer than the sandbox keeps.
+  // What pi did, whatever OpenRouter answered: its VM was closed for writing too much.
   if (result.wroteTooMuch) return { cause: 'other', reason: 'pi wrote more than a run may', status }
-  if (result.code === 0 && result.stdoutCut) return { cause: 'other', reason: "pi's answer was too long", status }
   if (result.code === 0 && unexpected !== null) return { cause: 'other', reason: shortReason(`unexpected file ${unexpected}`), status }
   if (result.code === 0 && filesError !== null) return { cause: 'other', reason: shortReason(`couldn't commit the run's files (${filesError.message})`), status }
 
@@ -195,7 +191,7 @@ export function pauseAfter(paused, { cause, reason, now }) {
 
 // The run's outcome, as `settleBatch` and `settleTask` take it:
 //
-//   { ok: true, done: Set, failed: Map }        pi succeeded; for a batch, what it reported
+//   { ok: true, done: Set, failed: Map }        the run passed; for a batch, what it marked
 //   { ok: false, cause, reason }                it failed, for this cause (`failureCause`)
 
 function withoutPause(state) {
@@ -225,9 +221,9 @@ export function isFirstFailure(state) {
 // The state after a batch of messages. `batch` is what `buildBatch` gave. Returns
 // `{ state, givenUp }`, with the items that ran out of attempts, in order.
 //
-// - **Done:** gone from `retry`.
-// - **Failed** by the agent: into `failed`, with its reason.
-// - **Not reported,** or in a batch that failed for another reason: one attempt more, due again
+// - **Marked done:** gone from `retry`.
+// - **Marked failed** by the agent: into `failed`, with its reason.
+// - **Marked neither way,** or in a batch that failed for another reason: one attempt more, due again
 //   `RETRY_WAIT` later. After `MAX_ATTEMPTS`, into `failed` and given up.
 // - **A setup error or an outage:** every item waits in `retry` for the next try, its attempts as
 //   they were. It is due at once: the pause holds every run back until the next try, which comes
@@ -267,7 +263,7 @@ export function settleLane(lane, batch, outcome, { now }) {
   if (outcome.ok) {
     for (const item of batch.items) {
       if (outcome.failed.has(item.seq)) giveUp(item.seq, outcome.failed.get(item.seq))
-      else if (!outcome.done.has(item.seq)) tryAgain(item, 'not reported')
+      else if (!outcome.done.has(item.seq)) tryAgain(item, 'not marked')
     }
   } else if (outcome.cause === 'other') {
     for (const item of batch.items) tryAgain(item, outcome.reason)

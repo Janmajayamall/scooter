@@ -78,7 +78,7 @@ test('view: what the VM sees, and what writes lets it change, by path', () => {
   assert.equal(writeRule(view, '/agents/lifelog/views/a.csv'), 'inside')
   assert.equal(writeRule(view, '/agents/lifelog/views'), 'folder')
   assert.equal(writeRule(view, '/notes/todo.md'), 'file')
-  for (const p of ['/agents/lifelog', '/agents/lifelog/state.json', '/agents/lifelog/run/system.md', '/agents/lifelog/views2', '/notes/todo.md/x', '/datastore/a']) assert.equal(writeRule(view, p), null, p)
+  for (const p of ['/agents/lifelog', '/agents/lifelog/state.json', '/agents/lifelog/run/index.txt', '/agents/lifelog/views2', '/notes/todo.md/x', '/datastore/a']) assert.equal(writeRule(view, p), null, p)
 
   // A folder of writes may be made, removed and given a mode, and nothing else; a file anything but
   // made or removed as a folder.

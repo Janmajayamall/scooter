@@ -134,14 +134,14 @@ export function makeDataDir(dir) {
   const datastore = path.join(dir, 'data', 'datastore')
   const day = path.join(datastore, '2026', '11', '09')
   const skill = path.join(agent, 'run', 'config', 'skills', 'expenses')
-  for (const folder of ['views', 'memory', 'sessions', 'run/session', 'run/config/prompts']) {
+  for (const folder of ['views', 'memory', 'sessions', 'run/session', 'run/send', 'run/config/prompts']) {
     fs.mkdirSync(path.join(agent, folder), { recursive: true })
   }
   fs.mkdirSync(skill, { recursive: true })
   fs.mkdirSync(day, { recursive: true })
   fs.writeFileSync(path.join(agent, 'state.json'), '{"cursor":1049}\n')
   fs.writeFileSync(path.join(agent, 'memory', 'preferences.md'), '- 2026-11-09 (#1040): Track coffee.\n')
-  fs.writeFileSync(path.join(agent, 'run', 'system.md'), '# Protocol\n\nEnd every answer with DONE lines.\n')
+  fs.writeFileSync(path.join(agent, 'run', 'config', 'prompts', 'lifelog.md'), '# You are lifelog\n\nFile what the owner sends.\n')
   fs.writeFileSync(path.join(skill, 'SKILL.md'), SKILL)
   fs.writeFileSync(path.join(day, 'log.jsonl'), `${JSON.stringify(MESSAGE)}\n`)
   return {
@@ -150,13 +150,14 @@ export function makeDataDir(dir) {
     day,
     skill,
     session: path.join(agent, 'run', 'session'),
-    systemPrompt: path.join(agent, 'run', 'system.md'),
+    // The run's copy of the agent's prompt, which pi appends to its system prompt.
+    systemPrompt: path.join(agent, 'run', 'config', 'prompts', 'lifelog.md'),
   }
 }
 
 // What a run's VM sees and may change, as the runner gives it (`piFiles`) for the agent of the
 // example config: the data folder, of which it sees the datastore and the agent's folder, and may
-// change `views/`, `memory/` and `run/session/`; never `sessions/`. Mounted at `at` instead of
+// change `views/`, `memory/`, `run/session/`, `run/send/` and `run/marks.txt`; never `sessions/`. Mounted at `at` instead of
 // the data folder's own path by `startVm`, its paths in the VM are under `at`.
 export function designFiles(data) {
   const paths = makePaths({ dataDir: path.dirname(path.dirname(data.agent)), configDir: '/config' })

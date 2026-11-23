@@ -28,7 +28,7 @@ async function eventsOf(response) {
 }
 
 test('fake model: a tool call and an answer on the messages route', async () => {
-  const model = createFakeModel([{ thinking: 'hm', text: 'Looking.', tool: 'read', args: { path: '/a' } }, { text: 'DONE: 1' }])
+  const model = createFakeModel([{ thinking: 'hm', text: 'Looking.', tool: 'read', args: { path: '/a' } }, { text: 'Filed it.' }])
   const body = { model: 'anthropic/claude-sonnet-5.5', stream: true, messages: [] }
 
   const first = await eventsOf(await model.handle(post(`${MESSAGES_PATH}?beta=true`, body, { 'x-api-key': 'placeholder' })))
@@ -58,7 +58,7 @@ test('fake model: a tool call and an answer on the messages route', async () => 
   assert.equal(first[0][1].message.model, body.model)
 
   const second = await eventsOf(await model.handle(post(MESSAGES_PATH, body)))
-  assert.equal(second.find(([, data]) => data.delta?.type === 'text_delta')[1].delta.text, 'DONE: 1')
+  assert.equal(second.find(([, data]) => data.delta?.type === 'text_delta')[1].delta.text, 'Filed it.')
   assert.equal(second.find(([name]) => name === 'message_delta')[1].delta.stop_reason, 'end_turn')
 
   // Every request is kept for the test to look at, with its headers and its parsed body.
@@ -75,7 +75,7 @@ test('fake model: a tool call and an answer on the messages route', async () => 
 })
 
 test('fake model: a tool call and an answer on the chat completions route', async () => {
-  const model = createFakeModel([{ thinking: 'hm', tool: 'bash', args: { command: 'ls' } }, { text: 'DONE: 1' }])
+  const model = createFakeModel([{ thinking: 'hm', tool: 'bash', args: { command: 'ls' } }, { text: 'Filed it.' }])
   const body = { model: 'google/gemini-2.5-flash', stream: true, messages: [] }
 
   const first = await eventsOf(await model.handle(post(CHAT_PATH, body)))
@@ -88,7 +88,7 @@ test('fake model: a tool call and an answer on the chat completions route', asyn
   assert.ok(first.at(-2)[1].usage)
 
   const second = await eventsOf(await model.handle(post(CHAT_PATH, body)))
-  assert.equal(second[0][1].choices[0].delta.content, 'DONE: 1')
+  assert.equal(second[0][1].choices[0].delta.content, 'Filed it.')
   assert.equal(second[1][1].choices[0].finish_reason, 'stop')
 })
 
@@ -120,7 +120,7 @@ test('fake model: the last step repeats, and a step can be a function of the req
 })
 
 test('fake model: anything but a model request gets a 404, and is still recorded', async () => {
-  const model = createFakeModel([{ text: 'DONE: 1' }])
+  const model = createFakeModel([{ text: 'Filed it.' }])
   const elsewhere = [
     new Request(`https://${OPENROUTER_HOST}/api/v1/models/user`),
     new Request(`https://${OPENROUTER_HOST}${CHAT_PATH}`),

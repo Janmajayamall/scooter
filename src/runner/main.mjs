@@ -39,7 +39,6 @@ import { buildBatch, buildTaskPrompt } from './batch.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
-import { loadProtocol } from './prompt.mjs'
 import { removeReplaySessions } from './replay.mjs'
 import { openRestarts } from './restarts.mjs'
 import { performRun } from './run.mjs'
@@ -127,7 +126,6 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
 
     const datastore = openDatastore({ paths, clock })
     datastore.poll()
-    const protocol = loadProtocol()
     // The VM's Node converts times with the zone rules that ship with the runner, and the runner's
     // own Node with its built-in ones; the two can be of different releases, which the owner
     // accepts, so the log only says so.
@@ -136,7 +134,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     let waitingFor = null
 
     async function run(job, signal) {
-      const done = await performRun({ agent, settings, paths, sandbox, git, protocol, ids, log, clock, index: datastore.index, state, stateFile, job, signal })
+      const done = await performRun({ agent, settings, paths, sandbox, git, ids, log, clock, index: datastore.index, state, stateFile, job, signal })
       state = done.state
       if (done.outcome === 'waiting') {
         if (waitingFor !== done.why) log.info('runner.waiting', { agent: agent.name, for: done.why })

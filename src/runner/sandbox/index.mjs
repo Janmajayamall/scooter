@@ -35,16 +35,16 @@
 //   and the sandbox puts `value` in its place only on requests to `hosts`.
 // - `signal` aborts the run: the VM is closed, as for a timeout.
 //
-// It resolves with `{ code, signal, stdout, stderr, timedOut, stdoutCut, wroteTooMuch }`. `code` is
+// It resolves with `{ code, signal, stdout, stderr, timedOut, wroteTooMuch }`. `code` is
 // the program's exit code, or null when it didn't exit by itself: it timed out, was aborted, went
 // past what a run may write, or the VM was lost. It rejects only when the command couldn't be run
 // at all, such as when the VM doesn't start.
 //
 // Nothing pi does may stop the runner, so a sandbox bounds what a run
 // can take from it:
-// - **Output.** It keeps the start of stdout, pi's answer, and the end of stderr, where OpenRouter's
-//   error is, up to `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (`createOutput`).
-//   `stdoutCut` says the answer was cut, which fails the run as pi's own failure.
+// - **Output.** It keeps the start of stdout and the end of stderr, where OpenRouter's error is, up
+//   to `SANDBOX_STDOUT_MAX_BYTES` and `SANDBOX_STDERR_MAX_BYTES` (`createOutput`), and drops the
+//   rest. The runner reads none of pi's stdout.
 // - **Writes.** The real sandbox stops a run that writes more than `RUN_WRITE_MAX_BYTES`, or makes
 //   more than `RUN_NAMES_MAX_COUNT` names, in what it may change: it refuses the write, closes
 //   the VM, and says `wroteTooMuch`, which fails the run as pi's own failure too.
@@ -64,13 +64,12 @@ export class SandboxSetupError extends Error {
 // Collects a program's output as both sandboxes keep it: the first `SANDBOX_STDOUT_MAX_BYTES` of
 // stdout and the last `SANDBOX_STDERR_MAX_BYTES` of stderr. `add(stream, chunk)` takes each piece
 // as it comes, so the memory it holds is bounded whatever the program prints; `result()` gives
-// `{ stdout, stderr, stdoutCut }`, as text.
+// `{ stdout, stderr }`, as text.
 export function createOutput() {
   const stdoutMax = limits.SANDBOX_STDOUT_MAX_BYTES
   const stderrMax = limits.SANDBOX_STDERR_MAX_BYTES
   const stdout = []
   let stdoutBytes = 0
-  let stdoutCut = false
   let stderr = []
   let stderrBytes = 0
   return {
@@ -78,7 +77,6 @@ export function createOutput() {
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
       if (stream === 'stdout') {
         const room = stdoutMax - stdoutBytes
-        if (bytes.length > room) stdoutCut = true
         if (room > 0) {
           const kept = bytes.subarray(0, room)
           stdout.push(kept)
@@ -99,7 +97,6 @@ export function createOutput() {
       return {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: err.subarray(Math.max(0, err.length - stderrMax)).toString('utf8'),
-        stdoutCut,
       }
     },
   }

@@ -134,7 +134,6 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
           signal: result.signal,
           stdout: kept.stdout,
           stderr: kept.stderr,
-          stdoutCut: kept.stdoutCut,
           timedOut: result.timedOut,
           wroteTooMuch,
         }
@@ -156,6 +155,19 @@ export function createFakeSandbox({ root, paths, proc, clock, accel = 'kvm', ima
     refused() {
       const file = path.join(control, 'refused.txt')
       return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean) : []
+    },
+
+    // What `send` and `mark` printed, and how each ended, as the stub ran them: a list for each
+    // run that got as far as marking and sending, in order, each `{ program, args, code, stdout,
+    // stderr, folder }`, `code` null when the program wasn't on the `PATH`.
+    reported() {
+      const file = path.join(control, 'reported.jsonl')
+      if (!fs.existsSync(file)) return []
+      return fs
+        .readFileSync(file, 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line))
     },
 
     // What the stub saw on each run, in order.

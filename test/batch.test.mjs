@@ -63,7 +63,7 @@ test('batch: at most 20 items, retries first, and the cursor stops before the fi
     else if (seq === 27) lines.push(line.email(seq, '2026-11-09T15:00:00Z', 'Hi', 'not read'))
     else lines.push(line.text(seq, '2026-11-09T15:00:00Z', `item ${seq}`))
   }
-  const retry = [3, 1, 2].map(seq => ({ seq, attempts: 2, due: '2026-11-09T15:00:00Z', reason: 'not reported' }))
+  const retry = [3, 1, 2].map(seq => ({ seq, attempts: 2, due: '2026-11-09T15:00:00Z', reason: 'not marked' }))
   const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, channels: ['whatsapp'] } })
   assert.equal(batch.items.length, limits.BATCH_MAX_ITEMS)
   assert.deepEqual(seqsOf(batch).slice(0, 3), [1, 2, 3])
@@ -144,7 +144,7 @@ test('batch: with a long context, its oldest lines are left out first, and an ov
   ])
   assert.equal(batch.context.length, 300)
   assert.ok(bytes(prompt) <= limits.PROMPT_MAX_BYTES)
-  const contextLines = prompt.split('For context only (no action, no DONE):\n')[1].split('\n')
+  const contextLines = prompt.split('For context only (no action, nothing to mark):\n')[1].split('\n')
   // The newest are kept, newest first, and the rest are counted.
   assert.match(contextLines[0], /^#303 Thu 5 Nov 15:30 you sent: "reply number 303 /)
   const kept = contextLines.filter(text => text.startsWith('#')).length
@@ -160,7 +160,7 @@ test('batch: with a long context, its oldest lines are left out first, and an ov
     assert.deepEqual(cut.batch.context, [4])
     assert.ok(bytes(cut.prompt) <= 4096)
     assert.match(cut.prompt, /\n#3 20:30 text: "y+" \(cut; the whole text is line 1 of /)
-    assert.match(cut.prompt, /For context only \(no action, no DONE\):\n#4 20:31 you sent: "Which café\?"$/)
+    assert.match(cut.prompt, /For context only \(no action, nothing to mark\):\n#4 20:31 you sent: "Which café\?"$/)
   } finally {
     restore()
   }
@@ -283,7 +283,7 @@ test('batch: context lines and reply labels', () => {
 #22 20:44 text: "odder"
       ↳ reply to #15
 
-For context only (no action, no DONE):
+For context only (no action, nothing to mark):
 #17 20:39 you sent, in reply to #13: "Noted:\\n\\"two lines\\""
 #16 20:38 you reacted ✅ to #8
 #15 20:37 the owner removed their reaction to #3
@@ -335,7 +335,7 @@ test('batch: a line this version doesn\'t know is passed over, and what the prom
 #14 20:42 edit of #3, now: "/help"
 #15 20:43 deletion of #4
 
-For context only (no action, no DONE):
+For context only (no action, nothing to mark):
 #12 20:40 you reacted to #2
 #11 20:39 the owner reacted to #2`,
   )
@@ -395,7 +395,7 @@ test('batch: an edit or deletion brings in its message from retry or failed, sho
     ...initialAgentState(),
     cursor: 6,
     // #3 waits, not due yet; #4 failed for good; #5 was handled, and is in neither.
-    retry: [{ seq: 3, attempts: 2, due: '2026-11-09T16:00:00Z', reason: 'not reported' }],
+    retry: [{ seq: 3, attempts: 2, due: '2026-11-09T16:00:00Z', reason: 'not marked' }],
     failed: [{ seq: 4, at: '2026-11-09T14:30:00Z', reason: 'not handled after 4 attempts' }],
   }
   const { batch, prompt } = build({ lines, state })

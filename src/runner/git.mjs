@@ -359,9 +359,9 @@ const exists = full => lstatOrNull(full) !== null
 // it can't search, or a file, would stop it. So an entry whose way is blocked is passed over, as
 // one that isn't there, before anything is set aside, made, staged, checked, emptied or read at
 // it, and what blocks it is left as it is: it isn't the runner's to remove. The clean-up,
-// staging, the check, a rebuild's emptying, a backfill's summary and the prompt's reading of the
-// memory files all judge so. A folder the runner can search but not write doesn't block the way:
-// what that costs is in `run.md`, under A change of writes.
+// staging, the check, a rebuild's emptying and a backfill's summary all judge so. A folder the
+// runner can search but not write doesn't block the way: what that costs is in `run.md`, under A
+// change of writes.
 export function wayIsOpen(dir, entry) {
   let folder = dir
   for (const name of pathOf(entry).split('/').slice(0, -1)) {

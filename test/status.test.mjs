@@ -58,7 +58,7 @@ const STATUS = {
 
 const STATE = {
   cursor: 3,
-  retry: [{ seq: 2, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }],
+  retry: [{ seq: 2, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }],
   failed: [
     { seq: 1, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },
     { seq: 3, at: '2026-11-09T12:00:00Z', reason: 'unreadable' },

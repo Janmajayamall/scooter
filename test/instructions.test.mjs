@@ -1,7 +1,7 @@
 // The agent's instructions (`docs/architecture/agent.md`; the plan's milestone 11): the default
-// config in `config/`, its prompt and its five skills, read against the documents themselves; the
-// protocol that ships with the runner, read against the parser of its answers; and the skill that
-// ships with the runner, read against the line format (`line.mjs`) and what `show` prints.
+// config in `config/`, its prompt and its five skills, read against the documents themselves; and
+// the skill that ships with the runner, read against the line format (`line.mjs`), what `show`,
+// `send` and `mark` print, and what the runner makes of what they leave (`report.mjs`).
 //
 // The files are the repository's own, as `setup` copies them and Docker mounts them. What the
 // agent's document gives word for word, the views' list, the CSV headers and the categories, is
@@ -19,12 +19,12 @@ import { limits } from '../src/common/limits.mjs'
 import { OWN_AUTHORS } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { indexFileText, prepareRun } from '../src/runner/agentdir.mjs'
-import { answerEntries, parseAnswer, reportsOf } from '../src/runner/answer.mjs'
 import { RUNNER_SKILL, loadConfig, parseConfig, skillFileProblem } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
-import { SECTIONS, loadProtocol } from '../src/runner/prompt.mjs'
+import { SECTIONS } from '../src/runner/prompt.mjs'
+import { readMarks, readSends } from '../src/runner/report.mjs'
 import { piEnv } from '../src/runner/run.mjs'
-import { SKILLS, exampleYaml, fillerLines, indexOf, line, writeConfig } from './support/runner.mjs'
+import { SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const REPO = path.resolve(import.meta.dirname, '..')
@@ -140,20 +140,26 @@ test('instructions: each CSV header is the one the agent\'s document gives, and 
   assert.deepEqual([...listed.matchAll(/`([^`]+)`/g)].map(match => match[1]), categories)
 })
 
-test("instructions: a run's system prompt is the protocol, then the prompt, then the memory, with the five skills copied for pi", t => {
+test("instructions: pi appends the agent's prompt to its system prompt, as the config folder has it, with the runner's skill and the five skills copied for pi", t => {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG })
   const [agent] = loadConfig({ paths }).agents
-  fs.mkdirSync(paths.agentMemory('lifelog'), { recursive: true })
-  fs.writeFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), '- 2026-11-09 (#1060): Track coffee and tea in meals.csv as "drink".\n')
-  const prepared = prepareRun({ paths, agent, protocol: loadProtocol(), index: createIndex(), sessionId: 'lifelog-2026-11-09' })
-  const system = fs.readFileSync(prepared.systemFile, 'utf8')
-  const protocolAt = system.indexOf('# How you work with Scooter')
-  const promptAt = system.indexOf('# You are lifelog')
-  const memoryAt = system.indexOf('# Your memory\n\n## memory/preferences.md\n\n- 2026-11-09 (#1060)')
-  assert.ok(protocolAt === 0 && promptAt > protocolAt && memoryAt > promptAt, `${protocolAt} ${promptAt} ${memoryAt}`)
+  const prepared = prepareRun({ paths, agent, index: createIndex(), sessionId: 'lifelog-2026-11-09' })
+  assert.equal(prepared.promptFile, path.join(paths.agentRunConfig('lifelog'), 'prompts', 'lifelog.md'))
+  assert.equal(fs.readFileSync(prepared.promptFile, 'utf8'), read('prompts', 'lifelog.md'))
   assert.deepEqual(prepared.skillDirs, [path.join(paths.agentRunSkills('lifelog'), 'scooter'), ...SKILLS.map(name => path.join(paths.agentRunConfig('lifelog'), 'skills', name))])
   for (const name of SKILLS) assert.equal(fs.readFileSync(path.join(paths.agentRunConfig('lifelog'), 'skills', name, 'SKILL.md'), 'utf8'), read('skills', name, 'SKILL.md'))
+})
+
+test("instructions: the prompt says to read the runner's skill and the two memory files first, as the agent's document gives it", () => {
+  const prompt = read('prompts', 'lifelog.md')
+  const block = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.body.startsWith('Before anything else, on every run:')).body
+  assert.ok(prompt.includes(block), block)
+  // Before the views, and naming the skill by the name it has, and each memory file.
+  assert.ok(prompt.indexOf(block) < prompt.indexOf('Views (all under views/):'))
+  for (const words of [`\`${RUNNER_SKILL}\` skill`, '`memory/preferences.md`', '`memory/needs-review.md`']) assert.ok(block.includes(words), words)
+  // The runner's skill says to read it first too, where pi offers it, in its description.
+  assert.match(/^description: (.*)$/m.exec(RUNNER_SKILL_FILE)[1], /Read it before anything else, on every run\.$/)
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -237,7 +243,7 @@ test("runner's skill: its examples of show and of the index file are what show p
   fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
   fs.mkdirSync(paths.agentDir('lifelog'), { recursive: true })
   const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }
-  prepareRun({ paths, agent, protocol: '', index: datastore.index })
+  prepareRun({ paths, agent, index: datastore.index })
 
   for (const { args, output } of examples) {
     const env = piEnv({ timeZone: 'Asia/Kolkata', binDir: paths.agentRunBin('lifelog'), icuTzDir: paths.agentRunIcuTz('lifelog') })
@@ -256,79 +262,78 @@ test("runner's skill: its examples of show and of the index file are what show p
 })
 
 // ---------------------------------------------------------------------------------------------
-// The protocol against the parser
+// The runner's own skill, against `send`, `mark` and what the runner makes of what they leave
 
-test('protocol: its example answer is read as it says', () => {
-  const protocol = loadProtocol()
-  const example = fencedBlocks(protocol).find(block => block.body.startsWith('REPLY_TO:')).body
-  const answer = parseAnswer(example)
-  assert.deepEqual(answer.done, [1050, 1051, 1052])
-  assert.deepEqual(answer.failed, [{ seq: 1053, reason: 'the PDF needs a password' }])
-  assert.deepEqual(answer.messages.map(message => message.replyTo), [1052, 1053])
-  assert.equal(answer.noReply, false)
-  assert.equal(answer.unreadable, 0)
+// The skill's examples of `send` and `mark`, as one script, the commands with their here-documents,
+// and what they print.
+function commandExamples() {
+  const blocks = fencedBlocks(RUNNER_SKILL_FILE).filter(block => /^\$ (send|mark) /.test(block.body))
+  const script = []
+  const printed = []
+  for (const { body } of blocks) {
+    let input = null
+    for (const text of body.trimEnd().split('\n')) {
+      if (input !== null) {
+        script.push(text)
+        if (text === input) input = null
+      } else if (text.startsWith('$ ')) {
+        script.push(text.slice(2))
+        input = /<<'([A-Z]+)'$/.exec(text)?.[1] ?? null
+      } else {
+        printed.push(text)
+      }
+    }
+  }
+  return { script: script.join('\n'), printed: printed.join('\n') }
+}
 
-  // In quiet mode: the two replies, and a reaction to each message done that wasn't replied to.
-  const lines = [1050, 1051, 1052, 1053].map(seq => line.text(seq, '2026-11-09T15:43:00Z', `message ${seq}`))
-  const index = indexOf([...fillerLines(1049), ...lines])
-  const reports = reportsOf(answer, [1050, 1051, 1052, 1053])
-  assert.deepEqual([...reports.done], [1050, 1051, 1052])
-  const agent = { name: 'lifelog', sends: ['whatsapp'], replyMode: 'quiet', ackReaction: '✅' }
-  const entries = answerEntries({ answer, agent, index, about: 1053, done: reports.done })
-  assert.deepEqual(
-    entries.map(entry => (entry.type === 'text' ? `text ${entry.replyTo}` : `react ${entry.target}`)),
-    ['text 1052', 'text 1053', 'react 1050', 'react 1051'],
-  )
+test("runner's skill: its examples of send and mark, run in bash as the agent runs them, print what it shows, and leave what the runner reads as it says", t => {
+  const { script, printed } = commandExamples()
+  assert.match(script, /^mark done /m)
+  assert.match(script, /^mark failed /m)
+  assert.match(script, /^send --reply-to /m)
+  assert.match(script, /^send <<'END'$/m)
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
+  fs.mkdirSync(path.join(paths.configDir, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
+  fs.mkdirSync(paths.agentDir('lifelog'), { recursive: true })
+  prepareRun({ paths, agent: { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }, index: createIndex() })
+  // The run's bin/ first, as pi's environment has it, and this Node, as the VM's is on its PATH; a
+  // home of the test's own in place of the VM's.
+  const env = { ...piEnv({ timeZone: 'Asia/Kolkata', binDir: paths.agentRunBin('lifelog'), icuTzDir: paths.agentRunIcuTz('lifelog') }), HOME: root }
+  env.PATH = `${env.PATH}:${path.dirname(process.execPath)}`
+  const result = spawnSync('bash', ['-c', script], { env, encoding: 'utf8', input: '' })
+  assert.equal(result.stderr, '')
+  assert.equal(result.status, 0)
+  assert.equal(result.stdout, `${printed}\n`)
+
+  // What the runner reads: the marks, and the messages in order, the second from the
+  // here-document, its ends trimmed.
+  assert.deepEqual(readMarks(paths.agentRunMarks('lifelog')), {
+    done: [1050, 1051, 1052],
+    failed: [{ seq: 1053, reason: 'the PDF needs a password' }],
+    unreadable: 0,
+    refused: null,
+  })
+  assert.deepEqual(readSends(paths.agentRunSend('lifelog')), {
+    messages: [
+      { text: 'Is this ticket for you alone, or for Sam too?', replyTo: 1052 },
+      { text: 'Filed the coffee and the lunch.', replyTo: null },
+    ],
+    refused: 0,
+    past: 0,
+    error: null,
+  })
 })
 
-test('protocol: what it says of each line is what the parser does', () => {
-  const protocol = loadProtocol()
-  const said = words => assert.ok(protocol.includes(words), words)
-
-  // A `#` is fine; a range isn't read.
-  said('A `#` before a number is fine.')
-  assert.deepEqual(parseAnswer('DONE: #1050 #1051').done, [1050, 1051])
-  said('a range such as `1050-1053` isn\'t read')
-  assert.deepEqual(parseAnswer('DONE: 1050-1053'), { done: [], failed: [], messages: [], noReply: false, unreadable: 1 })
-
-  // The reason on the same line.
-  said('`FAILED: <number> <reason>`')
-  assert.deepEqual(parseAnswer('FAILED: 1053 the PDF needs a password').failed, [{ seq: 1053, reason: 'the PDF needs a password' }])
-
-  // `REPLY_TO` with nothing else on its line; a line that starts with an instruction but can't be
-  // read is dropped, and isn't sent.
-  said('put `REPLY_TO: <number>` on a line of its own before it, with nothing else on that line')
-  said("A line that starts with one of them but can't be read is dropped, and isn't sent to the owner either.")
-  const extra = parseAnswer('REPLY_TO: 1052 about the ticket\nIs it for Sam too?\nDONE: 1052')
-  assert.deepEqual(extra.messages, [{ replyTo: null, text: 'Is it for Sam too?' }])
-  assert.equal(extra.unreadable, 1)
-  // Text before the first `REPLY_TO` is a message of its own; everything after one, up to the
-  // next, is one message.
-  said('Text before the first `REPLY_TO` is sent as a message of its own.')
-  assert.deepEqual(parseAnswer('Filed both.\nREPLY_TO: 1052\nFor Sam too?\nAnd the return?\nREPLY_TO: 1053\nLocked.').messages, [
-    { replyTo: null, text: 'Filed both.' },
-    { replyTo: 1052, text: 'For Sam too?\nAnd the return?' },
-    { replyTo: 1053, text: 'Locked.' },
-  ])
-
-  // `NO_REPLY` anywhere sends none of the text.
-  said('a `NO_REPLY` line anywhere in the answer sends none of its text')
-  const quiet = parseAnswer('Filed the coffee.\nNO_REPLY\nDONE: 1050')
-  const index = indexOf([...fillerLines(1049), line.text(1050, '2026-11-09T15:43:00Z', 'coffee 150')])
-  const agent = { name: 'lifelog', sends: ['whatsapp'], replyMode: 'quiet', ackReaction: '✅' }
-  assert.deepEqual(answerEntries({ answer: quiet, agent, index, about: 1050, done: new Set([1050]) }), [
-    { type: 'react', by: 'lifelog', target: 1050, emoji: '✅', channels: ['whatsapp'] },
-  ])
-
-  // Instructions are read at the start of a line, in capitals with their colon, after trimming.
-  said('each at the start of its own line: the word in capitals, then its colon')
-  assert.deepEqual(parseAnswer('  DONE: 1050  ').done, [1050])
-  for (const text of ['**DONE: 1050**', '- DONE: 1050', 'done: 1050', 'DONE 1050', '`DONE: 1050`']) assert.deepEqual(parseAnswer(text).done, [], text)
-
-  // The number of messages one answer sends.
-  said(`Scooter sends at most ${limits.ANSWER_MAX_TEXTS} messages from one answer, the first ones, and drops the rest.`)
-
+test("runner's skill: what it says of a run is what the runner does: the prompt's sections, the attempts, and how many messages go", () => {
+  const said = words => assert.ok(RUNNER_SKILL_FILE.includes(words), words)
   // The sections of the prompt, by the names `prompt.mjs` gives them.
   for (const heading of [SECTIONS.new, SECTIONS.retrying, SECTIONS.context]) said(`**${heading.replace(/:$/, '')}:**`)
   said(`\`${SECTIONS.task}\``)
+  said(`An item you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)
+  said(`Scooter sends at most ${limits.RUN_MAX_SENDS} messages of one run, the first ones, and drops the rest.`)
+  // What the agent's document says it describes.
+  for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'Internet: on', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'In a backfill nothing you send goes out']) said(words)
 })

@@ -4,15 +4,20 @@
 //
 // | In an item's text | It                                                                      |
 // |-------------------|-------------------------------------------------------------------------|
-// | (nothing)         | adds a row for the item to `views/notes.csv`, and reports it `DONE`     |
-// | `IGNORE`          | doesn't report it                                                       |
-// | `FAIL`            | reports it `FAILED`, and says why                                       |
-// | `ASK`             | notes a question in `memory/needs-review.md`, asks it with `REPLY_TO`,  |
-// |                   | and reports the item `DONE`                                             |
-// | `SAY`             | files it, and says so in plain text                                     |
+// | (nothing)         | adds a row for the item to `views/notes.csv`, and marks it done         |
+// | `IGNORE`          | doesn't mark it                                                         |
+// | `FAIL`            | marks it failed, and sends why                                          |
+// | `ASK`             | notes a question in `memory/needs-review.md`, sends it with             |
+// |                   | `--reply-to` the item, and marks the item done                          |
+// | `SAY`             | files it, and sends a message that says so                              |
 // | `UNSURE`          | files it with a ❓ in its row                                           |
 // | `OUTSIDE`         | in a backfill's batch, also tries to file it in `views/notes.csv`,      |
 // |                   | which the backfill may not change                                       |
+//
+// It marks and sends as the agent does, through the programs that ship with the runner, `mark`
+// and `send`, found on the `PATH` it was given and run with the host's Node, as `show` is with
+// `SHOW`. Then it prints a last message, which nothing reads. A scheduled task gets a message
+// sent, "Today: nothing missing."
 //
 // A backfill's batch, whose prompt starts with `Backfill`, files each item in the first CSV file
 // its `writes` names instead of `views/notes.csv`.
@@ -37,6 +42,7 @@
 // |                        |                        | refused by the policy, and fails                   |
 // | `CRASH`                | `{"crash": 3}`         | files the items, then exits with that code         |
 // | `HANG`                 | `{"hang": true}`       | files the items, then waits for ever               |
+// | `LATE`                 | `{"late": true}`       | with `CRASH` or `HANG`, marks and sends first      |
 // | `DOTFILE`, `SYMLINK`,  | `{"leave": "FIFO"}`    | leaves a file git wouldn't record: `views/.hidden`,|
 // | `FIFO`, `IGNORED`,     |                        | a link, a FIFO, `views/scratch.tmp`, a file and a  |
 // | `LOCKEDFILE`,          |                        | folder the runner can't read (`views/locked.csv`,  |
@@ -61,11 +67,15 @@
 // | `RUNLOCKED`            |                        | leaves a folder the runner can't read in           |
 // |                        |                        | `run/session/`                                     |
 // | `DEEPSESSION`          |                        | leaves the tree of `DEEPTREE` in `run/session/`    |
-// | `NOREPLY`              |                        | answers `NO_REPLY`                                 |
 // | `MEMORY`               |                        | adds a line to `memory/preferences.md`             |
-// | `UNKNOWN`              |                        | reports numbers that weren't in the batch          |
-// | `REPLYTO=<seq>`        |                        | replies to that number                             |
-// | `LONGANSWER`           |                        | starts its answer with 64 KB of text               |
+// | `UNKNOWN`              |                        | marks numbers that weren't in the batch            |
+// | `REPLYTO=<seq>`        |                        | sends a reply to that number                       |
+// | `OLDANSWER`            |                        | marks and sends nothing, and prints what an answer |
+// |                        |                        | of the old format would have said, `DONE` lines    |
+// |                        |                        | and a `REPLY_TO`                                   |
+// | `RUNLEAVES=<what>`     | `{"runLeaves": "…"}`   | leaves in `run/send/` or `run/marks.txt`, beside   |
+// |                        |                        | what it sent and marked, what `send` and `mark`    |
+// |                        |                        | never write (`leaveInRun`)                         |
 // | `FILELINK`, `FILEGONE`,|                        | of the first file its writes name in the agent's   |
 // | `FILEWRITE`,           |                        | folder: makes it a link, removes it, adds a line   |
 // | `FILEHARD`             |                        | of the batch's numbers to it, or gives it a second |
@@ -79,7 +89,8 @@
 // It writes OpenRouter's answers to the network log as the runner's policy would, in its format,
 // and keeps its session as pi 1.5.2 does. Every absolute path it
 // is given is a path in the VM: it finds it under `PI_STUB_ROOT`, the fake VM's folder. What it
-// saw is added to `calls.jsonl` in its control folder.
+// saw is added to `calls.jsonl` in its control folder, and what `send` and `mark` printed, and how
+// each ended, to `reported.jsonl`.
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -120,7 +131,7 @@ for (let n = 0; n < args.length; n++) {
 const SECTIONS = {
   'New messages:': 'new',
   'Retrying (not handled yet):': 'retrying',
-  'For context only (no action, no DONE):': 'context',
+  'For context only (no action, nothing to mark):': 'context',
   'Scheduled task (from your configuration, not a message from the owner):': 'task',
 }
 const items = []
@@ -176,15 +187,20 @@ const seen = {
   prompt,
 }
 
-// `show`, found by its name on the `PATH` the stub was given, each folder of which is a path in the
-// VM, and run with the host's Node, as the VM's `env` would run it with the VM's, and with the
-// environment pi got, as pi's bash tool runs a program: `TZ`, and `ICU_TIMEZONE_FILES_DIR`, a path
-// in the VM that is the same path on the host.
-if (has('SHOW')) {
-  const folder = (process.env.PATH ?? '').split(':').find(dir => dir !== '' && fs.existsSync(inVm(path.join(dir, 'show'))))
-  const run = folder === undefined ? null : spawnSync(process.execPath, [inVm(path.join(folder, 'show')), ...items.map(item => String(item.seq))], { env: seen.env, encoding: 'utf8' })
-  seen.show = run === null ? null : { folder, code: run.status, stdout: run.stdout, stderr: run.stderr }
+// A program that ships with the runner, `show`, `send` or `mark`, found by its name on the `PATH`
+// the stub was given, each folder of which is a path in the VM, and run with the host's Node, as the
+// VM's `env` would run it with the VM's, and with the environment pi got, as pi's bash tool runs a
+// program: `TZ`, and `ICU_TIMEZONE_FILES_DIR`, a path in the VM that is the same path on the host.
+// Its standard input is empty, as `/dev/null` is in pi's bash tool, unless `input` is given.
+// Returns `{ folder, code, stdout, stderr }`, or null when it isn't on the `PATH`.
+function shipped(program, args, input = '') {
+  const folder = (process.env.PATH ?? '').split(':').find(dir => dir !== '' && fs.existsSync(inVm(path.join(dir, program))))
+  if (folder === undefined) return null
+  const run = spawnSync(process.execPath, [inVm(path.join(folder, program)), ...args], { env: seen.env, encoding: 'utf8', input })
+  return { folder, code: run.status, stdout: run.stdout, stderr: run.stderr }
 }
+
+if (has('SHOW')) seen.show = shipped('show', items.map(item => String(item.seq)))
 
 // The session, as pi keeps it: found by its first line, which names the session and the folder;
 // otherwise a new file named by the time.
@@ -307,7 +323,7 @@ function act() {
     const word = name => new RegExp(`\\b${name}\\b`).test(item.text)
     if (word('IGNORE')) continue
     if (word('FAIL')) {
-      failed.push(`FAILED: ${item.seq} can't read it`)
+      failed.push(item.seq)
       plain.push(`I couldn't read #${item.seq}.`)
       continue
     }
@@ -316,7 +332,7 @@ function act() {
     for (const file of files) append(file, row, 'seq,text\n')
     if (word('ASK')) {
       append(path.join(guestCwd, 'memory', 'needs-review.md'), `- #${item.seq}: work or personal?\n`)
-      replies.push(`REPLY_TO: ${item.seq}\nWork or personal?`)
+      replies.push({ replyTo: item.seq, text: 'Work or personal?' })
     }
     if (word('SAY')) plain.push(`Filed #${item.seq}.`)
     done.push(item.seq)
@@ -401,7 +417,30 @@ function act() {
     }
   }
 
+  // As the agent would: what it says, then its marks, each through the program that ships with
+  // the runner. What each printed, and how it ended, is kept in `reported.jsonl`, a line a run.
+  for (const seq of [...everything.matchAll(/\bREPLYTO=(\d+)\b/g)].map(match => Number(match[1]))) replies.push({ replyTo: seq, text: `About #${seq}.` })
+  const reported = []
+  const report = (program, args, input) => reported.push({ program, args, ...(shipped(program, args, input) ?? { code: null }) })
+  const reportAll = () => {
+    if (has('OLDANSWER')) return
+    for (const text of plain) report('send', [text])
+    // A reply goes on standard input, as a here-document gives it.
+    for (const reply of replies) report('send', ['--reply-to', String(reply.replyTo)], `${reply.text}\n`)
+    if (done.length > 0) report('mark', ['done', ...done.map(seq => `#${seq}`)])
+    for (const seq of failed) report('mark', ['failed', String(seq), "can't read it"])
+    if (has('UNKNOWN')) {
+      report('mark', ['done', '999999'])
+      report('mark', ['failed', '888888', 'not mine'])
+    }
+    leaveInRun(/\bRUNLEAVES=([A-Z]+)\b/.exec(everything)?.[1] ?? behavior.runLeaves)
+    fs.appendFileSync(path.join(CONTROL, 'reported.jsonl'), `${JSON.stringify(reported)}\n`)
+  }
+
+  // `LATE` has it mark and send before it crashes or hangs, as an agent that fails after both.
   const crash = valueOf('CRASH') ?? (has('CRASH') ? 3 : behavior.crash)
+  const late = has('LATE') || behavior.late === true
+  if (late) reportAll()
   if (crash !== undefined) {
     process.stderr.write('Error: the stub crashed\n')
     process.exit(Number(crash))
@@ -411,14 +450,92 @@ function act() {
     wait()
     return
   }
+  if (!late) reportAll()
+  // The model's last message, which pi prints and nothing reads; with `OLDANSWER`, an answer of the
+  // format the runner read before `send` and `mark`, and nothing marked or sent.
+  if (has('OLDANSWER')) {
+    const lines = [...plain, ...replies.map(reply => `REPLY_TO: ${reply.replyTo}\n${reply.text}`), `DONE: ${done.join(' ')}`, ...failed.map(seq => `FAILED: ${seq} can't read it`)]
+    process.stdout.write(`${lines.join('\n')}\n`)
+  } else {
+    process.stdout.write('Done.\n')
+  }
+}
 
-  const lines = [...plain, ...replies]
-  const target = valueOf('REPLYTO')
-  if (target) lines.push(`REPLY_TO: ${target}\nAbout #${target}.`)
-  if (has('NOREPLY')) lines.push('NO_REPLY')
-  if (done.length > 0) lines.push(`DONE: ${done.map(seq => `#${seq}`).join(' ')}`)
-  lines.push(...failed)
-  if (has('UNKNOWN')) lines.push('DONE: 999999', 'FAILED: 888888 not mine')
-  if (has('LONGANSWER')) lines.unshift('x'.repeat(64 * 1024))
-  process.stdout.write(`${lines.join('\n')}\n`)
+// What `send` and `mark` never write, left in `run/send/` or as `run/marks.txt` beside what they
+// wrote, as pi, root in its VM, could leave it there (`RUNLEAVES=<what>`): the marks file as a
+// link to marks elsewhere, a FIFO, a folder, unreadable, with a second name, past
+// `MARKS_MAX_BYTES`, or with lines `mark` doesn't write; an entry as a link to one elsewhere, a FIFO,
+// a folder, unreadable, with a second name, past `SEND_ENTRY_MAX_BYTES`, with a text of nearly a
+// megabyte, or one with U+0000 and half a surrogate pair; names and entries that aren't `send`'s; a
+// thousand entries (`{"runLeaves": "SENDMANY", "count": n}` for another number); a tree whose paths
+// pass what the system takes; or a file of holes a byte past `AGENT_FILES_MAX_BYTES`, as a run that
+// filled the disk would leave, which the test makes act full.
+function leaveInRun(what) {
+  if (what === undefined) return
+  const run = inVm(path.join(guestCwd, 'run'))
+  const sendDir = path.join(run, 'send')
+  const marks = path.join(run, 'marks.txt')
+  const elsewhere = path.join(run, 'session')
+  const done = items.map(item => `done ${item.seq}\n`).join('')
+  const entry = (text, extra = {}) => `${JSON.stringify({ text, ...extra })}\n`
+  const put = (name, contents) => fs.writeFileSync(path.join(sendDir, name), contents)
+  const fifo = file => execFileSync('mkfifo', [file], { env: { PATH: process.env.PI_STUB_PATH } })
+  if (what === 'MARKSLINK') {
+    fs.writeFileSync(path.join(elsewhere, 'marks-elsewhere.txt'), done)
+    fs.rmSync(marks, { force: true })
+    fs.symlinkSync('session/marks-elsewhere.txt', marks)
+  } else if (what === 'MARKSFIFO') {
+    fs.rmSync(marks, { force: true })
+    fifo(marks)
+  } else if (what === 'MARKSDIR') {
+    fs.rmSync(marks, { force: true })
+    fs.mkdirSync(marks)
+    fs.writeFileSync(path.join(marks, 'done.txt'), done)
+  } else if (what === 'MARKSLOCKED') {
+    fs.appendFileSync(marks, done)
+    fs.chmodSync(marks, 0o000)
+  } else if (what === 'MARKSHARD') {
+    fs.appendFileSync(marks, done)
+    fs.linkSync(marks, path.join(elsewhere, 'second-name.txt'))
+  } else if (what === 'MARKSBIG') {
+    const line = done === '' ? 'done 1\n' : done
+    fs.appendFileSync(marks, line.repeat(Math.ceil((limits.MARKS_MAX_BYTES + 1) / Buffer.byteLength(line))))
+  } else if (what === 'MARKSODD') {
+    const seq = items[0]?.seq ?? 1
+    const odd = [`done ${'9'.repeat(20)}`, `done ${seq} more`, 'failed', `DONE: ${seq}`, `done 0${seq}`, 'done -1', `done #${seq}`, ` done ${seq}`, `done ${seq}\r`]
+    fs.appendFileSync(marks, Buffer.concat([Buffer.from(odd.map(text => `${text}\n`).join('')), Buffer.from([0xff, 0xfe, 0x0a]), Buffer.from(`done ${seq}`)]))
+  } else if (what === 'SENDLINK') {
+    fs.writeFileSync(path.join(elsewhere, 'elsewhere.json'), entry('From a link.'))
+    fs.symlinkSync('../session/elsewhere.json', path.join(sendDir, '90.json'))
+  } else if (what === 'SENDFIFO') {
+    fifo(path.join(sendDir, '90.json'))
+  } else if (what === 'SENDDIR') {
+    fs.mkdirSync(path.join(sendDir, '90.json'))
+    put('90.json/1.json', entry('In a folder.'))
+  } else if (what === 'SENDLOCKED') {
+    put('90.json', entry('Locked.'))
+    fs.chmodSync(path.join(sendDir, '90.json'), 0o000)
+  } else if (what === 'SENDHARD') {
+    fs.writeFileSync(path.join(elsewhere, 'second.json'), entry('Two names.'))
+    fs.linkSync(path.join(elsewhere, 'second.json'), path.join(sendDir, '90.json'))
+  } else if (what === 'SENDBIG') {
+    put('90.json', entry('x'.repeat(limits.SEND_ENTRY_MAX_BYTES)))
+  } else if (what === 'SENDLONG') {
+    put('90.json', entry('long '.repeat(Math.floor((limits.SEND_ENTRY_MAX_BYTES - 100) / 5))))
+  } else if (what === 'SENDNUL') {
+    put('90.json', '{"text":"a\\u0000b\\ud800c"}\n')
+  } else if (what === 'SENDODD') {
+    for (const name of ['.hidden.json', '01.json', 'x.json', '90', `${'9'.repeat(20)}.json`]) put(name, entry('Not a name send gives.'))
+    fs.writeFileSync(Buffer.concat([Buffer.from(`${sendDir}/`), Buffer.from([0x39, 0x31, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e])]), entry('Not UTF-8.'))
+    const bad = ['{"text": "cut', '[]', '"text"', entry('Extra.', { channels: ['whatsapp'] }), entry('  \n '), entry('Reply.', { replyTo: '1042' }), entry('Reply.', { replyTo: 0 }), entry('Reply.', { replyTo: 1.5 }), '{"replyTo": 1}\n']
+    bad.forEach((contents, n) => put(`${91 + n}.json`, contents))
+  } else if (what === 'SENDMANY') {
+    const count = behavior.count ?? 1000
+    for (let n = 1; n <= count; n++) put(`${n + 100}.json`, entry(`Message ${n}.`))
+  } else if (what === 'SENDDEEP') {
+    deepTree(sendDir)
+  } else if (what === 'FILLSEND') {
+    fs.writeFileSync(path.join(sendDir, 'fill.bin'), '')
+    fs.truncateSync(path.join(sendDir, 'fill.bin'), limits.AGENT_FILES_MAX_BYTES + 1)
+  }
 }

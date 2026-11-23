@@ -12,14 +12,14 @@
 // - **Its batches** are replayed (`replay.mjs`): one of the owner's days each, `Now:` the time of
 //   the batch's newest item, a session of its own for each day, and the locks. The prompt starts
 //   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the
-//   backfill's skill alone, with the system prompt of live runs, so the owner's current
-//   preferences apply to all of history.
+//   backfill's skill alone, beside the runner's, with the agent's prompt of live runs, so the rules
+//   it reads from the memory, the owner's current preferences among them, apply to all of history.
 // - **What it may change:** the paths in `writes`, which lie in the agent's own `writes`, and
 //   nothing else: the sandbox lets its batches change only those (`runSpec` in `run.mjs`).
-// - **Silent:** nothing is sent per batch. Texts, `REPLY_TO` and `NO_REPLY` are ignored, and a
-//   failure sends no notice.
+// - **Silent:** nothing is sent per batch. What `send` queued is dropped, and a failure sends no
+//   notice.
 // - **Its own retries,** handled like the live ones (`settleBackfill`): an item not
-//   reported is tried again a minute later; one reported `FAILED`, or given up on after
+//   marked is tried again a minute later; one marked failed, or given up on after
 //   `MAX_ATTEMPTS`, goes to `skipped`. An edit or deletion brings in the message it changes from
 //   the backfill's retries or `skipped`, as from the live ones. A setup error or an outage pauses
 //   every run, as it does after a live run, and the items wait with their attempts as they were.

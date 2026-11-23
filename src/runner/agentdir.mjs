@@ -3,13 +3,13 @@
 //   /data/agents/lifelog/      a git repository, the runner's, 0700
 //     views/, memory/          what `writes` names in the folder, in git (`agent.repository`)
 //     sessions/                pi's sessions, not in git; hidden from the VM
-//     run/                     not in git: system.md, config/, session/, index.txt, bin/,
+//     run/                     not in git: config/, session/, send/, marks.txt, index.txt, bin/,
 //                              skills/ and icu-tz/
 //     state.json               the runner's state, not in git, 0600
 //
 // What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
-// with `run/` read-only but for `run/session/`, and never `sessions/` (`piFiles` in `run.mjs`).
-// Everything in it belongs to the runner's user.
+// with `run/` read-only but for `run/session/`, `run/send/` and `run/marks.txt`, and never
+// `sessions/` (`piFiles` in `run.mjs`). Everything in it belongs to the runner's user.
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -19,14 +19,16 @@ import { copyUntrustedFile, emptyFolder, ensureDir, removeTree } from '../common
 import { limits } from '../common/limits.mjs'
 import { errorFields } from '../common/log.mjs'
 import { RUNNER_SKILL } from './config.mjs'
-import { wayIsOpen } from './git.mjs'
-import { readMemoryFile, renderSystemPrompt } from './prompt.mjs'
 
 // What ships with the runner for every run's VM: the programs, which each run gets in `run/bin/`
 // under their names; the runner's own skill, which it gets in `run/skills/`; and ICU's zone rules,
 // which it gets as `run/icu-tz/`, and which the VM's Node converts times with (`piEnv` in
 // `run.mjs`).
-const PROGRAMS = { show: fileURLToPath(new URL('./vm/bin/show.mjs', import.meta.url)) }
+const PROGRAMS = {
+  show: fileURLToPath(new URL('./vm/bin/show.mjs', import.meta.url)),
+  send: fileURLToPath(new URL('./vm/bin/send.mjs', import.meta.url)),
+  mark: fileURLToPath(new URL('./vm/bin/mark.mjs', import.meta.url)),
+}
 const RUNNER_SKILL_DIR = fileURLToPath(new URL(`./vm/skills/${RUNNER_SKILL}`, import.meta.url))
 const ICU_TZ_DIR = fileURLToPath(new URL('./vm/icu-tz', import.meta.url))
 
@@ -69,7 +71,8 @@ const FILE_MODE = 0o600
 // what pi wrote there (`discardChanges` in `git.mjs`).
 //
 // First it frees what pi wrote that a crash or a stop may have left taking room: what a clean-up
-// set aside and couldn't remove, in `agents/.discarded/<agent>/`, and `run/session/`. pi could have
+// set aside and couldn't remove, in `agents/.discarded/<agent>/`, and what the run could write in
+// `run/` (`clearRunWrites`). pi could have
 // filled the disk, and on a full disk no folder can be made, so this comes before any is. The
 // clean-up that follows at a start frees what `writes` names. `agents/.discarded/<agent>/` is made
 // here, while there is room, and kept, so a clean-up makes nothing before it has freed what it set
@@ -86,7 +89,7 @@ export async function ensureAgentDir({ paths, name, git, log }) {
   } catch (error) {
     log.warn('agent.discarded_left', { folder: name, ...errorFields(error) })
   }
-  emptyRunSession({ paths, name, log })
+  clearRunWrites({ paths, agent: { name }, log })
   for (const folder of [dir, paths.agentSessions(name), paths.agentRun(name), paths.agentDiscarded(name)]) {
     ensureDir(folder, { mode: FOLDER_MODE })
   }
@@ -124,7 +127,7 @@ function copyTree(source, target) {
 // The index file's text: one line for each line of the datastore that `index` holds, in `seq`
 // order, `<seq> <log>:<line number> <kind>[ <seq it points at>]`, as
 // `1054 /data/datastore/2026/11/09/log.jsonl:216 edit 1051`. A line points at its `target`, or
-// else at the message it replies to, `replyTo`; only a line of a kind this version doesn't know can
+// else at the message it replies to, `replyTo`; only a line this version's store didn't write can
 // have both. The paths are the host's, which the VM sees at the same paths. The reading check
 // holds the kind to a name and each `seq` to a whole number, so a line of the file can't be taken
 // for two, and the runner refuses a data folder whose path holds a line break (`settings.mjs`).
@@ -140,25 +143,26 @@ export function indexFileText(index, paths) {
 
 // Builds `run/` for one run, from nothing:
 // - `config/`: a copy of the agent's prompt and of `skills` (all of the agent's by default), each
-//   at its path in the config folder, so pi only ever sees this run's copy;
+//   at its path in the config folder, so pi only ever sees this run's copy. The prompt's copy is
+//   what pi appends to its system prompt;
 // - `skills/`: a copy of the skill that ships with the runner, which every run is given first;
-// - `bin/`: a copy of each program that ships with the runner, `show`, which the VM finds on its
-//   `PATH` (`piEnv` in `run.mjs`);
+// - `bin/`: a copy of each program that ships with the runner, `show`, `send` and `mark`, which the
+//   VM finds on its `PATH` (`piEnv` in `run.mjs`);
 // - `icu-tz/`: a copy of ICU's zone rules, which pi's environment points the VM's Node at;
 // - `index.txt`: the index file, from `index`, the datastore's (`indexFileText`);
 // - `session/`: empty, with a copy of the session `sessionId` if the runner has one, as
 //   `sessions/<sessionId>.jsonl`. With `session: none`, `sessionId` is null;
-// - `system.md`: the protocol, the agent's prompt, and its memory as it is now.
+// - `send/`: empty, for the messages `send` queues; `marks.txt`, which `mark` makes, isn't there.
 //
-// Returns `{ systemFile, skillDirs, sessionDir, sessionFile }`: the paths pi is given, and the
+// Returns `{ promptFile, skillDirs, sessionDir, sessionFile }`: the paths pi is given, and the
 // session file copied in, or null.
 //
-// pi could write `run/session/` in the last run, and leave there what it liked, if the runner
-// stopped before it emptied the folder (`clearRunSession`), so `run/` is removed as anything pi
-// wrote is (`removeTree`): access taken back, no folder read whole, and however deep it goes. The
-// rest of `run/` is read-only in the VM, and the runner never reads any of it back: it is made
-// anew for each run.
-export function prepareRun({ paths, agent, protocol, index, sessionId = null, skills = agent.skills }) {
+// pi could write `run/session/`, `run/send/` and `run/marks.txt` in the last run, and leave there
+// what it liked, if the runner stopped before it cleared them (`clearRunWrites`), so `run/` is
+// removed as anything pi wrote is (`removeTree`): access taken back, no folder read whole, and
+// however deep it goes. The rest of `run/` is read-only in the VM, and the runner never reads any
+// of it back: it is made anew for each run.
+export function prepareRun({ paths, agent, index, sessionId = null, skills = agent.skills }) {
   const name = agent.name
   const runDir = paths.agentRun(name)
   const configDir = paths.agentRunConfig(name)
@@ -167,8 +171,8 @@ export function prepareRun({ paths, agent, protocol, index, sessionId = null, sk
   ensureDir(runDir, { mode: FOLDER_MODE })
 
   ensureDir(configDir, { mode: FOLDER_MODE })
-  const promptCopy = path.join(configDir, agent.prompt.path)
-  copyTree(agent.prompt.file, promptCopy)
+  const promptFile = path.join(configDir, agent.prompt.path)
+  copyTree(agent.prompt.file, promptFile)
   const runnerSkill = path.join(paths.agentRunSkills(name), RUNNER_SKILL)
   copyTree(RUNNER_SKILL_DIR, runnerSkill)
   const skillDirs = [
@@ -201,21 +205,8 @@ export function prepareRun({ paths, agent, protocol, index, sessionId = null, sk
       fs.chmodSync(sessionFile, FILE_MODE)
     }
   }
-
-  const systemFile = paths.agentRunSystem(name)
-  const memory = paths.agentMemory(name)
-  // Nothing is read through what a run left at `memory` that blocks the way to the file, a link or
-  // a folder the runner can't search, as for an entry of `writes` (`wayIsOpen`): there is no
-  // memory file then.
-  const memoryFile = file => (wayIsOpen(paths.agentDir(name), `memory/${file}`) ? readMemoryFile(path.join(memory, file)) : null)
-  const system = renderSystemPrompt({
-    protocol,
-    prompt: fs.readFileSync(promptCopy, 'utf8'),
-    preferences: memoryFile('preferences.md'),
-    needsReview: memoryFile('needs-review.md'),
-  })
-  fs.writeFileSync(systemFile, system, { mode: FILE_MODE })
-  return { systemFile, skillDirs, sessionDir, sessionFile }
+  ensureDir(paths.agentRunSend(name), { mode: FOLDER_MODE })
+  return { promptFile, skillDirs, sessionDir, sessionFile }
 }
 
 // After a successful run, keeps the session pi wrote as `sessions/<sessionId>.jsonl`. Returns
@@ -268,18 +259,24 @@ export async function keepSession({ paths, agent, sessionId, log }) {
   }
 }
 
-// Empties `run/session/` once a run is over and its session has been kept, and before a failed
-// run's clean-up, so before the runner records the run: pi wrote what is there, and could have
-// filled the disk with it. The folder stays, so nothing is made. Returns nothing. An error is
-// logged and left to `prepareRun`, which empties `run/` again before the next run.
-export function clearRunSession({ paths, agent, log }) {
-  emptyRunSession({ paths, name: agent.name, log })
-}
-
-function emptyRunSession({ paths, name, log }) {
-  try {
-    emptyFolder(paths.agentRunSession(name))
-  } catch (error) {
-    log.warn('runner.run_session_left', { agent: name, ...errorFields(error) })
+// Clears what a run could write in `run/`: empties `run/session/` and `run/send/`, and removes
+// `run/marks.txt`; with `session: false`, all but `run/session/`. It runs once a run is over, what
+// `send` and `mark` left read and its session kept, and before a failed run's clean-up, so before
+// the runner records the run; and at a start. pi wrote what is there, and could have filled the
+// disk with it: the folders stay, so nothing is made. Returns nothing. An error is logged, naming
+// what couldn't be cleared, and left to `prepareRun`, which removes `run/` whole before the next
+// run.
+export function clearRunWrites({ paths, agent, log, session = true }) {
+  const name = agent.name
+  for (const [what, clear] of [
+    ...(session ? [['session', () => emptyFolder(paths.agentRunSession(name))]] : []),
+    ['send', () => emptyFolder(paths.agentRunSend(name))],
+    ['marks.txt', () => removeTree(paths.agentRunMarks(name))],
+  ]) {
+    try {
+      clear()
+    } catch (error) {
+      log.warn('runner.run_left', { agent: name, left: what, ...errorFields(error) })
+    }
   }
 }

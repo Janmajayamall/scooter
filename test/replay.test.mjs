@@ -77,7 +77,7 @@ test("replay: batches don't cross the owner's days, and Now: is each batch's own
 #1 21:30 text: "ran 5k"
 #3 23:50 text: "late coffee"
 
-For context only (no action, no DONE):
+For context only (no action, nothing to mark):
 #2 21:31 you sent: "Logged."`,
   )
   // A message just after midnight is of the next day, and its time is "today"'s.
@@ -124,7 +124,7 @@ test('replay: at most 20 items, due retries first, each batch of one day', () =>
 
   // A retry of 7 November is due, and the cursor is past 8 November: the retry is a batch of its
   // own, with its day's time, and 9 November waits for the next.
-  const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 3, attempts: 1, due: '2026-11-17T10:00:00Z', reason: 'not reported' }] }
+  const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 3, attempts: 1, due: '2026-11-17T10:00:00Z', reason: 'not marked' }] }
   const built = replay({ lane })
   assert.deepEqual([built.day, built.batch.items, built.batch.covered], ['2026-11-07', [{ seq: 3, origin: 'retry', attempt: 2 }], 6])
   assert.match(built.prompt, /^\[scooter\] Now: Saturday 7 November 2026, 23:50 /)
@@ -138,7 +138,7 @@ test('replay: at most 20 items, due retries first, each batch of one day', () =>
 test('replay: an edit brings in the message it changes, from another day, which is shown with its date', () => {
   // #1, of 7 November, waits in the lane's retries; #8 edits it on 9 November.
   const lines = [...LINES, line.edit(8, '2026-11-09T15:10:00Z', 1, 'ran 6k')]
-  const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 1, attempts: 1, due: '2026-11-19T10:00:00Z', reason: 'not reported' }] }
+  const lane = { ...initialAgentState(), cursor: 6, retry: [{ seq: 1, attempts: 1, due: '2026-11-19T10:00:00Z', reason: 'not marked' }] }
   const built = replay({ lines, lane, until: 8 })
   assert.equal(built.day, '2026-11-09')
   assert.deepEqual(built.batch.items, [

@@ -184,7 +184,7 @@ test('imports: the rest of what the checker refuses', () => {
   assert.match(violations({ 'src/bridge/helper.js': '' })[0], /code under src\/ is ES modules in .mjs files/)
   assert.match(violations({ 'src/bridge/helper.cjs': '' })[0], /ES modules in .mjs files/)
   assert.match(violations({ 'src/extra/thing.mjs': "import '../common/log.mjs'" })[0], /isn't in a folder the import rules know/)
-  assert.deepEqual(violations({ 'src/runner/protocol.md': "import nothing from 'anywhere'" }), [])
+  assert.deepEqual(violations({ 'src/runner/vm/skills/scooter/SKILL.md': "import nothing from 'anywhere'" }), [])
   // The zone rules' data is no code; a file of another kind anywhere else is.
   assert.deepEqual(violations({ 'src/runner/vm/icu-tz/zoneinfo64.res': "import nothing from 'anywhere'", 'src/runner/vm/icu-tz/LICENSE': '' }), [])
   assert.match(violations({ 'src/runner/vm/zoneinfo64.res': '' })[0], /ES modules in .mjs files/)

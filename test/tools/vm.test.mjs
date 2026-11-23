@@ -11,6 +11,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../../src/common/paths.mjs'
 import { icuTzRelease, prepareRun } from '../../src/runner/agentdir.mjs'
+import { readMarks, readSends } from '../../src/runner/report.mjs'
 import { openDatastore } from '../../src/runner/datastore.mjs'
 import { piEnv as runnerPiEnv, piFiles } from '../../src/runner/run.mjs'
 import { createFakeModel } from '../support/fake-model.mjs'
@@ -142,7 +143,7 @@ test("VM 1: what a run sees sits at the host's own paths, read-only except what 
     `echo x > ${agent}/new.txt`,
     `echo x > ${agent}/state.json`,
     `echo x > ${agent}/run/new.txt`,
-    `echo x > ${agent}/run/system.md`,
+    `echo x > ${agent}/run/config/prompts/lifelog.md`,
     `echo x > ${agent}/run/config/skills/expenses/SKILL.md`,
     `rm ${agent}/state.json`,
     `mkdir ${agent}/new`,
@@ -627,7 +628,7 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
   fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
   const agent = { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }
   // `run/` as the runner makes it for a run.
-  prepareRun({ paths, agent, protocol: '', index: datastore.index })
+  prepareRun({ paths, agent, index: datastore.index })
   const bin = paths.agentRunBin('lifelog')
   const icuTz = paths.agentRunIcuTz('lifelog')
   const release = icuTzRelease()
@@ -644,7 +645,7 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
 
   const model = createFakeModel([
     { tool: 'bash', args: { command: 'show 6; echo "exit $?"; show 7; echo "exit $?"; node -p process.versions.tz; printenv ICU_TIMEZONE_FILES_DIR' } },
-    { text: 'DONE: 6' },
+    { text: 'Shown.' },
   ])
   const vm = await startVm(t, { model, files: designFiles(data) })
   const inAgent = (argv, environment) => runIn(vm, argv, { cwd: data.agent, env: environment })
@@ -685,7 +686,7 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
     assert.match(result.stderr, READ_ONLY, command)
   }
   assert.equal(fs.readFileSync(path.join(bin, 'show'), 'utf8'), fs.readFileSync(new URL('../../src/runner/vm/bin/show.mjs', import.meta.url), 'utf8'))
-  assert.deepEqual(fs.readdirSync(bin), ['show'])
+  assert.deepEqual(fs.readdirSync(bin).sort(), ['mark', 'send', 'show'])
   for (const name of fs.readdirSync(new URL('../../src/runner/vm/icu-tz/', import.meta.url))) {
     assert.deepEqual(fs.readFileSync(path.join(icuTz, name)), fs.readFileSync(new URL(`../../src/runner/vm/icu-tz/${name}`, import.meta.url)), name)
   }
@@ -697,6 +698,97 @@ test("VM 7: a program the runner copies into run/ runs by its name from the PATH
   const [bash] = toolResults(model.modelRequests.at(-1).body)
   assert.equal(bash.isError, false, bash.text)
   assert.equal(bash.text, `${kolkata}exit 0\n7  no such line\nexit 1\n${release}\n${icuTz}\n`)
+})
+
+test("VM 9: send and mark, copied into run/bin/ as show is, run by their names from pi's bash tool, with a text through a pipe from a slower command or nothing on standard input, and write only into run/send/ and run/marks.txt, which the runner reads as they left them", options, async t => {
+  const dir = makeTestDir(t)
+  const data = makeDataDir(dir)
+  const paths = makePaths({ dataDir: path.join(dir, 'data'), configDir: path.join(dir, 'config') })
+  fs.mkdirSync(path.join(paths.configDir, 'prompts'), { recursive: true })
+  fs.writeFileSync(path.join(paths.configDir, 'prompts', 'lifelog.md'), 'You are lifelog.\n')
+  fs.rmSync(paths.datastore, { recursive: true })
+  writeDatastore(paths, fillerLines(1050))
+  const datastore = openDatastore({ paths })
+  datastore.poll()
+  // `run/` as the runner makes it for a run: an empty send/, and no marks.txt.
+  prepareRun({ paths, agent: { name: 'lifelog', prompt: { path: 'prompts/lifelog.md', file: path.join(paths.configDir, 'prompts', 'lifelog.md') }, skills: [] }, index: datastore.index })
+  const run = paths.agentRun('lifelog')
+  const bin = paths.agentRunBin('lifelog')
+  const index = fs.readFileSync(paths.agentRunIndex('lifelog'), 'utf8')
+  const queued = 'send: queued; it goes to the owner once this run has passed'
+  // What the agent types: a reply with quotes and a `$` in single quotes, a text with line breaks,
+  // a `$` and backticks through a here-document, a text through a pipe from a command slower than
+  // `send`, a send with no text at all, its marks, and writes where neither program writes.
+  // The command writes more than the pipe holds, so it is done only once `send` is reading, and
+  // then the rest after a pause, once `send` has met the pipe empty with its writer still open.
+  // One stream, so what the programs and the shell say on stderr keeps its place among the rest.
+  const command = [
+    'exec 2>&1',
+    `send --reply-to 1050 'He said "₹450, not $45".'; echo "exit $?"`,
+    "send <<'END'",
+    'Two lines,',
+    'with $HOME and `ticks` as they are.',
+    'END',
+    'echo "exit $?"',
+    `(node -e 'process.stdout.write("x".repeat(200000))'; sleep 0.2; echo ' and the end, late.') | send; echo "exit $?"`,
+    'send; echo "exit $?"',
+    'mark done 1050 1049; echo "exit $?"',
+    `mark failed 1048 "can't read it"; echo "exit $?"`,
+    `echo x > ${run}/index.txt; echo "exit $?"`,
+    `echo x > ${run}/marks-2.txt; echo "exit $?"`,
+    `mkdir ${run}/send/sub && rmdir ${run}/send/sub; echo "exit $?"`,
+  ].join('\n')
+  const model = createFakeModel([{ tool: 'bash', args: { command } }, { text: 'Done.' }])
+  const vm = await startVm(t, { model, files: designFiles(data) })
+  const result = await runPi(vm, { prompt: 'send and mark' }, { cwd: data.agent, env: piEnv(vm, { bin, icuTz: paths.agentRunIcuTz('lifelog') }) })
+  assert.equal(result.exitCode, 0, result.stderr)
+  const [bash] = toolResults(model.modelRequests.at(-1).body)
+  // What each said, the usage of send after its refusal, and the two writes the VM refused.
+  const usage = spawnSync(process.execPath, [path.join(bin, 'send'), '--help'], { encoding: 'utf8' }).stdout
+  assert.equal(
+    bash.text,
+    [
+      queued,
+      'exit 0',
+      queued,
+      'exit 0',
+      queued,
+      'exit 0',
+      'send: nothing to send: give the text as an argument, or on standard input',
+      usage.trimEnd(),
+      'exit 2',
+      'mark: 1050 and 1049 marked done',
+      'exit 0',
+      'mark: 1048 marked failed',
+      'exit 0',
+      `/bin/bash: line 12: ${run}/index.txt: Read-only file system`,
+      'exit 1',
+      `/bin/bash: line 13: ${run}/marks-2.txt: Read-only file system`,
+      'exit 1',
+      'exit 0',
+      '',
+    ].join('\n'),
+  )
+
+  // On the host, as the runner reads them: the three messages in order, and the marks.
+  assert.deepEqual(readSends(paths.agentRunSend('lifelog')), {
+    messages: [
+      { text: 'He said "₹450, not $45".', replyTo: 1050 },
+      { text: 'Two lines,\nwith $HOME and `ticks` as they are.', replyTo: null },
+      { text: `${'x'.repeat(200000)} and the end, late.`, replyTo: null },
+    ],
+    refused: 0,
+    past: 0,
+    error: null,
+  })
+  assert.deepEqual(readMarks(paths.agentRunMarks('lifelog')), {
+    done: [1050, 1049],
+    failed: [{ seq: 1048, reason: "can't read it" }],
+    unreadable: 0,
+    refused: null,
+  })
+  assert.deepEqual(fs.readdirSync(run).sort(), ['bin', 'config', 'icu-tz', 'index.txt', 'marks.txt', 'send', 'session', 'skills'])
+  assert.equal(fs.readFileSync(paths.agentRunIndex('lifelog'), 'utf8'), index)
 })
 
 test("VM 8: the image's Node converts with the zone rules that ship with the runner where pi's environment points it at them, and show prints the owner's time with them, or none", options, async t => {
@@ -719,7 +811,7 @@ test("VM 8: the image's Node converts with the zone rules that ship with the run
   // on the host, where the VM can't: `zoneinfo64.res` cut to half, and changed by a byte.
   for (const name of ['lifelog', 'cut', 'changed']) {
     fs.mkdirSync(paths.agentDir(name), { recursive: true })
-    prepareRun({ paths, agent: { name, prompt, skills: [] }, protocol: '', index: datastore.index })
+    prepareRun({ paths, agent: { name, prompt, skills: [] }, index: datastore.index })
   }
   const zoneinfo = name => path.join(paths.agentRunIcuTz(name), 'zoneinfo64.res')
   fs.truncateSync(zoneinfo('cut'), fs.statSync(zoneinfo('cut')).size / 2)

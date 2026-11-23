@@ -62,7 +62,7 @@ const SESSION_SCRIPT = [
     },
   },
   { tool: 'bash', args: { command: 'echo filed' } },
-  { thinking: 'Everything is filed.', text: 'NO_REPLY\nDONE: 1050 1051' },
+  { thinking: 'Everything is filed.', text: 'Filed both.' },
 ]
 
 // Runs the session on one route, in a folder of its own under `dir`, and returns every request
@@ -79,7 +79,7 @@ export async function captureSession(t, dir, route) {
       model: SESSION_MODELS[route],
       thinking: SESSION_THINKING,
       session: { dir: `${GUEST.agent}/run/session`, id: 'lifelog-2026-11-09' },
-      systemPrompt: `${GUEST.agent}/run/system.md`,
+      systemPrompt: `${GUEST.agent}/run/config/prompts/lifelog.md`,
       skills: [`${GUEST.agent}/run/config/skills/expenses`],
     },
     { cwd: GUEST.agent },

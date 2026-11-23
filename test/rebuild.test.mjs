@@ -65,7 +65,7 @@ async function prepare(t, { lines = HISTORY, state = HANDLED } = {}) {
   await runner.close()
   const { paths } = prepared
   fs.writeFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'old.csv'), 'seq,text\n1,ran 5k\n')
-  fs.writeFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), '- 2026-11-01 (#0): an old rule.\n')
+  fs.writeFileSync(path.join(path.join(paths.agentDir('lifelog'), 'memory'), 'preferences.md'), '- 2026-11-01 (#0): an old rule.\n')
   commitByHand(paths, 'lifelog: #1 #4 #6')
   fs.writeFileSync(path.join(paths.agentSessions('lifelog'), 'lifelog-2026-11-08.jsonl'), '{"type":"session"}\n')
   return prepared
@@ -149,7 +149,8 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
     ['lifelog-rebuild-2026-11-07', 'lifelog-rebuild-2026-11-08'],
   )
   assert.ok(seen.every(call => !call.prompt.includes('#7')))
-  assert.match(seen[0].systemPrompt, /## memory\/preferences\.md\n\n\(empty\)/)
+  // pi's system prompt has the agent's prompt alone: the memory, emptied, is the agent's to read.
+  assert.equal(seen[0].systemPrompt, 'You are lifelog.\n')
   // Every skill, after the runner's.
   assert.equal(seen[0].skills.length, 4)
 
@@ -163,7 +164,7 @@ test("rebuild: it stops at the seq that was newest when it started, so later mes
     fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'notes.csv'), 'utf8'),
     'seq,text\n1,"#1 21:30 text: \\"ran 5k\\""\n4,"#4 09:30 text: \\"start tracking coffee MEMORY\\""\n6,"#6 10:30 text: \\"coffee 120\\""\n',
   )
-  assert.equal(fs.readFileSync(path.join(paths.agentMemory('lifelog'), 'preferences.md'), 'utf8'), '- 2026-11-09 (#1): Track coffee.\n')
+  assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'memory'), 'preferences.md'), 'utf8'), '- 2026-11-09 (#1): Track coffee.\n')
   // Its sessions served it alone, and the old one is gone.
   assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
 
@@ -303,9 +304,9 @@ test('rebuild: a failed batch is thrown away and tried again; it gives way to a 
     'Waiting for a backup to finish.',
     `Rebuilding lifelog from the datastore, up to #3. The last commit before the rebuild is tagged ${TAG}.`,
     "2026-11-08 #1-#2: paused (OpenRouter: stub error 503) until 21:21.",
-    '2026-11-08 #1-#2: done; not reported, tried again: #2.',
-    '2026-11-08 #2: done; not reported, tried again: #2.',
-    '2026-11-08 #2: done; not reported, tried again: #2.',
+    '2026-11-08 #1-#2: done; not marked, tried again: #2.',
+    '2026-11-08 #2: done; not marked, tried again: #2.',
+    '2026-11-08 #2: done; not marked, tried again: #2.',
     '2026-11-08 #2: done; given up on: #2.',
     '2026-11-09 #3: done.',
     'Rebuilt lifelog up to #3, in 6 batches, committed as "lifelog: rebuild".',
@@ -364,7 +365,7 @@ test('rebuild: its own steps take run.lock and give way to a backup, as its batc
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild\n')
 })
 
-test('rebuild: an item not reported is tried again before the days after it, which are never its context', async t => {
+test('rebuild: an item not marked is tried again before the days after it, which are never its context', async t => {
   const lines = [
     line.text(1, '2026-11-07T07:00:00Z', 'from now on, tea is a drink IGNORE'), // Sat 7 Nov, 12:30
     line.sent(2, '2026-11-07T07:01:00Z', 'Noted.'),
@@ -431,7 +432,7 @@ test('rebuild: stopped, it throws the batch in progress away, and leaves a state
   // The first day is committed; the second thrown away.
   assert.equal(gitOf(paths, 'log', '-1', '--format=%s'), 'lifelog: rebuild #1\n')
   assert.equal(gitOf(paths, 'status', '--porcelain'), '')
-  assert.deepEqual(fs.readdirSync(paths.agentMemory('lifelog')), [])
+  assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.equal(state(paths).cursor, 6)
   assert.equal(lockExists(paths.runLock), false)
 

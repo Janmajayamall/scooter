@@ -105,7 +105,7 @@ test("triggers: the channels of every trigger for new messages are the agent's w
 })
 
 test('triggers: retries start a batch when they are due', () => {
-  const retry = due => [{ seq: 3, attempts: 1, due, reason: 'not reported' }]
+  const retry = due => [{ seq: 3, attempts: 1, due, reason: 'not marked' }]
   assert.deepEqual(ask({ state: { ...HANDLED, retry: retry('2026-11-09T15:51:00Z') }, lines: EARLIER }), { kind: 'idle', reason: 'nothing' })
   assert.deepEqual(ask({ state: { ...HANDLED, retry: retry('2026-11-09T15:50:30Z') }, lines: EARLIER }), { kind: 'messages' })
   // The quiet period holds them back too.
@@ -238,7 +238,7 @@ test('triggers: a backfill batch runs only when nothing live is waiting, and fin
   // Once it is handled, the backfill has its turn.
   assert.deepEqual(ask({ agent, state: { ...state, cursor: 5 }, lines }), { kind: 'backfill', id: 'people-1' })
   // A due retry or a scheduled task comes first.
-  const retry = [{ seq: 5, attempts: 1, due: '2026-11-09T15:50:00Z', reason: 'not reported' }]
+  const retry = [{ seq: 5, attempts: 1, due: '2026-11-09T15:50:00Z', reason: 'not marked' }]
   assert.deepEqual(ask({ agent, state: { ...state, cursor: 5, retry }, lines }), { kind: 'messages' })
   assert.equal(ask({ agent, state: { ...state, cursor: 5, scheduled: { '21:30': '2026-11-08' } }, lines, now: '2026-11-09T16:00:00Z' }).kind, 'scheduled')
   // So does a pause.
@@ -249,7 +249,7 @@ test('triggers: a backfill batch runs only when nothing live is waiting, and fin
   const done = { ...state, cursor: 5, backfill: { ...backfill, cursor: 4 } }
   assert.deepEqual(ask({ agent, state: done, lines }), { kind: 'backfill-finished', id: 'people-1' })
   // Not while its own retries wait; and they start a batch when they are due.
-  const waiting = { ...done, backfill: { ...done.backfill, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not reported' }] } }
+  const waiting = { ...done, backfill: { ...done.backfill, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }] } }
   assert.deepEqual(ask({ agent, state: waiting, lines }), { kind: 'idle', reason: 'nothing' })
   assert.deepEqual(ask({ agent, state: waiting, lines, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill', id: 'people-1' })
   // One whose entry left the config is left alone until the next start drops it.

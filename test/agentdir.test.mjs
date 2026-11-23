@@ -1,6 +1,6 @@
 // The agent's folder and `run/`, built before each run: git, the
-// `.gitignore` and the first commit; the copy of the config; the session copied in; and
-// `run/system.md`, with the memory read without following links.
+// `.gitignore` and the first commit; the copy of the config; what ships with the runner; the
+// session copied in; and what a run could write in `run/`, cleared at a start.
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -14,7 +14,6 @@ import { overrideLimits } from '../src/common/limits.mjs'
 import { GITIGNORE, ensureAgentDir, icuTzRelease, keepSession, prepareRun } from '../src/runner/agentdir.mjs'
 import { loadConfig } from '../src/runner/config.mjs'
 import { createGit } from '../src/runner/git.mjs'
-import { loadProtocol, readMemoryFile, renderSystemPrompt } from '../src/runner/prompt.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { deepTree } from './support/deep-tree.mjs'
 import { createTestLog } from './support/log.mjs'
@@ -53,7 +52,7 @@ test('agent folder: made on the first start, with git, a .gitignore and one comm
   const { paths, dir, ensure, events } = setup(t)
   await ensure()
   // With the folder a clean-up sets aside what it throws away in, made at the first start and kept.
-  for (const folder of [paths.agents, dir, path.join(paths.agentDir('lifelog'), 'views'), paths.agentMemory('lifelog'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
+  for (const folder of [paths.agents, dir, path.join(paths.agentDir('lifelog'), 'views'), path.join(paths.agentDir('lifelog'), 'memory'), paths.agentSessions('lifelog'), paths.agentRun('lifelog'), paths.agentDiscarded('lifelog')]) {
     assert.equal(modeOf(folder), 0o700, folder)
   }
   assert.equal(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8'), '/sessions/\n/run/\n/state.json\n')
@@ -84,7 +83,7 @@ test('agent folder: the .gitignore is anchored, so it can\'t match anything in v
       return false
     }
   }
-  for (const file of ['sessions/lifelog-2026-11-09.jsonl', 'run/system.md', 'run/session/x.jsonl', 'state.json']) assert.equal(ignored(file), true, file)
+  for (const file of ['sessions/lifelog-2026-11-09.jsonl', 'run/marks.txt', 'run/session/x.jsonl', 'run/send/1.json', 'state.json']) assert.equal(ignored(file), true, file)
   for (const file of ['views/sessions/a.csv', 'views/run/b.md', 'views/state.json', 'memory/run/x.md', 'memory/state.json']) assert.equal(ignored(file), false, file)
 })
 
@@ -144,7 +143,7 @@ test('agent folder: git works on the agent\'s own repository, also when the data
   assert.equal(git(root, 'log', '--format=%s'), 'outer\n')
 })
 
-test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill, programs and zone rules, the index file, the session, and system.md', async t => {
+test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill, programs and zone rules, the index file, the session, and an empty send/', async t => {
   const { paths, dir, ensure, agent } = setup(t)
   await ensure()
   // A skill with a script that can be run, in a folder of its own.
@@ -158,40 +157,46 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
   fs.writeFileSync(path.join(dir, 'run', 'index.txt'), '1 /etc/passwd:1 message\n')
   fs.mkdirSync(path.join(dir, 'run', 'bin'))
   fs.writeFileSync(path.join(dir, 'run', 'bin', 'show'), '#!/bin/sh\necho planted\n', { mode: 0o755 })
+  fs.mkdirSync(path.join(dir, 'run', 'send'))
+  fs.writeFileSync(path.join(dir, 'run', 'send', '1.json'), '{"text":"from the run before"}\n')
+  fs.writeFileSync(path.join(dir, 'run', 'marks.txt'), 'done 1\n')
   fs.mkdirSync(path.join(dir, 'run', 'icu-tz'))
   fs.writeFileSync(path.join(dir, 'run', 'icu-tz', 'zoneinfo64.res'), 'planted')
   fs.writeFileSync(path.join(dir, 'run', 'icu-tz', 'extra.res'), 'planted')
   // The runner's copy of today's session.
   fs.writeFileSync(path.join(dir, 'sessions', 'lifelog-2026-11-09.jsonl'), '{"type":"session"}\n')
-  fs.writeFileSync(path.join(dir, 'memory', 'preferences.md'), '- 2026-11-09 (#1060): Track coffee in meals.csv as "drink".\n')
   const index = createIndex()
   index.add(line.text(1, '2026-11-08T10:00:00Z', 'coffee 120'), '2026/11/08')
   index.add(line.edit(2, '2026-11-09T15:43:00Z', 1, 'coffee 150'), '2026/11/09')
 
-  const result = prepareRun({ paths, index, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-09' })
+  const result = prepareRun({ paths, index, agent: agent(), sessionId: 'lifelog-2026-11-09' })
   const run = path.join(dir, 'run')
   assert.deepEqual(result, {
-    systemFile: path.join(run, 'system.md'),
+    promptFile: path.join(run, 'config', 'prompts', 'lifelog.md'),
     skillDirs: [path.join(run, 'skills', 'scooter'), ...['expenses', 'runs', 'meals', 'travel', 'people'].map(name => path.join(run, 'config', 'skills', name))],
     sessionDir: path.join(run, 'session'),
     sessionFile: path.join(run, 'session', 'lifelog-2026-11-09.jsonl'),
   })
-  assert.deepEqual(fs.readdirSync(run).sort(), ['bin', 'config', 'icu-tz', 'index.txt', 'session', 'skills', 'system.md'])
+  assert.deepEqual(fs.readdirSync(run).sort(), ['bin', 'config', 'icu-tz', 'index.txt', 'send', 'session', 'skills'])
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), ['lifelog-2026-11-09.jsonl'])
+  assert.deepEqual(fs.readdirSync(path.join(run, 'send')), [])
   assert.equal(fs.readFileSync(path.join(run, 'config', 'prompts', 'lifelog.md'), 'utf8'), 'You are lifelog.\n')
   assert.match(fs.readFileSync(path.join(run, 'config', 'skills', 'runs', 'SKILL.md'), 'utf8'), /^---\nname: runs\n/)
   assert.equal(modeOf(path.join(run, 'config', 'skills', 'runs', 'scripts', 'pace.sh')), 0o700)
   assert.equal(modeOf(path.join(run, 'config', 'skills', 'runs', 'SKILL.md')), 0o600)
-  assert.equal(modeOf(path.join(run, 'system.md')), 0o600)
-  for (const folder of [run, path.join(run, 'config'), path.join(run, 'session'), path.join(run, 'bin'), path.join(run, 'skills'), path.join(run, 'icu-tz')]) assert.equal(modeOf(folder), 0o700)
-  // What ships with the runner, copied anew: its skill, `show`, which can be run, its zone rules,
-  // and the index file, written from the index given, whatever was there before.
+  assert.equal(modeOf(path.join(run, 'config', 'prompts', 'lifelog.md')), 0o600)
+  for (const folder of [run, path.join(run, 'config'), path.join(run, 'session'), path.join(run, 'send'), path.join(run, 'bin'), path.join(run, 'skills'), path.join(run, 'icu-tz')]) assert.equal(modeOf(folder), 0o700)
+  // What ships with the runner, copied anew: its skill, `show`, `send` and `mark`, which can be
+  // run, its zone rules, and the index file, written from the index given, whatever was there
+  // before.
   assert.deepEqual(fs.readdirSync(path.join(run, 'skills')), ['scooter'])
   assert.equal(fs.readFileSync(path.join(run, 'skills', 'scooter', 'SKILL.md'), 'utf8'), fs.readFileSync(new URL('../src/runner/vm/skills/scooter/SKILL.md', import.meta.url), 'utf8'))
   assert.equal(modeOf(path.join(run, 'skills', 'scooter', 'SKILL.md')), 0o600)
-  assert.deepEqual(fs.readdirSync(path.join(run, 'bin')), ['show'])
-  assert.equal(fs.readFileSync(path.join(run, 'bin', 'show'), 'utf8'), fs.readFileSync(new URL('../src/runner/vm/bin/show.mjs', import.meta.url), 'utf8'))
-  assert.equal(modeOf(path.join(run, 'bin', 'show')), 0o700)
+  assert.deepEqual(fs.readdirSync(path.join(run, 'bin')).sort(), ['mark', 'send', 'show'])
+  for (const program of ['show', 'send', 'mark']) {
+    assert.equal(fs.readFileSync(path.join(run, 'bin', program), 'utf8'), fs.readFileSync(new URL(`../src/runner/vm/bin/${program}.mjs`, import.meta.url), 'utf8'), program)
+    assert.equal(modeOf(path.join(run, 'bin', program)), 0o700, program)
+  }
   const shipped = new URL('../src/runner/vm/icu-tz/', import.meta.url)
   assert.deepEqual(fs.readdirSync(path.join(run, 'icu-tz')).sort(), ['LICENSE', 'README.md', 'metaZones.res', 'release.txt', 'timezoneTypes.res', 'windowsZones.res', 'zoneinfo64.res'])
   for (const name of fs.readdirSync(shipped)) {
@@ -203,33 +208,16 @@ test('run folder: a fresh copy of the prompt and skills, the runner\'s own skill
     `1 ${paths.dayLog('2026/11/08')}:1 message\n2 ${paths.dayLog('2026/11/09')}:1 edit 1\n`,
   )
   assert.equal(modeOf(path.join(run, 'index.txt')), 0o600)
-  assert.equal(
-    fs.readFileSync(result.systemFile, 'utf8'),
-    `# Protocol
-
-You are lifelog.
-
-# Your memory
-
-## memory/preferences.md
-
-- 2026-11-09 (#1060): Track coffee in meals.csv as "drink".
-
-## memory/needs-review.md
-
-(empty)
-`,
-  )
 
   // A new day's session: nothing to copy. A backfill gets its own skill alone, with the runner's.
-  const other = prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '# Protocol\n', sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
+  const other = prepareRun({ paths, index: NO_LINES, agent: agent(), sessionId: 'lifelog-2026-11-10', skills: agent().skills.slice(4) })
   assert.equal(other.sessionFile, null)
   assert.deepEqual(fs.readdirSync(path.join(run, 'session')), [])
   assert.deepEqual(fs.readdirSync(path.join(run, 'config', 'skills')), ['people'])
   assert.deepEqual(other.skillDirs, [path.join(run, 'skills', 'scooter'), path.join(run, 'config', 'skills', 'people')])
   assert.equal(fs.readFileSync(path.join(run, 'index.txt'), 'utf8'), '')
   // `session: none` has no session at all.
-  assert.equal(prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '# Protocol\n' }).sessionFile, null)
+  assert.equal(prepareRun({ paths, index: NO_LINES, agent: agent() }).sessionFile, null)
 })
 
 test('zone rules: their release is the first line of their release.txt, once each of ICU\'s four files is the one it lists', t => {
@@ -266,7 +254,7 @@ test('run folder: a session file that is a link isn\'t copied in', async t => {
   await ensure()
   fs.writeFileSync(path.join(root, 'elsewhere.jsonl'), 'not a session')
   fs.symlinkSync(path.join(root, 'elsewhere.jsonl'), path.join(dir, 'sessions', 'lifelog-2026-11-09.jsonl'))
-  const result = prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '', sessionId: 'lifelog-2026-11-09' })
+  const result = prepareRun({ paths, index: NO_LINES, agent: agent(), sessionId: 'lifelog-2026-11-09' })
   assert.equal(result.sessionFile, null)
   assert.deepEqual(fs.readdirSync(result.sessionDir), [])
 })
@@ -278,7 +266,7 @@ test('run folder: something in the config that isn\'t a file or a folder stops t
   // Added after the config was checked at startup.
   fs.writeFileSync(path.join(root, 'secret'), 'key')
   fs.symlinkSync(path.join(root, 'secret'), path.join(paths.configDir, 'skills', 'people', 'notes.md'))
-  assert.throws(() => prepareRun({ paths, index: NO_LINES, agent: config, protocol: '' }), error => error.code === 'ECONFIG')
+  assert.throws(() => prepareRun({ paths, index: NO_LINES, agent: config }), error => error.code === 'ECONFIG')
 })
 
 test('session: the file pi wrote is kept, never a link, a file with two names, or one too large', async t => {
@@ -289,7 +277,7 @@ test('session: the file pi wrote is kept, never a link, a file with two names, o
   const sessionDir = path.join(dir, 'run', 'session')
   const kept = path.join(dir, 'sessions', `${id}.jsonl`)
   const keep = () => keepSession({ paths, agent: config, sessionId: id, log })
-  const fresh = () => prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  const fresh = () => prepareRun({ paths, index: NO_LINES, agent: config, sessionId: id })
 
   // Nothing written: nothing kept.
   fresh()
@@ -715,7 +703,7 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   const config = agent()
   const id = 'lifelog-2026-11-09'
   const sessionDir = path.join(dir, 'run', 'session')
-  prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  prepareRun({ paths, index: NO_LINES, agent: config, sessionId: id })
   fs.mkdirSync(path.join(sessionDir, 'locked'))
   fs.writeFileSync(path.join(sessionDir, 'locked', 'x'), 'x')
   fs.chmodSync(path.join(sessionDir, 'locked'), 0o000)
@@ -725,44 +713,46 @@ test('run folder: what the runner can\'t read in run/session/ is emptied, and a 
   fs.chmodSync(sessionDir, 0o000)
   assert.equal(await keepSession({ paths, agent: config, sessionId: id, log }), 'refused')
 
-  prepareRun({ paths, index: NO_LINES, agent: config, protocol: '', sessionId: id })
+  prepareRun({ paths, index: NO_LINES, agent: config, sessionId: id })
   assert.deepEqual(fs.readdirSync(sessionDir), [])
   assert.equal(fs.existsSync(path.join(dir, 'sessions', `${id}.jsonl`)), false)
 })
 
-test('memory: read without following a link, only from a regular file, at most MEMORY_MAX_BYTES, and none through a file', t => {
-  const root = makeTestDir(t)
-  const file = name => path.join(root, name)
-  assert.equal(readMemoryFile(file('missing.md')), null)
-  fs.writeFileSync(file('plain.md'), '- one\n')
-  assert.deepEqual(readMemoryFile(file('plain.md')), { text: '- one\n', cut: false })
-
-  // pi writes the memory folder: a link to the runner's env file must not put the key in the prompt.
-  fs.writeFileSync(file('runner.env'), 'OPENROUTER_API_KEY=sk-or-secret\n')
-  fs.symlinkSync(file('runner.env'), file('link.md'))
-  assert.deepEqual(readMemoryFile(file('link.md')), { text: '(not a regular file, so not read)', cut: false })
-  // A FIFO isn't waited on.
-  execFileSync('mkfifo', [file('fifo.md')])
-  assert.deepEqual(readMemoryFile(file('fifo.md')), { text: '(not a regular file, so not read)', cut: false })
-  fs.mkdirSync(file('folder.md'))
-  assert.deepEqual(readMemoryFile(file('folder.md')), { text: '(not a regular file, so not read)', cut: false })
-  // The memory folder is a file, which writes may name as one: there is no memory file in it.
-  assert.equal(readMemoryFile(file('plain.md/preferences.md')), null)
-
-  // Too long: cut, without splitting a character, and the prompt says so.
-  fs.writeFileSync(file('long.md'), `${'a'.repeat(64 * 1024 - 1)}€ and more`)
-  const long = readMemoryFile(file('long.md'))
-  assert.equal(long.cut, true)
-  assert.equal(long.text, 'a'.repeat(64 * 1024 - 1))
-  const system = renderSystemPrompt({ protocol: 'P', prompt: 'Q', preferences: long, needsReview: { text: '\n', cut: false } })
-  assert.match(system, /a\n\n\(The file is longer than 65536 bytes, and only its beginning is shown\. Shorten it\.\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/)
+test('agent folder: a start clears what a run could write in run/, its session, the messages it queued and its marks, before it makes anything', async t => {
+  const { paths, dir, ensure, agent } = setup(t)
+  await ensure()
+  prepareRun({ paths, index: NO_LINES, agent: agent() })
+  // What a run the runner never cleaned up after left, pi's to choose: a tree too deep to remove
+  // by its paths, and a marks file that is a folder.
+  fs.writeFileSync(path.join(dir, 'run', 'session', 'x.jsonl'), 'x')
+  deepTree(path.join(dir, 'run', 'send'))
+  fs.mkdirSync(path.join(dir, 'run', 'marks.txt'))
+  fs.writeFileSync(path.join(dir, 'run', 'marks.txt', 'done'), 'done 1\n')
+  await ensure()
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'run', 'session')), [])
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'run', 'send')), [])
+  assert.equal(fs.existsSync(path.join(dir, 'run', 'marks.txt')), false)
 })
 
-test('protocol: it ships with the runner and says what the answer parser reads', () => {
-  const protocol = loadProtocol()
-  for (const words of ['DONE: <number>', 'FAILED: <number> <reason>', 'REPLY_TO: <number>', 'NO_REPLY', 'memory/needs-review.md', 'memory/preferences.md', 'Internet: on', 'git log', 'backfill', '`*bold*`, `_italic_` and `- ` lists']) {
-    assert.ok(protocol.includes(words), words)
-  }
+test("run folder: the runner reads nothing at memory, so nothing a run left there, a link, a folder it can't search or a file it can't read, stops a run's preparing", async t => {
+  const { root, paths, dir, ensure, agent } = setup(t)
+  await ensure()
+  const memory = path.join(dir, 'memory')
+  const prepare = () => prepareRun({ paths, index: NO_LINES, agent: agent() })
+  fs.mkdirSync(path.join(root, 'other'))
+  fs.writeFileSync(path.join(root, 'other', 'preferences.md'), "- not this agent's\n")
+  fs.rmSync(memory, { recursive: true })
+  fs.symlinkSync(path.join(root, 'other'), memory)
+  assert.equal(fs.readFileSync(prepare().promptFile, 'utf8'), 'You are lifelog.\n')
+  fs.rmSync(memory)
+  fs.mkdirSync(memory)
+  fs.writeFileSync(path.join(memory, 'preferences.md'), '- a rule\n')
+  fs.chmodSync(path.join(memory, 'preferences.md'), 0o000)
+  fs.writeFileSync(path.join(memory, 'needs-review.md'), '- a question\n')
+  assert.equal(fs.readFileSync(prepare().promptFile, 'utf8'), 'You are lifelog.\n')
+  fs.chmodSync(memory, 0o000)
+  assert.equal(fs.readFileSync(prepare().promptFile, 'utf8'), 'You are lifelog.\n')
+  fs.chmodSync(memory, 0o700)
 })
 
 test("git: a repository of files as well as folders: what isn't there yet is made a place for, a missing file is no fault, and the clean-up puts back what it set aside", async t => {
@@ -986,28 +976,6 @@ test("git: an entry with a folder the runner can't search on its way, as a run t
   // Once the runner can search it, the entries in it are the entries: what no commit holds goes.
   await after.discardChanges()
   assert.deepEqual(fs.readdirSync(shut).sort(), ['books', 'q1'])
-})
-
-test("run folder: no memory file is read through a link, or a folder the runner can't search, that a run left at memory, as none is through a file", async t => {
-  const { root, paths, dir, ensure, agent } = setup(t)
-  await ensure()
-  const memory = path.join(dir, 'memory')
-  const system = () => fs.readFileSync(prepareRun({ paths, index: NO_LINES, agent: agent(), protocol: '' }).systemFile, 'utf8')
-  const empty = /## memory\/preferences\.md\n\n\(empty\)\n\n## memory\/needs-review\.md\n\n\(empty\)\n$/
-  // A link, to a folder with memory files that aren't the agent's.
-  fs.mkdirSync(path.join(root, 'other'))
-  fs.writeFileSync(path.join(root, 'other', 'preferences.md'), "- not this agent's\n")
-  fs.rmSync(memory, { recursive: true })
-  fs.symlinkSync(path.join(root, 'other'), memory)
-  assert.match(system(), empty)
-  // A folder the runner can't search, which would stop every run before pi; root searches it.
-  fs.rmSync(memory)
-  fs.mkdirSync(memory)
-  fs.writeFileSync(path.join(memory, 'preferences.md'), '- a rule\n')
-  fs.chmodSync(memory, 0o000)
-  assert.match(system(), isRoot ? /## memory\/preferences\.md\n\n- a rule\n/ : empty)
-  fs.chmodSync(memory, 0o700)
-  assert.match(system(), /## memory\/preferences\.md\n\n- a rule\n/)
 })
 
 test('git: what the clean-up sets aside is named by a number, so an entry whose name is as long as the system takes is set aside too', async t => {
