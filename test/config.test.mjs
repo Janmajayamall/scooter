@@ -515,6 +515,7 @@ test("config: a trigger's prompt is text pi can be given, and holds no variable 
     ['"$constructor$ $toString$"', /holds \$constructor\$ or \$toString\$, which are no variables/],
     ['"@lifelog, the evening check-in"', /starts with @, which makes pi take the whole prompt as the name of a file to attach/],
     ['"Check in.\\0"', /holds the character U\+0000, which a command line can't carry/],
+    ['"Check in. \\uD83D"', /holds half of a pair of UTF-16 surrogates/],
     ['""', /must be the message pi is given for the run, as text/],
     ['"  \\n "', /must be the message pi is given for the run, as text/],
     ['7', /must be the message pi is given for the run, as text/],
@@ -533,6 +534,10 @@ test("config: a trigger's prompt is text pi can be given, and holds no variable 
   // The same for a trigger for new messages.
   const messages = faults(base.replace('New: $seq.unread$', 'New: $seq.new$'))
   assert.deepEqual(messages.map(problem => problem.field), ['agents.lifelog.run[0].prompt'])
+  // Every fault at once: a trigger's prompt at fault, and a channel another trigger names too.
+  const second = '      - on: new-messages\n        channels: [email]\n        prompt: "@email"\n'
+  const both = faults(base.replace('      - at: "21:30"', at => `${second}${at}`).replace('New: $seq.unread$', 'New: $seq.new$'))
+  assert.deepEqual(both.map(problem => problem.field).sort(), ['agents.lifelog.run[0].prompt', 'agents.lifelog.run[1].channels', 'agents.lifelog.run[1].prompt'])
 })
 
 test("config: a trigger's prompt, filled in with the longest values its variables can take, is within PROMPT_MAX_BYTES, a backfill's writes and the settings counted", t => {

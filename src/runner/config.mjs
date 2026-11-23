@@ -306,9 +306,14 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       return null
     }
     let ok = true
-    // A command line can't hold U+0000: the run could never start.
+    // A command line can't hold U+0000: the run could never start. Nor is half of a pair of UTF-16
+    // surrogates, which YAML's escapes can give, a character it can be sent as.
     if (value.includes('\0')) {
       fault(parts, 'holds the character U+0000, which a command line can\'t carry')
+      ok = false
+    }
+    if (!value.isWellFormed()) {
+      fault(parts, 'holds half of a pair of UTF-16 surrogates, which is no character a command line can carry')
       ok = false
     }
     // pi 1.5.2 takes an argument that starts with `@` as a file to attach, even after `--`, and
@@ -470,6 +475,8 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     const forScheduled = longestValues(common)
     const triggers = [...agent.run.newMessages.map(trigger => [trigger, forMessages]), ...agent.run.scheduled.map(trigger => [trigger, forScheduled])]
     for (const [trigger, longest] of triggers) {
+      // A prompt at fault is one already.
+      if (trigger.prompt === null) continue
       const most = longestPrompt(trigger.prompt, longest)
       if (most <= limits.PROMPT_MAX_BYTES) continue
       fault([...fieldOf.get(trigger), 'prompt'], `can make a prompt of ${most} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it`)
@@ -499,7 +506,8 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
         const other = run.newMessages.find(trigger => trigger.channels.includes(channel))
         if (other) return fault([...parts, 'channels'], `names ${channel}, which ${fieldName(fieldOf.get(other))}.channels names too: a channel starts the runs of one trigger at most`)
       }
-      if (channels.length === 0 || prompt === null) return
+      // Kept with a prompt at fault too, so that a channel another trigger names is a fault as well.
+      if (channels.length === 0) return
       const trigger = { channels, prompt }
       fieldOf.set(trigger, parts)
       run.newMessages.push(trigger)
@@ -512,7 +520,6 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       if (!schedule) return fault([...parts, 'at'], 'must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"')
       // The `at` values are the keys of the state's `scheduled`.
       if (run.scheduled.some(other => other.at === entry.at)) return fault([...parts, 'at'], `is ${entry.at}, which another entry has too`)
-      if (prompt === null) return
       const trigger = { at: entry.at, schedule, prompt }
       fieldOf.set(trigger, parts)
       run.scheduled.push(trigger)

@@ -76,7 +76,7 @@ try {
     argv: ['/bin/sh', '-c', SCRIPT],
     cwd: '/',
     env: { PATH: GUEST_PATH },
-    files: piFiles(paths, loadConfig({ paths }).agents.find(each => each.name === 'lifelog')),
+    files: piFiles(paths, loadConfig({ paths, settings }).agents.find(each => each.name === 'lifelog')),
     timeoutMs: 5 * 60_000,
     policy: { model: 'none', internet: false, zdr: true, secrets: {} },
   })

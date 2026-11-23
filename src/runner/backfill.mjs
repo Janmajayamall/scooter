@@ -20,12 +20,11 @@
 //   notice.
 // - **Its own retries,** handled like the live ones (`settleBackfill`): an item not
 //   marked is tried again a minute later; one marked failed, or given up on after
-//   `MAX_ATTEMPTS`, goes to `skipped`. An edit or deletion brings in the message it changes from
-//   the backfill's retries or `skipped`, as from the live ones. A setup error or an outage pauses
-//   every run, as it does after a live run, and the items wait with their attempts as they were.
-//   A message deleted since it was given is settled by the runner, as in a live lane, and holds
-//   nothing back. A batch leaves `lastRun` alone: that is the live runs' (the plan's rule for
-//   milestone 4).
+//   `MAX_ATTEMPTS`, goes to `skipped`. An edit brings in the message it changes from the
+//   backfill's retries or `skipped`; a message deleted since it was given is settled by the
+//   runner, as in the live lane, and holds nothing back. A setup error or an outage pauses every
+//   run, as it does after a live run, and the items wait with their attempts as they were. A
+//   batch leaves `lastRun` alone: that is the live runs' (the plan's rule for milestone 4).
 // - **Commits:** `lifelog: backfill people-1 #812-#831` (`commitMessage` in `run.mjs`).
 // - **Finishing** (`finishBackfill`): once its cursor has reached `until` and its retries are
 //   done, the ID goes to `backfillDone`, and the owner gets one message, which counts the rows of
