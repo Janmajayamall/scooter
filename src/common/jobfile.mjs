@@ -185,9 +185,9 @@ export function readJob(file, { agent }) {
 // the temporary files of an atomic write among them, aren't listed. A folder is used only while it
 // is a folder and not a link (`checkOwnFolder`), and an agent's folder only when its name is one
 // an agent can have: `agents/.discarded/` is the runner's own. An agent's folder, or its jobs'
-// folder, that isn't there, or is a link or a file, holds no job; `agents/` itself that is a link
-// or a file throws `EUNTRUSTED`. Oldest first is by ID, which is the time the job was written, and
-// then by agent.
+// folder, that isn't there, is a link or a file, or can't be read, holds no job; `agents/` itself
+// that is a link or a file throws `EUNTRUSTED`. Oldest first is by ID, which is the time the job
+// was written, and then by agent.
 export function listJobFiles(paths) {
   const found = []
   for (const agent of folderNames(paths.agents)) {
@@ -195,7 +195,7 @@ export function listJobFiles(paths) {
     try {
       checkOwnFolder(paths.agentDir(agent))
     } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'EUNTRUSTED') continue
+      if (PASSED_OVER.includes(error.code)) continue
       throw error
     }
     for (const name of folderNames(paths.agentJobs(agent), { passOver: true })) {
@@ -206,15 +206,19 @@ export function listJobFiles(paths) {
   return found.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.agent < b.agent ? -1 : a.agent > b.agent ? 1 : 0))
 }
 
+// Why a folder an agent's jobs could be in is passed over: it isn't there, it is a link or a file,
+// or it can't be read. So no folder of the runner's user's making can stop the runner.
+const PASSED_OVER = ['ENOENT', 'EUNTRUSTED', 'EACCES', 'ENOTDIR']
+
 // The names in a folder of the runner's, but those that start with a dot, or none when it isn't
-// there, or, with `passOver`, when it is a link or a file. It is used only while it is a folder and
-// not a link.
+// there, or, with `passOver`, for any reason of `PASSED_OVER`. It is used only while it is a folder
+// and not a link.
 function folderNames(dir, { passOver = false } = {}) {
   try {
     checkOwnFolder(dir)
     return fs.readdirSync(dir).filter(name => !name.startsWith('.'))
   } catch (error) {
-    if (error.code === 'ENOENT' || (passOver && error.code === 'EUNTRUSTED')) return []
+    if (error.code === 'ENOENT' || (passOver && PASSED_OVER.includes(error.code))) return []
     throw error
   }
 }

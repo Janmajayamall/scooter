@@ -585,13 +585,25 @@ test("backfill: a job's file too large, one the runner can't read, and an agent 
   const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value))
   write(named(1), { ...base, id: '20261109T150100000-0001', prompt: `Now: $now$${' '.repeat(4096)}` })
   atEnd(t, overrideLimits({ JOB_FILE_MAX_BYTES: 4096 }))
-  write(named(2), { ...base, id: '20261109T150200000-0001' })
-  if (!isRoot) fs.chmodSync(named(2), 0o000)
+  // One the runner can't read: root reads every file.
+  if (!isRoot) {
+    write(named(2), { ...base, id: '20261109T150200000-0001' })
+    fs.chmodSync(named(2), 0o000)
+  }
   const tryJobs = paths.agentJobs('lifelog-try')
   fs.mkdirSync(tryJobs, { recursive: true })
   const agentFile = { ...base, agent: 'lifelog-try', skills: null, writes: null }
   write(path.join(tryJobs, '20261109T150300000-0001.json'), { ...agentFile, id: '20261109T150300000-0001', agentFile: 'agents:\n  lifelog-try: {}\n' })
   write(path.join(tryJobs, '20261109T150400000-0001.json'), { ...agentFile, id: '20261109T150400000-0001', agentFile: jobYaml().replace('  lifelog:', '  lifelog-other:').replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog-other/views/]').replace('sends: [whatsapp]', 'sends: []') })
+  // Folders an agent's jobs could be in that are no folders to read, passed over: one the runner
+  // can't read, a file, and a link.
+  fs.mkdirSync(paths.agentJobs('locked'), { recursive: true })
+  write(path.join(paths.agentJobs('locked'), '20261109T150000000-0001.json'), { ...base, agent: 'locked', id: '20261109T150000000-0001' })
+  fs.chmodSync(paths.agentJobs('locked'), 0o000)
+  atEnd(t, () => fs.chmodSync(paths.agentJobs('locked'), 0o700))
+  fs.mkdirSync(paths.agentDir('filed'))
+  fs.writeFileSync(paths.agentJobs('filed'), 'x')
+  fs.symlinkSync(jobs, path.join(paths.agents, 'linked'))
   assert.deepEqual((await runner.tick()).action, { kind: 'backfill-start', id: good.job.id })
   const reasons = Object.fromEntries(entries.filter(entry => entry.event === 'runner.job_refused').map(entry => [entry.file, entry.reason]))
   assert.match(reasons['20261109T150100000-0001.json'], /too large/)
