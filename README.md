@@ -100,7 +100,7 @@ sudo systemctl start scooter-bridge scooter-runner
 sudo -u scooter-runner scooter doctor
 ```
 
-`scooter pair --phone +919812345678` gives a code to type into the phone instead of a QR code. `pair` does nothing while wacli is linked: to link it again, unlink it first on the phone. `doctor` runs as `scooter-runner` only, since it checks what the runner can reach (see [When something goes wrong](#when-something-goes-wrong)).
+`scooter pair --phone +919812345678` gives a code to type into the phone instead of a QR code. `pair` does nothing while wacli is linked: to link it again, unlink it first on the phone. `doctor` runs as `scooter-runner` only, since it checks what the runner can reach (see [When something goes wrong](#when-something-goes-wrong)); so does `backfill`, since it writes into the runner's folder (see [Backfills](#backfills)). Run as another user, either refuses, and says how to run it.
 
 Commands run as their service's user: `sudo scooter <command>` for the bridge's (`pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check`, `restore`), `sudo -u scooter-runner scooter <command>` for the runner's (`doctor`, `backfill`). `scooter help` lists them. The logs are in the journal: `journalctl -u scooter-bridge -u scooter-runner`.
 
@@ -323,6 +323,8 @@ A backfill runs the agent over your history again, as it usually runs, and sends
 sudo -u scooter-runner scooter backfill lifelog …      # natively
 docker compose run --rm runner backfill lifelog …        # Docker
 ```
+
+It runs as the runner's user, as above. Run as another, `sudo scooter backfill` among them, it writes nothing, exits with 2, and gives the command to run.
 
 - **Where it starts and stops:** at your first message, or `--from 2026-11-09`, the UTC date a message was stored, or `--from 812`, a message's number; and at the last message the agent had handled when the job started. Live runs handle what comes after.
 - **Live messages go first:** without `--hold-live`, the job works only while nothing live is waiting, so a new message is answered as usual, at most one batch later.

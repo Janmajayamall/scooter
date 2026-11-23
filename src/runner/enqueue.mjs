@@ -4,7 +4,8 @@
 //                            [--empty] [--hold-live] [--prompt <file>]
 //   scooter backfill --agent-file <file> [--from <UTC date or seq>]
 //
-// It runs as the runner's user; in Docker, as `docker compose run --rm runner backfill …`. It reads
+// It runs as the runner's user, and refuses to run as another where that user is there
+// (`wrongUser`); in Docker, as `docker compose run --rm runner backfill …`. It reads
 // `agents.yaml` and the datastore, checks its arguments against them, writes the job's file into
 // the agent's folder, `agents/<agent>/jobs/<id>.json`, and exits. The running runner takes the job
 // at its next look, with no restart (`backfill.mjs`). It changes nothing else, and takes no lock:
@@ -25,8 +26,9 @@
 //   it, and a `seq` past the newest line, are refused. Without it, the job starts at the first line.
 // - Each fault is reported at once, each on a line of its own, as `agents.yaml`'s are.
 //
-// Exit codes: 0 once the job is written; 2 for a call or a configuration it can't take; 1 when it
-// fails otherwise, as on a datastore it can't read, or a job's file it can't write.
+// Exit codes: 0 once the job is written; 2 for a call or a configuration it can't take, or another
+// user than the runner's; 1 when it fails otherwise, as on a datastore it can't read, or a job's
+// file it can't write.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,7 +36,9 @@ import { createIds, ensureDir, writeNewFile } from '../common/files.mjs'
 import { instanceAnswers } from '../common/instance.mjs'
 import { checkJob, jobFileName } from '../common/jobfile.mjs'
 import { limits } from '../common/limits.mjs'
+import { createLog } from '../common/log.mjs'
 import { dayOfDate, makePaths } from '../common/paths.mjs'
+import { createProc, inDocker } from '../common/proc.mjs'
 import { isDate, isoSeconds, systemClock } from '../common/time.mjs'
 import { ConfigError, checkJobWrites, jobPromptProblems, loadConfig, parseConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
@@ -239,9 +243,31 @@ export async function queueJob({ args, settings, clock = systemClock }) {
   return { job: written, file: path.join(dir, jobFileName(written.id)), runner: await instanceAnswers(paths.runnerSocket) }
 }
 
+// The runner's user, as `setup` makes it and the Docker image has it.
+const RUNNER_USER = 'scooter-runner'
+
+// Why `scooter backfill` doesn't run as the user it runs as, or null. It makes the jobs' folder
+// and the job's file in the runner's folder, which must be the runner's user's: made as root, the
+// folder is one the runner can't read, so the job never runs, and a later command as the runner's
+// user can't write there. Where that user isn't there, as in development, it runs as whoever runs
+// it. As `doctor` does (`wrongUser` in `src/ops/doctor.mjs`).
+export async function wrongUser({ proc, uid = process.getuid?.(), docker = inDocker() }) {
+  const runnerUser = await proc.findUser(RUNNER_USER)
+  if (runnerUser === null || runnerUser.uid === uid) return null
+  const how = docker ? 'docker compose run --rm runner backfill …' : `sudo -u ${RUNNER_USER} scooter backfill …`
+  return `backfill writes the job into the runner's folder, so it runs as ${RUNNER_USER}, not as uid ${uid}: ${how}`
+}
+
 // `scooter backfill`: queues the job, and says so on stdout. Exits with 0 once it is written, 2
-// when it can't take how it was called or how Scooter is configured, and 1 when it fails.
-export async function runBackfill({ args = [], settings, stdout, stderr, clock = systemClock }) {
+// when it can't take how it was called or how Scooter is configured, or runs as another user than
+// the runner's (`wrongUser`), which it looks at before it reads or makes anything, and 1 when it
+// fails. `proc`, `uid` and `docker` are for the tests.
+export async function runBackfill({ args = [], settings, stdout, stderr, clock = systemClock, proc = createProc({ log: createLog({ component: 'backfill', clock }) }), uid = process.getuid?.(), docker = inDocker() }) {
+  const wrong = await wrongUser({ proc, uid, docker })
+  if (wrong !== null) {
+    stderr.write(`scooter backfill: ${wrong}\n`)
+    return 2
+  }
   let queued
   try {
     queued = await queueJob({ args, settings, clock })
