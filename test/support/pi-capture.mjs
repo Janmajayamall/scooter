@@ -33,7 +33,9 @@ const SESSION_THINKING = 'low'
 
 // A prompt as the runner writes it: the default prompt for new messages, filled in.
 const PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: ${GUEST.agent}. The datastore: ${GUEST.datastore}. This run may change: ${GUEST.agent}/views/ ${GUEST.agent}/memory/.
+Your folder: ${GUEST.agent}
+The datastore: ${GUEST.datastore}
+This run may change: ${GUEST.agent}/views/ ${GUEST.agent}/memory/
 New: 1050 1051
 Given before: none
 `

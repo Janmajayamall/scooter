@@ -478,7 +478,7 @@
       "accept-encoding": "br, gzip, deflate, zstd",
       "accept-language": "*",
       "authorization": "Bearer <placeholder>",
-      "content-length": "9026",
+      "content-length": "9025",
       "content-type": "application/json",
       "host": "openrouter.ai",
       "sec-fetch-mode": "cors",
@@ -505,7 +505,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.\nNew: 1050 1051\nGiven before: none\n"
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nNew: 1050 1051\nGiven before: none\n"
             }
           ]
         }
@@ -775,7 +775,7 @@
       "accept-encoding": "br, gzip, deflate, zstd",
       "accept-language": "*",
       "authorization": "Bearer <placeholder>",
-      "content-length": "11165",
+      "content-length": "11164",
       "content-type": "application/json",
       "host": "openrouter.ai",
       "sec-fetch-mode": "cors",
@@ -802,7 +802,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.\nNew: 1050 1051\nGiven before: none\n"
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nNew: 1050 1051\nGiven before: none\n"
             }
           ]
         },

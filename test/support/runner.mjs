@@ -80,7 +80,9 @@ export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people']
 
 // The prompt of the example's trigger for new messages, as `agents.yaml` gives it.
 export const NEW_MESSAGES_PROMPT = `Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
-Your folder: $agent.dir$. The datastore: $datastore.dir$. This run may change: $run.writes$.
+Your folder: $agent.dir$
+The datastore: $datastore.dir$
+This run may change: $run.writes$
 New: $seq.unread$
 Given before: $seq.retry$
 `
@@ -186,7 +188,9 @@ export function exampleState() {
 // The example prompt, the example's prompt for new messages filled in for the example's lines and
 // state, with the data folder at `/data`, exactly as `docs/architecture/runner.md` shows it.
 export const EXAMPLE_PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.
+Your folder: /data/agents/lifelog
+The datastore: /data/datastore
+This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/
 New: 1050 1051 1052 1053 1054
 Given before: 1047 (attempt 2 of 4)
 `

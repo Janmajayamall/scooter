@@ -28,7 +28,9 @@ agents:
         channels: [whatsapp, email]      # from these channels
         prompt: |
           Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
-          Your folder: $agent.dir$. The datastore: $datastore.dir$. This run may change: $run.writes$.
+          Your folder: $agent.dir$
+          The datastore: $datastore.dir$
+          This run may change: $run.writes$
           New: $seq.unread$
           Given before: $seq.retry$
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly

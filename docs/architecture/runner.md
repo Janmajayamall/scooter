@@ -96,7 +96,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work: the cursor moves past it, the agent isn't given it, and doesn't mark it: the messages Scooter sent, the reactions, the owner's among them, lines of a channel no trigger names, and a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs. The agent can read any of them with `show` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)). *Why the owner's reactions aren't work:* the owner, on 2026-11-21: "Leave user reactions out". A work item that is a message already deleted is the runner's to settle, and is never given ([The batch](#the-batch)).
+**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work, and the cursor moves past it, and the agent is neither given it nor marks it: the messages Scooter sent, the reactions, the owner's among them, the lines of a channel no trigger names, and a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs. The agent can read any of them with `show` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)). *Why the owner's reactions aren't work:* the owner, on 2026-11-21: "Leave user reactions out". A work item that is a message already deleted is the runner's to settle, and is never given ([The batch](#the-batch)).
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 
@@ -147,7 +147,9 @@ The default prompt for new messages ([agents.yaml](configuration.md#agentsyaml))
 
 ```text
 Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.
+Your folder: /data/agents/lifelog
+The datastore: /data/datastore
+This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/
 New: 1050 1051 1052 1053 1054
 Given before: 1047 (attempt 2 of 4)
 ```

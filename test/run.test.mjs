@@ -125,7 +125,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   // The prompt, the last argument, after `--`: the trigger's, filled in.
   assert.equal(
     spec.argv.at(-1),
-    `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: ${agent}. The datastore: ${paths.datastore}. This run may change: ${agent}/views/ ${agent}/memory/.\nNew: 1042\nGiven before: none\n`,
+    `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: ${agent}\nThe datastore: ${paths.datastore}\nThis run may change: ${agent}/views/ ${agent}/memory/\nNew: 1042\nGiven before: none\n`,
   )
 
   // pi's environment and nothing else, with a placeholder where the key would be.

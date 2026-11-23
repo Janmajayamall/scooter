@@ -37,7 +37,7 @@ mark: 1053 marked failed
 ```
 
 - `mark done <number>…` for the lines you have handled: filed, replied to, or waiting on a question you asked. A line you asked a question about is done, and so is an edit or a deletion once what you filed from its message is changed, or if nothing was. Give every number: a range such as `1050-1053` isn't one.
-- `mark failed <number> "<reason>"` for a line you can't handle, with the reason in a few words. Tell the owner why with `send`.
+- `mark failed <number> "<reason>"` for a line you can't handle, with the reason in a few words, one line at a time: everything after its number is its reason. Tell the owner why with `send`.
 - A line you mark neither way is given to you again, up to 4 attempts in all, and is then given up on. One you mark both ways is failed. A number you weren't given is ignored. Marking one line settles no other: mark a message and its edit each.
 
 ## send

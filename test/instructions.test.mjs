@@ -336,6 +336,11 @@ test("runner's skill: its examples of send and mark, run in bash as the agent ru
     unreadable: 0,
     refused: null,
   })
+  // A line marked failed is one at a time, as the skill says: everything after its number is its
+  // reason, other numbers among it.
+  const twice = spawnSync('bash', ['-c', 'mark failed 1060 1061 "two at once"'], { env, encoding: 'utf8', input: '' })
+  assert.equal(twice.status, 0, twice.stderr)
+  assert.deepEqual(readMarks(paths.agentRunMarks('lifelog')).failed.at(-1), { seq: 1060, reason: '1061 two at once' })
   assert.deepEqual(readSends(paths.agentRunSend('lifelog')), {
     messages: [
       { text: 'Is this ticket for you alone, or for Sam too?', replyTo: 1052 },
@@ -355,6 +360,7 @@ test("runner's skill: what it says of a run is what the runner does: what a run 
   said('A message the owner deleted before you were given it is never given to you: only its deletion is.')
   said('Marking one line settles no other')
   said(`A line you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)
+  said('one line at a time: everything after its number is its reason')
   said(`Scooter sends at most ${limits.RUN_MAX_SENDS} messages of one run, the first ones, and drops the rest.`)
   // What the agent's document says it describes.
   for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'internet access is `on`', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'in a backfill or a rebuild, nothing you send goes out']) said(words)

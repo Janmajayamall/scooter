@@ -455,24 +455,24 @@ The code and its tests run as an ordinary user, without `setup`: Node ≥ 22.19,
   ```sh
   npm ci && npm test
   ```
-  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 889 tests, 829 passed, 60 skipped: 42 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
+  It needs nothing more, but the tests of real programs need them on the `PATH`: wacli, restic, `mke2fs`, `systemd-analyze` and Docker. It skips the tests that need the VM image, root, or root with `SCOOTER_ROOT_TESTS=1`, and those of a program that isn't installed. Counted: 893 tests, 832 passed, 61 skipped: 43 for the image, 8 for root, 4 for root with `SCOOTER_ROOT_TESTS=1`, 4 for wacli and 2 for restic.
 - **With the VM image and KVM**, for the tests that boot VMs and run pi in them. They need QEMU, with `qemu-img`, `debugfs`, and an image built from `config/image/build.json`, which the first command builds with Docker or Podman, from the network. `sg kvm` gives the run the `kvm` group, so the VMs use KVM:
   ```sh
   node test/support/build-test-image.mjs ~/scooter-test-image
   SCOOTER_TEST_IMAGE=~/scooter-test-image sg kvm -c 'npm test'
   ```
-  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 891 tests, 873 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 3½ minutes. Without `sg kvm` the VMs run under emulation, many times slower.
+  It skips what the plain run skips but the image. Counted, with `GONDOLIN_CPU` as below: 895 tests, 877 passed, 18 skipped, the 8, 4, 4 and 2 above, in about 4 minutes. Without `sg kvm` the VMs run under emulation, many times slower.
 
   Where QEMU aborts as it starts a VM under KVM, with `PC_MACHINE: Object … is not an instance of type generic-pc-machine`, also set `GONDOLIN_CPU=max,sgx=off`:
   ```sh
   SCOOTER_TEST_IMAGE=~/scooter-test-image GONDOLIN_CPU=max,sgx=off sg kvm -c 'npm test'
   ```
-  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, all 22 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
+  Ubuntu 24.04's QEMU 8.2.2 aborts so on a processor with SGX, such as an Intel i7-8665U, when it starts a `microvm` machine with `-cpu host` under KVM. That is what Gondolin 0.14.0 starts by default, and what the tests in `test/tools/vm.test.mjs` and `test/tools/pi.test.mjs` get: without the variable, all 23 of them fail. Gondolin takes QEMU's `-cpu` from `GONDOLIN_CPU`, and `max,sgx=off` starts under KVM and under emulation alike, where `host,sgx=off` fails the test that forces emulation. Scooter's own sandbox uses the `q35` machine ([The machine](docs/architecture/sandbox.md#the-machine)), and its tests passed with KVM without the variable.
 - **As root, in a container**, for what only root does: giving files away and running programs as other users, and, with `SCOOTER_ROOT_TESTS=1`, making users, as `setup`'s own test does. It needs Docker:
   ```sh
   docker run --rm -e SCOOTER_ROOT_TESTS=1 -v "$PWD":/src -w /src node:24-trixie sh -c 'npm ci && npm test'
   ```
-  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 889 tests, 811 passed, 78 skipped: 42 for the image, 21 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
+  It skips the tests that need the image, those of what a user can't read or write, which root can anyway, and those of programs the container doesn't have. Counted, under rootless Docker: 893 tests, 814 passed, 79 skipped: 43 for the image, 21 for what root can do anyway, 4 for wacli, 4 for `mke2fs`, 3 for restic, 2 for the users `setup` makes, which `scooter bridge` run as a process needs as root, 1 for `systemd-analyze` and 1 for Docker.
 
 **The zone rules** the agent's VM converts times with ship in `src/runner/vm/icu-tz/`, for one release of the tz database, which `release.txt` names. To update them to a newer one, replace the four files and `release.txt` as [Updating them](docs/architecture/agent.md#updating-them) says, and run the suite.
 
@@ -485,7 +485,7 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] A receipt photo ends up in `expenses.csv`: the model reads photos through pi's `read` tool.
 - [ ] A note that fits no view, such as "a slow Sunday at home", gets its ✅, and no view changes: the prompt has the agent file nothing for it.
 - [ ] A real batch runs end to end in the sandbox, with your key.
-- [ ] The agent reads its memory files and the `scooter` skill first, marks each message it was given with `mark`, and says what it says with `send`, as its instructions ask: nothing it prints is read, so a message it doesn't mark is given to it again, and is given up on after 4 attempts.
+- [ ] The agent reads its memory files and the `scooter` skill first, marks each message it was given with `mark`, and says what it says with `send`, as its instructions ask: nothing it prints decides anything, so a message it doesn't mark is given to it again, and is given up on after 4 attempts.
 - [ ] Given only the numbers of its messages, the agent reads each with `show`, files what it holds, and, for an edit or a deletion you send, changes or removes the row it filed from the message: edit a filed expense's amount, and delete another, and look at `expenses.csv`. A backfill's batch, which may change a view and not `memory/`, files its guesses with ❓ and asks nothing.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
 - [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
