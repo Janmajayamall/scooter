@@ -22,6 +22,7 @@
 //           prompt: |                        # what pi is given for the run, its variables filled in
 //             Now: $now$. New: $seq.unread$. Given before: $seq.retry$.
 //         - at: "21:30"                      # or "Sun 18:00"
+//           tag: check-in                    # names the task in the log and its notices
 //           prompt: "Now: $now$. Evening check-in."
 //         - backfill: people-1
 //           skill: people
@@ -69,15 +70,16 @@ const NAME_MAX_BYTES = 255
 const PATH_MAX_BYTES = 4095
 
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
-// A backfill's ID goes into session names, commit messages and the state.
-const BACKFILL_ID = /^[a-z0-9][a-z0-9-]*$/
+// A backfill's ID, which goes into session names, commit messages and the state; and a scheduled
+// trigger's tag, which names its task in the log and in the owner's notices.
+const ID_FORM = /^[a-z0-9][a-z0-9-]*$/
 // An OpenRouter model ID, such as `anthropic/claude-sonnet-5.5`, `~anthropic/claude-sonnet-latest`
 // or `google/gemma-3-4b-it:free`. Every model in pi's catalog has this form (milestone 0, pi 6).
 const MODEL_ID = /^~?[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/
 
 const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'writes', 'sends', 'session', 'reply_mode', 'ack_reaction', 'timeout_minutes', 'run']
 const OPTIONAL_KEYS = ['thinking', 'reads']
-const TRIGGER_KEYS = { on: ['on', 'channels', 'prompt'], at: ['at', 'prompt'], backfill: ['backfill', 'skill', 'writes'] }
+const TRIGGER_KEYS = { on: ['on', 'channels', 'prompt'], at: ['at', 'tag', 'prompt'], backfill: ['backfill', 'skill', 'writes'] }
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value) && !Buffer.isBuffer(value)
 
@@ -147,15 +149,16 @@ function isInside(dir, target) {
 //
 //   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }],
 //     reads, writes, repository, sends, channels, session, replyMode, ackReaction, timeoutMinutes,
-//     run: { newMessages: [{ channels, prompt }], scheduled: [{ at, schedule, prompt }], backfill: [{ id, skill, writes }] } }
+//     run: { newMessages: [{ channels, prompt }], scheduled: [{ at, tag, schedule, prompt }], backfill: [{ id, skill, writes }] } }
 //
 // `thinking` is null when it isn't given. A path of the config folder is kept as written, cleaned
 // (`path`), and as the file or folder it names (`file`, `dir`). A skill's `name` is its folder's
 // name. `reads` and `writes` are paths from the data folder, cleaned, a folder ending in `/`;
 // `reads` is the datastore and the agent's own folder when it isn't given. `repository` is what
 // the agent's repository keeps (`repositoryPaths`). `channels` is every channel the triggers for
-// new messages name, in order. A trigger's `prompt` is its text, as written. `schedule` is what
-// `parseLocalTime` returns. Throws a `ConfigError` that lists every fault.
+// new messages name, in order. A trigger's `prompt` is its text, as written. A scheduled trigger's
+// `tag` is as written, and `schedule` what `parseLocalTime` returns. Throws a `ConfigError` that
+// lists every fault.
 export function parseConfig(text, { configDir, dataDir = null, settings = null, file = 'agents.yaml' }) {
   const problems = []
   const lineCounter = new LineCounter()
@@ -185,6 +188,8 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
   const top = doc.toJS({ maxAliasCount: 100 })
   // Where each trigger for new messages, and each scheduled one, is, for a fault that names it.
   const fieldOf = new Map()
+  // The tags of each agent's scheduled triggers so far, by the agent's name.
+  const tagsSeen = new Map()
   const configReal = (() => {
     try {
       return fs.realpathSync(configDir)
@@ -516,11 +521,23 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
 
     if (kind === 'at') {
       const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
+      // The tag names the task in the log and in the owner's notices, where its time can't: the
+      // log keeps `at` for the time of its own line. It is checked whatever else is at fault in
+      // the trigger, so that a tag another trigger has too is a fault as well.
+      let tag = null
+      if (entry.tag !== undefined) {
+        const seen = tagsSeen.get(agent.name) ?? new Set()
+        tagsSeen.set(agent.name, seen)
+        if (typeof entry.tag !== 'string' || !ID_FORM.test(entry.tag)) fault([...parts, 'tag'], 'must be a tag of lowercase letters, digits and hyphens, such as check-in')
+        else if (seen.has(entry.tag)) fault([...parts, 'tag'], `is ${entry.tag}, which another entry has too`)
+        else tag = entry.tag
+        if (typeof entry.tag === 'string') seen.add(entry.tag)
+      }
       const schedule = typeof entry.at === 'string' ? parseLocalTime(entry.at) : null
       if (!schedule) return fault([...parts, 'at'], 'must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"')
       // The `at` values are the keys of the state's `scheduled`.
       if (run.scheduled.some(other => other.at === entry.at)) return fault([...parts, 'at'], `is ${entry.at}, which another entry has too`)
-      const trigger = { at: entry.at, schedule, prompt }
+      const trigger = { at: entry.at, tag, schedule, prompt }
       fieldOf.set(trigger, parts)
       run.scheduled.push(trigger)
       return
@@ -528,7 +545,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
 
     // A backfill.
     const id = entry.backfill
-    if (typeof id !== 'string' || !BACKFILL_ID.test(id)) {
+    if (typeof id !== 'string' || !ID_FORM.test(id)) {
       return fault([...parts, 'backfill'], 'must be an ID of lowercase letters, digits and hyphens, such as people-1')
     }
     if (run.backfill.some(other => other.id === id)) return fault([...parts, 'backfill'], `is ${id}, which another backfill entry has too`)

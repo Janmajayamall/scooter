@@ -125,6 +125,7 @@ ${NEW_MESSAGES_PROMPT.trimEnd()
   .map(text => `          ${text}`)
   .join('\n')}
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
+        tag: check-in                    # names the task in the log and in a notice of its failure
         prompt: >-
           Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled
           task from your configuration, not a message from the owner: send the owner, in a few

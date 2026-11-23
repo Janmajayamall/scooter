@@ -59,7 +59,7 @@ test('config: the example config is read as it stands', t => {
     timeoutMinutes: 10,
     run: {
       newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }],
-      scheduled: [{ at: '21:30', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: CHECK_IN_PROMPT }],
+      scheduled: [{ at: '21:30', tag: 'check-in', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: CHECK_IN_PROMPT }],
       backfill: [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv'] }],
     },
   })
@@ -87,8 +87,10 @@ test('config: what else is accepted', t => {
   // An unquoted time is a string in YAML 1.2, not a number of minutes as in YAML 1.1.
   const runs = `    run:
       - at: 09:05
+        tag: morning
         prompt: Morning.
       - at: Sun 18:00
+        tag: weekly-review-2
         prompt: Weekly review.
       - backfill: people-1
         skill: people
@@ -98,10 +100,10 @@ test('config: what else is accepted', t => {
   assert.deepEqual(run.newMessages, [])
   assert.deepEqual(channels, [])
   assert.deepEqual(
-    run.scheduled.map(entry => [entry.at, entry.schedule]),
+    run.scheduled.map(entry => [entry.at, entry.tag, entry.schedule]),
     [
-      ['09:05', { weekday: null, hour: 9, minute: 5 }],
-      ['Sun 18:00', { weekday: 7, hour: 18, minute: 0 }],
+      ['09:05', 'morning', { weekday: null, hour: 9, minute: 5 }],
+      ['Sun 18:00', 'weekly-review-2', { weekday: 7, hour: 18, minute: 0 }],
     ],
   )
   assert.deepEqual(run.backfill, [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] }])
@@ -201,7 +203,18 @@ test('config: each error in `run` names the entry and the field', t => {
     ],
     ['      - at: "25:00"\n        prompt: Late.\n', 'agents.lifelog.run[0].at', /must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"/],
     ['      - at: "sun 18:00"\n        prompt: Weekly.\n', 'agents.lifelog.run[0].at', /must be a time/],
-    ['      - at: "21:30"\n        prompt: One.\n      - at: "21:30"\n        prompt: Two.\n', 'agents.lifelog.run[1].at', /is 21:30, which another entry has too/],
+    // Two triggers may not share an `at`, whatever their tags: it is the state's key.
+    ['      - at: "21:30"\n        tag: one\n        prompt: One.\n      - at: "21:30"\n        tag: two\n        prompt: Two.\n', 'agents.lifelog.run[1].at', /is 21:30, which another entry has too/],
+    // Every scheduled trigger has a tag, of lowercase letters, digits and hyphens, each its own.
+    ['      - at: "21:30"\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /is missing/],
+    ['      - at: "21:30"\n        tag: Check-in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens, such as check-in$/],
+    ['      - at: "21:30"\n        tag: check in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: -check-in\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: 2130\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: ""\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
+    ['      - at: "21:30"\n        tag: check-in\n        prompt: One.\n      - at: "07:00"\n        tag: check-in\n        prompt: Two.\n', 'agents.lifelog.run[1].tag', /is check-in, which another entry has too$/],
+    ['      - on: new-messages\n        channels: [whatsapp]\n        tag: new\n        prompt: New.\n', 'agents.lifelog.run[0].tag', /doesn't belong with on/],
+    ['      - backfill: b1\n        skill: people\n        tag: b1\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].tag', /doesn't belong with backfill/],
     ['      - at: "21:30"\n', 'agents.lifelog.run[0].prompt', /is missing/],
     ['      - at: "21:30"\n        prompt: "  "\n', 'agents.lifelog.run[0].prompt', /must be the message pi is given for the run, as text/],
     ['      - at: "21:30"\n        task: Check in.\n', 'agents.lifelog.run[0].task', /doesn't belong with at/],
@@ -230,6 +243,10 @@ test('config: each error in `run` names the entry and the field', t => {
     assert.ok(problem, `${field}: ${JSON.stringify(problems)}`)
     assert.match(problem.message, message, field)
   }
+  // Every fault of the scheduled triggers at once: a tag another has too among them, also when the
+  // other's time is at fault.
+  const scheduled = faults(withRun('      - at: "25:00"\n        tag: check-in\n        prompt: One.\n      - at: "07:00"\n        tag: check-in\n        prompt: "$nwo$"\n      - at: "08:00"\n        tag: Morning\n'))
+  assert.deepEqual(scheduled.map(problem => problem.field).sort(), ['agents.lifelog.run[0].at', 'agents.lifelog.run[1].prompt', 'agents.lifelog.run[1].tag', 'agents.lifelog.run[2].prompt', 'agents.lifelog.run[2].tag'])
 
   // More than one trigger for new messages, each with channels of its own.
   const { parse } = setup(t)

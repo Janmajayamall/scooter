@@ -280,7 +280,7 @@ export function settleLane(lane, batch, outcome, { now }) {
 }
 
 // The state after a scheduled task (the plan's rule for milestone 4). `task` is
-// `{ kind: 'scheduled', at, date }`.
+// `{ kind: 'scheduled', at, tag, date }`.
 //
 // - A task that fails on a setup error or an outage stays due, and is the next try.
 // - A task that ran, or failed for another reason, is done for its date: it runs again at its next
@@ -297,9 +297,9 @@ export function settleTask(state, task, outcome, { now, startedAt, durationMs })
 const minutes = ms => Math.round(ms / 60000)
 
 // The notice of the first failure in a row. `job` is `{ kind: 'messages' }`, or the task as for
-// `settleTask`; `failure` what `failureCause` returned.
+// `settleTask`, which the notice names by its tag; `failure` what `failureCause` returned.
 export function failureNotice(job, { cause, reason }) {
-  const what = job.kind === 'scheduled' ? `run the scheduled task ${job.at}` : 'process your last messages'
+  const what = job.kind === 'scheduled' ? `run the scheduled task ${job.tag}` : 'process your last messages'
   let next
   if (cause === 'setup') next = `Runs are paused until this is fixed. I'll try again every ${minutes(limits.SETUP_RETRY_WAIT)} minutes.`
   else if (cause === 'outage' || job.kind === 'messages') next = "I'll try again."

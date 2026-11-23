@@ -405,11 +405,13 @@ test('notices: the first failure, with its short reason', () => {
     "⚠️ I couldn't process your last messages (OpenRouter: No endpoints found matching your data policy). Runs are paused until this is fixed. I'll try again every 30 minutes.",
   )
   assert.equal(text({ kind: 'messages' }, { cause: 'outage', reason: 'OpenRouter answered 503' }), "⚠️ I couldn't process your last messages (OpenRouter answered 503). I'll try again.")
-  assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'other', reason: 'timed out' }), "⚠️ I couldn't run the scheduled task 21:30 (timed out). It runs again at its next time.")
-  assert.equal(text({ kind: 'scheduled', at: '21:30' }, { cause: 'outage', reason: 'x' }), "⚠️ I couldn't run the scheduled task 21:30 (x). I'll try again.")
+  // A scheduled task is named by its tag.
+  const task = { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09' }
+  assert.equal(text(task, { cause: 'other', reason: 'timed out' }), "⚠️ I couldn't run the scheduled task check-in (timed out). It runs again at its next time.")
+  assert.equal(text(task, { cause: 'outage', reason: 'x' }), "⚠️ I couldn't run the scheduled task check-in (x). I'll try again.")
   assert.equal(
-    text({ kind: 'scheduled', at: '21:30' }, { cause: 'setup', reason: 'OpenRouter answered 401' }),
-    "⚠️ I couldn't run the scheduled task 21:30 (OpenRouter answered 401). Runs are paused until this is fixed. I'll try again every 30 minutes.",
+    text(task, { cause: 'setup', reason: 'OpenRouter answered 401' }),
+    "⚠️ I couldn't run the scheduled task check-in (OpenRouter answered 401). Runs are paused until this is fixed. I'll try again every 30 minutes.",
   )
 })
 

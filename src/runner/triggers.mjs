@@ -70,16 +70,16 @@ export function dueRetries(retry, index, channels, now) {
   return retry.filter(entry => parseIsoSeconds(entry.due) <= now && isToGive(index, entry.seq, channels)).sort((a, b) => a.seq - b.seq)
 }
 
-// The scheduled task that is due at `now`, as `{ at, date, prompt }`, or null: its trigger's `at`
-// and `prompt`, and `date`, the owner's date of the occurrence that came due, which the runner
-// records in `scheduled` once the task has run. An `at` the state has no date for is never due;
-// `startupState` gives every one a date.
+// The scheduled task that is due at `now`, as `{ at, tag, date, prompt }`, or null: its trigger's
+// `at`, `tag` and `prompt`, and `date`, the owner's date of the occurrence that came due, which the
+// runner records in `scheduled` once the task has run. An `at` the state has no date for is never
+// due; `startupState` gives every one a date.
 export function dueScheduled(agent, state, { now, timeZone }) {
-  for (const { at, schedule, prompt } of agent.run.scheduled) {
+  for (const { at, tag, schedule, prompt } of agent.run.scheduled) {
     const done = state.scheduled[at]
     if (done === undefined) continue
     const date = localDate(previousLocalTime(schedule, timeZone, now), timeZone)
-    if (date > done) return { at, date, prompt }
+    if (date > done) return { at, tag, date, prompt }
   }
   return null
 }
@@ -87,7 +87,7 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 // What to do next. Returns one of:
 //
 //   { kind: 'messages' }               run a batch of messages (`buildBatch`)
-//   { kind: 'scheduled', at, date, prompt }
+//   { kind: 'scheduled', at, tag, date, prompt }
 //   { kind: 'backfill', id }           run a batch of the backfill in progress
 //   { kind: 'backfill-finished', id }  the backfill has covered everything up to `until`
 //   { kind: 'idle', reason }           nothing now: `paused`, `quiet` (messages wait for the owner

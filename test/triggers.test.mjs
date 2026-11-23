@@ -14,14 +14,15 @@ const at = Date.parse
 const SECOND = 1000
 const MINUTE = 60 * SECOND
 
-// An agent whose one trigger for new messages names `channels`, or with none when they are none.
+// An agent whose one trigger for new messages names `channels`, or with none when they are none;
+// with a scheduled trigger for each `[at, prompt, tag]` of `scheduled`.
 function agentWith({ scheduled = [], backfill = [], channels = ['whatsapp', 'email'] } = {}) {
   return {
     name: 'lifelog',
     channels,
     run: {
       newMessages: channels.length > 0 ? [{ channels }] : [],
-      scheduled: scheduled.map(([time, prompt]) => ({ at: time, schedule: parseLocalTime(time), prompt })),
+      scheduled: scheduled.map(([time, prompt, tag = 'task']) => ({ at: time, tag, schedule: parseLocalTime(time), prompt })),
       backfill: backfill.map(id => ({ id, skill: 'people', writes: ['agents/lifelog/views/people.csv'] })),
     },
   }
@@ -138,11 +139,11 @@ test('triggers: a pause holds everything back until its next try, a text such as
 })
 
 test('triggers: a scheduled task runs at its time, once, and waits for messages and pauses', () => {
-  const agent = agentWith({ scheduled: [['21:30', 'Evening check-in.']] })
+  const agent = agentWith({ scheduled: [['21:30', 'Evening check-in.', 'check-in']] })
   const state = { ...HANDLED, scheduled: { '21:30': '2026-11-08' } }
   // 21:29 and 21:30 in Kolkata.
   assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T15:59:59Z' }), { kind: 'idle', reason: 'nothing' })
-  assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T16:00:00Z' }), { kind: 'scheduled', at: '21:30', date: '2026-11-09', prompt: 'Evening check-in.' })
+  assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T16:00:00Z' }), { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09', prompt: 'Evening check-in.' })
   // Once it has run, the runner records the date, and the task waits for tomorrow.
   const ran = { ...state, scheduled: { '21:30': '2026-11-09' } }
   assert.deepEqual(ask({ agent, state: ran, lines: EARLIER, now: '2026-11-10T15:59:59Z' }), { kind: 'idle', reason: 'nothing' })
@@ -211,13 +212,13 @@ test('time: scheduled tasks run at the right local time across daylight-saving c
 })
 
 test('time: a SCOOTER_TZ changed between restarts doesn\'t stall the schedule or the messages', () => {
-  const agent = agentWith({ scheduled: [['21:30', 'Check in.']] })
+  const agent = agentWith({ scheduled: [['21:30', 'Check in.', 'check-in']] })
   // In Kolkata the task ran at 21:30 on 9 November, 16:00 UTC. The runner restarts in New York,
   // where it is then 12:00 on the same day: the task runs at 21:30 there, that evening.
   const fromKolkata = { ...HANDLED, scheduled: { '21:30': '2026-11-09' } }
   const york = startupState(fromKolkata, agent, { now: at('2026-11-09T17:00:00Z'), timeZone: 'America/New_York' }).state
   assert.equal(dueScheduled(agent, york, { now: at('2026-11-10T02:29:00Z'), timeZone: 'America/New_York' }), null)
-  assert.deepEqual(dueScheduled(agent, york, { now: at('2026-11-10T02:30:00Z'), timeZone: 'America/New_York' }), { at: '21:30', date: '2026-11-09', prompt: 'Check in.' })
+  assert.deepEqual(dueScheduled(agent, york, { now: at('2026-11-10T02:30:00Z'), timeZone: 'America/New_York' }), { at: '21:30', tag: 'check-in', date: '2026-11-09', prompt: 'Check in.' })
 
   // The other way: in New York it ran at 21:30 on 9 November, 02:30 UTC on the 10th, which is
   // already 08:00 on the 10th in Kolkata. Its date there is ahead of nothing, and the task runs at

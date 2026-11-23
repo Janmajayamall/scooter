@@ -373,8 +373,8 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
 // ---------------------------------------------------------------------------------------------
 // Tasks and sessions
 
-test('tasks: the evening check-in runs at 21:30 with its prompt, sends its text on its own, and is done for the day', async t => {
-  const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
+test('tasks: the evening check-in runs at 21:30 with its prompt, is logged by its tag, sends its text on its own, and is done for the day', async t => {
+  const { runner, clock, state, outbox, sandbox, git, entries } = await openWith(t, [], { yaml: exampleYaml() })
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
   await clock.advance(10 * MINUTE - 30 * SECOND)
   const { action, outcome } = await runner.tick()
@@ -382,6 +382,11 @@ test('tasks: the evening check-in runs at 21:30 with its prompt, sends its text 
   assert.deepEqual(outcome, { ok: true, cause: null })
   // Its trigger's prompt, filled in: it gives no lines.
   assert.equal(sandbox.runs[0].spec.argv.at(-1), CHECK_IN_PROMPT.replace('$now$', 'Monday 9 November 2026, 21:30').replace('$user.timezone$', 'Asia/Kolkata').replace('$reply_mode$', 'quiet'))
+  // The log names the task by its tag: `at` is the time of the log's own line.
+  assert.deepEqual(
+    entries.filter(entry => entry.event === 'runner.run_started'),
+    [{ at: '2026-11-09T16:00:00Z', level: 'info', component: 'test', event: 'runner.run_started', agent: 'lifelog', job: 'scheduled', seqs: [], tag: 'check-in', session: 'lifelog-2026-11-09' }],
+  )
   // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL, if sends names it.
   assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.', channels: ['whatsapp'] }])
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
@@ -405,7 +410,7 @@ test('tasks: a scheduled task that fails for its own reasons waits for its next 
   assert.deepEqual((await late.runner.tick()).outcome, { ok: false, cause: 'other' })
   assert.deepEqual(late.state().scheduled, { '21:30': '2026-11-09' })
   assert.equal(late.sandbox.runs.length, 1)
-  assert.deepEqual(late.outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the scheduled task 21:30 (pi exited with code 2). It runs again at its next time." }])
+  assert.deepEqual(late.outbox(), [{ type: 'text', by: 'runner', text: "⚠️ I couldn't run the scheduled task check-in (pi exited with code 2). It runs again at its next time." }])
 
   const outage = await openWith(t, [], { start: '2026-11-09T15:59:59Z' })
   outage.sandbox.behave({ openrouter: 502 })
@@ -435,7 +440,7 @@ test('tasks: a scheduled task that a setup error holds back is still the next tr
   const restarted = await startTestRunner(t, prepared)
   assert.deepEqual(restarted.state().scheduled, { '21:30': '2026-11-08' })
   const { action, outcome } = await restarted.runner.tick()
-  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', date: '2026-11-09', prompt: CHECK_IN_PROMPT })
+  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09', prompt: CHECK_IN_PROMPT })
   assert.deepEqual(outcome, { ok: true, cause: null })
   assert.equal(state().paused, undefined)
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })

@@ -169,7 +169,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       }
       if (action.kind === 'scheduled') {
         const prompt = scheduledPrompt({ ...prompts, prompt: action.prompt })
-        const { outcome } = await run({ kind: 'scheduled', at: action.at, date: action.date, prompt }, signal)
+        const { outcome } = await run({ kind: 'scheduled', at: action.at, tag: action.tag, date: action.date, prompt }, signal)
         return { action, outcome }
       }
       // A backfill's batch, and finishing it (`backfill.mjs`). `nextAction` names only a

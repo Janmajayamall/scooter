@@ -314,7 +314,7 @@ The project's own names, each used one way in these documents.
 | run | One run of pi, in one VM, on one batch or scheduled task |
 | trigger | An entry of an agent's `run` in `agents.yaml`, which says when it runs: on new messages of its `channels`, at a time, or a backfill ([agents.yaml](architecture/configuration.md#agentsyaml)) |
 | prompt | The message pi is given for a run: the `prompt` of the trigger that starts it, with its variables, such as `$now$` and `$seq.unread$`, filled in. The agent's prompt is another: the file of the config folder, such as `prompts/lifelog.md`, that pi appends to its system prompt |
-| scheduled task | The run of a trigger `at` a time, such as the evening check-in, which is given no lines |
+| scheduled task | The run of a trigger `at` a time, such as the evening check-in, which is given no lines, and named by its trigger's `tag`, such as `check-in` |
 | view | A file lifelog keeps in its `views/`, such as `expenses.csv`, which its `writes` names. The runner doesn't know views: they are the agent's prompt's and skills' |
 | memory | Lifelog's `memory/`: the owner's standing instructions and the open questions, which lifelog's prompt tells the agent to read first. The runner doesn't read it |
 | `reads`, `writes` | What `agents.yaml` lets an agent's VM see, and change: files and folders of the data folder ([agents.yaml](architecture/configuration.md#agentsyaml)) |
