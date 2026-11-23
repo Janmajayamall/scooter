@@ -5,7 +5,8 @@
 //   scooter backfill --agent-file <file> [--from <UTC date or seq>]
 //
 // It runs as the runner's user, and refuses to run as another where that user is there
-// (`wrongUser`); in Docker, as `docker compose run --rm runner backfill …`. It reads
+// (`wrongUser`, which `src/cli.mjs` asks before the runner's settings are read); in Docker, as
+// `docker compose run --rm runner backfill …`. It reads
 // `agents.yaml` and the datastore, checks its arguments against them, writes the job's file into
 // the agent's folder, `agents/<agent>/jobs/<id>.json`, and exits. The running runner takes the job
 // at its next look, with no restart (`backfill.mjs`). It changes nothing else, and takes no lock:
@@ -250,8 +251,10 @@ const RUNNER_USER = 'scooter-runner'
 // and the job's file in the runner's folder, which must be the runner's user's: made as root, the
 // folder is one the runner can't read, so the job never runs, and a later command as the runner's
 // user can't write there. Where that user isn't there, as in development, it runs as whoever runs
-// it. As `doctor` does (`wrongUser` in `src/ops/doctor.mjs`).
-export async function wrongUser({ proc, uid = process.getuid?.(), docker = inDocker() }) {
+// it. As `doctor` does (`wrongUser` in `src/ops/doctor.mjs`). `src/cli.mjs` asks it before anything
+// is read, the runner's settings among them: natively `runner.env` is the runner's user's alone, so
+// another user would be told it can't be read, and not how to run the command.
+export async function wrongUser({ proc = createProc({ log: createLog({ component: 'backfill' }) }), uid = process.getuid?.(), docker = inDocker() } = {}) {
   const runnerUser = await proc.findUser(RUNNER_USER)
   if (runnerUser === null || runnerUser.uid === uid) return null
   const how = docker ? 'docker compose run --rm runner backfill …' : `sudo -u ${RUNNER_USER} scooter backfill …`
@@ -259,15 +262,10 @@ export async function wrongUser({ proc, uid = process.getuid?.(), docker = inDoc
 }
 
 // `scooter backfill`: queues the job, and says so on stdout. Exits with 0 once it is written, 2
-// when it can't take how it was called or how Scooter is configured, or runs as another user than
-// the runner's (`wrongUser`), which it looks at before it reads or makes anything, and 1 when it
-// fails. `proc`, `uid` and `docker` are for the tests.
-export async function runBackfill({ args = [], settings, stdout, stderr, clock = systemClock, proc = createProc({ log: createLog({ component: 'backfill', clock }) }), uid = process.getuid?.(), docker = inDocker() }) {
-  const wrong = await wrongUser({ proc, uid, docker })
-  if (wrong !== null) {
-    stderr.write(`scooter backfill: ${wrong}\n`)
-    return 2
-  }
+// when it can't take how it was called or how Scooter is configured, and 1 when it fails. Run as
+// another user than the runner's, it never starts: `src/cli.mjs` refuses that user first, with 2
+// (`wrongUser`), before it reads or makes anything.
+export async function runBackfill({ args = [], settings, stdout, stderr, clock = systemClock }) {
   let queued
   try {
     queued = await queueJob({ args, settings, clock })

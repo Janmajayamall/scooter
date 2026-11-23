@@ -8,9 +8,53 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { COMMANDS, main } from '../src/cli.mjs'
-import { makeTestDir } from './support/tmp.mjs'
+import { makePaths } from '../src/common/paths.mjs'
+import { inDocker } from '../src/common/proc.mjs'
+import { isRoot } from './support/root.mjs'
+import { line, writeConfig, writeDatastore } from './support/runner.mjs'
+import { atEnd, makeTestDir } from './support/tmp.mjs'
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url))
+
+// A native install of the runner's, in the test's folder, for a CLI command that runs as the
+// runner's user only:
+// - `runnerUser(uid)`: `scooter-runner` is a user at `uid`, or there is none with null, as `id`
+//   tells the CLI: a stand-in for `id`, first on Scooter's PATH while the test runs, that knows no
+//   other user.
+// - `envFile(readable)`: `runner.env`, with the runner's settings, which only the runner's user can
+//   read, as `setup` leaves it, 0600 and its own: unreadable, mode 0. Root reads a file of any mode,
+//   so as root a folder stands in its place, which no one can read as a file.
+// - `env`: the environment to run the command with, and `files()`, every name in the test's folder.
+function nativeInstall(t) {
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: path.join(root, 'config') })
+  const bin = path.join(root, 'bin')
+  const envDir = path.join(root, 'etc')
+  fs.mkdirSync(bin)
+  fs.mkdirSync(envDir)
+  const before = process.env.PATH
+  process.env.PATH = `${bin}${path.delimiter}${before}`
+  atEnd(t, () => {
+    process.env.PATH = before
+  })
+  const runnerUser = uid => {
+    const answer = uid === null ? 'exit 1' : `[ "$3" = scooter-runner ] || exit 1\necho ${uid}`
+    fs.writeFileSync(path.join(bin, 'id'), `#!/bin/sh\n${answer}\n`)
+    fs.chmodSync(path.join(bin, 'id'), 0o755)
+  }
+  const file = path.join(envDir, 'runner.env')
+  const envFile = readable => {
+    fs.rmSync(file, { recursive: true, force: true })
+    if (isRoot && !readable) {
+      fs.mkdirSync(file)
+    } else {
+      fs.writeFileSync(file, `OPENROUTER_API_KEY=sk-or-v1-runner\nDATA_DIR=${paths.dataDir}\nCONFIG_DIR=${paths.configDir}\n`)
+      fs.chmodSync(file, readable ? 0o600 : 0o000)
+    }
+  }
+  const files = () => fs.readdirSync(root, { recursive: true }).sort()
+  return { paths, runnerUser, envFile, file, env: { SCOOTER_ENV_DIR: envDir }, files, unreadable: isRoot ? 'EISDIR' : 'EACCES' }
+}
 
 // Runs `main` and collects what it prints.
 async function run(argv, options = {}) {
@@ -136,6 +180,46 @@ test('cli: a settings fault stops the command before its code is loaded, and nam
   assert.equal(out, '')
   assert.equal(err, 'scooter runner: OPENROUTER_API_KEY is required\nscooter runner: AGENT_ACCEL must be auto, kvm, emulation or hvf\n')
   assert.equal(loaded, false)
+})
+
+test("cli: backfill looks at who runs it before the runner's settings are read: another user, who can't read runner.env, is refused and told how to run it, nothing read or made", async t => {
+  const { paths, runnerUser, envFile, file, env, files, unreadable } = nativeInstall(t)
+  writeConfig(paths.configDir)
+  fs.mkdirSync(paths.datastore, { recursive: true })
+  writeDatastore(paths, [line.text(1, '2026-11-09T10:00:00Z', 'coffee 120')])
+  const uid = process.getuid()
+  const how = inDocker() ? 'docker compose run --rm runner backfill …' : 'sudo -u scooter-runner scooter backfill …'
+
+  // Another user than the runner's, root among them: refused, exit 2, with the command to run, and
+  // runner.env, which it can't read, not read; given no argument too, which would print the usage.
+  runnerUser(uid + 1)
+  envFile(false)
+  const before = files()
+  for (const args of [['lifelog', '--empty'], []]) {
+    assert.deepEqual(await run(['backfill', ...args], { env }), {
+      code: 2,
+      out: '',
+      err: `scooter backfill: backfill writes the job into the runner's folder, so it runs as scooter-runner, not as uid ${uid}: ${how}\n`,
+    })
+  }
+  assert.deepEqual(files(), before)
+  assert.equal(fs.existsSync(paths.agents), false)
+
+  // As the runner's user, the settings are read after the look: one it can't read is said, and with
+  // them it queues the job. So it does where there is no such user, as in development.
+  runnerUser(uid)
+  assert.deepEqual(await run(['backfill', 'lifelog'], { env }), {
+    code: 2,
+    out: '',
+    err: `scooter backfill: ${file} can't be read (${unreadable})\nscooter backfill: OPENROUTER_API_KEY is required\n`,
+  })
+  envFile(true)
+  const queued = await run(['backfill', 'lifelog'], { env })
+  assert.equal(queued.code, 0, queued.err)
+  assert.match(queued.out, /^Queued backfill \S+ of lifelog, from #1: /)
+  runnerUser(null)
+  assert.equal((await run(['backfill', 'lifelog'], { env })).code, 0)
+  assert.equal(fs.readdirSync(paths.agentJobs('lifelog')).length, 2)
 })
 
 test('cli: a command\'s result is the exit code', async () => {

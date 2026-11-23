@@ -16,6 +16,9 @@ import { SettingsError, loadSettings } from './common/settings.mjs'
 // - `where`: where it runs, which the help text shows beside the command. Natively a command runs as its service's user.
 // - `load`: returns the function that carries the command out. It imports the command's code
 //   only when the command is run. A command without one isn't built yet.
+// - `wrongUser`: for a command that runs as its side's user only, returns the function that says
+//   why it doesn't run as the user it runs as, or null. It is asked first, before the settings are
+//   read: another user may be unable to read them, and would be told that, not how to run it.
 //
 // The function gets `{ args, settings, env, stdout, stderr }` and returns the exit code, or
 // nothing for 0. `settings` is null for a `host` command.
@@ -140,6 +143,7 @@ export const COMMANDS = {
     usage: 'backfill <agent> [flags]',
     where: 'runner',
     summary: 'Queue a job that runs an agent, or one given in a file, over history; scooter backfill alone lists its flags',
+    wrongUser: async () => (await import('./runner/enqueue.mjs')).wrongUser,
     load: async () => (await import('./runner/enqueue.mjs')).runBackfill,
   },
 }
@@ -173,6 +177,15 @@ export async function main(argv, { env = process.env, stdout = process.stdout, s
   if (!command.load) {
     stderr.write(`scooter ${name}: this command isn't built yet\n`)
     return EXIT_FAILED
+  }
+
+  if (command.wrongUser) {
+    const wrongUser = await command.wrongUser()
+    const wrong = await wrongUser()
+    if (wrong !== null) {
+      stderr.write(`scooter ${name}: ${wrong}\n`)
+      return EXIT_USAGE
+    }
   }
 
   let settings = null

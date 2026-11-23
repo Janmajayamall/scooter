@@ -9,7 +9,7 @@ import { holdInstance } from '../src/common/instance.mjs'
 import { readJob } from '../src/common/jobfile.mjs'
 import { limits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { BackfillError, parseArgs, queueJob, runBackfill } from '../src/runner/enqueue.mjs'
+import { BackfillError, parseArgs, queueJob, runBackfill, wrongUser } from '../src/runner/enqueue.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { exampleYaml, line, writeConfig, writeDatastore } from './support/runner.mjs'
 import { runnerSettings } from './support/test-runner.mjs'
@@ -39,13 +39,12 @@ function setup(t, { lines = LINES, yaml = exampleYaml() } = {}) {
     fs.writeFileSync(full, text)
     return full
   }
-  // As the command runs where the runner's user isn't there, as in development, unless `users`
-  // gives the users there are and `uid` who runs it.
-  const run = async (args, { users = {}, uid = process.getuid?.(), docker = false } = {}) => {
+  // The command, once `src/cli.mjs` has let it run: who runs it is the CLI's to look at
+  // (test/cli.test.mjs).
+  const run = async args => {
     let out = ''
     let err = ''
-    const proc = { findUser: async name => users[name] ?? null }
-    const code = await runBackfill({ args, settings, clock, proc, uid, docker, stdout: { write: text => (out += text) }, stderr: { write: text => (err += text) } })
+    const code = await runBackfill({ args, settings, clock, stdout: { write: text => (out += text) }, stderr: { write: text => (err += text) } })
     return { code, out, err }
   }
   return { root, settings, paths, clock, file, run, queue: args => queueJob({ args, settings, clock }) }
@@ -277,30 +276,15 @@ test('backfill command: its exit codes: 2 for a call or a configuration it can\'
   assert.equal(fs.existsSync(paths.agentJobs('lifelog')), false)
 })
 
-test("backfill command: it runs as the runner's user where that user is there, refusing any other before it reads or makes anything, and says how", async t => {
-  const { run, paths } = setup(t)
-  const users = { 'scooter-runner': { uid: 997, gid: 997 } }
-  // As root, or any user but the runner's: refused, exit 2, naming the command to run, and nothing
-  // read or made, so not the fault of agents.yaml either.
-  fs.writeFileSync(paths.agentsYaml, exampleYaml().replace('reply_mode: quiet', 'reply_mode: chatty'))
+test("backfill command: it runs as the runner's user where that user is there, and says how to run it to any other", async () => {
+  const proc = users => ({ findUser: async name => users[name] ?? null })
+  const runner = { 'scooter-runner': { uid: 997, gid: 997 } }
+  // As root, or any user but the runner's: the reason, and the command to run, natively or in Docker.
   for (const uid of [0, 1000]) {
-    const refused = await run(['lifelog', '--empty'], { users, uid })
-    assert.equal(refused.code, 2)
-    assert.equal(refused.err, `scooter backfill: backfill writes the job into the runner's folder, so it runs as scooter-runner, not as uid ${uid}: sudo -u scooter-runner scooter backfill …\n`)
-    assert.equal(refused.out, '')
+    assert.equal(await wrongUser({ proc: proc(runner), uid, docker: false }), `backfill writes the job into the runner's folder, so it runs as scooter-runner, not as uid ${uid}: sudo -u scooter-runner scooter backfill …`)
   }
-  const docker = await run(['lifelog'], { users: { 'scooter-runner': { uid: 10002, gid: 10002 } }, uid: 0, docker: true })
-  assert.equal(docker.code, 2)
-  assert.match(docker.err, /, not as uid 0: docker compose run --rm runner backfill …\n$/)
-  assert.equal((await run([], { users, uid: 0 })).code, 2)
-  assert.equal(fs.existsSync(paths.agentDir('lifelog')), false)
-  assert.equal(fs.existsSync(paths.agents), false)
-
+  assert.match(await wrongUser({ proc: proc({ 'scooter-runner': { uid: 10002, gid: 10002 } }), uid: 0, docker: true }), /, not as uid 0: docker compose run --rm runner backfill …$/)
   // As the runner's user, and where that user isn't there, as in development: it runs.
-  fs.writeFileSync(paths.agentsYaml, exampleYaml())
-  const own = await run(['lifelog'], { users, uid: 997 })
-  assert.equal(own.code, 0, own.err)
-  const none = await run(['lifelog'], { users: {}, uid: 0 })
-  assert.equal(none.code, 0, none.err)
-  assert.equal(fs.readdirSync(paths.agentJobs('lifelog')).length, 2)
+  assert.equal(await wrongUser({ proc: proc(runner), uid: 997, docker: false }), null)
+  assert.equal(await wrongUser({ proc: proc({}), uid: 0, docker: false }), null)
 })
