@@ -7,7 +7,7 @@ import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { parseLocalTime } from '../src/common/time.mjs'
 import { startupState } from '../src/runner/state.mjs'
-import { dueScheduled, isWorkItem, nextAction } from '../src/runner/triggers.mjs'
+import { dueScheduled, isToGive, isWorkItem, nextAction } from '../src/runner/triggers.mjs'
 import { indexOf, line } from './support/runner.mjs'
 
 const at = Date.parse
@@ -21,7 +21,7 @@ function agentWith({ scheduled = [], backfill = [], channels = ['whatsapp', 'ema
     channels,
     run: {
       newMessages: channels.length > 0 ? [{ channels }] : [],
-      scheduled: scheduled.map(([time, task]) => ({ at: time, schedule: parseLocalTime(time), task })),
+      scheduled: scheduled.map(([time, prompt]) => ({ at: time, schedule: parseLocalTime(time), prompt })),
       backfill: backfill.map(id => ({ id, skill: 'people', writes: ['agents/lifelog/views/people.csv'] })),
     },
   }
@@ -115,6 +115,20 @@ test('triggers: retries start a batch when they are due', () => {
   assert.deepEqual(ask({ state: { ...HANDLED, retry: stale }, lines: EARLIER }), { kind: 'idle', reason: 'nothing' })
 })
 
+test('triggers: a message already deleted is no work to give, and starts no run; its deletion is', () => {
+  const deleted = [...EARLIER, line.delete(4, '2026-11-09T15:50:00Z', 3)]
+  // #3 deleted, waiting to be tried again and due, with its deletion dealt with: nothing to do.
+  const retry = [{ seq: 3, attempts: 1, due: '2026-11-09T15:00:00Z', reason: 'not marked' }]
+  assert.deepEqual(ask({ state: { ...HANDLED, cursor: 4, retry }, lines: deleted }), { kind: 'idle', reason: 'nothing' })
+  // Its deletion, after the cursor, is work.
+  assert.deepEqual(ask({ state: { ...HANDLED, retry }, lines: deleted }), { kind: 'messages' })
+  // A message deleted before it was given: only its deletion is work.
+  assert.deepEqual(ask({ state: { ...initialAgentState(), cursor: 2 }, lines: deleted }), { kind: 'messages' })
+  assert.deepEqual(isToGive(indexOf(deleted), 3, ['whatsapp']), false)
+  assert.deepEqual(isToGive(indexOf(deleted), 4, ['whatsapp']), true)
+  assert.deepEqual(isToGive(indexOf(deleted), 1, ['whatsapp']), true)
+})
+
 test('triggers: a pause holds everything back until its next try, a text such as /status among the messages', () => {
   const lines = [...EARLIER, line.text(4, '2026-11-09T15:50:00Z', '/status'), line.text(5, '2026-11-09T15:50:01Z', 'lunch')]
   const paused = { since: '2026-11-09T15:40:00Z', cause: 'setup', reason: 'OpenRouter answered 401', next: '2026-11-09T16:10:00Z', tries: 1 }
@@ -128,7 +142,7 @@ test('triggers: a scheduled task runs at its time, once, and waits for messages 
   const state = { ...HANDLED, scheduled: { '21:30': '2026-11-08' } }
   // 21:29 and 21:30 in Kolkata.
   assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T15:59:59Z' }), { kind: 'idle', reason: 'nothing' })
-  assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T16:00:00Z' }), { kind: 'scheduled', at: '21:30', date: '2026-11-09', task: 'Evening check-in.' })
+  assert.deepEqual(ask({ agent, state, lines: EARLIER, now: '2026-11-09T16:00:00Z' }), { kind: 'scheduled', at: '21:30', date: '2026-11-09', prompt: 'Evening check-in.' })
   // Once it has run, the runner records the date, and the task waits for tomorrow.
   const ran = { ...state, scheduled: { '21:30': '2026-11-09' } }
   assert.deepEqual(ask({ agent, state: ran, lines: EARLIER, now: '2026-11-10T15:59:59Z' }), { kind: 'idle', reason: 'nothing' })
@@ -203,7 +217,7 @@ test('time: a SCOOTER_TZ changed between restarts doesn\'t stall the schedule or
   const fromKolkata = { ...HANDLED, scheduled: { '21:30': '2026-11-09' } }
   const york = startupState(fromKolkata, agent, { now: at('2026-11-09T17:00:00Z'), timeZone: 'America/New_York' }).state
   assert.equal(dueScheduled(agent, york, { now: at('2026-11-10T02:29:00Z'), timeZone: 'America/New_York' }), null)
-  assert.deepEqual(dueScheduled(agent, york, { now: at('2026-11-10T02:30:00Z'), timeZone: 'America/New_York' }), { at: '21:30', date: '2026-11-09', task: 'Check in.' })
+  assert.deepEqual(dueScheduled(agent, york, { now: at('2026-11-10T02:30:00Z'), timeZone: 'America/New_York' }), { at: '21:30', date: '2026-11-09', prompt: 'Check in.' })
 
   // The other way: in New York it ran at 21:30 on 9 November, 02:30 UTC on the 10th, which is
   // already 08:00 on the 10th in Kolkata. Its date there is ahead of nothing, and the task runs at
@@ -252,6 +266,11 @@ test('triggers: a backfill batch runs only when nothing live is waiting, and fin
   const waiting = { ...done, backfill: { ...done.backfill, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }] } }
   assert.deepEqual(ask({ agent, state: waiting, lines }), { kind: 'idle', reason: 'nothing' })
   assert.deepEqual(ask({ agent, state: waiting, lines, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill', id: 'people-1' })
+  // A message of its retries that was deleted since, live, holds it back no more: the runner
+  // settles it, and no batch would give it.
+  const deletedSince = [...lines, line.delete(6, '2026-11-09T15:50:20Z', 3)]
+  assert.deepEqual(ask({ agent, state: { ...waiting, cursor: 6 }, lines: deletedSince }), { kind: 'backfill-finished', id: 'people-1' })
+  assert.deepEqual(ask({ agent, state: { ...waiting, cursor: 6 }, lines: deletedSince, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill-finished', id: 'people-1' })
   // One whose entry left the config is left alone until the next start drops it.
   assert.deepEqual(ask({ agent: agentWith(), state: { ...state, cursor: 5 }, lines }), { kind: 'idle', reason: 'nothing' })
 

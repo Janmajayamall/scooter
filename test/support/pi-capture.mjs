@@ -31,13 +31,12 @@ const WRITTEN_BY = 'Written by test/tools/capture-pi-requests.mjs.'
 // The default config asks for this level.
 const SESSION_THINKING = 'low'
 
-// A prompt as the runner writes it.
-const PROMPT = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: ${GUEST.agent}. Attachments are in ${GUEST.datastore} (read-only).
-
-New messages:
-#1050 21:13 text: "coffee 150"
-#1051 21:14 photo ${DAY}/1051.png (image/png), caption: "the receipt"`
+// A prompt as the runner writes it: the default prompt for new messages, filled in.
+const PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
+Your folder: ${GUEST.agent}. The datastore: ${GUEST.datastore}. This run may change: ${GUEST.agent}/views/ ${GUEST.agent}/memory/.
+New: 1050 1051
+Given before: none
+`
 
 // One batch, start to finish: the model reads a message and a photo, changes a view and the
 // memory, runs a command and reports. It thinks before its first and its last step, and says

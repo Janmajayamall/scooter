@@ -23,7 +23,7 @@
 //    which is dropped, among them, because the rebuild runs every skill over the history each
 //    would cover.
 // 4. **Replay** the datastore up to `until`, silently (`replay.mjs`): batches of one of the
-//    owner's days, `Now:` each batch's own time, a session for each day, each batch taking
+//    owner's days, `$now$` each batch's own time, a session for each day, each batch taking
 //    `run.lock` and giving way to `backup.lock`. Its progress is a lane it keeps in memory, the
 //    live lane's fields of a state that is never saved, and it handles failures as the runner
 //    does: items not marked are tried again a minute later, and given up on after
@@ -124,7 +124,7 @@ function batchReport({ job, day, after, outcome, now, timeZone }) {
 // can't start for how things stand, and anything else that stops it.
 export async function rebuildAgent({ settings, agentName, openSandbox, clock = systemClock, log = createLog({ component: 'rebuild', clock }), proc = createProc({ log, clock }), say = () => {}, signal }) {
   const paths = makePaths(settings)
-  const { agents } = loadConfig({ paths })
+  const { agents } = loadConfig({ paths, settings })
   const agent = agents.find(candidate => candidate.name === agentName)
   if (!agent) throw new RebuildError(`agents.yaml has no agent called ${agentName}; it has ${agents.map(candidate => candidate.name).join(', ')}`)
 
@@ -245,17 +245,7 @@ export async function rebuildAgent({ settings, agentName, openSandbox, clock = s
         if (!(await sleep('retry', Math.min(...waiting) - now))) return stopped()
         continue
       }
-      const built = buildReplayBatch({
-        agent,
-        lane: state,
-        until,
-        index,
-        paths,
-        now,
-        timeZone: settings.timeZone,
-        homeCurrency: settings.homeCurrency,
-        internet: settings.agentInternet,
-      })
+      const built = buildReplayBatch({ agent, lane: state, until, index, paths, settings, now })
       if (built === null) break
       const job = { kind: 'rebuild', batch: built.batch, prompt: built.prompt, sessionId: replaySessionId(agent, { day: built.day }) }
       const done = await performRun({ ...context, state, job })

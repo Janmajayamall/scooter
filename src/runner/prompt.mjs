@@ -1,263 +1,148 @@
-// What the agent is told in a run: the prompt, which is pi's user message. pi's system prompt is
-// pi's own, with the agent's prompt of the config folder appended, the run's copy of it
-// (`prepareRun` in `agentdir.mjs`).
+// The prompt: the message pi is given for a run. It is the `prompt` of the trigger that starts the
+// run, as the owner wrote it in `agents.yaml`, with its variables filled in, and nothing else:
 //
-// The prompt shows each item as it is now, with times in the owner's time zone:
+//   prompt: |
+//     Now: $now$ ($user.timezone$). Reply mode: $reply_mode$.
+//     New: $seq.unread$
+//     Given before: $seq.retry$
 //
-//   [scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-//   Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).
+// becomes
 //
-//   New messages:
-//   #1050 21:13 photo /data/datastore/2026/11/09/1050.jpg (image/jpeg), caption: "lunch with sam"
-//   #1053 21:20 text: "work"
-//         ↳ reply to #1043, which you sent: "Blue Tokai, ₹450 at 12:40: work or personal?"
+//   Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Reply mode: quiet.
+//   New: 1050 1051 1053
+//   Given before: 1047 (attempt 2 of 4)
 //
-//   Retrying (not handled yet):
-//   #1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
+// A variable is `$`, a name of letters, dots and underscores that starts with a letter, and `$`.
+// Any other `$` is the owner's own text, as in "$5". One the runner doesn't know is a fault of
+// `agents.yaml` (`config.mjs`), which also holds every prompt, filled in with the longest values its
+// variables can take, within `PROMPT_MAX_BYTES`: the prompt is one command-line argument, which
+// Linux refuses at 128 KB. The values are the owner's settings, Scooter's own paths, a time and
+// numbers: nothing a channel delivered, no text, name or path from a message, goes into a prompt.
 //
-//   For context only (no action, nothing to mark):
-//   #1049 21:05 you sent: "Logged ₹340 Uber."
-//   #1048 21:04 the owner reacted 👍 to #1046
-//
-// Every text the owner or the agent wrote is shown as a JSON string, so a line break or a quote in
-// it can't pass for the prompt's own structure. The prompt is one command-line argument, so
-// `batch.mjs` keeps it within `PROMPT_MAX_BYTES`, and a text too long for that is shown cut,
-// followed by where the whole of it is.
+// pi's system prompt is pi's own, with the agent's prompt of the config folder appended, the run's
+// copy of it (`prepareRun` in `agentdir.mjs`).
 
 import path from 'node:path'
-import { dataFlag, dataText } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
-import { parseIsoSeconds, shortLocalTime, toLocal } from '../common/time.mjs'
+import { toLocal } from '../common/time.mjs'
+
+// The variables a prompt may hold, by name, in the order the documents give them.
+export const VARIABLES = ['now', 'user.timezone', 'user.currency', 'reply_mode', 'internet', 'agent.dir', 'datastore.dir', 'seq.unread', 'seq.retry', 'run.writes']
+
+// A variable in a prompt. A `$` that doesn't start one is text.
+const VARIABLE = /\$([A-Za-z][A-Za-z_.]*)\$/g
+
+// What a list with nothing in it reads.
+export const NONE = 'none'
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const pad = number => String(number).padStart(2, '0')
 
-export const SECTIONS = {
-  new: 'New messages:',
-  retrying: 'Retrying (not handled yet):',
-  context: 'For context only (no action, nothing to mark):',
-  task: 'Scheduled task (from your configuration, not a message from the owner):',
-}
-
-// How far an item's further lines are indented, under its `#seq`.
-const INDENT = '      '
-
-// ---------------------------------------------------------------------------------------------
-// Times, in the owner's time zone
-
-// `Monday 9 November 2026, 21:20`.
+// `Monday 9 November 2026, 21:20`: `$now$`.
 export function longTime(ms, timeZone) {
   const t = toLocal(ms, timeZone)
   return `${WEEKDAYS[t.weekday - 1]} ${t.day} ${MONTHS[t.month - 1]} ${t.year}, ${pad(t.hour)}:${pad(t.minute)}`
 }
 
-// An item's time: `21:13` on the owner's day of `now`, `Sun 8 Nov 20:02` on another day of the
-// same year, and `Sat 8 Nov 2025 20:02` in another year (`shortLocalTime`).
-export const itemTime = shortLocalTime
+// The names of the variables `template` holds, in order, each as often as it is there.
+export function variablesIn(template) {
+  return [...template.matchAll(VARIABLE)].map(match => match[1])
+}
 
-// The two lines every prompt starts with.
-export function promptHeader({ now, timeZone, homeCurrency, replyMode, internet, agentDir, datastoreDir }) {
-  return (
-    `[scooter] Now: ${longTime(now, timeZone)} (${timeZone}). Home currency: ${homeCurrency}. ` +
-    `Reply mode: ${replyMode}. Internet: ${internet ? 'on' : 'off'}.\n` +
-    `Your folder: ${agentDir}. Attachments are in ${datastoreDir} (read-only).`
-  )
+// `template` with each variable replaced by its value in `values`, by name. Each is replaced once,
+// as it is: a value is never read for variables again, and nothing in it is read as a pattern of
+// `String.replace`, such as `$&`. A name `values` doesn't have, which the check of `agents.yaml`
+// rules out, stays as it is.
+export function renderPrompt(template, values) {
+  return template.replace(VARIABLE, (whole, name) => (Object.hasOwn(values, name) ? values[name] : whole))
+}
+
+// A path in a list of paths: as it is, or as a JSON string when it holds a space, a quote or a
+// control character, which would make the list read another way. A path as it is starts with `/`,
+// so the two can't be taken for each other.
+function listedPath(file) {
+  return /[\s\p{C}"]/u.test(file) ? JSON.stringify(file) : file
+}
+
+// What `writes` names, as the VM has it, each path in the data folder, a folder ending in `/`.
+function writesList(paths, writes) {
+  return writes.length === 0 ? NONE : writes.map(entry => listedPath(path.join(paths.dataDir, entry))).join(' ')
+}
+
+// `$seq.unread$`: the new lines, `1051 1054 1060`.
+function unreadList(items) {
+  const seqs = items.filter(item => item.origin === 'new').map(item => item.seq)
+  return seqs.length === 0 ? NONE : seqs.join(' ')
+}
+
+// `$seq.retry$`: the lines given before and not finished, each with its attempt,
+// `1047 (attempt 2 of 4), 1048 (attempt 1 of 4)`.
+function retryList(items) {
+  const retried = items.filter(item => item.origin !== 'new').map(item => `${item.seq} (attempt ${item.attempt} of ${limits.MAX_ATTEMPTS})`)
+  return retried.length === 0 ? NONE : retried.join(', ')
+}
+
+// The value of each variable for a run of `agent`:
+// - `now`: the run's time, in milliseconds; a replayed batch gives its own (`replay.mjs`);
+// - `items`: the batch's items, `{ seq, origin, attempt }` (`batch.mjs`), none for a scheduled run;
+// - `writes`: what the run may change, the agent's `writes` or a backfill's;
+// - `settings`: the runner's, for `SCOOTER_TZ`, `HOME_CURRENCY` and `AGENT_INTERNET`;
+// - `paths`: what `makePaths` returns; a path in the data folder is the same inside the VM.
+export function promptValues({ agent, paths, settings, now, items = [], writes = agent.writes }) {
+  return {
+    now: longTime(now, settings.timeZone),
+    'user.timezone': settings.timeZone,
+    'user.currency': settings.homeCurrency,
+    reply_mode: agent.replyMode,
+    internet: settings.agentInternet ? 'on' : 'off',
+    'agent.dir': paths.agentDir(agent.name),
+    'datastore.dir': paths.datastore,
+    'seq.unread': unreadList(items),
+    'seq.retry': retryList(items),
+    'run.writes': writesList(paths, writes),
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
-// Texts
+// How long a prompt can be
 
-// A word from a channel, such as a MIME type or an emoji, as it is when it is one plain word, and
-// as a JSON string otherwise.
-function token(value) {
-  return /^[^\s\p{C}"\\]+$/u.test(value) ? value : JSON.stringify(value)
+const bytes = text => Buffer.byteLength(text)
+
+// The most digits a `seq` or an attempt can have: they are safe integers.
+const NUMBER_MAX_BYTES = String(Number.MAX_SAFE_INTEGER).length
+
+// The longest `$now$`: the longest weekday and month, and a year of a sign and five digits.
+const NOW_MAX_BYTES = Math.max(...WEEKDAYS.map(bytes)) + Math.max(...MONTHS.map(bytes)) + bytes(' 30  -99999, 23:59')
+
+// The most items a batch can have of each origin. New ones are among at most `BATCH_MAX_ITEMS`
+// candidates; those given before are the due retries among them, and the messages their edits
+// bring in, at most one an edit (`assembleBatch` in `batch.mjs`).
+const longestList = (count, each, separator) => (count === 0 ? bytes(NONE) : Math.max(bytes(NONE), count * each + (count - 1) * bytes(separator)))
+
+// The longest value each variable can take in a run of `agent`, in bytes, for prompts of runs
+// whose `writes` is one of `writesLists`: the agent's own, or a backfill's.
+export function longestValues({ agent, paths, settings, writesLists = [agent.writes] }) {
+  const known = promptValues({ agent, paths, settings, now: 0 })
+  const retryEach = bytes(`${'9'.repeat(NUMBER_MAX_BYTES)} (attempt ${'9'.repeat(NUMBER_MAX_BYTES)} of ${limits.MAX_ATTEMPTS})`)
+  return {
+    ...Object.fromEntries(Object.entries(known).map(([name, value]) => [name, bytes(value)])),
+    now: NOW_MAX_BYTES,
+    'seq.unread': longestList(limits.BATCH_MAX_ITEMS, NUMBER_MAX_BYTES, ' '),
+    'seq.retry': longestList(2 * limits.BATCH_MAX_ITEMS, retryEach, ', '),
+    'run.writes': Math.max(...writesLists.map(writes => bytes(writesList(paths, writes)))),
+  }
 }
 
-// A short phrase from Scooter's own code, such as why media wasn't stored: as it is, unless it
-// holds a control character such as a line break.
-function phrase(value) {
-  return /^[^\p{C}]*$/u.test(value) ? value : JSON.stringify(value)
-}
-
-// The longest beginning of `text` that is at most `bytes` long in UTF-8, without splitting a
-// character.
-export function cutText(text, bytes) {
-  let used = 0
-  let end = 0
-  for (const char of text) {
-    const size = Buffer.byteLength(char)
-    if (used + size > bytes) break
-    used += size
-    end += char.length
+// The most bytes `template` can make, filled in with values no longer than `longest` gives. Each
+// piece of its own text is counted apart: half of a pair of UTF-16 surrogates on either side of a
+// variable takes three bytes, and two together four.
+export function longestPrompt(template, longest) {
+  let total = 0
+  let from = 0
+  for (const match of template.matchAll(VARIABLE)) {
+    total += bytes(template.slice(from, match.index)) + longest[match[1]]
+    from = match.index + match[0].length
   }
-  return text.slice(0, end)
-}
-
-// A text as a JSON string. Longer than `cap` bytes, it is cut there and followed by `where`, which
-// says where the whole of it is.
-function quoteText(text, cap, where) {
-  if (Buffer.byteLength(text) <= cap) return JSON.stringify(text)
-  return `${JSON.stringify(cutText(text, cap))} (cut; ${where})`
-}
-
-// The last resort, for a prompt that is still too long after everything else (`batch.mjs`): it is
-// cut at the limit, and says so.
-export function fitToLimit(prompt) {
-  const max = limits.PROMPT_MAX_BYTES
-  if (Buffer.byteLength(prompt) <= max) return prompt
-  const note = '\n(The rest of this prompt was cut: it was too long.)'
-  return `${cutText(prompt, max - Buffer.byteLength(note))}${note}`
-}
-
-// ---------------------------------------------------------------------------------------------
-// Lines of the datastore
-
-// What a file's MIME type makes it, in a word.
-function fileKind(mime) {
-  if (mime.startsWith('image/')) return 'photo'
-  if (mime.startsWith('video/')) return 'video'
-  if (mime.startsWith('audio/')) return 'audio'
-  return 'document'
-}
-
-// What media that couldn't be stored was, in a word: WhatsApp's media types, with `image` as photo.
-function mediaKind(type) {
-  return type === 'image' ? 'photo' : token(type)
-}
-
-// Returns the functions that describe lines of the datastore, for one prompt.
-// - `view`: `{ index, paths, agentName, now, timeZone }`.
-// - `cap`: the most bytes of each text the items show.
-// - `onCapped(bytes)`: called with the length of each text `cap` applies to.
-function describer({ index, paths, agentName, now, timeZone }, cap, onCapped = () => {}) {
-  // A text as `quote` shows it, and its length told to `onCapped` when a cap applies to it.
-  const quote = (text, textCap, where) => {
-    if (textCap !== Infinity) onCapped(Buffer.byteLength(text))
-    return quoteText(text, textCap, where)
-  }
-  const filePath = (entry, file) => path.join(paths.dayDir(entry.day), file.path)
-  const fileText = (entry, file) => `${file.name ? `${JSON.stringify(file.name)} ` : ''}${filePath(entry, file)} (${token(file.mime)})`
-  const lineRef = seq => {
-    const entry = index.get(seq)
-    return `line ${entry.number} of ${paths.dayLog(entry.day)}`
-  }
-  const timeOf = entry => itemTime(parseIsoSeconds(entry.line.at), now, timeZone)
-  const who = line => (line.dir === 'in' ? 'the owner' : line.by === agentName ? 'you' : 'Scooter')
-
-  // A message as it is now. Returns `{ head, extra }`: what follows its time on its first line, and
-  // its further lines. With `bare`, a plain text is only its text, as a quoted message is shown.
-  function message(entry, { bare = false, textCap = cap } = {}) {
-    const { line } = entry
-    const current = index.current(line.seq)
-    if (current.deletedIn !== null) return { head: `(deleted in #${current.deletedIn})`, extra: [] }
-    const isEmail = line.source === 'email'
-    const where = isEmail && line.files ? `the whole email is ${filePath(entry, line.files[0])}` : `the whole text is ${lineRef(current.editedIn ?? line.seq)}`
-    const text = quote(current.text, textCap, where)
-    const edited = current.editedIn !== null ? ` (edited in #${current.editedIn})` : ''
-    const forwarded = dataFlag(line, 'forwarded') ? 'forwarded ' : ''
-    const extra = []
-    const files = line.files ?? []
-    let head
-    if (isEmail) {
-      head = `${forwarded}email ${quote(dataText(line, 'subject') ?? '', textCap, where)}: ${text}`
-      for (const file of files.slice(1)) extra.push(`attachment ${fileText(entry, file)}`)
-      if (files.length > 0) extra.push(`whole email ${filePath(entry, files[0])}`)
-    } else if (files.length > 0) {
-      head = `${forwarded}${fileKind(files[0].mime)} ${fileText(entry, files[0])}${current.text === '' ? '' : `, caption: ${text}`}`
-      for (const file of files.slice(1)) extra.push(`attachment ${fileText(entry, file)}`)
-    } else if (line.media) {
-      head = `${forwarded}${mediaKind(line.media.type)}, not stored (${phrase(line.media.error)})${current.text === '' ? '' : `, caption: ${text}`}`
-    } else {
-      head = bare && !forwarded ? text : `${forwarded}text: ${text}`
-    }
-    if (line.media && (isEmail || files.length > 0)) extra.push(`${mediaKind(line.media.type)} not stored (${phrase(line.media.error)})`)
-    return { head: `${head}${edited}`, extra }
-  }
-
-  // The line under a reply: what it quotes, and who sent that. A reply to a line the index can't
-  // show as a message, a line of a kind or a channel this version doesn't know, shows the channel's
-  // preview, `quoted` in the line's `data`, if there is one.
-  function replyLine(line) {
-    const quoted = dataText(line, 'quoted')
-    const preview = () => quote(quoted, cap, `the whole text is ${lineRef(line.seq)}`)
-    if (line.replyTo !== undefined) {
-      const target = index.get(line.replyTo)
-      if (!target || index.current(line.replyTo) === undefined) {
-        return quoted === undefined ? `↳ reply to #${line.replyTo}` : `↳ reply to #${line.replyTo}: ${preview()}`
-      }
-      return `↳ reply to #${line.replyTo}, which ${who(target.line)} sent: ${message(target, { bare: true }).head}`
-    }
-    if (quoted !== undefined) return `↳ reply to an earlier message: ${preview()}`
-    return null
-  }
-
-  // An item of the batch: `#seq time what`, then its further lines.
-  function item(seq, suffix = '') {
-    const entry = index.get(seq)
-    const { line } = entry
-    let head
-    let extra = []
-    if (line.kind === 'edit') head = `edit of #${line.target}, now: ${quote(line.text, cap, `the whole text is ${lineRef(seq)}`)}`
-    else if (line.kind === 'delete') head = `deletion of #${line.target}`
-    else ({ head, extra } = message(entry))
-    const reply = line.kind === 'message' ? replyLine(line) : null
-    const lines = [`#${seq} ${timeOf(entry)} ${head}${suffix}`, ...extra.map(text => `${INDENT}${text}`)]
-    if (reply) lines.push(`${INDENT}${reply}`)
-    return lines.join('\n')
-  }
-
-  // A line of context: something sent, or a reaction. Its texts are shown whole.
-  function context(seq) {
-    const entry = index.get(seq)
-    const { line } = entry
-    const start = `#${seq} ${timeOf(entry)} ${who(line)}`
-    if (line.kind === 'reaction') {
-      // The emoji is in the line's `data`, "" for a reaction removed; without one, it isn't shown.
-      const emoji = dataText(line, 'emoji')
-      if (emoji === '') return `${start} removed ${line.dir === 'in' ? 'their' : 'your'} reaction to #${line.target}`
-      return `${start} reacted ${emoji === undefined ? '' : `${token(emoji)} `}to #${line.target}`
-    }
-    const inReply = line.replyTo !== undefined ? `, in reply to #${line.replyTo}` : ''
-    const { head, extra } = message(entry, { bare: true, textCap: Infinity })
-    return [`${start} sent${inReply}: ${head}`, ...extra.map(text => `${INDENT}${text}`)].join('\n')
-  }
-
-  return { item, context }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The prompts
-
-// The prompt of a batch. `batch` is what `assembleBatch` returns. `view` is `{ index, paths,
-// agentName, header, now, timeZone }`, with `header` from `promptHeader`. Options, which
-// `batch.mjs` uses to fit the prompt within its limit:
-// - `itemCap`: the most bytes of each text an item shows, whole by default;
-// - `contextKeep`: how many lines of context to show, newest first, all by default;
-// - `onCapped(bytes)`: called with the length of each text `itemCap` applies to.
-export function renderBatchPrompt(batch, view, { itemCap = Infinity, contextKeep = Infinity, onCapped } = {}) {
-  const describe = describer(view, itemCap, onCapped)
-  const sections = [view.header]
-  const fresh = batch.items.filter(item => item.origin === 'new')
-  const retrying = batch.items.filter(item => item.origin !== 'new')
-  if (fresh.length > 0) sections.push([SECTIONS.new, ...fresh.map(item => describe.item(item.seq))].join('\n'))
-  if (retrying.length > 0) {
-    const lines = retrying.map(item => describe.item(item.seq, ` (attempt ${item.attempt} of ${limits.MAX_ATTEMPTS})`))
-    sections.push([SECTIONS.retrying, ...lines].join('\n'))
-  }
-  // Newest first. When the prompt is too long, the oldest are left out first.
-  const newestFirst = [...batch.context].reverse()
-  const shown = newestFirst.slice(0, contextKeep)
-  if (newestFirst.length > 0) {
-    const lines = shown.map(seq => describe.context(seq))
-    const left = newestFirst.length - shown.length
-    if (left > 0) lines.push(`(${left} older ${left === 1 ? 'line' : 'lines'} left out: the prompt would have been too long)`)
-    sections.push([SECTIONS.context, ...lines].join('\n'))
-  }
-  return sections.join('\n\n')
-}
-
-// The prompt of a scheduled task: the task instead of messages.
-export function renderTaskPrompt(task, { header }) {
-  return fitToLimit(`${header}\n\n${SECTIONS.task}\n${task.trim()}`)
+  return total + bytes(template.slice(from))
 }

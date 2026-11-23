@@ -31,7 +31,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
   assert.deepEqual(outcome, { ok: true, cause: null })
 
   // The view, committed by Scooter with the batch's numbers.
-  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"coffee 150"\n')
   assert.equal(git('log', '-1', '--format=%an <%ae>%n%s'), 'Scooter <scooter@localhost>\nlifelog: #1042\n')
   assert.equal(git('status', '--porcelain'), '')
 
@@ -122,7 +122,11 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
     ...['expenses', 'runs', 'meals', 'travel', 'people'].flatMap(skill => ['--skill', path.join(run, 'config', 'skills', skill)]),
     '--',
   ])
-  assert.match(spec.argv.at(-1), /^\[scooter\] Now: Monday 9 November 2026, 21:20 \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
+  // The prompt, the last argument, after `--`: the trigger's, filled in.
+  assert.equal(
+    spec.argv.at(-1),
+    `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: ${agent}. The datastore: ${paths.datastore}. This run may change: ${agent}/views/ ${agent}/memory/.\nNew: 1042\nGiven before: none\n`,
+  )
 
   // pi's environment and nothing else, with a placeholder where the key would be.
   assert.deepEqual(Object.keys(env).sort(), ['HOME', 'ICU_TIMEZONE_FILES_DIR', 'LANG', 'OPENROUTER_API_KEY', 'PATH', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'TZ'])
@@ -248,7 +252,8 @@ test('run: a text such as /new is a message the agent is given, and its batch go
   assert.equal(sandbox.runs.length, 1)
   const argv = sandbox.runs[0].spec.argv
   assert.equal(argv[argv.indexOf('--session-id') + 1], 'lifelog-2026-11-09')
-  assert.match(argv.at(-1), /^#1042 21:20 text: "\/new"$/m)
+  assert.match(argv.at(-1), /^New: 1042 1043$/m)
+  assert.ok(!argv.at(-1).includes('/new'))
   assert.deepEqual(state().lastRun.seqs, [1042, 1043])
   assert.deepEqual(outbox(), [
     { type: 'react', by: 'lifelog', target: 1042, emoji: '✅', channels: ['whatsapp'] },
@@ -596,7 +601,7 @@ test("run: writes naming a file, a folder in another entry and a folder outside 
   add(line.text(1043, '2026-11-09T15:51:00Z', 'more FILELINK SHARED CRASH'))
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
   assert.equal(fs.lstatSync(path.join(agent, 'views', 'books.csv')).isFile(), true)
-  assert.equal(fs.readFileSync(path.join(agent, 'views', 'books.csv'), 'utf8'), 'seq,text\n1042,"#1042 21:20 text: \\"book ASK SHARED\\""\n')
+  assert.equal(fs.readFileSync(path.join(agent, 'views', 'books.csv'), 'utf8'), 'seq,text\n1042,"book ASK SHARED"\n')
   assert.equal(fs.readFileSync(path.join(shared, 'shared.txt'), 'utf8'), 'from the agent\nfrom the agent\n')
   assert.equal(git('status', '--porcelain', '--ignored', '--', 'views', 'memory'), '')
   assert.equal(state().retry[0].seq, 1043)
@@ -787,7 +792,7 @@ test('run: an item not marked is tried again a minute later, as a retry, and giv
   for (const attempt of [2, 3, 4]) {
     await clock.advance(SECOND)
     assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
-    assert.match(sandbox.runs.at(-1).spec.argv.at(-1), new RegExp(`Retrying \\(not handled yet\\):\\n#1042 21:20 text: "coffee 120 IGNORE" \\(attempt ${attempt} of 4\\)`))
+    assert.match(sandbox.runs.at(-1).spec.argv.at(-1), new RegExp(`^New: none\\nGiven before: 1042 \\(attempt ${attempt} of 4\\)$`, 'm'))
     if (attempt < 4) await clock.advance(MINUTE - SECOND)
   }
   assert.deepEqual(state().retry, [])
@@ -797,14 +802,39 @@ test('run: an item not marked is tried again a minute later, as a retry, and giv
 })
 
 test('run: an edit of a failed message brings it back into the batch, and it leaves failed', async t => {
-  const { runner, clock, state, add } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'blurry FAIL')])
+  const { runner, clock, state, add, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'blurry')])
+  sandbox.behave({ words: ['FAIL'] })
   await runNext(runner, clock)
   assert.deepEqual(state().failed.map(entry => entry.seq), [1042])
+  sandbox.behave(null)
   add(line.edit(1043, '2026-11-09T15:51:00Z', 1042, 'coffee 150'))
   await runNext(runner, clock)
   assert.deepEqual(state().lastRun.seqs, [1042, 1043])
+  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^New: 1043\nGiven before: 1042 \(attempt 1 of 4\)$/m)
   assert.deepEqual(state().failed, [])
   assert.deepEqual(state().retry, [])
+})
+
+test('run: a message deleted before it was given is never given, and its deletion is; one deleted while it waits leaves retry with the batch that gives its deletion', async t => {
+  const { runner, clock, state, add, sandbox, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 120'), line.delete(1043, '2026-11-09T15:50:01Z', 1042)])
+  await runNext(runner, clock)
+  assert.deepEqual(state().lastRun.seqs, [1043])
+  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^New: 1043\nGiven before: none$/m)
+  assert.deepEqual([state().cursor, state().retry, state().failed], [1043, [], []])
+  // No ✅ for a deletion, nor for the message it deleted.
+  assert.deepEqual(outbox(), [])
+
+  // #1044 isn't marked, and waits; deleted meanwhile, it is no more given, and its deletion's batch
+  // settles it.
+  add(line.text(1044, '2026-11-09T15:51:00Z', 'lunch IGNORE'))
+  await runNext(runner, clock)
+  assert.deepEqual(state().retry.map(entry => entry.seq), [1044])
+  add(line.delete(1045, '2026-11-09T15:51:30Z', 1044))
+  await runNext(runner, clock)
+  assert.deepEqual(state().lastRun.seqs, [1045])
+  assert.deepEqual([state().retry, state().failed], [[], []])
+  await clock.advance(5 * MINUTE)
+  assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
 })
 
 // ---------------------------------------------------------------------------------------------

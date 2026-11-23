@@ -493,7 +493,7 @@
       "anthropic-beta": "mid-conversation-output-config-2026-07-01,thinking-binding-controls-2026-08-01",
       "anthropic-dangerous-direct-browser-access": "true",
       "anthropic-version": "2023-06-01",
-      "content-length": "8973",
+      "content-length": "8920",
       "content-type": "application/json",
       "host": "openrouter.ai",
       "sec-fetch-mode": "cors",
@@ -517,7 +517,7 @@
           "content": [
             {
               "type": "text",
-              "text": "[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).\n\nNew messages:\n#1050 21:13 text: \"coffee 150\"\n#1051 21:14 photo /data/datastore/2026/11/09/1051.png (image/png), caption: \"the receipt\"",
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.\nNew: 1050 1051\nGiven before: none\n",
               "cache_control": {
                 "type": "ephemeral"
               }
@@ -765,7 +765,7 @@
       "anthropic-beta": "mid-conversation-output-config-2026-07-01,thinking-binding-controls-2026-08-01",
       "anthropic-dangerous-direct-browser-access": "true",
       "anthropic-version": "2023-06-01",
-      "content-length": "11511",
+      "content-length": "11458",
       "content-type": "application/json",
       "host": "openrouter.ai",
       "sec-fetch-mode": "cors",
@@ -789,7 +789,7 @@
           "content": [
             {
               "type": "text",
-              "text": "[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).\n\nNew messages:\n#1050 21:13 text: \"coffee 150\"\n#1051 21:14 photo /data/datastore/2026/11/09/1051.png (image/png), caption: \"the receipt\""
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.\nNew: 1050 1051\nGiven before: none\n"
             }
           ]
         },

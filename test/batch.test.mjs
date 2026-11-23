@@ -1,30 +1,41 @@
-// The batch and its prompt: the example prompt, the two
-// limits, context lines and reply labels, emails, and an edit or deletion bringing in its message.
+// The batch and its prompt: the example prompt, the trigger's prompt and its variables, the
+// batch's limit, the lines it passes over, the messages already deleted, and an edit bringing in its
+// message.
 
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { limits, overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
-import { buildBatch, buildTaskPrompt, headerFor } from '../src/runner/batch.mjs'
-import { cutText, renderBatchPrompt } from '../src/runner/prompt.mjs'
-import { EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, fillerLines, indexOf, line } from './support/runner.mjs'
+import { assembleBatch, buildBatch, scheduledPrompt, selectCandidates, triggerOf } from '../src/runner/batch.mjs'
+import { settleBatch } from '../src/runner/failures.mjs'
+import { NONE, VARIABLES, longTime, longestPrompt, longestValues, promptValues, renderPrompt, variablesIn } from '../src/runner/prompt.mjs'
+import { EXAMPLE_NOW, EXAMPLE_PROMPT, NEW_MESSAGES_PROMPT, exampleLines, exampleState, fillerLines, indexOf, line } from './support/runner.mjs'
+import { atEnd } from './support/tmp.mjs'
 
 const PATHS = makePaths({ dataDir: '/data', configDir: '/config' })
-const AGENT = { name: 'lifelog', channels: ['whatsapp', 'email'], replyMode: 'quiet', run: { newMessages: [{ channels: ['whatsapp', 'email'] }], scheduled: [], backfill: [] } }
-const HEADER = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).`
+const SETTINGS = { timeZone: 'Asia/Kolkata', homeCurrency: 'INR', agentInternet: false }
+// Every variable, one to a line.
+const EVERY = `${VARIABLES.map(name => `${name}=$${name}$`).join('\n')}\n`
+const AGENT = {
+  name: 'lifelog',
+  channels: ['whatsapp', 'email'],
+  replyMode: 'quiet',
+  writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'],
+  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }], scheduled: [], backfill: [] },
+}
+const withPrompt = (prompt, agent = AGENT) => ({ ...agent, run: { ...agent.run, newMessages: [{ channels: agent.channels, prompt }] } })
 
-function build({ lines, state = initialAgentState(), now = EXAMPLE_NOW, agent = AGENT, timeZone = 'Asia/Kolkata', internet = false }) {
-  return buildBatch({ agent, state, index: indexOf(lines), paths: PATHS, now: Date.parse(now), timeZone, homeCurrency: 'INR', internet })
+function build({ lines, state = initialAgentState(), now = EXAMPLE_NOW, agent = AGENT, settings = SETTINGS, paths = PATHS }) {
+  return buildBatch({ agent, state, index: indexOf(lines), paths, settings, now: Date.parse(now) })
 }
 
-// The prompt without its two header lines and the blank line after them.
-const body = prompt => prompt.split('\n').slice(3).join('\n')
-const bytes = text => Buffer.byteLength(text)
 const seqsOf = batch => batch.items.map(item => item.seq)
+// A prompt that gives every variable, read back as `{ name: value }`.
+const valuesOf = prompt => Object.fromEntries(prompt.trimEnd().split('\n').map(text => [text.slice(0, text.indexOf('=')), text.slice(text.indexOf('=') + 1)]))
 
-test('batch: the example prompt, exactly as the runner\'s document shows it', () => {
+test("batch: the example prompt, exactly as the runner's document shows it", () => {
   const { batch, prompt } = build({ lines: exampleLines(), state: exampleState() })
   assert.equal(prompt, EXAMPLE_PROMPT)
   assert.deepEqual(batch, {
@@ -36,15 +47,68 @@ test('batch: the example prompt, exactly as the runner\'s document shows it', ()
       { seq: 1053, origin: 'new', attempt: 1 },
       { seq: 1054, origin: 'new', attempt: 1 },
     ],
-    context: [1048, 1049],
+    settled: [],
     covered: 1054,
     newest: 1054,
   })
+  // The document's own example, the fenced block under "The prompt" that starts as the prompt does.
+  const document = fs.readFileSync(new URL('../docs/architecture/runner.md', import.meta.url), 'utf8')
+  const section = document.slice(document.indexOf('\n## The prompt\n'))
+  const blocks = [...section.matchAll(/^```text\n([\s\S]*?)^```$/gm)].map(match => match[1])
+  assert.ok(blocks.includes(EXAMPLE_PROMPT), 'runner.md shows the example prompt')
 })
 
-test('batch: the header says the mode, the internet setting and the currency', () => {
-  const { prompt } = build({ lines: exampleLines(), state: exampleState(), agent: { ...AGENT, replyMode: 'confirm' }, internet: true })
-  assert.equal(prompt.split('\n')[0], '[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: confirm. Internet: on.')
+test("batch: the prompt is the trigger's own, each variable filled in once, and nothing else", () => {
+  const settings = { timeZone: 'America/New_York', homeCurrency: 'USD', agentInternet: true }
+  const agent = withPrompt(EVERY, { ...AGENT, replyMode: 'confirm', writes: ['agents/lifelog/views/books.csv', 'agents/lifelog/my notes/', 'shared/'] })
+  const { prompt } = build({ lines: exampleLines(), state: exampleState(), agent, settings })
+  assert.deepEqual(valuesOf(prompt), {
+    now: 'Monday 9 November 2026, 10:50',
+    'user.timezone': 'America/New_York',
+    'user.currency': 'USD',
+    reply_mode: 'confirm',
+    internet: 'on',
+    'agent.dir': '/data/agents/lifelog',
+    'datastore.dir': '/data/datastore',
+    'seq.unread': '1050 1051 1052 1053 1054',
+    'seq.retry': '1047 (attempt 2 of 4)',
+    // A path that holds a space is a JSON string, so the list reads one way.
+    'run.writes': '/data/agents/lifelog/views/books.csv "/data/agents/lifelog/my notes/" /data/shared/',
+  })
+
+  // A `$` that starts no variable is the owner's own text, and a pattern `String.replace` reads in
+  // a replacement is text too, in the template and in a value. A value is never read again for
+  // variables: a data folder whose path holds `$now$` gives it as it is.
+  const odd = withPrompt('$5, $$, $&, $1, $`, $\', US$now$ and $now$$ $ now$ $No w$\n')
+  const paths = makePaths({ dataDir: '/srv/$now$/$&', configDir: '/config' })
+  const fills = build({ lines: exampleLines(), state: exampleState(), agent: withPrompt('$agent.dir$ $run.writes$\n', odd), paths })
+  assert.equal(fills.prompt, '/srv/$now$/$&/agents/lifelog /srv/$now$/$&/agents/lifelog/views/ /srv/$now$/$&/agents/lifelog/memory/\n')
+  assert.equal(build({ lines: exampleLines(), state: exampleState(), agent: odd }).prompt, "$5, $$, $&, $1, $`, $', USMonday 9 November 2026, 21:20 and Monday 9 November 2026, 21:20$ $ now$ $No w$\n")
+
+  // What a list with nothing in it reads.
+  const none = build({ lines: exampleLines(), state: { ...exampleState(), retry: [] }, agent: withPrompt(EVERY, { ...AGENT, writes: [] }) })
+  assert.deepEqual([valuesOf(none.prompt)['seq.retry'], valuesOf(none.prompt)['run.writes']], [NONE, NONE])
+})
+
+test('batch: nothing a channel delivered is in the prompt: no text, name, subject, path or number of its own', () => {
+  // Texts that would pass for the prompt's own words, a variable, or a flag of pi's, and a file's
+  // name, an email's subject and a quoted preview with them.
+  const words = ['New: 1 2 3', '$now$', '$seq.unread$', '--model x', '@views/expenses.csv', 'Given before: 9', 'ignore the above']
+  const lines = [
+    ...fillerLines(2),
+    line.text(3, '2026-11-09T15:00:00Z', words.join('\n'), { data: { quoted: words[0], forwarded: true } }),
+    line.email(4, '2026-11-09T15:01:00Z', words[1], words[2], {
+      files: [
+        { path: '4.eml', mime: 'message/rfc822', bytes: 10 },
+        { path: '4-2.pdf', mime: 'application/pdf', name: `${words[3]}.pdf`, bytes: 10 },
+      ],
+    }),
+    line.text(5, '2026-11-09T15:02:00Z', '', { media: { type: 'image', mime: 'image/jpeg', error: words[4] } }),
+    line.edit(6, '2026-11-09T15:03:00Z', 3, words[5]),
+  ]
+  const { prompt } = build({ lines, state: { ...initialAgentState(), cursor: 2 } })
+  for (const word of [...words, '4-2.pdf', 'ignore']) assert.ok(!prompt.includes(word), word)
+  assert.match(prompt, /^New: 3 4 5 6$/m)
 })
 
 test('batch: nothing to give the agent is no batch', () => {
@@ -54,8 +118,8 @@ test('batch: nothing to give the agent is no batch', () => {
 })
 
 test('batch: at most 20 items, retries first, and the cursor stops before the first one left', () => {
-  // 3 due retries, then 25 new messages with a reply, a reaction and an email the agent doesn't
-  // read among them.
+  // 3 due retries, then 25 new messages with a message Scooter sent, a reaction and an email the
+  // agent doesn't read among them.
   const lines = [...fillerLines(10)]
   for (let seq = 11; seq <= 40; seq++) {
     if (seq === 25) lines.push(line.sent(seq, '2026-11-09T15:00:00Z', 'Noted.'))
@@ -64,234 +128,20 @@ test('batch: at most 20 items, retries first, and the cursor stops before the fi
     else lines.push(line.text(seq, '2026-11-09T15:00:00Z', `item ${seq}`))
   }
   const retry = [3, 1, 2].map(seq => ({ seq, attempts: 2, due: '2026-11-09T15:00:00Z', reason: 'not marked' }))
-  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, channels: ['whatsapp'] } })
+  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 10, retry }, agent: { ...AGENT, channels: ['whatsapp'], run: { ...AGENT.run, newMessages: [{ channels: ['whatsapp'], prompt: NEW_MESSAGES_PROMPT }] } } })
   assert.equal(batch.items.length, limits.BATCH_MAX_ITEMS)
   assert.deepEqual(seqsOf(batch).slice(0, 3), [1, 2, 3])
   assert.deepEqual(batch.items.slice(0, 3).map(item => [item.origin, item.attempt]), [['retry', 3], ['retry', 3], ['retry', 3]])
-  // The 17 new ones are #11 to #24 and #28 to #30; #31 is the first left for later.
+  // The 17 new ones are #11 to #24 and #28 to #30; #31 is the first left for later. The message
+  // sent, the reaction and the email are passed over, and given in no way.
   assert.deepEqual(seqsOf(batch).slice(3), [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 28, 29, 30])
   assert.equal(batch.covered, 30)
   assert.equal(batch.newest, 30)
-  // The context is the sent message and the reaction; the email is passed over.
-  assert.deepEqual(batch.context, [25, 26])
-  assert.ok(!prompt.includes('not read'))
-  assert.equal(prompt.split('\n').filter(text => text.startsWith('#')).length, 22)
+  assert.match(prompt, /^New: 11 12 13 14 15 16 17 18 19 20 21 22 23 24 28 29 30$/m)
+  assert.match(prompt, /^Given before: 1 \(attempt 3 of 4\), 2 \(attempt 3 of 4\), 3 \(attempt 3 of 4\)$/m)
 })
 
-test('batch: the batch stops growing at the prompt\'s size limit, and always keeps one item', () => {
-  // Ten messages of 15 KB each: six fit in 96 KB with the header.
-  const lines = [...fillerLines(2)]
-  for (let seq = 3; seq <= 12; seq++) lines.push(line.text(seq, '2026-11-09T15:00:00Z', 'x'.repeat(15 * 1024)))
-  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 2 } })
-  assert.deepEqual(seqsOf(batch), [3, 4, 5, 6, 7, 8])
-  assert.equal(batch.covered, 8)
-  assert.ok(bytes(prompt) <= limits.PROMPT_MAX_BYTES)
-  assert.ok(!prompt.includes('(cut;'))
-
-  // With a limit below even one of them, the first is shown cut, and says where the rest is.
-  const restore = overrideLimits({ PROMPT_MAX_BYTES: 4096 })
-  try {
-    const small = build({ lines, state: { ...initialAgentState(), cursor: 2 } })
-    assert.deepEqual(seqsOf(small.batch), [3])
-    assert.equal(small.batch.covered, 3)
-    assert.ok(bytes(small.prompt) <= 4096, `${bytes(small.prompt)}`)
-    // Its line is the first of 9 November's log: the filler is in 8 November's.
-    assert.match(small.prompt, /\n#3 20:30 text: "x+" \(cut; the whole text is line 1 of \/data\/datastore\/2026\/11\/09\/log\.jsonl\)$/)
-  } finally {
-    restore()
-  }
-})
-
-test('batch: an over-long text points at the line it is in, or at the whole email', () => {
-  const restore = overrideLimits({ PROMPT_MAX_BYTES: 2048 })
-  try {
-    const long = 'ü'.repeat(3000)
-    // An edited message shows its latest text, which is in the edit's line.
-    const lines = [...fillerLines(2), line.text(3, '2026-11-09T15:00:00Z', 'short'), line.edit(4, '2026-11-09T15:01:00Z', 3, long)]
-    const first = build({ lines, state: { ...initialAgentState(), cursor: 2 } })
-    assert.ok(bytes(first.prompt) <= 2048)
-    assert.match(first.prompt, /\n#3 20:30 text: "ü+" \(cut; the whole text is line 2 of \/data\/datastore\/2026\/11\/09\/log\.jsonl\) \(edited in #4\)$/)
-    // The edit itself didn't fit beside it, and comes in the next batch.
-    assert.deepEqual([seqsOf(first.batch), first.batch.covered], [[3], 3])
-    const second = build({ lines, state: { ...initialAgentState(), cursor: 3 } })
-    assert.match(second.prompt, /\n#4 20:31 edit of #3, now: "ü+" \(cut; the whole text is line 2 of \/data\/datastore\/2026\/11\/09\/log\.jsonl\)$/)
-
-    const email = [...fillerLines(2), line.email(3, '2026-11-09T16:12:40Z', 'Booking', long, { files: [{ path: '3.eml', mime: 'message/rfc822', bytes: 9000 }] })]
-    const mail = build({ lines: email, state: { ...initialAgentState(), cursor: 2 } }).prompt
-    assert.ok(bytes(mail) <= 2048)
-    assert.match(mail, /#3 21:42 email "Booking": "ü+" \(cut; the whole email is \/data\/datastore\/2026\/11\/09\/3\.eml\)\n      whole email \/data\/datastore\/2026\/11\/09\/3\.eml$/)
-    // A cut never splits a character.
-    assert.equal(cutText('aü€😀', 5), 'aü')
-    assert.equal(cutText('aü€😀', 9), 'aü€')
-    assert.equal(cutText('😀😀', 7), '😀')
-    assert.equal(cutText('😀😀', 8), '😀😀')
-  } finally {
-    restore()
-  }
-})
-
-test('batch: with a long context, its oldest lines are left out first, and an over-long item keeps what context fits', () => {
-  // A message from long ago, in `failed`, is brought in by an edit; 300 replies were sent since.
-  const day = '2026/11/09'
-  const lines = [...fillerLines(2), { ...line.text(3, '2026-11-01T10:00:00Z', 'coffee 120'), day }]
-  for (let seq = 4; seq < 304; seq++) lines.push({ ...line.sent(seq, '2026-11-05T10:00:00Z', `reply number ${seq} `.repeat(25)), day })
-  lines.push(line.edit(304, '2026-11-09T15:00:00Z', 3, 'coffee 150'))
-  const state = { ...initialAgentState(), cursor: 303, failed: [{ seq: 3, at: '2026-11-01T10:05:00Z', reason: 'unreadable' }] }
-  const { batch, prompt } = build({ lines, state })
-  assert.deepEqual(batch.items, [
-    { seq: 3, origin: 'failed', attempt: 1 },
-    { seq: 304, origin: 'new', attempt: 1 },
-  ])
-  assert.equal(batch.context.length, 300)
-  assert.ok(bytes(prompt) <= limits.PROMPT_MAX_BYTES)
-  const contextLines = prompt.split('For context only (no action, nothing to mark):\n')[1].split('\n')
-  // The newest are kept, newest first, and the rest are counted.
-  assert.match(contextLines[0], /^#303 Thu 5 Nov 15:30 you sent: "reply number 303 /)
-  const kept = contextLines.filter(text => text.startsWith('#')).length
-  assert.ok(kept > 100 && kept < 300, `${kept}`)
-  assert.equal(contextLines.at(-1), `(${300 - kept} older lines left out: the prompt would have been too long)`)
-  assert.match(prompt, /#3 Sun 1 Nov 15:30 text: "coffee 150" \(edited in #304\) \(attempt 1 of 4\)/)
-
-  // An item too long on its own is cut, and the context stays, since there is room for it then.
-  const restore = overrideLimits({ PROMPT_MAX_BYTES: 4096 })
-  try {
-    const few = [...fillerLines(2), line.text(3, '2026-11-09T15:00:00Z', 'y'.repeat(9000)), line.sent(4, '2026-11-09T15:01:00Z', 'Which café?')]
-    const cut = build({ lines: few, state: { ...initialAgentState(), cursor: 2 } })
-    assert.deepEqual(cut.batch.context, [4])
-    assert.ok(bytes(cut.prompt) <= 4096)
-    assert.match(cut.prompt, /\n#3 20:30 text: "y+" \(cut; the whole text is line 1 of /)
-    assert.match(cut.prompt, /For context only \(no action, nothing to mark\):\n#4 20:31 you sent: "Which café\?"$/)
-  } finally {
-    restore()
-  }
-})
-
-test('batch: whatever the texts, the prompt keeps within its limit and has an item', () => {
-  const restore = overrideLimits({ PROMPT_MAX_BYTES: 3000 })
-  try {
-    let seed = 7
-    const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
-    const pieces = ['a', 'ü', '€', '😀', '\n', '"', '\\', '\u0001']
-    const text = length => Array.from({ length }, () => pieces[Math.floor(random() * pieces.length)]).join('')
-    for (let round = 0; round < 40; round++) {
-      const lines = [...fillerLines(2)]
-      let seq = 3
-      const count = 1 + Math.floor(random() * 30)
-      for (let n = 0; n < count; n++) {
-        const length = Math.floor(random() * (random() < 0.2 ? 5000 : 200))
-        const kind = random()
-        if (kind < 0.25) lines.push(line.sent(seq, '2026-11-09T15:00:00Z', text(length + 1)))
-        else if (kind < 0.35) lines.push(line.email(seq, '2026-11-09T15:00:00Z', text(30), text(length), { files: [{ path: `${seq}.eml`, mime: 'message/rfc822', bytes: 10 }] }))
-        else lines.push(line.text(seq, '2026-11-09T15:00:00Z', text(length), seq > 3 && random() < 0.3 ? { replyTo: seq - 1, data: { quoted: text(length) } } : {}))
-        seq += 1
-      }
-      if (!lines.some(entry => entry.dir === 'in' && entry.seq > 2)) lines.push(line.text(seq, '2026-11-09T15:00:00Z', text(4000)))
-      const result = build({ lines, state: { ...initialAgentState(), cursor: 2 } })
-      assert.ok(bytes(result.prompt) <= 3000, `round ${round}: ${bytes(result.prompt)} bytes`)
-      assert.ok(result.batch.items.length >= 1)
-      assert.ok(result.prompt.includes('\nNew messages:\n#'), `round ${round}`)
-    }
-    // The last resort: an email with so many attachments that even its paths are too long.
-    const files = [{ path: '3.eml', mime: 'message/rfc822', bytes: 10 }, ...Array.from({ length: 200 }, (_, n) => ({ path: `3-${n + 2}.pdf`, mime: 'application/pdf', name: `part ${n}.pdf`, bytes: 10 }))]
-    const flood = build({ lines: [...fillerLines(2), line.email(3, '2026-11-09T15:00:00Z', 'Parts', 'All of them.', { files })], state: { ...initialAgentState(), cursor: 2 } })
-    assert.ok(bytes(flood.prompt) <= 3000)
-    assert.ok(flood.prompt.endsWith('\n(The rest of this prompt was cut: it was too long.)'))
-  } finally {
-    restore()
-  }
-})
-
-test('batch: an item too long on its own is cut as little as will do, also where a text fits whole', () => {
-  const max = 800
-  const restore = overrideLimits({ PROMPT_MAX_BYTES: max })
-  try {
-    const now = Date.parse(EXAMPLE_NOW)
-    const view = { paths: PATHS, agentName: 'lifelog', now, timeZone: 'Asia/Kolkata', header: headerFor({ agent: AGENT, paths: PATHS, now, timeZone: 'Asia/Kolkata', homeCurrency: 'INR', internet: false }) }
-    let oneWhole = 0
-    // An item that quotes a message, so two texts are cut. The quoted one's length passes through
-    // the stretch where it fits whole, and just below, cut and with its note, it doesn't.
-    for (let length = 100; length < 400; length += 3) {
-      const lines = [...fillerLines(2), line.text(3, '2026-11-09T14:00:00Z', 'q'.repeat(length)), line.text(4, '2026-11-09T15:00:00Z', 'o'.repeat(700), { replyTo: 3 })]
-      const result = build({ lines, state: { ...initialAgentState(), cursor: 3 } })
-      const index = indexOf(lines)
-      // Every cap, from the highest down: the first that fits is the least cut.
-      let best = null
-      for (let cap = max; cap >= 0 && best === null; cap--) {
-        const prompt = renderBatchPrompt(result.batch, { ...view, index }, { itemCap: cap, contextKeep: 0 })
-        if (bytes(prompt) <= max) best = prompt
-      }
-      assert.equal(result.prompt, best, `a quoted text of ${length} bytes`)
-      if ((best.match(/\(cut; /g) ?? []).length === 1) oneWhole += 1
-    }
-    assert.ok(oneWhole > 0)
-  } finally {
-    restore()
-  }
-})
-
-test('batch: context lines and reply labels', () => {
-  const lines = [
-    ...fillerLines(1),
-    line.text(2, '2026-11-09T14:00:00Z', 'coffee 120'),
-    line.sent(3, '2026-11-09T14:00:30Z', 'Which café?', { replyTo: 2 }),
-    { ...line.sent(4, '2026-11-09T14:01:00Z', "⚠️ I couldn't process your last messages (timed out). I'll try again."), by: 'runner' },
-    line.text(5, '2026-11-09T14:02:00Z', '', { files: [{ path: '5.jpg', mime: 'image/jpeg', bytes: 10 }] }),
-    line.text(6, '2026-11-09T14:03:00Z', 'gone'),
-    line.delete(7, '2026-11-09T14:04:00Z', 6),
-    // From here on, after the cursor.
-    line.text(8, '2026-11-09T15:00:00Z', 'Blue Tokai', { replyTo: 3, data: { quoted: 'Which café?' } }),
-    line.text(9, '2026-11-09T15:01:00Z', 'what?', { replyTo: 4, data: { quoted: '⚠️ I couldn…' } }),
-    line.text(10, '2026-11-09T15:02:00Z', 'that was lunch', { replyTo: 5 }),
-    line.text(11, '2026-11-09T15:03:00Z', 'never mind', { replyTo: 6, data: { quoted: 'gone' } }),
-    line.text(12, '2026-11-09T15:04:00Z', 'about my old message', { data: { quoted: 'from before Scooter' } }),
-    line.text(13, '2026-11-09T15:05:00Z', 'read this', { data: { forwarded: true } }),
-    line.reaction(14, '2026-11-09T15:06:00Z', 3, '❤️'),
-    line.reaction(15, '2026-11-09T15:07:00Z', 3, ''),
-    { ...line.reaction(16, '2026-11-09T15:08:00Z', 8, '✅'), dir: 'out', trust: undefined, by: 'lifelog' },
-    line.sent(17, '2026-11-09T15:09:00Z', 'Noted:\n"two lines"', { replyTo: 13 }),
-    // A text such as /new is a message like any other, and so is what a reply quotes of it.
-    line.text(18, '2026-11-09T15:10:00Z', '/new'),
-    line.text(19, '2026-11-09T15:11:00Z', 'after it'),
-    line.text(20, '2026-11-09T15:12:00Z', 'that one', { replyTo: 18, data: { quoted: '/new' } }),
-    // A reply to a line that isn't a message, which only a damaged datastore has, shows the
-    // channel's preview if it has one.
-    line.text(21, '2026-11-09T15:13:00Z', 'odd', { replyTo: 14, data: { quoted: 'a heart' } }),
-    line.text(22, '2026-11-09T15:14:00Z', 'odder', { replyTo: 15 }),
-  ].map(entry => JSON.parse(JSON.stringify(entry)))
-  const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 7 } })
-  assert.deepEqual(seqsOf(batch), [8, 9, 10, 11, 12, 13, 18, 19, 20, 21, 22])
-  assert.equal(
-    body(prompt),
-    `New messages:
-#8 20:30 text: "Blue Tokai"
-      ↳ reply to #3, which you sent: "Which café?"
-#9 20:31 text: "what?"
-      ↳ reply to #4, which Scooter sent: "⚠️ I couldn't process your last messages (timed out). I'll try again."
-#10 20:32 text: "that was lunch"
-      ↳ reply to #5, which the owner sent: photo /data/datastore/2026/11/09/5.jpg (image/jpeg)
-#11 20:33 text: "never mind"
-      ↳ reply to #6, which the owner sent: (deleted in #7)
-#12 20:34 text: "about my old message"
-      ↳ reply to an earlier message: "from before Scooter"
-#13 20:35 forwarded text: "read this"
-#18 20:40 text: "/new"
-#19 20:41 text: "after it"
-#20 20:42 text: "that one"
-      ↳ reply to #18, which the owner sent: "/new"
-#21 20:43 text: "odd"
-      ↳ reply to #14: "a heart"
-#22 20:44 text: "odder"
-      ↳ reply to #15
-
-For context only (no action, nothing to mark):
-#17 20:39 you sent, in reply to #13: "Noted:\\n\\"two lines\\""
-#16 20:38 you reacted ✅ to #8
-#15 20:37 the owner removed their reaction to #3
-#14 20:36 the owner reacted ❤️ to #3`,
-  )
-})
-
-test('batch: a line this version doesn\'t know is passed over, and what the prompt takes from data it checks first', () => {
+test("batch: a line this version doesn't know is passed over, and an edit or a deletion of one is work of its own", () => {
   const at = minute => `2026-11-09T15:${String(minute).padStart(2, '0')}:00Z`
   const base = { dir: 'in', trust: 'owner' }
   const lines = [
@@ -301,124 +151,94 @@ test('batch: a line this version doesn\'t know is passed over, and what the prom
     { seq: 3, kind: 'command', ...base, at: at(1), source: 'whatsapp', sourceId: 'C3', text: '/status' },
     { seq: 4, kind: 'message', ...base, at: at(2), source: 'telegram', sourceId: 'T4', text: 'hi' },
     { seq: 5, kind: 'message', ...base, at: at(3), source: 'whatsapp', sourceId: 'W5' },
-    // Fields this version doesn't know are ignored; a reply to a line it doesn't know shows the
-    // preview in its data.
+    // Fields this version doesn't know, and `data` of any kind, change nothing.
     line.text(6, at(4), 'lunch 300', { replyTo: 4, quoted: 'top-level', forwarded: true, subject: 'x', data: { quoted: 'hi there' } }),
-    // `data` that isn't what a channel writes.
     line.email(7, at(5), 'unused', 'a list for data', { data: ['Call with Sam'] }),
-    line.email(8, at(6), 'unused', 'a subject that is a number', { data: { subject: 7 } }),
-    line.text(9, at(7), 'forwarded, or not', { data: { forwarded: 'yes' } }),
-    line.text(10, at(8), 'a reply', { replyTo: 3, data: { quoted: 7 } }),
-    { ...line.reaction(11, at(9), 2, 'x'), data: { emoji: 7 } },
-    { ...line.reaction(12, at(10), 2, 'x'), dir: 'out', trust: undefined, by: 'lifelog', data: undefined },
-    // An `out` line of a kind this version doesn't know is no context.
-    { seq: 13, kind: 'typing', dir: 'out', at: at(11), source: 'whatsapp', by: 'lifelog' },
-    // An edit of the old command, and a deletion of the gone channel's message, are work of their own.
-    line.edit(14, at(12), 3, '/help'),
-    line.delete(15, at(13), 4),
+    { ...line.reaction(8, at(6), 2, 'x'), data: { emoji: 7 } },
+    // An `out` line of a kind this version doesn't know.
+    { seq: 9, kind: 'typing', dir: 'out', at: at(7), source: 'whatsapp', by: 'lifelog' },
+    // An edit of the old command, and a deletion of the gone channel's message.
+    line.edit(10, at(8), 3, '/help'),
+    line.delete(11, at(9), 4),
   ].map(entry => JSON.parse(JSON.stringify(entry)))
   const { batch, prompt } = build({ lines, state: { ...initialAgentState(), cursor: 1 } })
-  assert.deepEqual(seqsOf(batch), [2, 6, 7, 8, 9, 10, 14, 15])
-  assert.deepEqual(batch.context, [11, 12])
-  assert.equal(batch.covered, 15)
-  assert.equal(
-    body(prompt),
-    `New messages:
-#2 20:30 text: "coffee 120"
-#6 20:34 text: "lunch 300"
-      ↳ reply to #4: "hi there"
-#7 20:35 email "": "a list for data"
-#8 20:36 email "": "a subject that is a number"
-#9 20:37 text: "forwarded, or not"
-#10 20:38 text: "a reply"
-      ↳ reply to #3
-#14 20:42 edit of #3, now: "/help"
-#15 20:43 deletion of #4
-
-For context only (no action, nothing to mark):
-#12 20:40 you reacted to #2
-#11 20:39 the owner reacted to #2`,
-  )
+  assert.deepEqual(seqsOf(batch), [2, 6, 7, 10, 11])
+  assert.equal(batch.covered, 11)
+  assert.match(prompt, /^New: 2 6 7 10 11$/m)
 })
 
-test('batch: emails, media and attachments in the prompt', () => {
-  const lines = [
-    ...fillerLines(2),
-    // The example email of `docs/architecture/datastore.md`, as `runner.md` shows it in a prompt.
-    line.email(3, '2026-11-09T16:12:40Z', 'Call with Sam', "Recording from today's call.", {
-      files: [
-        { path: '3.eml', mime: 'message/rfc822', bytes: 19262388 },
-        { path: '3-2.m4a', mime: 'audio/mp4', name: 'Call with Sam.m4a', bytes: 14206977 },
-      ],
-    }),
-    // An email that couldn't be read is stored with its .eml and why.
-    line.email(4, '2026-11-09T16:13:00Z', '', '', { files: [{ path: '4.eml', mime: 'message/rfc822', bytes: 900 }], media: { type: 'email', error: 'could not be parsed' } }),
-    line.text(5, '2026-11-09T16:14:00Z', 'receipt', { media: { type: 'image', mime: 'image/jpeg', error: 'download failed' } }),
-    line.text(6, '2026-11-09T16:15:00Z', 'Blue Tokai', { media: { type: 'location', error: 'not a file, so not stored' } }),
-    line.text(7, '2026-11-09T16:16:00Z', '', { files: [{ path: '7.mp4', mime: 'video/mp4', bytes: 10 }] }),
-    line.text(8, '2026-11-09T16:17:00Z', 'voice', { files: [{ path: '8.ogg', mime: 'audio/ogg; codecs=opus', bytes: 10 }] }),
-    // A message caught up from yesterday, and one from last year, arriving today.
-    { ...line.text(9, '2026-11-08T05:00:00Z', 'yesterday'), day: '2026/11/09' },
-    { ...line.text(10, '2025-12-31T05:00:00Z', 'last year'), day: '2026/11/09' },
-  ]
-  const { prompt } = build({ lines, state: { ...initialAgentState(), cursor: 2 }, now: '2026-11-09T16:20:00Z' })
-  assert.equal(
-    body(prompt),
-    `New messages:
-#3 21:42 email "Call with Sam": "Recording from today's call."
-      attachment "Call with Sam.m4a" /data/datastore/2026/11/09/3-2.m4a (audio/mp4)
-      whole email /data/datastore/2026/11/09/3.eml
-#4 21:43 email "": ""
-      whole email /data/datastore/2026/11/09/4.eml
-      email not stored (could not be parsed)
-#5 21:44 photo, not stored (download failed), caption: "receipt"
-#6 21:45 location, not stored (not a file, so not stored), caption: "Blue Tokai"
-#7 21:46 video /data/datastore/2026/11/09/7.mp4 (video/mp4)
-#8 21:47 audio /data/datastore/2026/11/09/8.ogg ("audio/ogg; codecs=opus"), caption: "voice"
-#9 Sun 8 Nov 10:30 text: "yesterday"
-#10 Wed 31 Dec 2025 10:30 text: "last year"`,
-  )
-})
-
-test('batch: an edit or deletion brings in its message from retry or failed, shown as it is now', () => {
-  const lines = [
-    ...fillerLines(2),
-    line.text(3, '2026-11-09T14:00:00Z', 'coffee 120'),
-    line.text(4, '2026-11-09T14:01:00Z', 'taxi 300'),
-    line.text(5, '2026-11-09T14:02:00Z', 'lunch 400'),
-    line.text(6, '2026-11-09T14:03:00Z', 'unrelated'),
-    line.edit(7, '2026-11-09T15:00:00Z', 3, 'coffee 150'),
-    line.delete(8, '2026-11-09T15:01:00Z', 4),
-    line.edit(9, '2026-11-09T15:02:00Z', 5, 'lunch 450'),
-  ]
-  const state = {
-    ...initialAgentState(),
-    cursor: 6,
-    // #3 waits, not due yet; #4 failed for good; #5 was handled, and is in neither.
-    retry: [{ seq: 3, attempts: 2, due: '2026-11-09T16:00:00Z', reason: 'not marked' }],
-    failed: [{ seq: 4, at: '2026-11-09T14:30:00Z', reason: 'not handled after 4 attempts' }],
+// The lost-line rule: an edit and a deletion, in every order, against a message that is new, waits
+// to be tried again, was given up on, or is done. Each line that is work is given until it is
+// marked, or has used its attempts, and only the message already deleted is settled by the runner.
+test('batch: a message already deleted is never given, and its deletion always is; an edit brings in its message from retry or failed', () => {
+  const at = minute => `2026-11-09T15:${String(minute).padStart(2, '0')}:00Z`
+  const message = line.text(3, at(0), 'coffee 120')
+  const edit = seq => line.edit(seq, at(seq), 3, 'coffee 150')
+  const deletion = seq => line.delete(seq, at(seq), 3)
+  const waiting = { seq: 3, attempts: 1, due: '2026-11-09T16:30:00Z', reason: 'not marked' }
+  const givenUp = { seq: 3, at: at(1), reason: 'not handled after 4 attempts' }
+  const states = {
+    new: { cursor: 2, retry: [], failed: [] },
+    waiting: { cursor: 3, retry: [waiting], failed: [] },
+    'given up on': { cursor: 3, retry: [], failed: [givenUp] },
+    done: { cursor: 3, retry: [], failed: [] },
   }
-  const { batch, prompt } = build({ lines, state })
-  assert.deepEqual(batch.items, [
-    { seq: 3, origin: 'retry', attempt: 3 },
-    { seq: 4, origin: 'failed', attempt: 1 },
-    { seq: 7, origin: 'new', attempt: 1 },
-    { seq: 8, origin: 'new', attempt: 1 },
-    { seq: 9, origin: 'new', attempt: 1 },
-  ])
-  assert.equal(
-    body(prompt),
-    `New messages:
-#7 20:30 edit of #3, now: "coffee 150"
-#8 20:31 deletion of #4
-#9 20:32 edit of #5, now: "lunch 450"
+  const orders = { edit: [edit(4)], deletion: [deletion(4)], 'edit, then deletion': [edit(4), deletion(5)], 'deletion, then edit': [deletion(4), edit(5)] }
+  // What each gives, as `[items, settled]`, by the message's state and the order of the lines.
+  const expected = {
+    new: { edit: [[[3, 'new', 1], [4, 'new', 1]], []], deletion: [[[4, 'new', 1]], []], 'edit, then deletion': [[[4, 'new', 1], [5, 'new', 1]], []], 'deletion, then edit': [[[4, 'new', 1], [5, 'new', 1]], []] },
+    waiting: { edit: [[[3, 'retry', 2], [4, 'new', 1]], []], deletion: [[[4, 'new', 1]], [3]], 'edit, then deletion': [[[4, 'new', 1], [5, 'new', 1]], [3]], 'deletion, then edit': [[[4, 'new', 1], [5, 'new', 1]], [3]] },
+    'given up on': { edit: [[[3, 'failed', 1], [4, 'new', 1]], []], deletion: [[[4, 'new', 1]], [3]], 'edit, then deletion': [[[4, 'new', 1], [5, 'new', 1]], [3]], 'deletion, then edit': [[[4, 'new', 1], [5, 'new', 1]], [3]] },
+    done: { edit: [[[4, 'new', 1]], []], deletion: [[[4, 'new', 1]], []], 'edit, then deletion': [[[4, 'new', 1], [5, 'new', 1]], []], 'deletion, then edit': [[[4, 'new', 1], [5, 'new', 1]], []] },
+  }
+  for (const [stateName, lane] of Object.entries(states)) {
+    for (const [orderName, after] of Object.entries(orders)) {
+      const lines = [...fillerLines(2), message, ...after]
+      const state = { ...initialAgentState(), ...lane }
+      const built = build({ lines, state })
+      const what = `${stateName}, ${orderName}`
+      const [items, settled] = expected[stateName][orderName]
+      assert.deepEqual(built.batch.items.map(item => [item.seq, item.origin, item.attempt]), items, what)
+      assert.deepEqual(built.batch.settled, settled, what)
+      assert.equal(built.batch.covered, lines.at(-1).seq, what)
+      // Whatever comes of the run, the message settled has left both lists; and once the batch is
+      // marked done, nothing of it waits, nor is it given again.
+      for (const outcome of [{ ok: true, done: new Set(items.map(([seq]) => seq)), failed: new Map() }, { ok: false, cause: 'outage', reason: 'x' }, { ok: false, cause: 'other', reason: 'x' }]) {
+        const next = settleBatch(state, built.batch, outcome, { now: Date.parse(EXAMPLE_NOW), startedAt: Date.parse(EXAMPLE_NOW), durationMs: 1 }).state
+        for (const seq of settled) {
+          assert.ok(!next.retry.some(entry => entry.seq === seq), what)
+          assert.ok(!next.failed.some(entry => entry.seq === seq), what)
+        }
+        if (outcome.ok) {
+          assert.deepEqual(next.retry, [], what)
+          assert.equal(build({ lines, state: next, now: '2026-11-10T00:00:00Z' }), null, what)
+        }
+      }
+    }
+  }
 
-Retrying (not handled yet):
-#3 19:30 text: "coffee 150" (edited in #7) (attempt 3 of 4)
-#4 19:31 (deleted in #8) (attempt 1 of 4)`,
-  )
+  // The deletion comes, in a later batch, also when the batch that gave the message was cut before
+  // it, and when the message is deleted before its first batch the cursor passes it.
+  const cut = [...fillerLines(2), message]
+  for (let seq = 4; seq <= 21; seq++) cut.push(line.text(seq, at(seq), `item ${seq}`))
+  cut.push(deletion(22))
+  const first = build({ lines: cut.slice(0, -1), state: { ...initialAgentState(), cursor: 2 } })
+  assert.deepEqual(seqsOf(first.batch), [3, ...Array.from({ length: 18 }, (_, n) => n + 4)])
+  const waitingNow = { ...initialAgentState(), cursor: first.batch.covered, retry: [{ ...waiting, due: at(0) }] }
+  const second = build({ lines: cut, state: waitingNow })
+  assert.deepEqual(seqsOf(second.batch), [22])
+  assert.deepEqual(second.batch.settled, [3])
+  const fresh = build({ lines: cut, state: { ...initialAgentState(), cursor: 2 } })
+  assert.deepEqual(seqsOf(fresh.batch), [...Array.from({ length: 18 }, (_, n) => n + 4), 22])
+  assert.equal(fresh.batch.covered, 22)
 
-  // They come in even when they take the batch past 20 items.
+  // A message deleted while it waits is due no more, and starts no batch by itself; the batch that
+  // gives its deletion settles it.
+  const onlyDeleted = build({ lines: [...fillerLines(2), message, deletion(4)], state: { ...initialAgentState(), cursor: 4, retry: [{ ...waiting, due: at(0) }] } })
+  assert.equal(onlyDeleted, null)
+})
+
+test('batch: an edit brings in its message even past 20 items, and an edit of a message deleted since brings in nothing', () => {
   const many = [...fillerLines(2), line.text(3, '2026-11-09T14:00:00Z', 'coffee 120')]
   for (let seq = 4; seq <= 21; seq++) many.push(line.text(seq, '2026-11-09T15:00:00Z', `item ${seq}`))
   many.push(line.edit(22, '2026-11-09T15:00:00Z', 3, 'coffee 150'), line.text(23, '2026-11-09T15:00:00Z', 'later'))
@@ -426,17 +246,67 @@ Retrying (not handled yet):
   assert.equal(full.batch.items.length, 21)
   assert.deepEqual(seqsOf(full.batch).slice(0, 3), [2, 3, 4])
   assert.equal(full.batch.covered, 22)
+  assert.match(full.prompt, /^Given before: 2 \(attempt 2 of 4\), 3 \(attempt 1 of 4\)$/m)
+
+  // A message edited and then deleted, in failed: the edit brings nothing back.
+  const lines = [...fillerLines(2), line.text(3, '2026-11-09T14:00:00Z', 'coffee 120'), line.edit(4, '2026-11-09T15:00:00Z', 3, 'coffee 150'), line.delete(5, '2026-11-09T15:01:00Z', 3)]
+  const index = indexOf(lines)
+  const lane = { cursor: 3, retry: [], failed: [{ seq: 3, at: '2026-11-09T14:30:00Z', reason: 'x' }] }
+  const { candidates, fresh } = selectCandidates({ agent: AGENT, lane, index, now: Date.parse(EXAMPLE_NOW), upTo: 4 })
+  assert.deepEqual(assembleBatch({ agent: AGENT, lane, index, upTo: 4 }, candidates, fresh).items, [{ seq: 4, origin: 'new', attempt: 1 }])
 })
 
-test('batch: a scheduled task is its task, with no messages', () => {
-  const prompt = buildTaskPrompt({
-    agent: AGENT,
-    task: 'Evening check-in. List in a few lines what you filed today.\n',
-    paths: PATHS,
-    now: Date.parse(EXAMPLE_NOW),
-    timeZone: 'Asia/Kolkata',
-    homeCurrency: 'INR',
-    internet: false,
+test("batch: its prompt is that of the first trigger, in run's order, that names the channel of one of its lines", () => {
+  const agent = {
+    ...AGENT,
+    run: { ...AGENT.run, newMessages: [{ channels: ['email'], prompt: 'Emails: $seq.unread$\n' }, { channels: ['whatsapp'], prompt: 'WhatsApp: $seq.unread$\n' }] },
+  }
+  const lines = [...fillerLines(2), line.text(3, '2026-11-09T15:00:00Z', 'coffee'), line.email(4, '2026-11-09T15:01:00Z', 'Ticket', 'attached')]
+  // An email among the lines: the email trigger's, which comes first, with every line's number.
+  assert.equal(build({ lines, state: { ...initialAgentState(), cursor: 2 }, agent }).prompt, 'Emails: 3 4\n')
+  // Only WhatsApp's.
+  assert.equal(build({ lines: lines.slice(0, 3), state: { ...initialAgentState(), cursor: 2 }, agent }).prompt, 'WhatsApp: 3\n')
+  assert.equal(triggerOf(agent, [{ seq: 4 }, { seq: 3 }], indexOf(lines)).prompt, 'Emails: $seq.unread$\n')
+})
+
+test("batch: a scheduled task's prompt is its trigger's, with no lines", () => {
+  const prompt = scheduledPrompt({ agent: AGENT, prompt: EVERY, paths: PATHS, settings: SETTINGS, now: Date.parse(EXAMPLE_NOW) })
+  assert.deepEqual(valuesOf(prompt), {
+    now: 'Monday 9 November 2026, 21:20',
+    'user.timezone': 'Asia/Kolkata',
+    'user.currency': 'INR',
+    reply_mode: 'quiet',
+    internet: 'off',
+    'agent.dir': '/data/agents/lifelog',
+    'datastore.dir': '/data/datastore',
+    'seq.unread': NONE,
+    'seq.retry': NONE,
+    'run.writes': '/data/agents/lifelog/views/ /data/agents/lifelog/memory/',
   })
-  assert.equal(prompt, `${HEADER}\n\nScheduled task (from your configuration, not a message from the owner):\nEvening check-in. List in a few lines what you filed today.`)
+})
+
+test('prompt: its variables, and the longest value each can take, which no prompt filled in passes', t => {
+  assert.deepEqual(variablesIn('$now$ $5 $a.b_c$ $$ $1x$ $now$'), ['now', 'a.b_c', 'now'])
+  assert.equal(renderPrompt('$now$ $other$', { now: '$&' }), '$& $other$')
+  // Times of the owner's day.
+  assert.equal(longTime(Date.parse('2026-11-09T15:50:30Z'), 'Asia/Kolkata'), 'Monday 9 November 2026, 21:20')
+
+  // The longest each variable can take: a batch of the most items, each of the largest number, and
+  // a time of the longest names.
+  atEnd(t, overrideLimits({ BATCH_MAX_ITEMS: 3 }))
+  const agent = { ...AGENT, writes: ['agents/lifelog/views/'] }
+  const backfill = ['agents/lifelog/views/a.csv', 'agents/lifelog/views/my b.csv']
+  const longest = longestValues({ agent, paths: PATHS, settings: SETTINGS, writesLists: [agent.writes, backfill] })
+  const big = Number.MAX_SAFE_INTEGER
+  const items = [
+    ...[0, 1, 2].map(n => ({ seq: big - n, origin: 'new', attempt: 1 })),
+    ...[3, 4, 5, 6, 7, 8].map(n => ({ seq: big - n, origin: 'retry', attempt: big })),
+  ]
+  const filled = promptValues({ agent, paths: PATHS, settings: SETTINGS, now: Date.parse('2026-09-30T18:29:00Z'), items, writes: backfill })
+  assert.equal(filled.now, 'Wednesday 30 September 2026, 23:59')
+  for (const name of VARIABLES) assert.ok(Buffer.byteLength(filled[name]) <= longest[name], name)
+  for (const name of ['seq.unread', 'seq.retry', 'run.writes', 'user.timezone', 'agent.dir']) assert.equal(Buffer.byteLength(filled[name]), longest[name], name)
+  assert.equal(longestPrompt(EVERY, longest), Buffer.byteLength(renderPrompt(EVERY, filled)) + (longest.now - Buffer.byteLength(filled.now)))
+  // Half of a pair of surrogates on either side of a variable counts as three bytes, as it is sent.
+  assert.equal(longestPrompt('\uD83D$internet$\uDE00', longest), 3 + 3 + 3)
 })

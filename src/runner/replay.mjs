@@ -3,15 +3,16 @@
 //
 // - **One of the owner's days per batch.** A replayed batch is drawn from its lane as a live one
 //   is (`batch.mjs`): due retries first, then work items after the lane's cursor, up to the
-//   `seq` the replay stops at, at most `BATCH_MAX_ITEMS` and within `PROMPT_MAX_BYTES`. And every
-//   item it takes was sent on one day of the owner's: the local date, in `SCOOTER_TZ`, of the
-//   first item's `at`. It stops at the first item sent on another. A message that an edit or a
-//   deletion in it brings in, from the lane's retries or from what it gave up on, joins whatever
-//   its day, as it may take a batch past 20: otherwise the edit would be handled before the
-//   message it changes. It is shown with its date, which says when it was sent.
-// - **`Now:`** in the prompt is the time of the batch's newest item, not the clock's, so "today"
+//   `seq` the replay stops at, at most `BATCH_MAX_ITEMS`. And every item it takes was sent on one
+//   day of the owner's: the local date, in `SCOOTER_TZ`, of the first item's `at`. It stops at the
+//   first item sent on another. A message that an edit in it brings in, from the lane's retries or
+//   from what it gave up on, joins whatever its day, as it may take a batch past `BATCH_MAX_ITEMS`:
+//   otherwise the edit would be handled before the message it changes.
+// - **`$now$`** in the prompt is the time of the batch's newest item, not the clock's, so "today"
 //   and "yesterday" in old messages mean what they meant then. Every item but one brought in is of
 //   that day, so every one of them was sent "today".
+// - **The prompt** is that of a live batch: the prompt of the first trigger `on: new-messages` that
+//   names the channel of one of its lines, with `$run.writes$` what the replay may change.
 // - **A session for each of the owner's days:** `<agent>-rebuild-<day>`, or
 //   `<agent>-backfill-<id>-<day>`, so a day's batches continue one conversation and no other day's.
 //   With `session: none`, none, as for live runs. A replay's sessions serve only it, and go once it
@@ -25,7 +26,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { errorFields } from '../common/log.mjs'
 import { localDate, parseIsoSeconds } from '../common/time.mjs'
-import { fitBatch, headerFor, selectCandidates } from './batch.mjs'
+import { assembleBatch, batchPrompt, selectCandidates } from './batch.mjs'
 
 // The owner's day a line was sent on: the date of its `at` in `timeZone`, such as `2026-11-09`.
 export function ownersDay(line, timeZone) {
@@ -51,24 +52,20 @@ export function batchTime(batch, index) {
 
 // The next replayed batch of a lane, and its prompt, or null when there is nothing to give the
 // agent now. Returns `{ batch, prompt, day, time }`: the batch as `assembleBatch` gives it, the
-// owner's day it is of, and the time its prompt's `Now:` says.
+// owner's day it is of, and the time its prompt's `$now$` says.
 //
 // - `agent`, `index`: the config and the datastore's index.
 // - `lane`: `{ cursor, retry, failed }` (`batch.mjs`); `until`: the `seq` the replay stops at.
 // - `now`: the clock's time, which says which retries are due.
-// - `paths`, `timeZone`, `homeCurrency`, `internet`: as for a live batch.
-// - `intro`: a line the prompt starts with, or null: a backfill's.
-export function buildReplayBatch({ agent, lane, until, index, paths, now, timeZone, homeCurrency, internet, intro = null }) {
+// - `paths`, `settings`: as for a live batch.
+// - `writes`: what the replay's runs may change, the agent's own or a backfill's.
+export function buildReplayBatch({ agent, lane, until, index, paths, settings, now, writes = agent.writes }) {
   const upTo = Math.min(until, index.lastSeq)
-  const { candidates, fresh, day } = replayCandidates({ agent, lane, index, now, upTo, timeZone })
+  const { candidates, fresh, day } = replayCandidates({ agent, lane, index, now, upTo, timeZone: settings.timeZone })
   if (candidates.length === 0) return null
-  const viewOf = batch => {
-    const time = batchTime(batch, index)
-    const header = headerFor({ agent, paths, now: time, timeZone, homeCurrency, internet })
-    return { index, paths, agentName: agent.name, now: time, timeZone, header: intro === null ? header : `${intro}\n${header}` }
-  }
-  const { batch, prompt } = fitBatch({ agent, lane, index, upTo, candidates, fresh, viewOf })
-  return { batch, prompt, day, time: batchTime(batch, index) }
+  const batch = assembleBatch({ agent, lane, index, upTo }, candidates, fresh)
+  const time = batchTime(batch, index)
+  return { batch, prompt: batchPrompt({ agent, batch, index, paths, settings, now: time, writes }), day, time }
 }
 
 // The session of a replayed batch of the owner's day `day`: `<agent>-rebuild-<day>` for a rebuild,

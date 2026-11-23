@@ -19,14 +19,17 @@
 //       run:
 //         - on: new-messages
 //           channels: [whatsapp, email]
+//           prompt: |                        # what pi is given for the run, its variables filled in
+//             Now: $now$. New: $seq.unread$. Given before: $seq.retry$.
 //         - at: "21:30"                      # or "Sun 18:00"
-//           task: Evening check-in.
+//           prompt: "Now: $now$. Evening check-in."
 //         - backfill: people-1
 //           skill: people
 //           writes: [agents/lifelog/views/people.csv]
 //
 // Every field is required except `thinking` and `reads`. A key the format doesn't have is a fault,
-// so that a misspelled one isn't ignored without a word.
+// so that a misspelled one isn't ignored without a word. So is a variable the runner doesn't know,
+// in a trigger's `prompt` (`prompt.mjs`).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,7 +37,9 @@ import { LineCounter, parseDocument } from 'yaml'
 import { SOURCES } from '../common/datastore/line.mjs'
 import { limits } from '../common/limits.mjs'
 import { OWN_AUTHORS } from '../common/outbox.mjs'
+import { makePaths } from '../common/paths.mjs'
 import { parseLocalTime } from '../common/time.mjs'
+import { VARIABLES, longestPrompt, longestValues, variablesIn } from './prompt.mjs'
 
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 export const SESSIONS = ['daily', 'none']
@@ -72,7 +77,7 @@ const MODEL_ID = /^~?[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/
 
 const AGENT_KEYS = ['model', 'thinking', 'prompt', 'skills', 'reads', 'writes', 'sends', 'session', 'reply_mode', 'ack_reaction', 'timeout_minutes', 'run']
 const OPTIONAL_KEYS = ['thinking', 'reads']
-const TRIGGER_KEYS = { on: ['on', 'channels'], at: ['at', 'task'], backfill: ['backfill', 'skill', 'writes'] }
+const TRIGGER_KEYS = { on: ['on', 'channels', 'prompt'], at: ['at', 'prompt'], backfill: ['backfill', 'skill', 'writes'] }
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value) && !Buffer.isBuffer(value)
 
@@ -131,7 +136,10 @@ function isInside(dir, target) {
 
 // Reads the text of `agents.yaml`. `configDir` is the config folder that its paths are relative
 // to, `dataDir`, when given, the data folder, against whose path a path of `reads` and `writes` is
-// measured, and `file` names the file in messages. Returns the configuration:
+// measured, and `file` names the file in messages. With `dataDir` and `settings`, the runner's,
+// it also holds each trigger's `prompt`, filled in with the longest values its variables can take,
+// within `PROMPT_MAX_BYTES`: the runner, `rebuild` and `doctor` give both (`loadConfig`). Returns
+// the configuration:
 //
 //   { agents: [agent] }
 //
@@ -139,16 +147,16 @@ function isInside(dir, target) {
 //
 //   { name, model, thinking, prompt: { path, file }, skills: [{ name, path, dir }],
 //     reads, writes, repository, sends, channels, session, replyMode, ackReaction, timeoutMinutes,
-//     run: { newMessages: [{ channels }], scheduled: [{ at, schedule, task }], backfill: [{ id, skill, writes }] } }
+//     run: { newMessages: [{ channels, prompt }], scheduled: [{ at, schedule, prompt }], backfill: [{ id, skill, writes }] } }
 //
 // `thinking` is null when it isn't given. A path of the config folder is kept as written, cleaned
 // (`path`), and as the file or folder it names (`file`, `dir`). A skill's `name` is its folder's
 // name. `reads` and `writes` are paths from the data folder, cleaned, a folder ending in `/`;
 // `reads` is the datastore and the agent's own folder when it isn't given. `repository` is what
 // the agent's repository keeps (`repositoryPaths`). `channels` is every channel the triggers for
-// new messages name, in order. `schedule` is what `parseLocalTime` returns. Throws a `ConfigError`
-// that lists every fault.
-export function parseConfig(text, { configDir, dataDir = null, file = 'agents.yaml' }) {
+// new messages name, in order. A trigger's `prompt` is its text, as written. `schedule` is what
+// `parseLocalTime` returns. Throws a `ConfigError` that lists every fault.
+export function parseConfig(text, { configDir, dataDir = null, settings = null, file = 'agents.yaml' }) {
   const problems = []
   const lineCounter = new LineCounter()
   const doc = parseDocument(text, { version: '1.2', schema: 'core', uniqueKeys: true, prettyErrors: true, lineCounter })
@@ -175,7 +183,7 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
   }
 
   const top = doc.toJS({ maxAliasCount: 100 })
-  // Where each trigger for new messages is, for a fault that names it.
+  // Where each trigger for new messages, and each scheduled one, is, for a fault that names it.
   const fieldOf = new Map()
   const configReal = (() => {
     try {
@@ -290,10 +298,32 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
     return valid ? [...value] : []
   }
 
-  function nonEmptyString(parts, value, what) {
-    if (typeof value === 'string' && value.trim() !== '') return value
-    fault(parts, `must be ${what}`)
-    return null
+  // A trigger's `prompt`: text that isn't blank, which pi can be given as its message, with no
+  // variable the runner doesn't know. Returns it, or null after a fault.
+  function promptOf(parts, value) {
+    if (typeof value !== 'string' || value.trim() === '') {
+      fault(parts, 'must be the message pi is given for the run, as text')
+      return null
+    }
+    let ok = true
+    // A command line can't hold U+0000: the run could never start.
+    if (value.includes('\0')) {
+      fault(parts, 'holds the character U+0000, which a command line can\'t carry')
+      ok = false
+    }
+    // pi 1.5.2 takes an argument that starts with `@` as a file to attach, even after `--`, and
+    // fails without one (`pi 9` in `test/tools/pi.test.mjs`). No variable's value starts with it.
+    if (value.startsWith('@')) {
+      fault(parts, "starts with @, which makes pi take the whole prompt as the name of a file to attach: start it with anything else")
+      ok = false
+    }
+    const unknown = [...new Set(variablesIn(value).filter(name => !VARIABLES.includes(name)))]
+    if (unknown.length > 0) {
+      const names = unknown.map(name => `$${name}$`)
+      fault(parts, `holds ${list(names)}, which ${unknown.length === 1 ? 'is no variable' : 'are no variables'} the runner knows: they are ${list(VARIABLES.map(name => `$${name}$`))}`)
+      ok = false
+    }
+    return ok ? value : null
   }
 
   function agentOf(name, raw) {
@@ -419,11 +449,31 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
 
     agent.run = { newMessages: [], scheduled: [], backfill: [] }
     if (raw.run !== undefined) {
-      if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages, channels: [whatsapp]}]')
+      if (!Array.isArray(raw.run)) fault(at('run'), 'must be a list of when the agent runs, such as [{on: new-messages, channels: [whatsapp], prompt: "New: $seq.unread$"}]')
       else raw.run.forEach((entry, n) => triggerOf(agent, at('run', n), entry))
     }
     agent.channels = agent.run.newMessages.flatMap(trigger => trigger.channels)
+    if (settings !== null && dataDir !== null) checkPromptLengths(agent)
     return agent
+  }
+
+  // Each trigger's prompt, filled in with the longest values its variables can take, is one
+  // command-line argument, which Linux refuses at 128 KB (`pi 7` in `test/tools/pi.test.mjs`):
+  // it must be within `PROMPT_MAX_BYTES`. A backfill's batches are given the prompt of a trigger
+  // for new messages, with its own `writes`.
+  function checkPromptLengths(agent) {
+    const paths = makePaths({ dataDir, configDir })
+    // A `reply_mode` that is missing or wrong is a fault of its own: the longest stands for it.
+    const longestMode = REPLY_MODES.reduce((longest, mode) => (mode.length > longest.length ? mode : longest))
+    const common = { agent: { ...agent, replyMode: agent.replyMode ?? longestMode }, paths, settings }
+    const forMessages = longestValues({ ...common, writesLists: [agent.writes, ...agent.run.backfill.map(entry => entry.writes)] })
+    const forScheduled = longestValues(common)
+    const triggers = [...agent.run.newMessages.map(trigger => [trigger, forMessages]), ...agent.run.scheduled.map(trigger => [trigger, forScheduled])]
+    for (const [trigger, longest] of triggers) {
+      const most = longestPrompt(trigger.prompt, longest)
+      if (most <= limits.PROMPT_MAX_BYTES) continue
+      fault([...fieldOf.get(trigger), 'prompt'], `can make a prompt of ${most} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it`)
+    }
   }
 
   function triggerOf(agent, parts, entry) {
@@ -440,6 +490,7 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
     const { run } = agent
 
     if (kind === 'on') {
+      const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
       if (entry.on !== 'new-messages') return fault([...parts, 'on'], 'must be new-messages')
       if (entry.channels === undefined) return
       const channels = channelList([...parts, 'channels'], entry.channels)
@@ -448,20 +499,23 @@ export function parseConfig(text, { configDir, dataDir = null, file = 'agents.ya
         const other = run.newMessages.find(trigger => trigger.channels.includes(channel))
         if (other) return fault([...parts, 'channels'], `names ${channel}, which ${fieldName(fieldOf.get(other))}.channels names too: a channel starts the runs of one trigger at most`)
       }
-      if (channels.length === 0) return
-      const trigger = { channels }
+      if (channels.length === 0 || prompt === null) return
+      const trigger = { channels, prompt }
       fieldOf.set(trigger, parts)
       run.newMessages.push(trigger)
       return
     }
 
     if (kind === 'at') {
-      const task = nonEmptyString([...parts, 'task'], entry.task, 'the task, as text')
+      const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
       const schedule = typeof entry.at === 'string' ? parseLocalTime(entry.at) : null
       if (!schedule) return fault([...parts, 'at'], 'must be a time as "HH:MM", or a weekday and a time as "Sun 18:00"')
       // The `at` values are the keys of the state's `scheduled`.
       if (run.scheduled.some(other => other.at === entry.at)) return fault([...parts, 'at'], `is ${entry.at}, which another entry has too`)
-      if (task !== null) run.scheduled.push({ at: entry.at, schedule, task })
+      if (prompt === null) return
+      const trigger = { at: entry.at, schedule, prompt }
+      fieldOf.set(trigger, parts)
+      run.scheduled.push(trigger)
       return
     }
 
@@ -568,14 +622,15 @@ export function skillFileProblem(text, folderName) {
   return null
 }
 
-// Reads and checks `agents.yaml` from the config folder. Throws a `ConfigError` that lists every
-// fault, also when the file can't be read.
-export function loadConfig({ paths }) {
+// Reads and checks `agents.yaml` from the config folder, with the runner's `settings`, which fill
+// in the prompts' variables. Throws a `ConfigError` that lists every fault, also when the file
+// can't be read.
+export function loadConfig({ paths, settings }) {
   let text
   try {
     text = fs.readFileSync(paths.agentsYaml, 'utf8')
   } catch (error) {
     throw new ConfigError([{ field: null, line: null, message: `${paths.agentsYaml} can't be read (${error.code ?? error.name})` }])
   }
-  return parseConfig(text, { configDir: paths.configDir, dataDir: paths.dataDir, file: paths.agentsYaml })
+  return parseConfig(text, { configDir: paths.configDir, dataDir: paths.dataDir, settings, file: paths.agentsYaml })
 }

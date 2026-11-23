@@ -212,7 +212,7 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
 
   let model = null
   try {
-    const { agents } = runner.loadConfig({ paths })
+    const { agents } = runner.loadConfig({ paths, settings })
     model = agents[0].model
     checks.push({ name: 'config', status: 'ok', text: `${paths.agentsYaml} is valid; the agent's model is ${model}` })
   } catch (error) {

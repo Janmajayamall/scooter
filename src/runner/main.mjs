@@ -35,7 +35,7 @@ import { RunnerStatusError, readRunnerStatus } from '../common/runnerstatus.mjs'
 import { systemClock } from '../common/time.mjs'
 import { ensureAgentDir, icuTzRelease } from './agentdir.mjs'
 import { backfillJob, finishBackfill } from './backfill.mjs'
-import { buildBatch, buildTaskPrompt } from './batch.mjs'
+import { buildBatch, scheduledPrompt } from './batch.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
@@ -83,7 +83,7 @@ export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
 //   give another.
 export async function openRunner({ settings, openSandbox, clock = systemClock, log = createLog({ component: 'runner', clock }), proc = createProc({ log, clock }), restartWaits = false, runnerTz = process.versions.tz }) {
   const paths = makePaths(settings)
-  const { agents } = loadConfig({ paths })
+  const { agents } = loadConfig({ paths, settings })
   // There is exactly one agent in v2.
   const [agent] = agents
 
@@ -159,7 +159,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         batchSeconds: settings.batchSeconds,
         incomingSeenAt: datastore.incomingSeenAt,
       })
-      const prompts = { agent, paths, now, timeZone: settings.timeZone, homeCurrency: settings.homeCurrency, internet: settings.agentInternet }
+      const prompts = { agent, paths, settings, now }
 
       if (action.kind === 'messages') {
         const built = buildBatch({ agent, state, index: datastore.index, ...prompts })
@@ -168,8 +168,8 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         return { action, outcome }
       }
       if (action.kind === 'scheduled') {
-        const prompt = buildTaskPrompt({ task: action.task, ...prompts })
-        const { outcome } = await run({ kind: 'scheduled', at: action.at, date: action.date, task: action.task, prompt }, signal)
+        const prompt = scheduledPrompt({ ...prompts, prompt: action.prompt })
+        const { outcome } = await run({ kind: 'scheduled', at: action.at, date: action.date, prompt }, signal)
         return { action, outcome }
       }
       // A backfill's batch, and finishing it (`backfill.mjs`). `nextAction` names only a

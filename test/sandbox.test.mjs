@@ -621,12 +621,13 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   }
   assert.deepEqual(outcome, { ok: true, cause: null })
 
-  // pi read the message's line in the datastore, which its VM sees read-only: the tool's result,
-  // which the model got with the next request, holds what only the file has, its WhatsApp ID.
+  // The prompt gave the line's number, and nothing of what it says; pi read the line in the
+  // datastore, which its VM sees read-only: the tool's result, which the model got with the next
+  // request, holds what only the file has, its text and its WhatsApp ID.
   const [first, second] = model.modelRequests
-  assert.match(JSON.stringify(first.body), /New messages:\\n#1 [^"]* text: \\"coffee 150 at Blue Tokai\\"/)
+  assert.match(JSON.stringify(first.body), /New: 1\\nGiven before: none\\n/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000001/)
-  assert.doesNotMatch(JSON.stringify(first.body), /3EB0E2E0000000000001/)
+  assert.doesNotMatch(JSON.stringify(first.body), /3EB0E2E0000000000001|Blue Tokai/)
   // The view, committed by Scooter with the batch's number.
   assert.equal(fs.readFileSync(path.join(path.join(paths.agentDir('lifelog'), 'views'), 'expenses.csv'), 'utf8'), 'date,time,merchant,amount,currency,source\n2026-11-09,21:20,Blue Tokai,150,INR,#1\n')
   const git = (...args) => spawnText('git', args, { GIT_DIR: path.join(paths.agentDir('lifelog'), '.git'), GIT_WORK_TREE: paths.agentDir('lifelog') })
@@ -658,6 +659,12 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   assert.deepEqual([...new Set(logged.filter(entry => entry.event === 'response').map(entry => entry.status))], [200])
 })
 
+// The text of the first user message of a recorded request: a string or a list of parts.
+function conversationText(body) {
+  const { content } = body.messages.find(message => message.role === 'user')
+  return typeof content === 'string' ? content : content.map(part => part.text ?? '').join('\n')
+}
+
 // The text of a recorded request's system prompt: a field of its own on the messages route, which
 // is a string or a list of parts.
 function systemPromptOf(request) {
@@ -665,7 +672,7 @@ function systemPromptOf(request) {
   return typeof system === 'string' ? system : system.map(part => part.text ?? '').join('\n')
 }
 
-test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the prompt, the runner's skill and the five skills, reads two, finds show, send, mark and the zone rules that ship with the runner, files a message by them, says so with send and marks it with mark", options, async t => {
+test("sandbox: the agent's instructions of config/ through the real sandbox: pi is given the prompt, the runner's skill and the five skills, reads two, finds show, send, mark and the zone rules that ship with the runner, reads the line its prompt gives the number of with show, files it, says so with send and marks it with mark", options, async t => {
   const prepared = prepare(t)
   const { paths, settings, log } = prepared
   // The repository's own config folder, as `setup` copies it and Docker mounts it.
@@ -681,6 +688,8 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
     { tool: 'read', args: { path: `${skills}/expenses/SKILL.md` } },
     { tool: 'bash', args: { command: 'command -v pdftotext pdftoppm heif-convert curl git node show send mark' } },
     { tool: 'bash', args: { command: 'node -p process.versions.tz; printenv ICU_TIMEZONE_FILES_DIR' } },
+    // The line whose number the prompt gave, read as lifelog's prompt says.
+    { tool: 'bash', args: { command: 'show 1' } },
     { tool: 'write', args: { path: 'views/expenses.csv', content: `${header}\n2026-11-09,21:20,Blue Tokai,coffee,150,INR,Food & drink,,,,#1\n` } },
     { tool: 'bash', args: { command: "send <<'END'\nFiled the coffee at Blue Tokai: ₹150, \"Food & drink\".\nEND\nmark done 1" } },
     { text: 'Filed it.' },
@@ -703,7 +712,7 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   // and pi's list of the skills: the runner's, at its copy in run/skills/, then the five, each at
   // its copy in run/config/, with the description its SKILL.md gives. No memory: the agent reads
   // its own.
-  const [first, second, third, fourth, fifth, , seventh] = model.modelRequests
+  const [first, second, third, fourth, fifth, sixth, , eighth] = model.modelRequests
   const system = systemPromptOf(first)
   assert.ok(system.includes(fs.readFileSync(new URL('../config/prompts/lifelog.md', import.meta.url), 'utf8').trimEnd()))
   assert.ok(!system.includes('# Your memory'))
@@ -728,8 +737,18 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   // What pi's bash tool runs gets the variable, and its Node converts with the rules it names, the
   // run's copy of those that ship with the runner.
   assert.equal(toolResults(fifth.body)[3].text, `${icuTzRelease()}\n${paths.agentRunIcuTz('lifelog')}\n`)
+  // The prompt is the default one for new messages, filled in: the line's number, not its text;
+  // and show, from pi's bash tool, printed the line.
+  const userText = conversationText(first.body)
+  // The run's time is the real clock's, as the test runs.
+  assert.match(userText, /^Now: [A-Z][a-z]+day \d{1,2} [A-Z][a-z]+ \d{4}, \d\d:\d\d \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
+  assert.ok(userText.endsWith('New: 1\nGiven before: none\n'), userText)
+  assert.ok(!userText.includes('coffee'))
+  const shown = toolResults(sixth.body)[4].text
+  assert.ok(shown.startsWith(`1  Mon 9 Nov 2026 21:20 +05:30  ${paths.dayLog('2026/11/09')}:1\n{"seq":1,"kind":"message"`), shown)
+  assert.ok(shown.includes('"text":"coffee 150"'), shown)
   // send and mark, from pi's bash tool, said what they did.
-  assert.equal(toolResults(seventh.body)[5].text, 'send: queued; it goes to the owner once this run has passed\nmark: 1 marked done\n')
+  assert.equal(toolResults(eighth.body)[6].text, 'send: queued; it goes to the owner once this run has passed\nmark: 1 marked done\n')
 
   // What pi wrote, committed; the message, and the ✅ from the mark; and what send and mark left,
   // cleared.
@@ -746,7 +765,7 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   assert.equal(fs.existsSync(paths.agentRunMarks('lifelog')), false)
 })
 
-test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
+test("sandbox: a rebuild's batch through the real sandbox: $now$ is the message's own time, pi reads it and writes a view, and the rebuild commits it as one, sending nothing", options, async t => {
   const prepared = prepare(t)
   const { paths, settings, log } = prepared
   // The rebuild makes the agent's folder itself; the datastore holds one message of Sunday.
@@ -772,10 +791,11 @@ test("sandbox: a rebuild's batch through the real sandbox: Now: is the message's
   assert.deepEqual({ ...result, tag: undefined }, { stopped: false, tag: undefined, until: 1, cursor: 1, batches: 1, failed: [] })
   assert.match(result.tag, /^before-rebuild-\d{8}T\d{6}Z$/)
 
-  // The prompt has the message's own time, and pi read its line, which its VM sees read-only.
+  // The prompt has the message's own time and its number, and pi read its line, which its VM sees
+  // read-only.
   const [first, second] = model.modelRequests
-  assert.match(JSON.stringify(first.body), /\[scooter\] Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
-  assert.match(JSON.stringify(first.body), /New messages:\\n#1 10:30 text: \\"coffee 120 at Blue Tokai\\"/)
+  assert.match(JSON.stringify(first.body), /Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
+  assert.match(JSON.stringify(first.body), /New: 1\\nGiven before: none\\n/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000002/)
   // One commit on the tagged one, the view in it, its session gone, and nothing sent: what the
   // batch queued with send is dropped.

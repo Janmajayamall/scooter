@@ -228,6 +228,8 @@ export function isFirstFailure(state) {
 // - **A setup error or an outage:** every item waits in `retry` for the next try, its attempts as
 //   they were. It is due at once: the pause holds every run back until the next try, which comes
 //   sooner when the runner restarts.
+// - **A message already deleted** that the batch settles (`settled`, `assembleBatch`) leaves
+//   `retry`, and `failed`, in every case.
 //
 // An item brought in from `failed` leaves it and starts again at attempt 1. `failed` keeps
 // its newest `FAILED_KEEP`. The cursor moves past the batch in every case: what the batch didn't
@@ -242,10 +244,12 @@ export function settleBatch(state, batch, outcome, { now, startedAt, durationMs 
 // What a batch's outcome does to its lane's items, as `settleBatch` describes it: a lane is
 // `{ cursor, retry, failed }` (`batch.mjs`), with `failed` as `[{ seq, at, reason }]`. Returns
 // `{ lane, givenUp }`, the lane afterwards and the items that ran out of attempts, in order.
-// Live runs and a backfill's batches settle their own lanes so.
+// Live runs and a backfill's batches settle their own lanes so. The messages already deleted that
+// the batch settles (`settled`) leave `retry` and `failed` whatever came of the run: they weren't
+// given.
 export function settleLane(lane, batch, outcome, { now }) {
   const at = isoSeconds(now)
-  const inBatch = new Set(batch.items.map(item => item.seq))
+  const inBatch = new Set([...batch.items.map(item => item.seq), ...batch.settled])
   const retry = lane.retry.filter(entry => !inBatch.has(entry.seq))
   const failed = lane.failed.filter(entry => !inBatch.has(entry.seq))
   const givenUp = []

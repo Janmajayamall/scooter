@@ -15,7 +15,7 @@ import { EMULATION_NOTICE } from '../src/runner/status.mjs'
 import { deepTree } from './support/deep-tree.mjs'
 import { createFakeSandbox } from './support/fake-sandbox.mjs'
 import { actFull, holds } from './support/full-disk.mjs'
-import { exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
+import { CHECK_IN_PROMPT, exampleYaml, fillerLines, line, writeDatastore } from './support/runner.mjs'
 import { MINUTE, SECOND, gitOf, openTestRunner, outboxOf, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
 import { atEnd } from './support/tmp.mjs'
 
@@ -40,14 +40,14 @@ async function runNext(runner, clock) {
 test('failures: a crash discards the run\'s changes, counts an attempt, and sends one notice for the first failure in a row', async t => {
   const { runner, clock, state, outbox, git, views, add, paths, sandbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')])
   await runNext(runner, clock)
-  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"coffee 150"\n')
   outbox({ take: true })
 
   // pi files #1043 and changes the view, then crashes: the view is as it was committed.
   add(line.text(1043, '2026-11-09T15:51:00Z', 'lunch 300 MEMORY'))
   sandbox.behave({ crash: 3 })
   assert.deepEqual((await runNext(runner, clock)).outcome, { ok: false, cause: 'other' })
-  assert.equal(views('notes.csv'), 'seq,text\n1042,"#1042 21:20 text: \\"coffee 150\\""\n')
+  assert.equal(views('notes.csv'), 'seq,text\n1042,"coffee 150"\n')
   assert.deepEqual(fs.readdirSync(path.join(paths.agentDir('lifelog'), 'memory')), [])
   assert.equal(git('status', '--porcelain', '--', 'views', 'memory'), '')
   assert.deepEqual(state().retry, [{ seq: 1043, attempts: 1, due: '2026-11-09T15:51:46Z', reason: 'pi exited with code 3' }])
@@ -373,14 +373,15 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
 // ---------------------------------------------------------------------------------------------
 // Tasks and sessions
 
-test('tasks: the evening check-in runs at 21:30 with its task, sends its text on its own, and is done for the day', async t => {
+test('tasks: the evening check-in runs at 21:30 with its prompt, sends its text on its own, and is done for the day', async t => {
   const { runner, clock, state, outbox, sandbox, git } = await openWith(t, [], { yaml: exampleYaml() })
   assert.deepEqual((await runner.tick()).action, { kind: 'idle', reason: 'nothing' })
   await clock.advance(10 * MINUTE - 30 * SECOND)
   const { action, outcome } = await runner.tick()
   assert.equal(action.kind, 'scheduled')
   assert.deepEqual(outcome, { ok: true, cause: null })
-  assert.match(sandbox.runs[0].spec.argv.at(-1), /\n\nScheduled task \(from your configuration, not a message from the owner\):\nEvening check-in\./)
+  // Its trigger's prompt, filled in: it gives no lines.
+  assert.equal(sandbox.runs[0].spec.argv.at(-1), CHECK_IN_PROMPT.replace('$now$', 'Monday 9 November 2026, 21:30').replace('$user.timezone$', 'Asia/Kolkata').replace('$reply_mode$', 'quiet'))
   // Its text is Scooter's own: no `about`, so it goes to DEFAULT_CHANNEL, if sends names it.
   assert.deepEqual(outbox(), [{ type: 'text', by: 'lifelog', text: 'Today: nothing missing.', channels: ['whatsapp'] }])
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })
@@ -434,7 +435,7 @@ test('tasks: a scheduled task that a setup error holds back is still the next tr
   const restarted = await startTestRunner(t, prepared)
   assert.deepEqual(restarted.state().scheduled, { '21:30': '2026-11-08' })
   const { action, outcome } = await restarted.runner.tick()
-  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', date: '2026-11-09', task: action.task })
+  assert.deepEqual(action, { kind: 'scheduled', at: '21:30', date: '2026-11-09', prompt: CHECK_IN_PROMPT })
   assert.deepEqual(outcome, { ok: true, cause: null })
   assert.equal(state().paused, undefined)
   assert.deepEqual(state().scheduled, { '21:30': '2026-11-09' })

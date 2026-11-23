@@ -201,7 +201,7 @@ function settleJob(job, state, outcome, timing) {
 // Runs one job, and returns `{ state, outcome }`. `job` is
 //
 //   { kind: 'messages', batch, prompt }            from `buildBatch`
-//   { kind: 'scheduled', at, date, task, prompt }  from `nextAction` and `buildTaskPrompt`
+//   { kind: 'scheduled', at, date, prompt }        from `nextAction` and `scheduledPrompt`
 //   { kind: 'rebuild', batch, prompt, sessionId }  a rebuild's batch (`rebuild.mjs`)
 //   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes }   from `backfillJob`
 //
@@ -230,8 +230,8 @@ export async function performRun(context) {
     const prepared = prepareRun({ paths, agent, index, sessionId: id, skills: job.skills })
     const spec = runSpec({ agent, settings, paths, prepared, sessionId: id, prompt: job.prompt, writes: job.writes })
     const seqs = job.batch ? job.batch.items.map(item => item.seq) : []
-    const task = job.kind === 'scheduled' ? job.at : undefined
-    log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, task, backfill: job.kind === 'backfill' ? job.id : undefined, session: id })
+    const at = job.kind === 'scheduled' ? job.at : undefined
+    log.info('runner.run_started', { agent: agent.name, job: job.kind, seqs, at, backfill: job.kind === 'backfill' ? job.id : undefined, session: id })
 
     let result
     try {

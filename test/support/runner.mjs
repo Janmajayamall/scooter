@@ -78,6 +78,17 @@ export const line = {
 // The skills of the default config.
 export const SKILLS = ['expenses', 'runs', 'meals', 'travel', 'people']
 
+// The prompt of the example's trigger for new messages, as `agents.yaml` gives it.
+export const NEW_MESSAGES_PROMPT = `Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
+Your folder: $agent.dir$. The datastore: $datastore.dir$. This run may change: $run.writes$.
+New: $seq.unread$
+Given before: $seq.retry$
+`
+
+// The prompt of the example's evening check-in, as YAML folds it.
+export const CHECK_IN_PROMPT =
+  'Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled task from your configuration, not a message from the owner: send the owner, in a few lines, what you filed today, anything that looks missing, and the open questions.'
+
 // The example `agents.yaml`, with the backfill entry when `backfill` is true.
 export function exampleYaml({ backfill = false } = {}) {
   return `agents:
@@ -100,13 +111,22 @@ export function exampleYaml({ backfill = false } = {}) {
     reply_mode: quiet                    # quiet or confirm
     ack_reaction: "✅"                   # reaction on handled messages in quiet mode; "" for none
     timeout_minutes: 10
+    # When the agent runs, and the message pi is given for each run, its prompt. The runner fills
+    # in each $variable$ of a prompt: $now$, $user.timezone$, $user.currency$, $reply_mode$,
+    # $internet$, $agent.dir$, $datastore.dir$, $seq.unread$, $seq.retry$ and $run.writes$.
     run:
       - on: new-messages                 # every batch of new messages
         channels: [whatsapp, email]      # from these channels
+        prompt: |
+${NEW_MESSAGES_PROMPT.trimEnd()
+  .split('\n')
+  .map(text => `          ${text}`)
+  .join('\n')}
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
-        task: >-
-          Evening check-in. List in a few lines what you filed today,
-          mention anything that looks missing, and list the open questions.
+        prompt: >-
+          Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled
+          task from your configuration, not a message from the owner: send the owner, in a few
+          lines, what you filed today, anything that looks missing, and the open questions.
 ${backfill ? '      - backfill: people-1\n        skill: people\n        writes: [agents/lifelog/views/people.csv]\n' : ''}`
 }
 
@@ -163,21 +183,10 @@ export function exampleState() {
   }
 }
 
-// The example prompt, exactly as `docs/architecture/runner.md` shows it.
-export const EXAMPLE_PROMPT = `[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).
-
-New messages:
-#1050 21:13 photo /data/datastore/2026/11/09/1050.jpg (image/jpeg), caption: "lunch with sam"
-#1051 21:14 text: "coffee 150" (edited in #1054)
-#1052 21:15 document "ticket.pdf" /data/datastore/2026/11/09/1052.pdf (application/pdf)
-#1053 21:20 text: "work"
-      ↳ reply to #1043, which you sent: "Blue Tokai, ₹450 at 12:40: work or personal?"
-#1054 21:22 edit of #1051, now: "coffee 150"
-
-Retrying (not handled yet):
-#1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
-
-For context only (no action, nothing to mark):
-#1049 21:05 you sent: "Logged ₹340 Uber."
-#1048 21:04 the owner reacted 👍 to #1046`
+// The example prompt, the example's prompt for new messages filled in for the example's lines and
+// state, with the data folder at `/data`, exactly as `docs/architecture/runner.md` shows it.
+export const EXAMPLE_PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
+Your folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.
+New: 1050 1051 1052 1053 1054
+Given before: 1047 (attempt 2 of 4)
+`

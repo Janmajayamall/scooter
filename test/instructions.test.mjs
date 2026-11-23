@@ -21,10 +21,9 @@ import { makePaths } from '../src/common/paths.mjs'
 import { indexFileText, prepareRun } from '../src/runner/agentdir.mjs'
 import { RUNNER_SKILL, loadConfig, parseConfig, skillFileProblem } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
-import { SECTIONS } from '../src/runner/prompt.mjs'
 import { readMarks, readSends } from '../src/runner/report.mjs'
 import { piEnv } from '../src/runner/run.mjs'
-import { SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
+import { NEW_MESSAGES_PROMPT, SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const REPO = path.resolve(import.meta.dirname, '..')
@@ -33,6 +32,8 @@ const AGENT = fs.readFileSync(path.join(REPO, 'docs', 'architecture', 'agent.md'
 const DATASTORE = fs.readFileSync(path.join(REPO, 'docs', 'architecture', 'datastore.md'), 'utf8')
 const RUNNER_SKILL_FILE = fs.readFileSync(path.join(REPO, 'src', 'runner', 'vm', 'skills', RUNNER_SKILL, 'SKILL.md'), 'utf8')
 const read = (...parts) => fs.readFileSync(path.join(CONFIG, ...parts), 'utf8')
+// The runner's settings that fill in a prompt's variables.
+const SETTINGS = { timeZone: 'Asia/Kolkata', homeCurrency: 'INR', agentInternet: false }
 const linesOf = text => text.split('\n')
 
 // The section of a document's text that starts with `heading`, up to the next heading of its level.
@@ -65,7 +66,7 @@ const skillFolders = () => fs.readdirSync(path.join(CONFIG, 'skills')).sort()
 
 test('instructions: the default config validates, and is the tests\' example', t => {
   const root = makeTestDir(t)
-  const { agents } = loadConfig({ paths: makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG }) })
+  const { agents } = loadConfig({ paths: makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG }), settings: SETTINGS })
   assert.equal(agents.length, 1)
   const [agent] = agents
   assert.equal(agent.prompt.file, fs.realpathSync(path.join(CONFIG, 'prompts', 'lifelog.md')))
@@ -143,7 +144,7 @@ test('instructions: each CSV header is the one the agent\'s document gives, and 
 test("instructions: pi appends the agent's prompt to its system prompt, as the config folder has it, with the runner's skill and the five skills copied for pi", t => {
   const root = makeTestDir(t)
   const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG })
-  const [agent] = loadConfig({ paths }).agents
+  const [agent] = loadConfig({ paths, settings: SETTINGS }).agents
   const prepared = prepareRun({ paths, agent, index: createIndex(), sessionId: 'lifelog-2026-11-09' })
   assert.equal(prepared.promptFile, path.join(paths.agentRunConfig('lifelog'), 'prompts', 'lifelog.md'))
   assert.equal(fs.readFileSync(prepared.promptFile, 'utf8'), read('prompts', 'lifelog.md'))
@@ -160,6 +161,25 @@ test("instructions: the prompt says to read the runner's skill and the two memor
   for (const words of [`\`${RUNNER_SKILL}\` skill`, '`memory/preferences.md`', '`memory/needs-review.md`']) assert.ok(block.includes(words), words)
   // The runner's skill says to read it first too, where pi offers it, in its description.
   assert.match(/^description: (.*)$/m.exec(RUNNER_SKILL_FILE)[1], /Read it before anything else, on every run\.$/)
+})
+
+test("instructions: the prompt says how each line given is handled, as the agent's document gives it, and the default prompt for new messages gives what it relies on", () => {
+  const prompt = read('prompts', 'lifelog.md')
+  const block = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.body.startsWith('Then take each line')).body
+  assert.ok(prompt.includes(block), block)
+  for (const words of ['`show`', '`mark`', 'an edit or a deletion', 'Mark every number you were given, and only those.']) assert.ok(block.includes(words), words)
+  // The default prompt for new messages, the agent's document's own, gives the time, the lines'
+  // numbers and what the run may change, which lifelog's prompt reads: its backfill rule goes by
+  // whether the run may change `memory/`.
+  const config = read('agents.yaml')
+  for (const text of NEW_MESSAGES_PROMPT.trimEnd().split('\n')) assert.ok(config.includes(`          ${text}\n`), text)
+  const shown = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.info === 'yaml' && fenced.body.includes('$seq.unread$'))
+  assert.ok(shown, "agent.md shows the default prompt for new messages")
+  for (const text of NEW_MESSAGES_PROMPT.trimEnd().split('\n')) assert.ok(shown.body.includes(text), text)
+  for (const variable of ['$now$', '$seq.unread$', '$seq.retry$', '$run.writes$']) assert.ok(NEW_MESSAGES_PROMPT.includes(variable), variable)
+  assert.ok(prompt.includes('When the run\'s message says this run may change views but not `memory/`'))
+  assert.match(NEW_MESSAGES_PROMPT, /^Now: \$now\$/)
+  assert.ok(prompt.includes('Today is the date after `Now:` in the run\'s message'))
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -327,13 +347,17 @@ test("runner's skill: its examples of send and mark, run in bash as the agent ru
   })
 })
 
-test("runner's skill: what it says of a run is what the runner does: the prompt's sections, the attempts, and how many messages go", () => {
+test("runner's skill: what it says of a run is what the runner does: what a run gives, the attempts, and how many messages go", () => {
   const said = words => assert.ok(RUNNER_SKILL_FILE.includes(words), words)
-  // The sections of the prompt, by the names `prompt.mjs` gives them.
-  for (const heading of [SECTIONS.new, SECTIONS.retrying, SECTIONS.context]) said(`**${heading.replace(/:$/, '')}:**`)
-  said(`\`${SECTIONS.task}\``)
-  said(`An item you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)
+  // What a run gives: numbers, never a message's words; a message deleted before it was given is
+  // never given (`assembleBatch`); and one line's mark settles no other.
+  said('Only their numbers: you read each line with `show`.')
+  said('A message the owner deleted before you were given it is never given to you: only its deletion is.')
+  said('Marking one line settles no other')
+  said(`A line you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)
   said(`Scooter sends at most ${limits.RUN_MAX_SENDS} messages of one run, the first ones, and drops the rest.`)
   // What the agent's document says it describes.
-  for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'Internet: on', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'In a backfill nothing you send goes out']) said(words)
+  for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'internet access is `on`', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'in a backfill or a rebuild, nothing you send goes out']) said(words)
+  // It names no section of a prompt the runner no longer renders.
+  for (const words of ['New messages:', 'Retrying', 'For context only', 'Scheduled task (from']) assert.ok(!RUNNER_SKILL_FILE.includes(words), words)
 })

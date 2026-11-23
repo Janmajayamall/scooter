@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { inspect } from 'node:util'
 import { attachmentName, openStore } from '../src/bridge/store.mjs'
 import { createIndex } from '../src/common/datastore/index.mjs'
-import { DatastoreError, checkLine, checkReadLine, dataFlag, dataText, decodeLine, encodeLine, isKnown } from '../src/common/datastore/line.mjs'
+import { DatastoreError, checkLine, checkReadLine, dataText, decodeLine, encodeLine, isKnown } from '../src/common/datastore/line.mjs'
 import { createReader, listDays } from '../src/common/datastore/reader.mjs'
 import { overrideLimits } from '../src/common/limits.mjs'
 import { makePaths } from '../src/common/paths.mjs'
@@ -280,10 +280,6 @@ test('datastore: what a reader takes from data, it checks first', () => {
   // Only its own: nothing an object inherits.
   assert.equal(dataText(line({}), 'constructor'), undefined)
   assert.equal(dataText(line(JSON.parse('{"__proto__":{"subject":"x"}}')), 'subject'), undefined)
-  assert.equal(dataFlag(line({ forwarded: true }), 'forwarded'), true)
-  for (const data of [undefined, null, [true], { forwarded: 'true' }, { forwarded: 1 }, { forwarded: false }, {}]) {
-    assert.equal(dataFlag(line(data), 'forwarded'), false, JSON.stringify(data))
-  }
 })
 
 test('datastore: an error about a line never quotes the line', () => {

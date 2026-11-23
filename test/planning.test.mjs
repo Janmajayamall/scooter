@@ -9,7 +9,7 @@ import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
 import { createProc } from '../src/common/proc.mjs'
 import { ensureAgentDir, prepareRun } from '../src/runner/agentdir.mjs'
-import { buildBatch, buildTaskPrompt } from '../src/runner/batch.mjs'
+import { buildBatch, scheduledPrompt } from '../src/runner/batch.mjs'
 import { loadConfig } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
 import { createGit } from '../src/runner/git.mjs'
@@ -17,7 +17,7 @@ import { loadState, saveState, sessionId, startupState } from '../src/runner/sta
 import { nextAction } from '../src/runner/triggers.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { createTestLog } from './support/log.mjs'
-import { EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, line, writeConfig, writeDatastore } from './support/runner.mjs'
+import { CHECK_IN_PROMPT, EXAMPLE_NOW, EXAMPLE_PROMPT, exampleLines, exampleState, line, writeConfig, writeDatastore } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const SECOND = 1000
@@ -43,7 +43,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
   const { paths, stateFile, clock, log, asInDocker } = setup(t)
 
   // What the runner does at startup.
-  const { agents: [agent] } = loadConfig({ paths })
+  const { agents: [agent] } = loadConfig({ paths, settings: SETTINGS })
   await ensureAgentDir({ paths, name: agent.name, git: createGit({ proc: createProc({ log, clock }), dir: paths.agentDir(agent.name), discardDir: paths.agentDiscarded(agent.name), log, clock }), log })
   const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: SETTINGS.timeZone })
   saveState(stateFile, started.state)
@@ -68,16 +68,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
   await clock.advance(1)
   assert.deepEqual(ask(), { kind: 'messages' })
 
-  const { batch, prompt } = buildBatch({
-    agent,
-    state: loadState(stateFile),
-    index: datastore.index,
-    paths,
-    now: clock.now(),
-    timeZone: SETTINGS.timeZone,
-    homeCurrency: SETTINGS.homeCurrency,
-    internet: SETTINGS.agentInternet,
-  })
+  const { batch, prompt } = buildBatch({ agent, state: loadState(stateFile), index: datastore.index, paths, settings: SETTINGS, now: clock.now() })
   assert.equal(asInDocker(prompt), EXAMPLE_PROMPT)
   assert.deepEqual(batch.items.map(item => item.seq), [1047, 1050, 1051, 1052, 1053, 1054])
   assert.equal(batch.covered, 1054)
@@ -93,7 +84,7 @@ test('planning: from the datastore, the state and the clock to the next action, 
 
 test('planning: a text such as /new is a message, which waits for the owner to be quiet and goes into the batch', async t => {
   const { paths, stateFile, clock } = setup(t)
-  const { agents: [agent] } = loadConfig({ paths })
+  const { agents: [agent] } = loadConfig({ paths, settings: SETTINGS })
   const datastore = openDatastore({ paths, clock })
   datastore.poll()
   // The owner sends /new, then another message.
@@ -106,10 +97,11 @@ test('planning: a text such as /new is a message, which waits for the owner to b
   assert.deepEqual(ask(), { kind: 'idle', reason: 'quiet' })
   await clock.advance(8 * SECOND)
   assert.deepEqual(ask(), { kind: 'messages' })
-  const { batch, prompt } = buildBatch({ agent, state: loadState(stateFile), index: datastore.index, paths, now: clock.now(), timeZone: SETTINGS.timeZone, homeCurrency: 'INR', internet: false })
+  const { batch, prompt } = buildBatch({ agent, state: loadState(stateFile), index: datastore.index, paths, settings: SETTINGS, now: clock.now() })
   assert.deepEqual(batch.items.map(item => item.seq), [1047, 1050, 1051, 1052, 1053, 1054, 1055, 1056])
   assert.equal(batch.covered, 1056)
-  assert.match(prompt, /^#1055 21:20 text: "\/new"$/m)
+  assert.match(prompt, /^New: 1050 1051 1052 1053 1054 1055 1056$/m)
+  assert.ok(!prompt.includes('/new'))
   // Nothing was written but the datastore's lines: no reply, and the state as it was.
   assert.deepEqual(fs.existsSync(paths.outbox) ? fs.readdirSync(paths.outbox) : [], [])
   assert.deepEqual(loadState(stateFile), exampleState())
@@ -117,7 +109,7 @@ test('planning: a text such as /new is a message, which waits for the owner to b
 
 test('planning: the evening check-in comes due at 21:30, after the messages, with its own prompt', async t => {
   const { paths, stateFile, clock } = setup(t)
-  const { agents: [agent] } = loadConfig({ paths })
+  const { agents: [agent] } = loadConfig({ paths, settings: SETTINGS })
   // The runner starts at 21:20; the check-in hasn't come due today.
   saveState(stateFile, startupState({ ...exampleState(), cursor: 1054, retry: [] }, agent, { now: clock.now(), timeZone: SETTINGS.timeZone }).state)
   const datastore = openDatastore({ paths, clock })
@@ -129,10 +121,11 @@ test('planning: the evening check-in comes due at 21:30, after the messages, wit
   const action = ask()
   assert.equal(action.kind, 'scheduled')
   assert.deepEqual([action.at, action.date], ['21:30', '2026-11-09'])
-  const prompt = buildTaskPrompt({ agent, task: action.task, paths, now: clock.now(), timeZone: SETTINGS.timeZone, homeCurrency: 'INR', internet: false })
-  assert.match(
+  assert.equal(action.prompt, CHECK_IN_PROMPT)
+  const prompt = scheduledPrompt({ agent, prompt: action.prompt, paths, settings: SETTINGS, now: clock.now() })
+  assert.equal(
     prompt,
-    /^\[scooter\] Now: Monday 9 November 2026, 21:30 \(Asia\/Kolkata\)\. .*\n.*\n\nScheduled task \(from your configuration, not a message from the owner\):\nEvening check-in\. List in a few lines what you filed today, mention anything that looks missing, and list the open questions\.$/,
+    'Now: Monday 9 November 2026, 21:30 (Asia/Kolkata). Reply mode: quiet. Evening check-in, a scheduled task from your configuration, not a message from the owner: send the owner, in a few lines, what you filed today, anything that looks missing, and the open questions.',
   )
 })
 

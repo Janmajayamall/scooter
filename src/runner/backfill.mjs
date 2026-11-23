@@ -9,11 +9,11 @@
 // - **When it runs** (`nextAction` in `triggers.mjs`): a batch only when nothing live is waiting,
 //   no work items after the live cursor, no due retries and no scheduled task. Runs never overlap,
 //   so a message that arrives during a batch waits for it, and then goes first.
-// - **Its batches** are replayed (`replay.mjs`): one of the owner's days each, `Now:` the time of
-//   the batch's newest item, a session of its own for each day, and the locks. The prompt starts
-//   with a line saying it is a backfill and what it may change (`backfillIntro`). pi gets the
-//   backfill's skill alone, beside the runner's, with the agent's prompt of live runs, so the rules
-//   it reads from the memory, the owner's current preferences among them, apply to all of history.
+// - **Its batches** are replayed (`replay.mjs`): one of the owner's days each, `$now$` the time of
+//   the batch's newest item, a session of its own for each day, and the locks. The prompt is that
+//   of a live batch, with `$run.writes$` what the backfill may change. pi gets the backfill's skill
+//   alone, beside the runner's, with the agent's prompt of live runs, so the rules it reads from
+//   the memory, the owner's current preferences among them, apply to all of history.
 // - **What it may change:** the paths in `writes`, which lie in the agent's own `writes`, and
 //   nothing else: the sandbox lets its batches change only those (`runSpec` in `run.mjs`).
 // - **Silent:** nothing is sent per batch. What `send` queued is dropped, and a failure sends no
@@ -23,7 +23,9 @@
 //   `MAX_ATTEMPTS`, goes to `skipped`. An edit or deletion brings in the message it changes from
 //   the backfill's retries or `skipped`, as from the live ones. A setup error or an outage pauses
 //   every run, as it does after a live run, and the items wait with their attempts as they were.
-//   A batch leaves `lastRun` alone: that is the live runs' (the plan's rule for milestone 4).
+//   A message deleted since it was given is settled by the runner, as in a live lane, and holds
+//   nothing back. A batch leaves `lastRun` alone: that is the live runs' (the plan's rule for
+//   milestone 4).
 // - **Commits:** `lifelog: backfill people-1 #812-#831` (`commitMessage` in `run.mjs`).
 // - **Finishing** (`finishBackfill`): once its cursor has reached `until` and its retries are
 //   done, the ID goes to `backfillDone`, and the owner gets one message, which counts the rows of
@@ -39,20 +41,6 @@ import { wayIsOpen } from './git.mjs'
 import { buildReplayBatch, removeReplaySessions, replaySessionId } from './replay.mjs'
 import { saveState } from './state.mjs'
 
-// What "and" makes of a list.
-function listed(words) {
-  return words.length === 1 ? words[0] : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
-}
-
-// The line a backfill's prompt starts with, for the backfill `entry` of `agents.yaml`: its paths
-// as the VM has them, in the data folder.
-export function backfillIntro(entry, paths) {
-  return (
-    `Backfill (from your configuration, not a message from the owner): file these messages for the ${entry.skill} skill only. ` +
-    `Change only ${listed(entry.writes.map(write => path.join(paths.dataDir, write)))}.`
-  )
-}
-
 // The skills pi gets for a backfill's batch: the backfill's own, alone.
 export function backfillSkills(agent, entry) {
   return agent.skills.filter(skill => skill.name === entry.skill)
@@ -66,20 +54,9 @@ export function backfillLane(backfill) {
 // The job of the next batch of the backfill in progress, for `performRun`, or null when there is
 // nothing to give the agent now. `entry` is the backfill's entry in `agents.yaml`; the rest is as
 // for `buildReplayBatch`, with `now` the clock's time.
-export function backfillJob({ agent, entry, state, index, paths, now, timeZone, homeCurrency, internet }) {
+export function backfillJob({ agent, entry, state, index, paths, settings, now }) {
   const backfill = state.backfill
-  const built = buildReplayBatch({
-    agent,
-    lane: backfillLane(backfill),
-    until: backfill.until,
-    index,
-    paths,
-    now,
-    timeZone,
-    homeCurrency,
-    internet,
-    intro: backfillIntro(entry, paths),
-  })
+  const built = buildReplayBatch({ agent, lane: backfillLane(backfill), until: backfill.until, index, paths, settings, now, writes: entry.writes })
   if (built === null) return null
   return {
     kind: 'backfill',
