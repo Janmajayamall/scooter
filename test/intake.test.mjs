@@ -112,6 +112,8 @@ test('intake: reactions, edits and deletions point at the seq of their message',
   await whatsapp.deliver(makeRecord({ id: 'M2', revoked: true, at: '2026-11-09T15:44:30Z' }))
   // The channel's data goes on whatever line its record becomes.
   await whatsapp.deliver(makeRecord({ id: 'M1', edited: true, text: 'coffee 130', data: { by: 'the channel' } }))
+  // A reaction whose record carries no `data`: the emoji is the channel's, so the line has none.
+  await whatsapp.deliver(makeRecord({ id: 'R3', reactionToId: 'M2' }))
   assert.deepEqual(lines().slice(2).map(gist), [
     { seq: 3, kind: 'reaction', sourceId: 'R1', target: 1, data: { emoji: '👍' } },
     // A removed reaction is one whose emoji is "", which is the channel's to say.
@@ -119,7 +121,9 @@ test('intake: reactions, edits and deletions point at the seq of their message',
     { seq: 5, kind: 'edit', sourceId: 'M1', target: 1, text: 'coffee 120' },
     { seq: 6, kind: 'delete', sourceId: 'M2', target: 2 },
     { seq: 7, kind: 'edit', sourceId: 'M1', target: 1, text: 'coffee 130', data: { by: 'the channel' } },
+    { seq: 8, kind: 'reaction', sourceId: 'R3', target: 2 },
   ])
+  assert.equal(Object.hasOwn(lines()[7], 'data'), false)
   assert.equal(lines()[4].at, '2026-11-09T15:44:00Z')
 })
 

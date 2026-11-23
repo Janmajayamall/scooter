@@ -59,14 +59,16 @@ const isBareName = value => isText(value) && !value.includes('/') && !value.star
 
 // Whether a value is what JSON can hold, and reads back as it was written: null, a boolean, a
 // string, a finite number but -0, which is written as 0, or a list without holes or a plain object
-// of such values.
+// of such values, neither with a `toJSON` function of its own, whose result `JSON.stringify`
+// would write in its place.
 function isJson(value, seen = new Set()) {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return true
   if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0)
   if (typeof value !== 'object' || seen.has(value)) return false
   const isList = Array.isArray(value)
   const proto = Object.getPrototypeOf(value)
-  if (!isList && proto !== Object.prototype && proto !== null) return false
+  if (isList ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return false
+  if (Object.hasOwn(value, 'toJSON') && typeof value.toJSON === 'function') return false
   seen.add(value)
   let ok = true
   if (isList) {
@@ -216,7 +218,8 @@ export function dataText(line, name) {
 }
 
 // The text of a line as it goes into `log.jsonl`, with its line break. Throws a `DatastoreError`
-// if the line isn't well formed.
+// if the line isn't well formed, or if the text it would write isn't: the check is made of the
+// text too, so nothing JSON writes otherwise than the check saw it can reach the log.
 export function encodeLine(line) {
   const problems = checkLine(line)
   if (problems.length > 0) throw new DatastoreError(`not a datastore line: ${problems.join('; ')}`)
@@ -224,7 +227,10 @@ export function encodeLine(line) {
   for (const field of FIELDS) {
     if (line[field] !== undefined) ordered[field] = line[field]
   }
-  return `${JSON.stringify(ordered)}\n`
+  const text = JSON.stringify(ordered)
+  const written = checkLine(JSON.parse(text))
+  if (written.length > 0) throw new DatastoreError(`not a datastore line as written: ${written.join('; ')}`)
+  return `${text}\n`
 }
 
 // Reads one line of `log.jsonl`, without its line break. Throws a `DatastoreError` if it isn't

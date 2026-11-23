@@ -398,7 +398,7 @@ test('status: the datastore is read without changing it, part of a line a crash 
   assert.ok(!text.includes('/status'))
 })
 
-test('status: a line this version doesn\'t know is read, and is neither the newest message nor one pending', t => {
+test('status: a line this version doesn\'t know is read, and is neither the newest message nor one pending; nor is a message already deleted, which the runner never gives', t => {
   const { paths, write } = setup(t)
   const base = { dir: 'in', trust: 'owner' }
   const lines = [
@@ -412,16 +412,19 @@ test('status: a line this version doesn\'t know is read, and is neither the newe
     { seq: 6, kind: 'message', ...base, at: '2026-11-09T15:42:00Z', source: 'constructor', sourceId: 'X6', text: 'hi' },
     { seq: 7, kind: 'message', ...base, at: '2026-11-09T15:43:00Z', source: 'whatsapp', sourceId: 'W7' },
     { seq: 8, kind: 'edit', ...base, at: '2026-11-09T15:44:00Z', source: 'telegram', sourceId: 'T5', target: 5, text: 'hello' },
+    // A message already deleted, which the runner never gives, and its deletion, which it gives.
+    { seq: 9, kind: 'message', ...base, at: '2026-11-09T15:45:00Z', source: 'whatsapp', sourceId: 'W9', text: 'tea 40' },
+    { seq: 10, kind: 'delete', ...base, at: '2026-11-09T15:46:00Z', source: 'whatsapp', sourceId: 'W9', target: 9 },
   ]
   fs.mkdirSync(paths.dayDir('2026/11/09'), { recursive: true })
   fs.writeFileSync(paths.dayLog('2026/11/09'), lines.map(entry => `${JSON.stringify(entry)}\n`).join(''))
   const index = readIndex(paths)
-  assert.equal(index.lastSeq, 8)
+  assert.equal(index.lastSeq, 10)
   write(paths.runnerStatus, { ...STATUS, agents: { lifelog: { ...STATUS.agents.lifelog, channels: ['whatsapp', 'email'] } } })
   write(paths.agentState('lifelog'), { ...STATE, cursor: 1, retry: [], failed: [] })
   const text = statusText({ now: NOW, settings: { timeZone: 'Asia/Kolkata' }, paths, index })
-  assert.match(text, /^Newest message: #2, 19:40, on email$/m)
-  assert.match(text, /^Messages: 1 pending, 0 retrying, 0 failed\.$/m)
+  assert.match(text, /^Newest message: #9, 21:15, on WhatsApp$/m)
+  assert.match(text, /^Messages: 2 pending, 0 retrying, 0 failed\.$/m)
   assert.ok(!/telegram|constructor|\/status/.test(text), text)
 })
 

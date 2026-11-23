@@ -33,12 +33,11 @@ Says that you handled these lines, or that you can't handle this one, and why.
 `
 
 // A line's number as `show` and the index file write it, from `1051`, `#1051` or `01051`; null for
-// anything else, a number past what a line's `seq` can be among them.
+// anything else, a number of more than 15 digits among them, which the runner's reader of the marks
+// takes for no number (`report.mjs`), and which no line's `seq` comes near.
 function seqOf(text) {
-  const digits = /^#?([0-9]+)$/.exec(text)?.[1]
-  if (digits === undefined) return null
-  const seq = Number(digits)
-  return Number.isSafeInteger(seq) && seq >= 1 ? seq : null
+  const digits = /^#?0*([1-9][0-9]{0,14})$/.exec(text)?.[1]
+  return digits === undefined ? null : Number(digits)
 }
 
 // `a`, `a and b`, `a, b and c`.

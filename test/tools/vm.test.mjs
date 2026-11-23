@@ -833,11 +833,13 @@ test("VM 8: the image's Node converts with the zone rules that ship with the run
   }
 
   // Started as the sandbox starts pi, with pi's environment: the shipped release. Without the
-  // variable: the image's own, which isn't.
+  // variable: the image's own, which is another in the image of this writing, tz 2024b, so the
+  // variable is what gives the shipped one. An image built later whose Node has the shipped
+  // release built in can't show that, and isn't wrong for it: said, not failed.
   assert.equal(await tzOf(env('Asia/Kolkata')), release)
   const own = await runIn(vm, ['node', '-p', '`${process.versions.node} ICU ${process.versions.icu} tz ${process.versions.tz}`'], { env: { PATH: GUEST_PATH } })
   t.diagnostic(`the image's Node without the variable: ${own.stdout.trim()}`)
-  assert.equal(await tzOf({ PATH: GUEST_PATH }) === release, false)
+  if ((await tzOf({ PATH: GUEST_PATH })) === release) t.diagnostic(`the image's Node has tz ${release} built in, so this can't tell that the variable is what gives it`)
 
   // In each zone, what the shipped rules give, by the runner's own time code in a Node given them,
   // and what the host prints with the same environment.

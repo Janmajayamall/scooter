@@ -247,7 +247,9 @@ function counts(index, state, channels) {
   let pending = 0
   for (let seq = state.cursor + 1; seq <= index.lastSeq; seq++) {
     const line = index.get(seq)?.line
-    if (line && isKnown(line) && line.dir === 'in' && WORK.includes(line.kind) && channels.includes(line.source)) pending += 1
+    // A message already deleted is never given: the runner settles it itself (`isToGive`).
+    const deleted = line?.kind === 'message' && Boolean(index.current(seq)?.deletedIn)
+    if (line && isKnown(line) && line.dir === 'in' && WORK.includes(line.kind) && channels.includes(line.source) && !deleted) pending += 1
   }
   return { pending, retrying: state.retry.length, failed: state.failed.length }
 }

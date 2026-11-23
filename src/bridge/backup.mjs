@@ -92,9 +92,12 @@ export class ResticError extends Error {
   }
 }
 
-// The last line restic wrote on stderr, which is its error when it ends with one.
+// restic's error on stderr: its last line that starts with `Fatal:`, or else its last line. *Why
+// not the last line alone:* restic 0.19.1 ends an error opening the repository with the
+// repository's location on a line of its own, after the `Fatal:` line that says why.
 function lastLine(text) {
-  return text.split('\n').map(line => line.trim()).filter(Boolean).at(-1) ?? ''
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+  return lines.findLast(line => line.startsWith('Fatal:')) ?? lines.at(-1) ?? ''
 }
 
 // `6 hours`, `10 minutes`.

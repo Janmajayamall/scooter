@@ -7,6 +7,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { icuTzRelease } from '../src/runner/agentdir.mjs'
 import { ConfigError, loadConfig } from '../src/runner/config.mjs'
 import { IMAGE_RECORD, checkImage, machineArch, pinnedPiVersion, qemuProgram, readBuildFile } from '../src/runner/sandbox/image.mjs'
 import { kvmProblem } from '../src/runner/sandbox/accel.mjs'
@@ -83,7 +85,7 @@ function install(t, { accel = 'auto', zdr = true } = {}) {
     booted.push(given.dataDir)
     return { accel: 'kvm', ms: 1234 }
   }
-  const runner = { loadConfig, ConfigError, readBuildFile, pinnedPiVersion, checkImage, qemuProgram, kvmProblem: () => null, bootCheck }
+  const runner = { loadConfig, ConfigError, icuTzRelease: () => icuTzRelease(), readBuildFile, pinnedPiVersion, checkImage, qemuProgram, kvmProblem: () => null, bootCheck }
   const check = (changes = {}) => runChecks({ settings, runner, proc, envDir, root: me, docker: false, fetch: fakeFetch().fetch, ...changes })
   return { root, settings, paths, envDir, bin, users, proc, runner, check, booted }
 }
@@ -98,8 +100,9 @@ test('doctor: with everything there, every check passes, and the report says so'
   assert.deepEqual(failed(checks), [])
   assert.deepEqual(
     checks.map(entry => entry.name),
-    ['config', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files', 'OpenRouter', 'ZDR'],
+    ['config', 'zone rules', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files', 'OpenRouter', 'ZDR'],
   )
+  assert.equal(byName(checks, 'zone rules')[0].text, `the zone rules that ship with the runner are whole, of tz ${icuTzRelease()}`)
   assert.equal(byName(checks, 'VM boot')[0].text, 'a VM booted in 1.2 seconds, with KVM')
   assert.match(byName(checks, 'config')[0].text, new RegExp(`the agent's model is ${MODEL}`))
   assert.equal(byName(checks, 'accelerator')[0].text, 'KVM')
@@ -159,6 +162,27 @@ test('doctor: no QEMU, and no image, or one for another pi, each with its fix', 
   assert.equal(byName(checks, 'VM image')[0].fix, 'docker compose run --rm build-image, with the runner stopped')
 })
 
+test('doctor: the zone rules that ship with the runner, damaged or missing, are a failure, with its fix natively and in Docker', async t => {
+  const { check, runner, root } = install(t)
+  const copy = path.join(root, 'icu-tz')
+  fs.cpSync(fileURLToPath(new URL('../src/runner/vm/icu-tz', import.meta.url)), copy, { recursive: true })
+  const zoneinfo = path.join(copy, 'zoneinfo64.res')
+  fs.appendFileSync(zoneinfo, 'x')
+  const damaged = { ...runner, icuTzRelease: () => icuTzRelease(copy) }
+  for (const docker of [false, true]) {
+    const checks = await check({ runner: damaged, docker })
+    // A VM's boot, which doesn't use them, is still tried.
+    assert.equal(byName(checks, 'VM boot')[0].status, 'ok')
+    const [rules] = byName(checks, 'zone rules')
+    assert.equal(rules.status, 'fail')
+    assert.equal(rules.text, `${zoneinfo} isn't the file ${path.join(copy, 'release.txt')} lists; the runner doesn't start without them`)
+    assert.equal(rules.fix, docker ? 'put the code back as the repository has it, git checkout -- src/runner/vm/icu-tz, then docker compose build' : 'put the code back as the repository has it: sudo git -C /opt/scooter checkout -- src/runner/vm/icu-tz')
+  }
+  fs.rmSync(path.join(copy, 'release.txt'))
+  const [gone] = byName(await check({ runner: damaged }), 'zone rules')
+  assert.match(gone.text, /^ENOENT: .*release\.txt'; the runner doesn't start without them$/)
+})
+
 test('doctor: stopped during the boot check, it hands the boot check its signal, which closes the VM, and makes no check after it', async t => {
   // `bootCheck` closes its VM on the signal (sandbox.test.mjs).
   const { check, runner } = install(t)
@@ -171,7 +195,7 @@ test('doctor: stopped during the boot check, it hands the boot check its signal,
   }
   const checks = await check({ runner: { ...runner, bootCheck }, signal: stopping.signal })
   assert.deepEqual(given, [stopping.signal])
-  assert.deepEqual(checks.map(entry => entry.name), ['config', 'accelerator', 'QEMU', 'VM image'])
+  assert.deepEqual(checks.map(entry => entry.name), ['config', 'zone rules', 'accelerator', 'QEMU', 'VM image'])
 })
 
 test("doctor: stopped while it waits for OpenRouter's answer, it stops waiting, and makes no check of OpenRouter", async t => {
@@ -193,7 +217,7 @@ test("doctor: stopped while it waits for OpenRouter's answer, it stops waiting, 
   assert.ok(Date.now() - started < 5000)
   assert.equal(given.length, 1)
   assert.equal(given[0].aborted, true)
-  assert.deepEqual(checks.map(entry => entry.name), ['config', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files'])
+  assert.deepEqual(checks.map(entry => entry.name), ['config', 'zone rules', 'accelerator', 'QEMU', 'VM image', 'VM boot', 'folders', 'env files'])
 })
 
 test("doctor: a VM boots from the image with the runner's accelerator, in its own folder; one that doesn't is a failure, with its fix", async t => {

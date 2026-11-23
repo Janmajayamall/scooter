@@ -189,4 +189,6 @@ test('imports: the rest of what the checker refuses', () => {
   assert.deepEqual(violations({ 'src/runner/vm/icu-tz/zoneinfo64.res': "import nothing from 'anywhere'", 'src/runner/vm/icu-tz/LICENSE': '' }), [])
   assert.match(violations({ 'src/runner/vm/zoneinfo64.res': '' })[0], /ES modules in .mjs files/)
   assert.match(violations({ 'src/runner/vm/bin/icu-tz/helper.js': '' })[0], /ES modules in .mjs files/)
+  // A module put in the zone rules' folder is code, and kept to the rules.
+  assert.match(violations({ 'src/runner/vm/icu-tz/helper.mjs': "import 'imapflow'" })[0], /^src\/runner\/vm\/icu-tz\/helper\.mjs: /)
 })

@@ -403,6 +403,13 @@ test('backups: a backup says nothing when it works, and sends a notice when it f
     [{ exit: { backup: 11 } }, '⚠️ The backup failed: the backup repository is locked by another restic, such as a check that is running.'],
     [{ exit: { backup: 3 } }, "⚠️ The backup saved snapshot abcd1234, but didn't finish: restic couldn't read some files, so the snapshot is incomplete."],
     [{ exit: { forget: 1 }, stderr: { forget: 'Fatal: unable to prune\n' } }, "⚠️ The backup saved snapshot abcd1234, but didn't finish: restic forget: Fatal: unable to prune."],
+    // restic 0.19.1 ends an error opening the repository with its location on a line of its own:
+    // the reason is the line that says why.
+    [
+      { exit: { backup: 1 }, stderr: { backup: 'Stat(<config/>) failed: Stat: Access Denied.\nFatal: unable to open config file: Stat: Access Denied.\ns3:http://127.0.0.1:18999/bucket/scooter\n' } },
+      '⚠️ The backup failed: restic backup: Fatal: unable to open config file: Stat: Access Denied.',
+    ],
+    [{ exit: { backup: 1 }, stderr: { backup: 'unable to read\nsomething went wrong\n' } }, '⚠️ The backup failed: restic backup: something went wrong.'],
     [{ snapshot: 'none' }, "⚠️ The backup failed: restic backup didn't say which snapshot it saved."],
   ]
   for (const [fixtures, text] of cases) {
@@ -1146,6 +1153,32 @@ test('backups: a real round trip with restic: init, back up, no plaintext, the w
   assert.deepEqual(tree(back.datastore), tree(paths.datastore))
   // What isn't one of the folders a backup holds is left alone.
   assert.equal(fs.readFileSync(path.join(back.runnerImage, 'rootfs.ext4'), 'utf8'), 'an image of its own')
+})
+
+test('backups: with restic, a repository that can\'t be opened gives as its reason the line that says why, not the repository\'s location, which restic prints after it', { skip: withRestic.skip || (isRoot ? 'root reads a folder of any mode' : false) }, async t => {
+  const root = makeTestDir(t)
+  const clock = createFakeClock('2026-11-10T22:00:00Z')
+  const { log } = createTestLog({ clock })
+  const proc = createProc({ log, clock })
+  const repository = path.join(root, 'repository')
+  const settings = settingsFor(root, { backup: { repository, restoreTarget: path.join(root, 'restored'), env: {} } })
+  const paths = makePaths(settings)
+  fillDataFolder(paths)
+  ensureDir(paths.bridge)
+  const init = await runBackupInit({ args: [], settings, stdout: { write() {} }, stderr: { write() {} }, clock, log, proc })
+  assert.equal(init, 0)
+  fs.chmodSync(repository, 0o000)
+  // The fact the reason rests on, as restic 0.19.1 prints it: the `Fatal:` line, then the location.
+  const said = await proc.run(realRestic, ['--repo', repository, '--no-cache', 'snapshots'], { env: { RESTIC_PASSWORD: settings.backup.password } })
+  assert.equal(said.code, 1)
+  const lines = said.stderr.trim().split('\n')
+  assert.equal(lines.at(-1), repository)
+  assert.match(lines.at(-2), /^Fatal: unable to open config file: /)
+
+  await assert.rejects(backUp({ settings, paths, proc, log, clock }), error => {
+    assert.match(error.reason, /^restic backup: Fatal: unable to open config file: .*permission denied$/)
+    return true
+  })
 })
 
 test('backups: with restic, Scooter\'s snapshots are one group whatever folders they hold, so forget keeps to the retention when a folder appears', withRestic, async t => {

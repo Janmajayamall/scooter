@@ -6,7 +6,8 @@
 // The caller chooses the fields, so that rule is the caller's to keep. Two things
 // here help it:
 // - a field named after one of the datastore's content fields is written as "[withheld]", so
-//   passing a whole datastore line by mistake leaks nothing;
+//   passing a whole line the store wrote by mistake leaks nothing; a line a reader took can also
+//   hold a top-level field this version doesn't know, which would be logged as it is;
 // - `errorFields` describes an error without its message, because the message of a parsing error
 //   quotes what was being parsed.
 

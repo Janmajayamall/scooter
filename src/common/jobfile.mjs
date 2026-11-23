@@ -97,7 +97,8 @@ export function checkJob(job) {
   for (const name of ['prompt', 'agentFile']) {
     if (job[name] !== undefined && job[name] !== null && !isText(job[name])) fault(name, "null, or a string that isn't empty")
   }
-  // An agent given in a file brings its own skills, writes and prompts, and holds nothing back.
+  // An agent given in a file brings its own skills, writes and prompts, and never holds live runs
+  // back.
   if (isText(job.agentFile)) {
     for (const name of ['skills', 'writes', 'prompt']) {
       if (job[name] !== undefined && job[name] !== null) fault(name, 'null for an agent given in a file')

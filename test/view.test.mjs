@@ -301,6 +301,41 @@ test('view: a link the run made to what it doesn\'t see can be seen, read, moved
   await refusedWith('EROFS', provider.unlink('/allowed/to-ro/secret/hidden.txt'), 'a hidden name removed through a linked folder')
 })
 
+test('view: a name in a folder that a link on the host leads out of the root is hidden, for lstat, readlink, unlink and rename too', async t => {
+  const { root, provider } = layOut(t)
+  const outside = path.join(path.dirname(root), 'outside')
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(outside, 'secret.txt'), 'the host\'s own\n')
+  fs.symlinkSync('secret.txt', path.join(outside, 'link'))
+  fs.symlinkSync(outside, path.join(root, 'allowed', 'out'))
+  // A fact about Gondolin 0.14.0: its RealFSProvider follows a link on the way for these, by the
+  // path alone, and answers for what lies outside its root.
+  const real = new gondolin.RealFSProvider(root)
+  assert.equal((await real.lstat('/allowed/out/secret.txt')).size, 'the host\'s own\n'.length)
+  assert.equal(await real.readlink('/allowed/out/link'), 'secret.txt')
+  // The view answers for none of them.
+  await refusedWith('ENOENT', provider.lstat('/allowed/out/secret.txt'), 'lstat through the link')
+  assert.throws(() => provider.lstatSync('/allowed/out/secret.txt'), error => error.code === 'ENOENT' || error.code === 'ERRNO_2')
+  await refusedWith('ENOENT', provider.readlink('/allowed/out/link'), 'readlink through the link')
+  assert.throws(() => provider.readlinkSync('/allowed/out/link'), error => error.code === 'ENOENT' || error.code === 'ERRNO_2')
+  await refusedWith('ENOENT', provider.stat('/allowed/out/secret.txt'), 'stat through the link')
+  await refusedWith('ENOENT', provider.open('/allowed/out/secret.txt', 'r'), 'open through the link')
+  for (const change of [
+    provider.unlink('/allowed/out/secret.txt'),
+    provider.rename('/allowed/out/secret.txt', '/allowed/taken.txt'),
+    provider.rename('/allowed/old.txt', '/allowed/out/old.txt'),
+  ]) {
+    await assert.rejects(change)
+  }
+  assert.equal(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'the host\'s own\n')
+  assert.deepEqual(fs.readdirSync(outside).sort(), ['link', 'secret.txt'])
+  assert.equal(fs.readFileSync(path.join(root, 'allowed', 'old.txt'), 'utf8'), 'old\n')
+  // The link itself, in the folder the run may write, is the run's own.
+  assert.equal((await provider.lstat('/allowed/out')).isSymbolicLink(), true)
+  await provider.unlink('/allowed/out')
+  assert.equal(fs.existsSync(path.join(root, 'allowed', 'out')), false)
+})
+
 test('view: a file on the way to an entry, as a change of writes can leave one, is no folder that leads there, and isn\'t shown', async t => {
   const dir = makeTestDir(t)
   const root = path.join(dir, 'root')
@@ -312,7 +347,7 @@ test('view: a file on the way to an entry, as a change of writes can leave one, 
     reads: [],
     writes: [
       { path: `${root}/notes/2026/books.csv`, folder: false },
-      { path: `${root}/way/inner/`, folder: true },
+      { path: `${root}/way/inner`, folder: true },
     ],
     hide: [],
   }

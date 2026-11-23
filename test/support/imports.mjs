@@ -207,8 +207,9 @@ const LIBRARIES = {
 }
 
 // What under `src/` isn't code: the documents, the runner's skill among them, and the data in the
-// folder of ICU's zone rules that ship with the runner for the VM (`src/runner/vm/icu-tz/`).
-const NOT_CODE = file => file.endsWith('.md') || file.startsWith('src/runner/vm/icu-tz/')
+// folder of ICU's zone rules that ship with the runner for the VM (`src/runner/vm/icu-tz/`), but a
+// module put there, which is code wherever it is.
+const NOT_CODE = file => file.endsWith('.md') || (file.startsWith('src/runner/vm/icu-tz/') && !file.endsWith('.mjs'))
 
 // Calls that change files. The code in `src/common/datastore/` only reads.
 const WRITES = /\b(?:appendFile|writeFile|write|writev|truncate|ftruncate|rename|unlink|rm|rmdir|mkdir|copyFile|cp|createWriteStream|chmod|fchmod|chown|fchown|link|symlink)(?:Sync)? ?\(/

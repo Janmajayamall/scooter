@@ -64,9 +64,10 @@ export const PI_TOOLS = 'read,bash,edit,write,grep,find,ls'
 // What the VM sees of the data folder, mounted at its own path, and what it may change (`files`,
 // `sandbox/index.mjs`): what the agent's `reads` and `writes` name, and `run/`, which a run needs
 // whatever they say; changes only to `writes`, the run's own unless given, and to the run's own
-// places in `run/`, `session/`, `send/` and `marks.txt`; and never `sessions/` or `jobs/`, the
-// runner's own: the sessions of every day, and the jobs of `scooter backfill`, whose prompts and
-// progress are the owner's and the runner's.
+// places in `run/`, `session/`, `send/` and `marks.txt`; and never the agent's own `sessions/` or
+// `jobs/`, the runner's own: the sessions of every day, and the jobs of `scooter backfill`, whose
+// prompts and progress are the owner's and the runner's. Another agent's folder that `reads`
+// names is seen whole, its `sessions/` and `jobs/` among it (`sandbox.md`).
 export function piFiles(paths, agent, writes = agent.writes) {
   const full = entry => path.join(paths.dataDir, entry.replace(/\/$/, ''))
   const name = agent.name

@@ -184,6 +184,20 @@ test('backfill command: an agent of agents.yaml, its skills and its writes, each
   ])
 })
 
+test('backfill command: an agent of agents.yaml without a trigger for new messages is refused, since its job would be given no line', async t => {
+  const yaml = exampleYaml().replace(/      - on: new-messages[\s\S]*?(?=      - at:)/, '')
+  assert.ok(!yaml.includes('new-messages'))
+  const { queue, paths } = setup(t, { yaml })
+  await refusal(queue(['lifelog', '--empty']), [
+    "lifelog has no trigger on: new-messages in agents.yaml: a job's runs are given the lines of its channels, so this one would be given none",
+  ])
+  await refusal(queue(['lifelog', '--skills', 'books']), [
+    "lifelog has no trigger on: new-messages in agents.yaml: a job's runs are given the lines of its channels, so this one would be given none",
+    '--skills names books, which is no skill of lifelog: its skills are expenses, runs, meals, travel, people',
+  ])
+  assert.equal(fs.existsSync(paths.agentJobs('lifelog')), false)
+})
+
 test('backfill command: --prompt is read now, kept in the job, and checked as a trigger\'s prompt is, with the job\'s writes', async t => {
   const { queue, file, root } = setup(t)
   const text = '# People\nFile only what belongs in $run.writes$. It costs $5.\nNew: $seq.unread$\n'

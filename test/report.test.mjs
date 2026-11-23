@@ -169,7 +169,7 @@ test('mark: done and failed, each a line of the marks file, which the runner rea
   assert.deepEqual(mark(['done', '1050', '#1051', '01052', '1050']), { code: 0, stdout: 'mark: 1050, 1051 and 1052 marked done\n', stderr: '' })
   assert.deepEqual(mark(['failed', '1053', 'the PDF needs a password']), { code: 0, stdout: 'mark: 1053 marked failed\n', stderr: '' })
   // A reason in several words, and with line breaks: one line, its spaces one each.
-  assert.equal(mark(['failed', '#1054', 'blurry', ' photo\n\nof a receipt ']).code, 0)
+  assert.equal(mark(['failed', '#1054', 'blurry', ' photo\n\nof a\u2028receipt ']).code, 0)
   assert.equal(mark(['done', '1055']).stdout, 'mark: 1055 marked done\n')
   assert.equal(fs.readFileSync(marksFile, 'utf8'), 'done 1050\ndone 1051\ndone 1052\nfailed 1053 the PDF needs a password\nfailed 1054 blurry photo of a receipt\ndone 1055\n')
   assert.deepEqual(marks(), {
@@ -183,6 +183,12 @@ test('mark: done and failed, each a line of the marks file, which the runner rea
   })
 })
 
+test('mark: a number of up to 15 digits, leading zeros apart, is a line\'s number, as the runner reads it', t => {
+  const { mark, marks } = setup(t)
+  assert.equal(mark(['done', '999999999999999', '#0001050']).code, 0)
+  assert.deepEqual([...marks().done].sort(), [1050, 999999999999999])
+})
+
 test("mark: without done or failed, a number, or a reason, or with a word that isn't a number, marks nothing", t => {
   const { mark, marksFile } = setup(t)
   for (const [args, said] of [
@@ -193,6 +199,10 @@ test("mark: without done or failed, a number, or a reason, or with a word that i
     [['done', '1050-1053'], /"1050-1053" isn't a line's number/],
     [['done', '0'], /"0" isn't a line's number/],
     [['done', '9'.repeat(20)], /isn't a line's number/],
+    // Past 15 digits, which the runner's reader of the marks takes for no number: a safe integer
+    // of 16 digits among them.
+    [['done', '9007199254740991'], /"9007199254740991" isn't a line's number/],
+    [['done', '1000000000000000'], /isn't a line's number/],
     [['failed', '1053'], /say why 1053 failed/],
     [['failed', '1053', ' \n '], /say why 1053 failed/],
     [['failed', 'the', 'PDF'], /"the" isn't a line's number/],

@@ -81,8 +81,9 @@ test('datastore: every kind of line', () => {
     { ...base, kind: 'delete', target: 4 },
     { ...base, kind: 'reaction', target: 4, data: { emoji: '👍' } },
     { ...base, kind: 'reaction', target: 4, data: { emoji: '' } },
-    // `data` is the channel's: any JSON it likes, on any line.
+    // `data` is the channel's: any JSON it likes, on any line, a key named `toJSON` among it.
     { ...base, kind: 'edit', target: 4, text: '', data: { list: [1, 'two', null, { three: [true] }], n: -0.5 } },
+    { ...base, kind: 'message', text: 'hi', data: { toJSON: 'a text', more: { toJSON: [1] } } },
     { ...base, kind: 'message', text: '', trust: 'external' },
     { seq: 9, kind: 'message', dir: 'out', at: base.at, source: 'whatsapp', by: 'bridge', text: 'Backup failed.' },
   ]
@@ -137,6 +138,11 @@ test('datastore: what the store refuses to write, and why', () => {
     [{ ...good, data: { f() {} } }, /data must be/],
     [{ ...good, data: { holes: [1, , 3] } }, /data must be/],
     [{ ...good, data: (() => { const loop = { a: 1 }; loop.self = loop; return loop })() }, /data must be/],
+    // What JSON would write otherwise than the check sees it: a `toJSON` of the object's own, which
+    // isn't enumerable, and a list of a class with one.
+    [{ ...good, data: Object.defineProperty({ quoted: 'x' }, 'toJSON', { value: () => ['not', 'an', 'object'] }) }, /data must be/],
+    [{ ...good, data: { list: new (class extends Array { toJSON() { return 'a text' } })() } }, /data must be/],
+    [{ ...good, data: { list: new (class extends Array {})() } }, /data must be/],
     [{ ...good, files: [] }, /files must be/],
     [{ ...good, files: [{ path: '../../etc/passwd', mime: 'text/plain', bytes: 1 }] }, /files must be/],
     [{ ...good, files: [{ path: '.hidden', mime: 'text/plain', bytes: 1 }] }, /files must be/],
@@ -158,6 +164,11 @@ test('datastore: what the store refuses to write, and why', () => {
     assert.match(checkLine(line).join('; '), pattern, inspect(line))
     assert.throws(() => encodeLine(line), DatastoreError)
   }
+  // The text is checked too: a value that changes between the check and the writing, as a getter's
+  // can, is caught in what would be written.
+  let reads = 0
+  const changing = { ...good, data: { get quoted() { return reads++ === 0 ? 'Blue Tokai' : undefined } } }
+  assert.throws(() => encodeLine(changing), /not a datastore line as written: data must be/)
   assert.throws(() => decodeLine('{"seq":1,'), /not JSON/)
   assert.throws(() => decodeLine(''), /not JSON/)
 })
