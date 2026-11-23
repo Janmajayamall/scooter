@@ -614,6 +614,21 @@ test("backfill: a job's file too large, one the runner can't read, and an agent 
   assert.deepEqual(fs.readdirSync(paths.agentDir('lifelog-try')), ['jobs'])
 })
 
+test("backfill: a job's file with fields the runner doesn't know is taken and run as any is, and the runner's saves keep them", async t => {
+  const { prepared, runner, sandbox } = await open(t)
+  const { job, file } = await queue(prepared, ['lifelog', ...PEOPLE])
+  fs.writeFileSync(file, JSON.stringify({ ...job, note: 'from a later version' }))
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill-start', id: job.id }, outcome: 'started' })
+  const started = jobOn(file)
+  fs.writeFileSync(file, JSON.stringify({ ...started, progress: { ...started.progress, model: 'x', retry: [{ seq: 1, attempts: 1, due: started.progress.started, reason: 'x', by: 'hand' }], cursor: 1 } }))
+  await runner.close()
+  const again = await startTestRunner(t, prepared)
+  assert.deepEqual((await again.runner.tick()).outcome, { ok: true, cause: null })
+  // #1 from its retries, by hand, and #3 new.
+  assert.deepEqual(itemsSeen(sandbox).map(items => items.toSorted((x, y) => x - y)), [[1, 3]])
+  assert.deepEqual([jobOn(file).note, jobOn(file).progress.model, jobOn(file).progress.cursor], ['from a later version', 'x', 3])
+})
+
 test("backfill: a job's start gives way to a backup, as a run does, and changes nothing until the backup is over", async t => {
   const { prepared, runner, paths, git } = await open(t)
   const { job } = await queue(prepared, ['lifelog', ...PEOPLE, '--empty'])

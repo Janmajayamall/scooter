@@ -37,6 +37,11 @@
 //
 // `scooter backfill` writes the file, and the runner alone changes it after that, atomically.
 // `scooter status` reads it, which is why its format is here.
+//
+// Every field above is needed, of its form, and a fault names the field; a job of an agent given
+// in a file has none of the others' flags. A field the runner doesn't know is ignored, at the top,
+// in `progress` or in a retry: the owner decided so on 2026-11-23, so that a file can hold more
+// than this version reads, as long as what it needs is there.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -47,7 +52,6 @@ import { parseIsoSeconds } from './time.mjs'
 
 const FIELDS = ['id', 'agent', 'written', 'from', 'skills', 'writes', 'empty', 'holdLive', 'prompt', 'agentFile', 'progress']
 const PROGRESS_FIELDS = ['started', 'until', 'cursor', 'given', 'retry', 'skipped']
-const RETRY_FIELDS = ['seq', 'attempts', 'due', 'reason']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isCount = value => Number.isSafeInteger(value) && value >= 0
@@ -64,13 +68,11 @@ export function jobIdOf(name) {
 
 // What is wrong with a job, as a list of statements that each name the field, such as
 // `progress.retry[0].due must be a UTC time to the second`. An empty list means it is well formed.
+// A field this version doesn't know isn't looked at: it is no fault.
 export function checkJob(job) {
   if (!isObject(job)) return ['the job must be an object']
   const problems = []
   const fault = (field, what) => problems.push(`${field} must be ${what}`)
-  for (const name of Object.keys(job)) {
-    if (!FIELDS.includes(name)) problems.push(`${name} is not a field of a job`)
-  }
   for (const name of FIELDS) {
     if (job[name] === undefined) problems.push(`${name} is missing`)
   }
@@ -105,9 +107,6 @@ export function checkJob(job) {
   if (progress !== undefined && progress !== null) {
     if (!isObject(progress)) fault('progress', 'null, or an object')
     else {
-      for (const name of Object.keys(progress)) {
-        if (!PROGRESS_FIELDS.includes(name)) problems.push(`progress.${name} is not a field of a job`)
-      }
       for (const name of PROGRESS_FIELDS) {
         if (progress[name] === undefined) problems.push(`progress.${name} is missing`)
       }
@@ -125,6 +124,25 @@ export function checkJob(job) {
   return problems
 }
 
+// What is wrong with an object's fields: `tests` gives each field the object needs, with its test
+// and what it must be. A field it doesn't give is no fault.
+function fieldProblems(field, value, tests) {
+  if (!isObject(value)) return [`${field} must be an object`]
+  const problems = []
+  for (const [name, [ok, what]] of Object.entries(tests)) {
+    if (value[name] === undefined) problems.push(`${field}.${name} is missing`)
+    else if (!ok(value[name])) problems.push(`${field}.${name} must be ${what}`)
+  }
+  return problems
+}
+
+const RETRY = {
+  seq: [isSeq, 'a seq'],
+  attempts: [isCount, 'a whole number, 0 or more'],
+  due: [isTime, 'a UTC time to the second'],
+  reason: [isText, "a string that isn't empty"],
+}
+
 // What is wrong with a list of lines to be tried again: each `{ seq, attempts, due, reason }`, each
 // `seq` once, and each at or before the lane's `cursor`, since a run moves the cursor past its
 // batch whether it succeeds or fails.
@@ -134,15 +152,8 @@ function retryProblems(field, value, cursor) {
   const problems = []
   value.forEach((item, n) => {
     const name = `${field}[${n}]`
-    if (!isObject(item) || Object.keys(item).length !== RETRY_FIELDS.length || !RETRY_FIELDS.every(key => Object.hasOwn(item, key))) {
-      problems.push(`${name} must be { ${RETRY_FIELDS.join(', ')} }`)
-      return
-    }
-    if (!isSeq(item.seq)) problems.push(`${name}.seq must be a seq`)
-    else if (isCount(cursor) && item.seq > cursor) problems.push(`${name}.seq is after the cursor`)
-    if (!isCount(item.attempts)) problems.push(`${name}.attempts must be a whole number, 0 or more`)
-    if (!isTime(item.due)) problems.push(`${name}.due must be a UTC time to the second`)
-    if (!isText(item.reason)) problems.push(`${name}.reason must be a string that isn't empty`)
+    problems.push(...fieldProblems(name, item, RETRY))
+    if (isObject(item) && isSeq(item.seq) && isCount(cursor) && item.seq > cursor) problems.push(`${name}.seq is after the cursor`)
   })
   const seqs = value.map(item => item?.seq)
   if (new Set(seqs).size !== seqs.length) problems.push(`${field} holds a seq twice`)
@@ -159,11 +170,13 @@ export class JobError extends Error {
 
 // Reads the job in `file`, whose name gives its ID, in the folder of the agent `agent`. Returns
 // `{ job, text }`, the job and the file's text. Throws a `JobError` that names the file when it
-// isn't a job, or isn't the job its name and its folder say, and the error of the read, such as
-// `ENOENT`, when it can't be read. It is read as a file another user controls, whoever reads it
-// (`readUntrustedFile`): without following a link, without waiting on a FIFO, only if it is a
-// regular file with one name, and up to `JOB_FILE_MAX_BYTES`. So nothing in the jobs' folder can
-// stop the runner, or have root, running `scooter status`, read another file.
+// isn't a job (`checkJob`: a field it needs missing or of another form), or isn't the job its name
+// and its folder say, and the error of the read, such as `ENOENT`, when it can't be read. Fields
+// it doesn't know are left in the job as they are: nothing acts on them, and the runner's saves
+// keep those at the top and in `progress`. It is read as a file another user controls, whoever
+// reads it (`readUntrustedFile`): without following a link, without waiting on a FIFO, only if it
+// is a regular file with one name, and up to `JOB_FILE_MAX_BYTES`. So nothing in the jobs' folder
+// can stop the runner, or have root, running `scooter status`, read another file.
 export function readJob(file, { agent }) {
   const text = readUntrustedFile(file, { maxBytes: limits.JOB_FILE_MAX_BYTES })
   let job

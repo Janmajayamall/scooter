@@ -4,10 +4,10 @@
 // - **One at a time, oldest first.** At each round the runner looks at the jobs' folders of the
 //   agents' folders (`listJobFiles`). It holds one job at a time, the oldest, of whichever agent,
 //   and takes the next only once the one it holds is over: finished, or cancelled by removing its
-//   file. A job's file is read as the runner reads its own state, strictly (`readJob`), and checked
-//   against `agents.yaml` as `scooter backfill` checked it; a file that isn't one, or a job that
-//   can't run as the config is now, is refused and logged, once while it stays as it is, and the
-//   runner goes on with the next.
+//   file. A job's file is read as a file another user controls, each field it needs checked and a
+//   field it doesn't know ignored (`readJob`), and the job is checked against `agents.yaml` as
+//   `scooter backfill` checked it; a file that isn't one, or a job that can't run as the config is
+//   now, is refused and logged, once while it stays as it is, and the runner goes on with the next.
 // - **An agent given in a file** (`--agent-file`) has a folder of its own, which the runner readies
 //   when it takes the job, as a start readies the agent's: made if it is new, git's leftover locks
 //   removed, and what a run cut short left thrown away.

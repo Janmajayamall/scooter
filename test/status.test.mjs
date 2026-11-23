@@ -293,16 +293,17 @@ test('status: the runner\'s files, and the folders they are in, are read without
   assert.match(linked, /^Network log: it can't be read \(EUNTRUSTED\)\.$/m)
 })
 
-test("status: the jobs of scooter backfill, oldest first, of every agent's folder, each as far as it has got, and those that can't be read said to be so, nothing read through a link", t => {
+test("status: the jobs of scooter backfill, oldest first, of every agent's folder, each as far as it has got, a field it doesn't know ignored, and those that can't be read said to be so, nothing read through a link", t => {
   const { status, write, paths } = setup(t)
   write(paths.bridgeStatus, BRIDGE)
   write(paths.runnerStatus, STATUS)
   write(paths.agentState('lifelog'), STATE)
   const jobs = name => paths.agentJobs(name)
-  // Written in this order: one waiting with --hold-live; an agent given in a file, started; one
-  // started with --hold-live, which gave up on two and has one to try again.
+  // Written in this order: one waiting with --hold-live; an agent given in a file, started, which
+  // holds a field the runner doesn't know; one started with --hold-live, which gave up on two and
+  // has one to try again.
   const waiting = { ...JOB, id: '20261109T150100000-0001', holdLive: true, progress: null, from: 812 }
-  const tried = { ...JOB, id: '20261109T150200000-0001', agent: 'lifelog-try', skills: null, writes: null, agentFile: 'agents:\n  lifelog-try: {}\n' }
+  const tried = { ...JOB, id: '20261109T150200000-0001', agent: 'lifelog-try', skills: null, writes: null, agentFile: 'agents:\n  lifelog-try: {}\n', later: true }
   const held = {
     ...JOB,
     id: '20261109T150300000-0001',
