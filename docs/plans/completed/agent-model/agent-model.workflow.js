@@ -2,7 +2,7 @@ export const meta = {
   name: 'scooter-agent-model',
   description: "Build Scooter's simpler agent model in nine pieces, each a pull request: implement, review, fix, merge",
   whenToUse:
-    "Run from the owner's Linux machine, with the checkout at ~/scooter and gh signed in. Covers pieces 1 to 9 of docs/plans/active/agent-model/agent-model.md.",
+    "Run from the owner's Linux machine, with the checkout at ~/scooter and gh signed in. Covers pieces 1 to 9 of docs/plans/completed/agent-model/agent-model.md.",
   phases: [
     { title: 'Progress' },
     { title: 'Piece 1: day pages and once go' },
@@ -25,8 +25,9 @@ export const meta = {
 //   4. once approved, the pull request is merged into `main`, and the next piece starts from there.
 //
 // The prompts give only the role, the piece's number, the pull request's number and the plan's path.
-// Everything else is in the plan, docs/plans/active/agent-model/agent-model.md, which every agent
-// reads whole: what each piece covers, what each role does, and how to run things on this machine.
+// Everything else is in the plan, docs/plans/completed/agent-model/agent-model.md, which every
+// agent reads whole: what each piece covers, what each role does, and how to run things on this
+// machine.
 //
 // The loop stops, and returns why, when an agent has a question for the owner, when an agent returns
 // nothing, which is how a usage limit shows, when a pull request isn't approved within `maxRounds`
@@ -88,7 +89,7 @@ if (cfg.to > LAST) {
 }
 
 const BASE = 'main'
-const PLAN = 'docs/plans/active/agent-model/agent-model.md'
+const PLAN = 'docs/plans/completed/agent-model/agent-model.md'
 const CODER = { model: 'opus', effort: 'xhigh' }
 const REVIEWER = { model: 'fable', effort: 'xhigh' }
 const STEP = { model: 'opus', effort: 'low' }
