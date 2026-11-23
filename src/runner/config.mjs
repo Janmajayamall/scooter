@@ -283,6 +283,9 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
   const fieldOf = new Map()
   // The tags of each agent's scheduled triggers so far, by the agent's name.
   const tagsSeen = new Map()
+  // Each trigger's prompt that is no fault itself, with where it is, by the agent's name: held to
+  // its length whatever else of its trigger is at fault, so that every fault is reported at once.
+  const promptsOf = new Map()
   const configReal = (() => {
     try {
       return fs.realpathSync(configDir)
@@ -540,12 +543,18 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     const longestMode = REPLY_MODES.reduce((longest, mode) => (mode.length > longest.length ? mode : longest))
     const common = { agent: { ...agent, replyMode: agent.replyMode ?? longestMode }, paths, settings }
     const longest = longestValues(common)
-    for (const trigger of [...agent.run.newMessages, ...agent.run.scheduled]) {
-      // A prompt at fault is one already.
-      if (trigger.prompt === null) continue
-      const problem = tooLong(longestPrompt(trigger.prompt, longest))
-      if (problem !== null) fault([...fieldOf.get(trigger), 'prompt'], problem)
+    for (const { parts, prompt } of promptsOf.get(agent.name) ?? []) {
+      const problem = tooLong(longestPrompt(prompt, longest))
+      if (problem !== null) fault(parts, problem)
     }
+  }
+
+  // A trigger's prompt, checked (`promptOf`), and kept to be held to its length.
+  function triggerPrompt(agent, parts, value) {
+    if (value === undefined) return null
+    const prompt = promptOf(parts, value)
+    if (prompt !== null) promptsOf.set(agent.name, [...(promptsOf.get(agent.name) ?? []), { parts, prompt }])
+    return prompt
   }
 
   function triggerOf(agent, parts, entry) {
@@ -562,7 +571,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     const { run } = agent
 
     if (kind === 'on') {
-      const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
+      const prompt = triggerPrompt(agent, [...parts, 'prompt'], entry.prompt)
       if (entry.on !== 'new-messages') return fault([...parts, 'on'], 'must be new-messages')
       if (entry.channels === undefined) return
       const channels = channelList([...parts, 'channels'], entry.channels)
@@ -581,7 +590,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
 
     // A scheduled trigger.
     {
-      const prompt = entry.prompt === undefined ? null : promptOf([...parts, 'prompt'], entry.prompt)
+      const prompt = triggerPrompt(agent, [...parts, 'prompt'], entry.prompt)
       // The tag names the task in the log and in the owner's notices, where its time can't: the
       // log keeps `at` for the time of its own line. It is checked whatever else is at fault in
       // the trigger, so that a tag another trigger has too is a fault as well.

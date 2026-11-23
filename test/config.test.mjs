@@ -543,6 +543,12 @@ test("config: a trigger's prompt, filled in with the longest values its variable
   const past = faultsOf(withCheckIn(base, `"${within}x"`))
   assert.deepEqual(past.map(problem => problem.field), ['agents.lifelog.run[1].prompt'])
   assert.match(past[0].message, new RegExp(`can make a prompt of ${limits.PROMPT_MAX_BYTES + 1} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it$`))
+  // Held whatever else of its trigger is at fault, so every fault is reported at once: a time or
+  // channels at fault, beside a prompt too long.
+  const badAt = faultsOf(withCheckIn(base, `"${within}x"`).replace('- at: "21:30"', '- at: "25:30"'))
+  assert.deepEqual(badAt.map(problem => problem.field).sort(), ['agents.lifelog.run[1].at', 'agents.lifelog.run[1].prompt'])
+  const badChannels = faultsOf(base.replace('channels: [whatsapp, email]', 'channels: [sms]').replace('New: $seq.unread$', `New: $seq.unread$ ${'x'.repeat(limits.PROMPT_MAX_BYTES)}`))
+  assert.deepEqual(badChannels.map(problem => problem.field).sort(), ['agents.lifelog.run[0].channels', 'agents.lifelog.run[0].prompt'])
   // A variable counts as the longest it can be: each line's number as the largest a seq can be.
   const numbers = `"${'$seq.unread$ '.repeat(Math.ceil(limits.PROMPT_MAX_BYTES / (limits.BATCH_MAX_ITEMS * 17)))}"`
   assert.equal(faultsOf(withCheckIn(base, numbers)).length, 1)
