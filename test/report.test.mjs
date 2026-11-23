@@ -183,6 +183,12 @@ test('mark: done and failed, each a line of the marks file, which the runner rea
   })
 })
 
+test('mark: a number of up to 15 digits, leading zeros apart, is a line\'s number, as the runner reads it', t => {
+  const { mark, marks } = setup(t)
+  assert.equal(mark(['done', '999999999999999', '#0001050']).code, 0)
+  assert.deepEqual([...marks().done].sort(), [1050, 999999999999999])
+})
+
 test("mark: without done or failed, a number, or a reason, or with a word that isn't a number, marks nothing", t => {
   const { mark, marksFile } = setup(t)
   for (const [args, said] of [
@@ -193,6 +199,10 @@ test("mark: without done or failed, a number, or a reason, or with a word that i
     [['done', '1050-1053'], /"1050-1053" isn't a line's number/],
     [['done', '0'], /"0" isn't a line's number/],
     [['done', '9'.repeat(20)], /isn't a line's number/],
+    // Past 15 digits, which the runner's reader of the marks takes for no number: a safe integer
+    // of 16 digits among them.
+    [['done', '9007199254740991'], /"9007199254740991" isn't a line's number/],
+    [['done', '1000000000000000'], /isn't a line's number/],
     [['failed', '1053'], /say why 1053 failed/],
     [['failed', '1053', ' \n '], /say why 1053 failed/],
     [['failed', 'the', 'PDF'], /"the" isn't a line's number/],
