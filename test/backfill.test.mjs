@@ -577,6 +577,35 @@ test("backfill: an outage of an agent given in a file's job waits as an outage's
   assert.equal(state().paused, undefined)
 })
 
+test("backfill: a job that has started is taken before one that hasn't, an older one refused before and taken now among them, so a --hold-live job under way holds live runs across a restart", async t => {
+  const { prepared, runner, clock, sandbox, add, outbox, paths, entries } = await open(t)
+  const older = await queue(prepared, ['--agent-file', tryAgentFile(prepared)])
+  // Its prompt leaves the config folder: the runner refuses the job, and takes the next.
+  const prompt = path.join(paths.configDir, 'prompts', 'try.md')
+  fs.rmSync(prompt)
+  await prepared.clock.advance(1)
+  const held = await queue(prepared, ['lifelog', '--empty', '--hold-live'])
+  assert.ok(older.job.id < held.job.id)
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill-start', id: held.job.id }, outcome: 'started' })
+  assert.ok(entries.some(entry => entry.event === 'runner.job_refused' && entry.file === `${older.job.id}.json`))
+  assert.deepEqual((await runner.tick()).action, { kind: 'backfill', id: held.job.id })
+
+  // A message arrives, the prompt is put back, and the runner starts again.
+  add(line.text(6, '2026-11-09T15:51:00Z', 'tea'))
+  fs.writeFileSync(prompt, 'You are a try.\n')
+  await runner.close()
+  const again = await startTestRunner(t, prepared)
+  await clock.advance(8 * SECOND)
+  // The job under way is taken again, not the older one, and live runs still wait for it.
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'backfill', id: held.job.id })
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'backfill-finished', id: held.job.id })
+  assert.equal(outbox({ take: true }).length, 1)
+  // Then the message, and then the older job.
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'messages' })
+  assert.deepEqual((await again.runner.tick()).action, { kind: 'backfill-start', id: older.job.id })
+  assert.deepEqual(itemsSeen(sandbox), [[1, 3], [4, 5], [6]])
+})
+
 test('backfill: jobs run one at a time, in the order they were written, a job of an agent given in a file among them, which runs in a folder of its own', async t => {
   const { prepared, runner, sandbox, paths, git, outbox } = await open(t, { lines: [line.text(6, '2026-11-09T15:00:00Z', 'tea')], state: { ...HANDLED, cursor: 6 } })
   const config = paths.configDir

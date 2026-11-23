@@ -317,7 +317,7 @@ docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look
 
 ## Backfills
 
-A backfill runs the agent over your history again, as it usually runs, and sends you nothing while it works. It is a job: `scooter backfill` checks what you ask against `agents.yaml` and the datastore, writes the job's file into the agent's folder, `agents/<agent>/jobs/<ID>.json`, and exits. The running runner takes it at its next look, with no restart; a stopped runner takes it when it starts. Jobs run one at a time, in the order you wrote them, and a job goes on after a restart from where it got. It spends on OpenRouter for every message it goes over.
+A backfill runs the agent over your history again, as it usually runs, and sends you nothing while it works. It is a job: `scooter backfill` checks what you ask against `agents.yaml` and the datastore, writes the job's file into the agent's folder, `agents/<agent>/jobs/<ID>.json`, and exits. The running runner takes it at its next look, with no restart; a stopped runner takes it when it starts. Jobs run one at a time, in the order you wrote them, and a job goes on after a restart from where it got, before any that hasn't started. It spends on OpenRouter for every message it goes over.
 
 ```sh
 sudo -u scooter-runner scooter backfill lifelog …      # natively

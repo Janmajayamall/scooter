@@ -1,11 +1,12 @@
 // Jobs of `scooter backfill`, as the runner runs them: the datastore's history given to an agent
 // again, as it usually runs, from the first line or from a chosen point, without sending anything.
 //
-// - **One at a time, oldest first.** At each round the runner looks at the jobs' folders of the
-//   agents' folders (`listJobFiles`). It holds one job at a time, the oldest, of whichever agent,
-//   and takes the next only once the one it holds is over: finished, or cancelled by removing its
-//   file. A job's file is read as a file another user controls, each field it needs checked and a
-//   field it doesn't know ignored (`readJob`), and the job is checked against `agents.yaml` as
+// - **One at a time, one that has started first.** At each round the runner looks at the jobs'
+//   folders of the agents' folders (`listJobFiles`). It holds one job at a time, of whichever
+//   agent: a job that has started before one that hasn't, the oldest first among each. It takes the
+//   next only once the one it holds is over: finished, or cancelled by removing its file. A job's
+//   file is read as a file another user controls, each field it needs checked and a field it
+//   doesn't know ignored (`readJob`), and the job is checked against `agents.yaml` as
 //   `scooter backfill` checked it; a file that isn't one, or a job that can't run as the config is
 //   now, is refused and logged, once while it stays as it is, and the runner goes on with the next.
 // - **An agent given in a file** (`--agent-file`) has a folder of its own, which the runner readies
@@ -270,18 +271,29 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
     async poll() {
       const entries = listJobFiles(paths)
       if (held !== null && !entries.some(entry => entry.file === held.file)) drop('runner.job_cancelled')
-      for (const entry of held === null ? entries : []) {
-        let taken
-        try {
-          taken = check(entry)
-        } catch (error) {
-          refuse(entry, error)
-          continue
+      if (held === null) {
+        // A job that has started comes before one that hasn't, and the oldest first among each:
+        // the first that has started, or else the first the runner can take.
+        let chosen = null
+        for (const entry of entries) {
+          let taken
+          try {
+            taken = check(entry)
+          } catch (error) {
+            refuse(entry, error)
+            continue
+          }
+          refused.delete(entry.file)
+          if (taken.job.progress !== null) {
+            chosen = taken
+            break
+          }
+          chosen ??= taken
         }
-        refused.delete(entry.file)
-        held = await ready(taken)
-        log.info('runner.job_taken', { agent: held.agent.name, job: held.id, started: held.job.progress !== null })
-        break
+        if (chosen !== null) {
+          held = await ready(chosen)
+          log.info('runner.job_taken', { agent: held.agent.name, job: held.id, started: held.job.progress !== null })
+        }
       }
       if (held === null) return null
       const { progress } = held.job
