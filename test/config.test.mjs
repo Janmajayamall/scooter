@@ -251,13 +251,15 @@ test('config: reads and writes name paths of the data folder, of any kind, and w
   assert.deepEqual(parse(change(base, 'writes', '[agents/lifelog/views/books.csv, agents/lifelog/memory/a.md]')).agents[0].repository, ['views/books.csv', 'memory/a.md'])
 
   for (const [write, message] of [
-    ['agents/lifelog/', /is agents\/lifelog\/, which holds agents\/lifelog\/, the agent's folder, where the runner keeps its state, its repository, run\/ and the sessions: name what the agent may write in it, such as agents\/lifelog\/views\//],
+    ['agents/lifelog/', /is agents\/lifelog\/, which holds agents\/lifelog\/, the agent's folder, where the runner keeps its state, its repository, run\/, the sessions and the jobs: name what the agent may write in it, such as agents\/lifelog\/views\//],
     ['agents/', /which holds agents\/lifelog\/, the agent's folder/],
     ['agents/lifelog', /which holds agents\/lifelog\/, the agent's folder/],
-    ['agents/lifelog/state.json', /is agents\/lifelog\/state.json, which the agent can't write: in its folder the runner keeps state.json, run\/, sessions\/ and its repository's .git, and the commit refuses a name that starts with a dot/],
+    ['agents/lifelog/state.json', /is agents\/lifelog\/state.json, which the agent can't write: in its folder the runner keeps state.json, run\/, sessions\/, jobs\/ and its repository's .git, and the commit refuses a name that starts with a dot/],
     ['agents/lifelog/run/', /which the agent can't write/],
     ['agents/lifelog/run/session/', /which the agent can't write/],
     ['agents/lifelog/sessions/', /which the agent can't write/],
+    ['agents/lifelog/jobs/', /which the agent can't write/],
+    ['agents/lifelog/jobs/20261123T101500123-0001.json', /which the agent can't write/],
     ['agents/lifelog/.git/', /which the agent can't write/],
     ['agents/lifelog/.gitignore', /which the agent can't write/],
     ['agents/lifelog/views/.hidden/', /which the agent can't write/],

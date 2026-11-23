@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { checkOwnFolder, copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeHandOff, removeTree, settleFolder, startsWithId, writeFileAtomic } from '../src/common/files.mjs'
+import { checkOwnFolder, copyUntrustedFile, createIds, emptyFolder, ensureDir, handOff, listHandOffs, readJsonFile, readUntrustedFile, removeHandOff, removeTree, settleFolder, startsWithId, writeFileAtomic, writeNewFile } from '../src/common/files.mjs'
 import { createFakeClock } from './support/clock.mjs'
 import { deepChain, deepTree } from './support/deep-tree.mjs'
 import { skipUnlessRoot } from './support/root.mjs'
@@ -66,6 +66,31 @@ test('files: a failed write leaves the old file and no temporary one', t => {
   assert.throws(() => writeFileAtomic(blocked, 'new'))
   assert.equal(fs.readFileSync(file, 'utf8'), 'old')
   assert.deepEqual(fs.readdirSync(dir).sort(), ['blocked', 'state.json', 'tmp'])
+})
+
+test("files: a new file is written whole, with the mode asked for, and never in another's place, whatever is at its name", t => {
+  const dir = makeTestDir(t)
+  const file = path.join(dir, 'job.json')
+  const umask = process.umask(0o077)
+  try {
+    writeNewFile(file, '{"a":1}\n', { mode: 0o640 })
+  } finally {
+    process.umask(umask)
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"a":1}\n')
+  assert.equal(fs.statSync(file).mode & 0o777, 0o640)
+  assert.equal(fs.statSync(file).nlink, 1)
+  // A name taken, by a file, a folder or a link that leads nowhere: EEXIST, and what is there is as
+  // it was.
+  fs.mkdirSync(path.join(dir, 'folder.json'))
+  fs.symlinkSync(path.join(dir, 'nowhere'), path.join(dir, 'link.json'))
+  for (const name of ['job.json', 'folder.json', 'link.json']) {
+    assert.throws(() => writeNewFile(path.join(dir, name), 'other'), { code: 'EEXIST' }, name)
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"a":1}\n')
+  assert.equal(fs.existsSync(path.join(dir, 'nowhere')), false)
+  // No temporary name is left, either way.
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['folder.json', 'job.json', 'link.json', 'tmp'])
 })
 
 test('files: making a folder leaves folders that exist as they are', t => {

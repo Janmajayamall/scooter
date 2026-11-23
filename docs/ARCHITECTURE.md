@@ -69,7 +69,7 @@ Each component, its document, and its files. Every file under `src/` belongs to 
 | Shared code | [shared-code.md](architecture/shared-code.md) | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/instance.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/paths.mjs` |
 | The runner | [runner.md](architecture/runner.md) | `src/runner/main.mjs`, `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/datastore.mjs`, `src/runner/state.mjs`, `src/runner/status.mjs`, `src/runner/restarts.mjs`, `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs` |
 | A run, and the agent's folder | [run.md](architecture/run.md) | `src/runner/run.mjs`, `src/runner/report.mjs`, `src/runner/failures.mjs`, `src/runner/agentdir.mjs`, `src/runner/git.mjs` |
-| Rebuild and backfill | [rebuild-and-backfill.md](architecture/rebuild-and-backfill.md) | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` |
+| Backfill | [backfill.md](architecture/backfill.md) | `src/runner/enqueue.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs`, `src/common/jobfile.mjs` |
 | The sandbox and the VM image | [sandbox.md](architecture/sandbox.md) | `src/runner/sandbox/index.mjs`, `src/runner/sandbox/gondolin.mjs`, `src/runner/sandbox/view.mjs`, `src/runner/sandbox/accel.mjs`, `src/runner/sandbox/image.mjs`, `config/image/build.json` |
 | The network policy | [network-policy.md](architecture/network-policy.md) | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` |
 | The agent and its instructions | [agent.md](architecture/agent.md) | `src/runner/vm/skills/scooter/SKILL.md`, `src/runner/vm/bin/show.mjs`, `src/runner/vm/bin/send.mjs`, `src/runner/vm/bin/mark.mjs`, `src/runner/vm/icu-tz/zoneinfo64.res`, `src/runner/vm/icu-tz/metaZones.res`, `src/runner/vm/icu-tz/timezoneTypes.res`, `src/runner/vm/icu-tz/windowsZones.res`, `src/runner/vm/icu-tz/release.txt`, `src/runner/vm/icu-tz/LICENSE`, `src/runner/vm/icu-tz/README.md`, `config/prompts/lifelog.md`, `config/skills/expenses/SKILL.md`, `config/skills/meals/SKILL.md`, `config/skills/people/SKILL.md`, `config/skills/runs/SKILL.md`, `config/skills/travel/SKILL.md` |
@@ -117,7 +117,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | Folder | Owner and mode | Bridge | Runner | pi | wacli | Email reader |
 |---|---|---|---|---|---|---|
 | `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | writes | reads | reads, as the default `reads` names it | no | no |
-| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | what `reads` names, by default its own folder, never `sessions/`; writes what `writes` names, by default `views/` and `memory/`, and `run/session/`, `run/send/` and `run/marks.txt` | no | no |
+| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | what `reads` names, by default its own folder, never `sessions/` or `jobs/`; writes what `writes` names, by default `views/` and `memory/`, and `run/session/`, `run/send/` and `run/marks.txt` | no | no |
 | `exchange` | `scooter-runner`, 0700 | takes entries, and keeps a sending file of each in `bridge/`; writes `backup.lock` | writes entries and `run.lock` | no | no | no |
 | `runner` | `scooter-runner`, 0700 | reads the network log and `status.json`; connects to `runner.sock` | writes | no | no | no |
 | `bridge` | root, 0700 | writes | no | no | no | no |
@@ -144,7 +144,7 @@ The bridge, as root, takes what it needs out of three folders other users contro
 
 *Cost, accepted:* Node has no calls relative to a folder it has open (`openat`, `unlinkat`), so a user who controls one of these folders can swap a link in between the bridge's check of it and its use. Such a swap reaches only files with the names the bridge removes there, which nothing else of Scooter's or the system's has, and empty folders, which are all a folder's removal takes; and where the bridge makes `backup.lock`, under that name. Only the runner's user controls `exchange/`, and an escape from pi's VM is needed to reach it.
 
-`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, and an agent's `state.json` and the network log's days, in `agents/<name>/` and `runner/log/`. It keeps the first two rules. The first without the check of the owner: it uses each of those folders only while it is a folder and not a link. The second but for a day of the log, which it reads as a stream, opened without following a link and only if it is a regular file. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json` or a day of the log, and shows only what passes the check of an agent's state or of the log's lines ([scooter status](architecture/bridge.md#scooter-status)).
+`scooter status`, as root on a native install, also reads in folders the runner's user controls: `runner/status.json`, an agent's `state.json` and the jobs' files of `scooter backfill`, and the network log's days, in `agents/`, `agents/<name>/`, `agents/<name>/jobs/` and `runner/log/`. It keeps the first two rules. The first without the check of the owner: it uses each of those folders only while it is a folder and not a link. The second but for a day of the log, which it reads as a stream, opened without following a link and only if it is a regular file. It writes and removes nothing there. A link swapped in between its check and its read reaches only a file named `state.json`, `<ID>.json` or a day of the log, and shows only what passes the check of an agent's state, of a job's file or of the log's lines ([scooter status](architecture/bridge.md#scooter-status), [The job's file](architecture/backfill.md#the-jobs-file)).
 
 `build-image`, as root on a native install, also works beside a folder another user controls, the runner's: [build-image](architecture/sandbox.md#build-image).
 
@@ -188,7 +188,8 @@ The interfaces between components. Changing one means changing both sides. Each 
 | The mail spool folder, and the reader's `state.json` | email reader → the email module | `src/mail/spool.mjs` | [The spool](architecture/email.md#the-spool), [The position](architecture/email.md#the-position) |
 | The outbox entry | runner, bridge → delivery | `src/common/outbox.mjs` | [Outbox entries](architecture/exchange.md#outbox-entries) |
 | The lock files | bridge ↔ runner | `src/common/locks.mjs` | [The locks](architecture/exchange.md#the-locks) |
-| The services' sockets | runner, rebuild, `build-image` ↔ bridge, `restore` | `src/common/instance.mjs` | [One service per data folder](architecture/shared-code.md#one-service-per-data-folder) |
+| The services' sockets | runner, `build-image` ↔ bridge, `restore` | `src/common/instance.mjs` | [One service per data folder](architecture/shared-code.md#one-service-per-data-folder) |
+| A job's file | `scooter backfill` → runner, `scooter status` | `src/common/jobfile.mjs` | [The job's file](architecture/backfill.md#the-jobs-file) |
 | `state.json` of an agent | runner → `scooter status` | `src/common/agentstate.mjs` | [State](architecture/runner.md#state) |
 | `status.json` | runner → `scooter status` | `src/common/runnerstatus.mjs` | [status.json](architecture/runner.md#statusjson) |
 | The bridge's `status.json` | bridge → `scooter status` | `src/bridge/status.mjs` | [The bridge's status.json](architecture/bridge.md#the-bridges-statusjson) |
@@ -226,7 +227,7 @@ The rules, which `test/imports.test.mjs` checks by reading every file under `src
 
 ## Why it is built this way
 
-- **The datastore is the only source of truth.** Views, memory, sessions and state are derived, and a rebuild can recreate them. So a bug in the runner or a bad run can cost a rebuild, never data.
+- **The datastore is the only source of truth.** Views, memory, sessions and state are derived, and a backfill from empty can file them again ([Backfill](architecture/backfill.md)). So a bug in the runner or a bad run can cost a backfill, never data.
 - **Two services that share folders, not sockets.** The bridge and the runner never call each other: the datastore carries work one way and the outbox carries replies back. *Why:* each holds different secrets; either can be down or restart without losing anything, and neither needs the other to be up: without the runner, messages are stored and handled once it is back, and without the bridge, replies wait in the outbox; nothing listens for connections; and the queue is plain files the owner can read. Every hand-off between them is atomic ([Atomic files and hand-offs](architecture/shared-code.md#atomic-files-and-hand-offs)).
 - **Polling, every `POLL_INTERVAL`.** No file watchers and no signals between the services. *Why:* the volume is a handful of messages a day, and a poll behaves the same on every system.
 - **`seq` is the only name a message has outside the bridge.** The agent, the outbox, the runner's state and the views' `source` column all use it; channel IDs stay in the datastore and the bridge. So the agent can't name a channel or a recipient, and adding a channel changes nothing past the bridge.
@@ -312,7 +313,7 @@ The project's own names, each used one way in these documents.
 | work item | An `in` line from a channel the agent's triggers for new messages name, of kind `message`, `edit` or `delete`, that this version knows. A message already deleted is one the runner settles itself, and never gives |
 | batch | The work items one run is given |
 | run | One run of pi, in one VM, on one batch or scheduled task |
-| trigger | An entry of an agent's `run` in `agents.yaml`, which says when it runs: on new messages of its `channels`, at a time, or a backfill ([agents.yaml](architecture/configuration.md#agentsyaml)) |
+| trigger | An entry of an agent's `run` in `agents.yaml`, which says when it runs: on new messages of its `channels`, or at a time ([agents.yaml](architecture/configuration.md#agentsyaml)) |
 | prompt | The message pi is given for a run: the `prompt` of the trigger that starts it, with its variables, such as `$now$` and `$seq.unread$`, filled in. The agent's prompt is another: the file of the config folder, such as `prompts/lifelog.md`, that pi appends to its system prompt |
 | scheduled task | The run of a trigger `at` a time, such as the evening check-in, which is given no lines, and named by its trigger's `tag`, such as `check-in` |
 | view | A file lifelog keeps in its `views/`, such as `expenses.csv`, which its `writes` names. The runner doesn't know views: they are the agent's prompt's and skills' |
@@ -324,7 +325,8 @@ The project's own names, each used one way in these documents.
 | network policy | The runner's rules for what pi's VM may send |
 | network log | The runner's log of every request pi's VM made |
 | placeholder | What pi's VM holds where the OpenRouter key would be |
-| rebuild, backfill | Replaying history through the agent: all of it again, or for one new view |
+| backfill, job | History given to an agent again, from the first line or a chosen point, without sending anything: a job, which `scooter backfill` writes as a file in the agent's folder, `jobs/<ID>.json`, and the running runner takes ([Backfill](architecture/backfill.md)) |
+| agent given in a file | An agent of a job of its own, `scooter backfill --agent-file`, in the format of `agents.yaml`, which writes only in its own folder and sends nothing: the way to try a prompt or a skill against history |
 
 ## To change X, look here
 
@@ -342,7 +344,7 @@ The project's own names, each used one way in these documents.
 | Backups and restore | `src/bridge/backup.mjs` | `test/backup.test.mjs`, `test/support/restic-stub.mjs` | [backups](architecture/backups.md) |
 | Files, programs, logs, time, sockets | `src/common/files.mjs`, `src/common/proc.mjs`, `src/common/log.mjs`, `src/common/time.mjs`, `src/common/instance.mjs` | `test/files.test.mjs`, `test/proc.test.mjs`, `test/log.test.mjs`, `test/time.test.mjs` | [shared code](architecture/shared-code.md) |
 | A path in the data folder or the config folder | `src/common/paths.mjs` | `test/paths.test.mjs` | [shared code](architecture/shared-code.md), [Folders and their owners](#folders-and-their-owners) |
-| The runner's files that `scooter status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [scooter status](architecture/bridge.md#scooter-status) |
+| The runner's files that `scooter status` reads | `src/common/agentstate.mjs`, `src/common/runnerstatus.mjs`, `src/common/jobfile.mjs`, `src/bridge/status.mjs` | `test/agentstate.test.mjs`, `test/runnerfiles.test.mjs`, `test/status.test.mjs`, `test/backfill.test.mjs` | [State](architecture/runner.md#state), [status.json](architecture/runner.md#statusjson), [The job's file](architecture/backfill.md#the-jobs-file), [scooter status](architecture/bridge.md#scooter-status) |
 | A constant | `src/common/limits.mjs` | `test/limits.test.mjs` | the document of the component that uses it; [Constants](architecture/configuration.md#constants) |
 | A setting | `src/common/settings.mjs`, the example env file | `test/settings.test.mjs`, `test/cli.test.mjs` | the document of the component that reads it; [The env files](architecture/configuration.md#the-env-files) |
 | A CLI command | `src/cli.mjs` | `test/cli.test.mjs` | [The CLI](architecture/configuration.md#the-cli), and the document of the component it belongs to |
@@ -350,7 +352,7 @@ The project's own names, each used one way in these documents.
 | The runner's start, loop and restarts | `src/runner/main.mjs`, `src/runner/restarts.mjs`, `src/runner/status.mjs` | `test/runner.test.mjs`, `test/restarts.test.mjs`, `test/runnerfiles.test.mjs` | [the runner](architecture/runner.md) |
 | When the agent runs, the batch, the prompt and its variables | `src/runner/triggers.mjs`, `src/runner/batch.mjs`, `src/runner/prompt.mjs`, `src/runner/config.mjs` | `test/triggers.test.mjs`, `test/batch.test.mjs`, `test/planning.test.mjs`, `test/config.test.mjs` | [the runner](architecture/runner.md) |
 | What `send` and `mark` leave, after a run, failures | `src/runner/report.mjs`, `src/runner/run.mjs`, `src/runner/failures.mjs`, `src/runner/git.mjs`, `src/runner/agentdir.mjs` | `test/report.test.mjs`, `test/run.test.mjs`, `test/failures.test.mjs`, `test/runner.test.mjs`, `test/agentdir.test.mjs`, `test/tools/git.test.mjs` | [A run, and the agent's folder](architecture/run.md) |
-| Rebuilds and backfills | `src/runner/rebuild.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs` | `test/rebuild.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs` | [rebuild and backfill](architecture/rebuild-and-backfill.md) |
+| `scooter backfill`, or how the runner runs a job | `src/runner/enqueue.mjs`, `src/runner/backfill.mjs`, `src/runner/replay.mjs`, `src/common/jobfile.mjs`, `src/runner/triggers.mjs` | `test/enqueue.test.mjs`, `test/backfill.test.mjs`, `test/replay.test.mjs`, `test/triggers.test.mjs` | [backfill](architecture/backfill.md) |
 | The sandbox or the VM image | `src/runner/sandbox/`, `config/image/build.json` | `test/sandbox.test.mjs`, `test/view.test.mjs`, `test/image.test.mjs`, `test/accel.test.mjs`, `test/tools/vm.test.mjs` | [the sandbox](architecture/sandbox.md) |
 | The network policy or its log | `src/runner/sandbox/policy.mjs`, `src/runner/sandbox/netlog.mjs`, `src/common/netlog.mjs` | `test/policy.test.mjs`, `test/fixtures/pi-requests/` | [the network policy](architecture/network-policy.md) |
 | The agent's instructions | `src/runner/vm/skills/`, `config/prompts/`, `config/skills/` | `test/instructions.test.mjs` | [the agent](architecture/agent.md) |

@@ -459,7 +459,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       // The folder itself, or one that holds it, as a file or a folder: as a file it could still
       // be moved, with everything in it.
       if (bare(write) === own || own.startsWith(`${bare(write)}/`)) {
-        fault(where, `is ${write}, which holds ${own}/, the agent's folder, where the runner keeps its state, its repository, run/ and the sessions: name what the agent may write in it, such as ${own}/views/`)
+        fault(where, `is ${write}, which holds ${own}/, the agent's folder, where the runner keeps its state, its repository, run/, the sessions and the jobs: name what the agent may write in it, such as ${own}/views/`)
         return
       }
       if (bare(write) === DISCARDED || write.startsWith(`${DISCARDED}/`)) {
@@ -469,7 +469,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
       if (!write.startsWith(`${own}/`)) return
       const parts = bare(write).slice(own.length + 1).split('/')
       if (RUNNER_NAMES.includes(parts[0]) || parts.some(part => part.startsWith('.'))) {
-        fault(where, `is ${write}, which the agent can't write: in its folder the runner keeps state.json, run/, sessions/ and its repository's .git, and the commit refuses a name that starts with a dot`)
+        fault(where, `is ${write}, which the agent can't write: in its folder the runner keeps state.json, run/, sessions/, jobs/ and its repository's .git, and the commit refuses a name that starts with a dot`)
       }
     })
     agent.writes = writes.filter(Boolean)

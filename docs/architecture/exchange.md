@@ -1,6 +1,6 @@
 # The exchange
 
-The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md). The runner writes one for each message `send` queued and each reaction to a line marked done ([What send and mark leave](run.md#what-send-and-mark-leave)), for a notice ([Notices](run.md#notices)) and for a backfill's summary ([Backfill](rebuild-and-backfill.md#backfill)).
+The exchange is the folder the two services coordinate through, `exchange/` in the data folder: `outbox/`, which carries messages to send from the runner to the bridge, and `locks/`, which keeps runs and backups apart. Who owns it, and who can reach it, is in [Folders and their owners](../ARCHITECTURE.md#folders-and-their-owners). This document covers the two contracts it holds, the outbox entry and the lock files, which both services follow. How the bridge sends an entry is [delivery](delivery.md). The runner writes one for each message `send` queued and each reaction to a line marked done ([What send and mark leave](run.md#what-send-and-mark-leave)), for a notice ([Notices](run.md#notices)) and for a backfill's message when its job has finished ([Finishing](backfill.md#finishing)).
 
 ## Files
 
@@ -30,7 +30,7 @@ The exchange is the folder the two services coordinate through, `exchange/` in t
 
 ## The locks
 
-Two lock files in `locks/` keep runs and backups apart: `run.lock`, which the runner takes for each run, and a rebuild for its batches and its own steps ([Rebuild](rebuild-and-backfill.md#rebuild)); and `backup.lock`, which the bridge takes for each backup.
+Two lock files in `locks/` keep runs and backups apart: `run.lock`, which the runner takes for each run, a job's batches among them, and for a job's start ([The start](backfill.md#the-start)); and `backup.lock`, which the bridge takes for each backup.
 
 - **A lock** is one line of JSON: `{"pid":4211,"at":"2026-11-09T15:50:02Z","deadline":"2026-11-09T16:00:02Z"}`, the times in UTC to the second, `deadline` null when there is none. It is written under a temporary name and hard-linked into place. *Why:* a link fails if the name exists, which makes taking the lock exclusive, and the name appears with its contents complete, so nobody reads half a lock. A lock that can't be read still counts as held.
 - **Each side takes its own lock first, and then looks for the other's.** *Why:* looking before taking would let a run and a backup start at the same instant. When the two appear together, the runner gives way: it releases `run.lock` and waits while `backup.lock` is there.

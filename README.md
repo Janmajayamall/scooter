@@ -14,7 +14,7 @@ This README is for installing and running it on Linux, natively or with Docker. 
 - [Daily use](#daily-use)
 - [The agent's instructions](#the-agents-instructions)
 - [Backups and restore](#backups-and-restore)
-- [Rebuilds and backfills](#rebuilds-and-backfills)
+- [Backfills](#backfills)
 - [When something goes wrong](#when-something-goes-wrong)
 - [The security model](#the-security-model)
 - [Reading the network log](#reading-the-network-log)
@@ -102,7 +102,7 @@ sudo -u scooter-runner scooter doctor
 
 `scooter pair --phone +919812345678` gives a code to type into the phone instead of a QR code. `pair` does nothing while wacli is linked: to link it again, unlink it first on the phone. `doctor` runs as `scooter-runner` only, since it checks what the runner can reach (see [When something goes wrong](#when-something-goes-wrong)).
 
-Commands run as their service's user: `sudo scooter <command>` for the bridge's (`pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check`, `restore`), `sudo -u scooter-runner scooter <command>` for the runner's (`doctor`, `rebuild`). `scooter help` lists them. The logs are in the journal: `journalctl -u scooter-bridge -u scooter-runner`.
+Commands run as their service's user: `sudo scooter <command>` for the bridge's (`pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check`, `restore`), `sudo -u scooter-runner scooter <command>` for the runner's (`doctor`, `backfill`). `scooter help` lists them. The logs are in the journal: `journalctl -u scooter-bridge -u scooter-runner`.
 
 Where things are: the data in `/var/lib/scooter`, the settings in `/etc/scooter`, the agent's instructions in `/etc/scooter/config`.
 
@@ -123,7 +123,7 @@ docker compose run --rm bridge pair
 - **`build-image`** builds the VM image into the data volume. Run it after installing and after each upgrade, with the runner stopped. It runs in a container of its own, as root and privileged, because Gondolin's builder makes a chroot with `/proc` and `/dev` mounted in it: under rootful Docker that container is root on the host, as a native build is.
 - **The data** is one named volume, `scooter_data`, mounted at `/data` in every container. A new volume starts as a copy of the image's `/data`, whose folders have the right owners and modes, which keep each service out of the others' folders. Keep the named volume: a bind mount of a host folder in its place starts empty, and then its folders must first be made with their owners, as the `Dockerfile` makes them.
 - **The config** is the repository's `./config`, mounted read-only into the runner. Its files must be readable by other users of the host, as git leaves them under the usual umask.
-- **Commands** run with `docker compose run --rm <service> <command>`: `bridge` for `pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check` and `restore`, `runner` for `doctor` and `rebuild`. Logs: `docker compose logs bridge runner`.
+- **Commands** run with `docker compose run --rm <service> <command>`: `bridge` for `pair`, `email-check`, `status`, `backup-init`, `snapshots`, `check` and `restore`, `runner` for `doctor` and `backfill`. Logs: `docker compose logs bridge runner`.
 - **Without KVM** pi's VMs run under emulation. To use KVM, see the next section.
 - **Ubuntu 24.04 with rootless Docker** needs Docker's AppArmor profile for `rootlesskit`, which Docker's documentation on rootless mode gives, because Ubuntu restricts unprivileged user namespaces.
 
@@ -223,7 +223,7 @@ sudo scooter status                        # natively
 docker compose run --rm bridge status      # Docker
 ```
 
-It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down, and `scooter status` doesn't say so either: it shows when the runner last started, the agent's last run and the messages pending, which only get older and more while it is down. The logs say whether it runs ([When something goes wrong](#when-something-goes-wrong)).
+It prints the bridge, when it started and when it last wrote its status, or when it stopped; the channels; the newest message; when the runner started, and whether it waits after stopping on an error; the agent's last run, whether runs are paused and why, and the messages pending, retrying and failed; each backfill, and how far it has got; the VMs' accelerator, the image's age, zero data retention, internet access, the network log's last 24 hours, and the backups. It reads only files, so it works with the bridge stopped, and changes nothing. Nothing tells you on WhatsApp that the runner is down, and `scooter status` doesn't say so either: it shows when the runner last started, the agent's last run and the messages pending, which only get older and more while it is down. The logs say whether it runs ([When something goes wrong](#when-something-goes-wrong)).
 
 **The views** are in the agent's folder, `agents/lifelog/` in the data folder: `views/expenses.csv`, `runs.csv`, `meals.csv`, `travel.csv` and `people.csv`. The folder is a git repository, with a commit for each batch. To copy the views out:
 
@@ -245,7 +245,7 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
 
   | Variable | Holds |
   |---|---|
-  | `$now$` | The run's time, in `SCOOTER_TZ`, such as `Monday 9 November 2026, 21:20`; in a backfill's or a rebuild's batch, the time of its newest message |
+  | `$now$` | The run's time, in `SCOOTER_TZ`, such as `Monday 9 November 2026, 21:20`; in a backfill's batch, the time of its newest message |
   | `$user.timezone$`, `$user.currency$` | `SCOOTER_TZ` and `HOME_CURRENCY` |
   | `$reply_mode$`, `$internet$` | `quiet` or `confirm`; `on` or `off` |
   | `$agent.dir$`, `$datastore.dir$` | The agent's folder and the datastore, as the agent's VM has them |
@@ -268,7 +268,7 @@ They are your files, in the config folder (`/etc/scooter/config` natively, `./co
      The name is lowercase letters, digits and single hyphens, and not `scooter`, which is the runner's own skill's. Without a matching name and a description the runner refuses to start.
   2. Add `skills/<name>` to the agent's `skills` in `agents.yaml`.
   3. Add a line for its view to the list in `prompts/lifelog.md`: `- books.csv: books read or started (skill: books)`.
-  4. To file the messages from before the skill was added, add a `backfill` entry (see [Backfills](#backfills)).
+  4. To file the messages from before the skill was added, run a backfill for it (see [A new skill's view](#a-new-skills-view)).
 - **Upgrades:** the runner's own skill, `scooter`, which says how Scooter works with the agent, ships with the runner, and so do `show`, `send` and `mark`, the commands the agent reads a message with, sends you a message with and says what it did with each message with, and the time zone rules the agent's VM converts times with; they change with an upgrade. The prompt and skills don't. Natively, `setup` copies `config/` to `/etc/scooter/config` only when it isn't there, so instructions a later version improves are yours to copy or merge by hand from `/opt/scooter/config`. So is `image/build.json`, which pins pi's version: natively the runner and `build-image` read your copy of it, so an upgrade that moves the pin needs it merged before the image is built again (see [Upgrading](#upgrading)). In Docker, `./config` is the repository's own files: the `git pull` of an upgrade changes them, or meets your edits as a conflict to merge.
 
 ## Backups and restore
@@ -302,7 +302,7 @@ docker compose run --rm build-image        # on a new machine
 docker compose up -d
 ```
 
-`restore` refuses while either service runs, and refuses a data folder that isn't empty unless given `--force`. With `--force`, each folder the backup holds becomes the backup's: restic deletes what the backup doesn't hold inside those folders, and nothing outside them. After a restore, look at the last commit of the agent's folder (see [Rebuilds](#rebuilds)).
+`restore` refuses while either service runs, and refuses a data folder that isn't empty unless given `--force`. With `--force`, each folder the backup holds becomes the backup's: restic deletes what the backup doesn't hold inside those folders, and nothing outside them. A backfill under way when the backup was taken goes on, after the restore, from where the backup has it (see [Backfills](#backfills)).
 
 To look at a backup without touching the data, restore it somewhere else, with `RESTORE_TARGET`; the services can keep running:
 
@@ -315,44 +315,106 @@ docker compose run --name scooter-look -e RESTORE_TARGET=/tmp/look bridge restor
 docker cp scooter-look:/tmp/look/data ./look && docker rm scooter-look
 ```
 
-## Rebuilds and backfills
+## Backfills
 
-### Rebuilds
-
-`rebuild` throws away what `writes` names in the agent's folder, the views and memory by default, and files your whole history again, one of your days at a time, as it was then: rules you sent as messages are learned again where you sent them. Use it after changing the instructions in a way the old views should follow. It sends nothing to you while it works, and it spends on OpenRouter for every message ever sent.
-
-1. **Stop the runner** first; the bridge may keep running, and stores what arrives. `rebuild` refuses while a runner runs.
-2. **Start the rebuild right after**: it stops at the newest message when it starts, so a message that waited for the stopped runner is filed with no reply or ✅.
-3. **Run it where closing a terminal doesn't stop it.** A rebuild isn't resumed: cut short, by a stop, a closed terminal or a crash, it starts from the beginning when run again, and spends again what it had spent.
+A backfill runs the agent over your history again, as it usually runs, and sends you nothing while it works. It is a job: `scooter backfill` checks what you ask against `agents.yaml` and the datastore, writes the job's file into the agent's folder, `agents/<agent>/jobs/<ID>.json`, and exits. The running runner takes it at its next look, with no restart; a stopped runner takes it when it starts. Jobs run one at a time, in the order you wrote them, and a job goes on after a restart from where it got. It spends on OpenRouter for every message it goes over.
 
 ```sh
-# Natively, in tmux or screen:
-sudo systemctl stop scooter-runner
-sudo -u scooter-runner scooter rebuild lifelog
-sudo systemctl start scooter-runner
-
-# Docker:
-docker compose stop runner
-docker compose run -d --name scooter-rebuild runner rebuild lifelog
-docker logs -f scooter-rebuild             # until it ends; then: docker rm scooter-rebuild
-docker compose start runner
+sudo -u scooter-runner scooter backfill lifelog …      # natively
+docker compose run --rm runner backfill lifelog …        # Docker
 ```
 
-- It tags the last commit before it `before-rebuild-<UTC time>`, such as `before-rebuild-20261118T101500Z`. To go back to it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-rebuild-20261118T101500Z` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's state stays as the rebuild left it.
-- It throws away uncommitted changes in what `writes` names in the agent's folder, `views/` and `memory/` by default, as a start of the runner does, and empties it.
-- A rebuild that finished commits as `lifelog: rebuild`. One that didn't leaves the last commit's message as `lifelog: rebuild #…`, and nothing else says so: look at it after a crash, a reboot or a restore (`git log -1`), and run the rebuild again if it reads so.
+- **Where it starts and stops:** at your first message, or `--from 2026-11-09`, the UTC date a message was stored, or `--from 812`, a message's number; and at the last message the agent had handled when the job started. Live runs handle what comes after.
+- **Live messages go first:** without `--hold-live`, the job works only while nothing live is waiting, so a new message is answered as usual, at most one batch later.
+- **Before it changes anything** it tags the agent's last commit `before-backfill-<ID>`. The tag keeps what you asked and the prompt the job used: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog cat-file tag before-backfill-<ID>`. Each of its batches commits as `lifelog: backfill <ID> #812-#831`.
+- **When it has finished** you get one message: "Backfill 20261123T101500123-0001 of lifelog finished: it was given 143 lines, and gave up on #1031 and #1207." `scooter status` shows each job until then, and how far it has got.
 
-### Backfills
+### A new skill's view
 
-A backfill files the messages from before a skill was added, for that skill alone, without touching the other views and without stopping live work. Add a `backfill` entry under the agent's `run` in `agents.yaml`, and restart the runner:
+After adding a skill (see [The agent's instructions](#the-agents-instructions)), file the messages from before it for that skill alone, without touching the other views. Put a prompt for the job in the config folder, such as `prompts/books-backfill.md`, readable by the runner's user:
+
+```text
+Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
+Your folder: $agent.dir$
+The datastore: $datastore.dir$
+This run may change: $run.writes$
+This is a backfill for the books skill: you go over old messages again, for the books view alone. File only what belongs in what this run may change. A message that holds nothing for it is done: mark it done, and change nothing.
+Given before: $seq.retry$
+New: $seq.unread$
+```
+
+Then:
+
+```sh
+sudo -u scooter-runner scooter backfill lifelog --skills books --writes agents/lifelog/views/books.csv --prompt /etc/scooter/config/prompts/books-backfill.md
+docker compose run --rm runner backfill lifelog --skills books --writes agents/lifelog/views/books.csv --prompt /config/prompts/books-backfill.md
+```
+
+The job's runs get the `books` skill alone, can change only `views/books.csv`, and are given this prompt in place of the one for new messages. `prompts/lifelog.md`, the agent's own, is the same as for new messages, so the history is filed by today's rules, and since such a run may change a view but not `memory/`, it files its guesses with ❓ and asks nothing. The command reads the prompt when you run it, checks it as it checks a prompt in `agents.yaml`, and keeps it with the job. Without `--prompt`, the runs get the prompt for new messages.
+
+### Everything again, from empty
+
+After changing the instructions in a way the old views should follow, file your whole history again, in its order, as it was then: rules you sent as messages are learned again where you sent them.
+
+```sh
+sudo -u scooter-runner scooter backfill lifelog --empty --hold-live
+docker compose run --rm runner backfill lifelog --empty --hold-live
+```
+
+`--empty` empties what the agent's `writes` names in its folder, `views/` and `memory/` by default, and commits that before the first batch. `--hold-live` keeps new messages and the evening check-in waiting until the job has finished: they are stored, and handled after it, also across a restart. It also has the job take your messages strictly in order: one it couldn't handle is tried again before the ones after it. To keep the memory as it is now, and file everything again by today's rules, add `--writes agents/lifelog/views/`.
+
+### Trying a prompt with an agent of its own
+
+To see what a changed prompt or skill would file, without touching lifelog's views, give an agent of its own in a file: an entry in the format of `agents.yaml`, under a name of its own, that writes only in its own folder and sends nothing. Copy `prompts/lifelog.md` to `prompts/lifelog-try.md`, change it, and put this in the config folder as `lifelog-try.yaml`:
 
 ```yaml
-      - backfill: books-1           # an ID of your choosing, used once
-        skill: books
-        writes: [agents/lifelog/views/books.csv]   # what it may change, in the agent's writes
+agents:
+  lifelog-try:
+    model: anthropic/claude-sonnet-5.5
+    thinking: low
+    prompt: prompts/lifelog-try.md        # paths are relative to the config folder, as in agents.yaml
+    skills: [skills/expenses, skills/runs, skills/meals, skills/travel, skills/people]
+    reads: [datastore/, agents/lifelog-try/]
+    writes: [agents/lifelog-try/views/, agents/lifelog-try/memory/]
+    sends: []
+    session: daily
+    reply_mode: quiet
+    ack_reaction: "✅"
+    timeout_minutes: 10
+    run:
+      - on: new-messages
+        channels: [whatsapp, email]
+        prompt: |
+          Now: $now$ ($user.timezone$). Home currency: $user.currency$. Reply mode: $reply_mode$. Internet: $internet$.
+          Your folder: $agent.dir$
+          The datastore: $datastore.dir$
+          This run may change: $run.writes$
+          Given before: $seq.retry$
+          New: $seq.unread$
 ```
 
-It works only while nothing live is waiting, and its VM can change only what its `writes` names. Its batches are given the prompt for new messages, with what the backfill may change as `$run.writes$`: the default `prompts/lifelog.md` has a batch that may change a view but not `memory/` file its guesses with ❓ and ask nothing. It sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
+Then:
+
+```sh
+sudo -u scooter-runner scooter backfill --agent-file /etc/scooter/config/lifelog-try.yaml --from 2026-11-01
+docker compose run --rm runner backfill --agent-file /config/lifelog-try.yaml --from 2026-11-01
+```
+
+Its views are in `agents/lifelog-try/views/`, beside lifelog's, to compare: `sudo -u scooter-runner diff -r /var/lib/scooter/agents/lifelog/views /var/lib/scooter/agents/lifelog-try/views`. It takes `--from` and no other flag: the file gives its skills, writes and prompts. Its memory, in its own folder, starts empty, and learns again the rules you sent as messages as it goes over them.
+
+### Cancelling a job
+
+Remove its file; the runner drops the job at its next look:
+
+```sh
+sudo -u scooter-runner ls /var/lib/scooter/agents/lifelog/jobs/
+sudo -u scooter-runner rm /var/lib/scooter/agents/lifelog/jobs/20261123T101500123-0001.json
+
+docker compose run --rm --entrypoint ls runner /data/agents/lifelog/jobs/
+docker compose run --rm --entrypoint rm runner /data/agents/lifelog/jobs/20261123T101500123-0001.json
+```
+
+What the job filed so far stays, committed. To go back to before it, with the runner stopped: `sudo -u scooter-runner git -C /var/lib/scooter/agents/lifelog reset --hard before-backfill-20261123T101500123-0001` (in Docker, `docker compose run --rm --entrypoint git runner -C /data/agents/lifelog reset --hard …`). The runner's own record of your messages isn't changed by either.
 
 ## When something goes wrong
 
@@ -486,7 +548,7 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] A note that fits no view, such as "a slow Sunday at home", gets its ✅, and no view changes: the prompt has the agent file nothing for it.
 - [ ] A real batch runs end to end in the sandbox, with your key.
 - [ ] The agent reads its memory files and the `scooter` skill first, marks each message it was given with `mark`, and says what it says with `send`, as its instructions ask: nothing it prints decides anything, so a message it doesn't mark is given to it again, and is given up on after 4 attempts.
-- [ ] Given only the numbers of its messages, the agent reads each with `show`, files what it holds, and, for an edit or a deletion you send, changes or removes the row it filed from the message: edit a filed expense's amount, and delete another, and look at `expenses.csv`. A backfill's batch, which may change a view and not `memory/`, files its guesses with ❓ and asks nothing.
+- [ ] Given only the numbers of its messages, the agent reads each with `show`, files what it holds, and, for an edit or a deletion you send, changes or removes the row it filed from the message: edit a filed expense's amount, and delete another, and look at `expenses.csv`. A backfill's batch, which may change a view and not `memory/`, files its guesses with ❓ and asks nothing; given the prompt of [A new skill's view](#a-new-skills-view), it files only for that view, and marks done a message that holds nothing for it, changing nothing.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
 - [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
 - [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli ([Catch-up](docs/architecture/whatsapp.md#catch-up)): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case catch-up leaves (see [Known limits](#known-limits)).
