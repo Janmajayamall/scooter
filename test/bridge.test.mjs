@@ -234,7 +234,7 @@ test('bridge: emails go through the reader, the bridge and the runner, and what 
   // in the prompt.
   const [seen] = both.sandbox.seen()
   assert.deepEqual(seen.items, [1, 2])
-  assert.ok(seen.prompt.endsWith('New: 1 2\nGiven before: none\n'), seen.prompt)
+  assert.ok(seen.prompt.endsWith('Given before: none\nNew: 1 2\n'), seen.prompt)
   for (const words of ['Bombay', 'Call with Sam', '.eml', 'ASK']) assert.ok(!seen.prompt.includes(words), words)
   // A question about the receipt, and a ✅ for the memo.
   assert.deepEqual(both.outbox(), [
@@ -271,7 +271,7 @@ test('bridge: both services start on a datastore that holds lines this version d
   assert.deepEqual(both.state().lastRun.seqs, [1, 4, 6, 7, 8])
   assert.deepEqual([both.state().cursor, both.state().retry, both.state().failed], [9, [], []])
   const [seen] = both.sandbox.seen()
-  assert.ok(seen.prompt.endsWith('New: 1 4 6 7 8\nGiven before: none\n'), seen.prompt)
+  assert.ok(seen.prompt.endsWith('Given before: none\nNew: 1 4 6 7 8\n'), seen.prompt)
   assert.ok(!/\/status|"hi"|receipt/.test(seen.prompt), seen.prompt)
   await both.deliver()
   // Its ✅s: reactions on WhatsApp, and a text for each email, whose subject isn't a string.

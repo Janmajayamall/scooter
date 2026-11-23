@@ -31,8 +31,8 @@ agents:
           Your folder: $agent.dir$
           The datastore: $datastore.dir$
           This run may change: $run.writes$
-          New: $seq.unread$
           Given before: $seq.retry$
+          New: $seq.unread$
       - at: "21:30"                      # daily in SCOOTER_TZ; "Sun 18:00" for weekly
         tag: check-in                    # names the task in the log and in a notice of its failure
         prompt: >-

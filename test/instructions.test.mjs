@@ -13,17 +13,19 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
+import { initialAgentState } from '../src/common/agentstate.mjs'
 import { createIndex } from '../src/common/datastore/index.mjs'
 import { DIRECTIONS, FIELDS, KINDS, SOURCES, TRUSTS, checkLine } from '../src/common/datastore/line.mjs'
 import { limits } from '../src/common/limits.mjs'
 import { OWN_AUTHORS } from '../src/common/outbox.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { indexFileText, prepareRun } from '../src/runner/agentdir.mjs'
+import { buildBatch } from '../src/runner/batch.mjs'
 import { RUNNER_SKILL, loadConfig, parseConfig, skillFileProblem } from '../src/runner/config.mjs'
 import { openDatastore } from '../src/runner/datastore.mjs'
 import { readMarks, readSends } from '../src/runner/report.mjs'
 import { piEnv } from '../src/runner/run.mjs'
-import { NEW_MESSAGES_PROMPT, SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
+import { EXAMPLE_NOW, NEW_MESSAGES_PROMPT, SKILLS, exampleYaml, indexOf, line, writeConfig } from './support/runner.mjs'
 import { makeTestDir } from './support/tmp.mjs'
 
 const REPO = path.resolve(import.meta.dirname, '..')
@@ -35,6 +37,8 @@ const read = (...parts) => fs.readFileSync(path.join(CONFIG, ...parts), 'utf8')
 // The runner's settings that fill in a prompt's variables.
 const SETTINGS = { timeZone: 'Asia/Kolkata', homeCurrency: 'INR', agentInternet: false }
 const linesOf = text => text.split('\n')
+// The order the agent takes the lines it is given in, which the prompt and the runner's skill give.
+const IN_ORDER = 'in the order of their numbers, lowest first, whichever of the two lists a number is in'
 
 // The section of a document's text that starts with `heading`, up to the next heading of its level.
 function designSection(heading, text) {
@@ -167,7 +171,7 @@ test("instructions: the prompt says how each line given is handled, as the agent
   const prompt = read('prompts', 'lifelog.md')
   const block = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.body.startsWith('Then take each line')).body
   assert.ok(prompt.includes(block), block)
-  for (const words of ['`show`', '`mark`', 'an edit or a deletion', 'Mark every number you were given, and only those.']) assert.ok(block.includes(words), words)
+  for (const words of ['`show`', '`mark`', 'an edit or a deletion', 'Mark every number you were given, and only those.', IN_ORDER]) assert.ok(block.includes(words), words)
   // The default prompt for new messages, the agent's document's own, gives the time, the lines'
   // numbers and what the run may change, which lifelog's prompt reads: its backfill rule goes by
   // whether the run may change `memory/`.
@@ -180,6 +184,38 @@ test("instructions: the prompt says how each line given is handled, as the agent
   assert.ok(prompt.includes('When the run\'s message says this run may change views but not `memory/`'))
   assert.match(NEW_MESSAGES_PROMPT, /^Now: \$now\$/)
   assert.ok(prompt.includes('Today is the date after `Now:` in the run\'s message'))
+})
+
+test('instructions: the default prompt for new messages gives the lines given before above the new ones, so its numbers read lowest first, as the agent takes them', t => {
+  const root = makeTestDir(t)
+  const paths = makePaths({ dataDir: path.join(root, 'data'), configDir: CONFIG })
+  const [agent] = loadConfig({ paths, settings: SETTINGS }).agents
+  // #1 waits to be tried again, #2 was given up on, and #3 and #4 are done; then #5, an edit of #2,
+  // which brings it back, #6, and #7, an edit of #1.
+  const lines = [
+    line.text(1, '2026-11-09T15:00:00Z', 'coffee 120'),
+    line.text(2, '2026-11-09T15:01:00Z', 'lunch 300'),
+    line.text(3, '2026-11-09T15:02:00Z', 'ran 5k'),
+    line.text(4, '2026-11-09T15:03:00Z', 'thanks'),
+    line.edit(5, '2026-11-09T15:40:00Z', 2, 'lunch 350'),
+    line.text(6, '2026-11-09T15:41:00Z', 'tea 40'),
+    line.edit(7, '2026-11-09T15:42:00Z', 1, 'coffee 150'),
+  ]
+  const state = {
+    ...initialAgentState(),
+    cursor: 4,
+    retry: [{ seq: 1, attempts: 1, due: '2026-11-09T15:10:00Z', reason: 'not marked' }],
+    failed: [{ seq: 2, at: '2026-11-09T15:20:00Z', reason: 'not handled after 4 attempts' }],
+  }
+  const { prompt } = buildBatch({ agent, state, index: indexOf(lines), paths, settings: SETTINGS, now: Date.parse(EXAMPLE_NOW) })
+  // The numbers of the two lists, in the order the prompt gives them.
+  const listed = linesOf(prompt).filter(text => /^(Given before|New): /.test(text))
+  assert.deepEqual(listed, ['Given before: 1 (attempt 2 of 4), 2 (attempt 1 of 4)', 'New: 5 6 7'])
+  const numbers = listed.flatMap(text => [...text.replace(/ \(attempt \d+ of \d+\)/g, '').matchAll(/\d+/g)].map(match => Number(match[0])))
+  assert.deepEqual(numbers, [1, 2, 5, 6, 7])
+  // The agent is told to take them so, by lifelog's prompt and by the runner's skill.
+  assert.ok(read('prompts', 'lifelog.md').includes(IN_ORDER))
+  assert.ok(RUNNER_SKILL_FILE.includes(IN_ORDER))
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -357,6 +393,8 @@ test("runner's skill: what it says of a run is what the runner does: what a run 
   // What a run gives: numbers, never a message's words; a message deleted before it was given is
   // never given (`assembleBatch`); and one line's mark settles no other.
   said('Only their numbers: you read each line with `show`.')
+  // The order the agent takes them in: an edit or a deletion after the message it changes.
+  said(`Take the lines ${IN_ORDER}: an edit or a deletion has a higher number than the message it changes, so you handle the message first.`)
   said('A message the owner deleted before you were given it is never given to you: only its deletion is.')
   said('Marking one line settles no other')
   said(`A line you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)

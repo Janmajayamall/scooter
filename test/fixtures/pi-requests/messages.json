@@ -517,7 +517,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nNew: 1050 1051\nGiven before: none\n",
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nGiven before: none\nNew: 1050 1051\n",
               "cache_control": {
                 "type": "ephemeral"
               }
@@ -789,7 +789,7 @@
           "content": [
             {
               "type": "text",
-              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nNew: 1050 1051\nGiven before: none\n"
+              "text": "Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: /data/agents/lifelog\nThe datastore: /data/datastore\nThis run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/\nGiven before: none\nNew: 1050 1051\n"
             }
           ]
         },

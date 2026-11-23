@@ -78,8 +78,8 @@ test('backfills: until is the live cursor when it starts, every message up to it
 Your folder: ${paths.agentDir('lifelog')}
 The datastore: ${paths.datastore}
 This run may change: ${paths.agentDir('lifelog')}/views/people.csv
-New: 1 3
 Given before: none
+New: 1 3
 `,
   )
   // Its own session for the day, the backfill's skill alone after the runner's, and the agent's
@@ -183,7 +183,7 @@ test("backfills: a batch's VM may change only the backfill's writes: a write any
   // lines, and what it may change, as the VM has it.
   const [call] = sandbox.seen()
   assert.match(call.prompt, /^Now: Saturday 7 November 2026, 17:30 \(Asia\/Kolkata\)\./)
-  assert.ok(call.prompt.includes(`This run may change: ${path.join(agent, 'views', 'people.csv')}\nNew: 1 3\nGiven before: none\n`), call.prompt)
+  assert.ok(call.prompt.includes(`This run may change: ${path.join(agent, 'views', 'people.csv')}\nGiven before: none\nNew: 1 3\n`), call.prompt)
   // The VM refuses the writes anywhere else, which the stub stands for: the view outside them,
   // and the memory.
   assert.deepEqual(sandbox.refused(), [path.join(agent, 'views', 'notes.csv'), path.join(agent, 'memory', 'preferences.md')])

@@ -385,7 +385,7 @@ test('rebuild: an item not marked is tried again before the days after it, at it
   )
   for (const [n, call] of sandbox.seen().slice(0, 4).entries()) {
     assert.match(call.prompt, /^Now: Saturday 7 November 2026, 12:30 /)
-    assert.match(call.prompt, n === 0 ? /^New: 1\nGiven before: none$/m : new RegExp(`^New: none\nGiven before: 1 \\(attempt ${n + 1} of 4\\)$`, 'm'))
+    assert.match(call.prompt, n === 0 ? /^Given before: none\nNew: 1$/m : new RegExp(`^Given before: 1 \\(attempt ${n + 1} of 4\\)\nNew: none$`, 'm'))
   }
 })
 

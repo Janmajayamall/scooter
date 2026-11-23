@@ -36,8 +36,8 @@ const PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency
 Your folder: ${GUEST.agent}
 The datastore: ${GUEST.datastore}
 This run may change: ${GUEST.agent}/views/ ${GUEST.agent}/memory/
-New: 1050 1051
 Given before: none
+New: 1050 1051
 `
 
 // One batch, start to finish: the model reads a message and a photo, changes a view and the

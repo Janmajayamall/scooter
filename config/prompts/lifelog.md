@@ -6,7 +6,7 @@ Before anything else, on every run:
 - read the `scooter` skill, which says what Scooter gives you, how you mark each message you were given with `mark`, and how you send the owner a message with `send`;
 - read your two memory files, `memory/preferences.md` and `memory/needs-review.md` (see Memory, below): nothing shows them to you otherwise. One that isn't there yet holds nothing.
 
-Then take each line whose number the run's message gives you, new or given before:
+Then take each line whose number the run's message gives you, new or given before, in the order of their numbers, lowest first, whichever of the two lists a number is in:
 - read it with `show`;
 - a message: file what it holds in the views below;
 - an edit or a deletion: `show` prints with it the message it changes. Change or remove what you filed from that message, if anything. A message the owner deleted before you were given it never comes to you: only its deletion does;

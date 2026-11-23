@@ -83,8 +83,8 @@ export const NEW_MESSAGES_PROMPT = `Now: $now$ ($user.timezone$). Home currency:
 Your folder: $agent.dir$
 The datastore: $datastore.dir$
 This run may change: $run.writes$
-New: $seq.unread$
 Given before: $seq.retry$
+New: $seq.unread$
 `
 
 // The prompt of the example's evening check-in, as YAML folds it.
@@ -192,6 +192,6 @@ export const EXAMPLE_PROMPT = `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata)
 Your folder: /data/agents/lifelog
 The datastore: /data/datastore
 This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/
-New: 1050 1051 1052 1053 1054
 Given before: 1047 (attempt 2 of 4)
+New: 1050 1051 1052 1053 1054
 `

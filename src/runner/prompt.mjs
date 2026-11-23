@@ -3,14 +3,14 @@
 //
 //   prompt: |
 //     Now: $now$ ($user.timezone$). Reply mode: $reply_mode$.
-//     New: $seq.unread$
 //     Given before: $seq.retry$
+//     New: $seq.unread$
 //
 // becomes
 //
 //   Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Reply mode: quiet.
-//   New: 1050 1051 1053
 //   Given before: 1047 (attempt 2 of 4)
+//   New: 1050 1051 1053
 //
 // A variable is `$`, a name of letters, dots and underscores that starts with a letter, and `$`.
 // Any other `$` is the owner's own text, as in "$5". One the runner doesn't know is a fault of

@@ -625,7 +625,7 @@ test('sandbox: one batch end to end through the real sandbox: pi reads a message
   // datastore, which its VM sees read-only: the tool's result, which the model got with the next
   // request, holds what only the file has, its text and its WhatsApp ID.
   const [first, second] = model.modelRequests
-  assert.match(JSON.stringify(first.body), /New: 1\\nGiven before: none\\n/)
+  assert.match(JSON.stringify(first.body), /Given before: none\\nNew: 1\\n/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000001/)
   assert.doesNotMatch(JSON.stringify(first.body), /3EB0E2E0000000000001|Blue Tokai/)
   // The view, committed by Scooter with the batch's number.
@@ -742,7 +742,7 @@ test("sandbox: the agent's instructions of config/ through the real sandbox: pi 
   const userText = conversationText(first.body)
   // The run's time is the real clock's, as the test runs.
   assert.match(userText, /^Now: [A-Z][a-z]+day \d{1,2} [A-Z][a-z]+ \d{4}, \d\d:\d\d \(Asia\/Kolkata\)\. Home currency: INR\. Reply mode: quiet\. Internet: off\.\n/)
-  assert.ok(userText.endsWith('New: 1\nGiven before: none\n'), userText)
+  assert.ok(userText.endsWith('Given before: none\nNew: 1\n'), userText)
   assert.ok(!userText.includes('coffee'))
   const shown = toolResults(sixth.body)[4].text
   assert.ok(shown.startsWith(`1  Mon 9 Nov 2026 21:20 +05:30  ${paths.dayLog('2026/11/09')}:1\n{"seq":1,"kind":"message"`), shown)
@@ -795,7 +795,7 @@ test("sandbox: a rebuild's batch through the real sandbox: $now$ is the message'
   // read-only.
   const [first, second] = model.modelRequests
   assert.match(JSON.stringify(first.body), /Now: Sunday 8 November 2026, 10:30 \(Asia\/Kolkata\)/)
-  assert.match(JSON.stringify(first.body), /New: 1\\nGiven before: none\\n/)
+  assert.match(JSON.stringify(first.body), /Given before: none\\nNew: 1\\n/)
   assert.match(JSON.stringify(second.body), /3EB0E2E0000000000002/)
   // One commit on the tagged one, the view in it, its session gone, and nothing sent: what the
   // batch queued with send is dropped.

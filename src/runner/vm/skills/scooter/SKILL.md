@@ -15,7 +15,7 @@ Scooter acts on what `mark` and `send` left once your run is over, and only if i
 
 ## What a run gives you
 
-Each run starts with a message from the owner's configuration, not from the owner. Its words are the owner's, and Scooter fills in what they ask for: the time, the owner's settings, your folder and the datastore's, what the run may change, and the numbers of the lines to work on, the new ones, and those you were given before and didn't finish, each with its attempt. Only their numbers: you read each line with `show`.
+Each run starts with a message from the owner's configuration, not from the owner. Its words are the owner's, and Scooter fills in what they ask for: the time, the owner's settings, your folder and the datastore's, what the run may change, and the numbers of the lines to work on, the new ones, and those you were given before and didn't finish, each with its attempt. Only their numbers: you read each line with `show`. Take the lines in the order of their numbers, lowest first, whichever of the two lists a number is in: an edit or a deletion has a higher number than the message it changes, so you handle the message first.
 
 - A message is given as it was sent. An edit or a deletion of it is a line of its own, given to you in its turn, which points at the message: `show` prints the message with it.
 - A message the owner deleted before you were given it is never given to you: only its deletion is.

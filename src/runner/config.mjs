@@ -20,7 +20,7 @@
 //         - on: new-messages
 //           channels: [whatsapp, email]
 //           prompt: |                        # what pi is given for the run, its variables filled in
-//             Now: $now$. New: $seq.unread$. Given before: $seq.retry$.
+//             Now: $now$. Given before: $seq.retry$. New: $seq.unread$.
 //         - at: "21:30"                      # or "Sun 18:00"
 //           tag: check-in                    # names the task in the log and its notices
 //           prompt: "Now: $now$. Evening check-in."

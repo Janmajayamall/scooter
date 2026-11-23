@@ -125,7 +125,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   // The prompt, the last argument, after `--`: the trigger's, filled in.
   assert.equal(
     spec.argv.at(-1),
-    `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: ${agent}\nThe datastore: ${paths.datastore}\nThis run may change: ${agent}/views/ ${agent}/memory/\nNew: 1042\nGiven before: none\n`,
+    `Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.\nYour folder: ${agent}\nThe datastore: ${paths.datastore}\nThis run may change: ${agent}/views/ ${agent}/memory/\nGiven before: none\nNew: 1042\n`,
   )
 
   // pi's environment and nothing else, with a placeholder where the key would be.
@@ -792,7 +792,7 @@ test('run: an item not marked is tried again a minute later, as a retry, and giv
   for (const attempt of [2, 3, 4]) {
     await clock.advance(SECOND)
     assert.deepEqual((await runner.tick()).outcome, { ok: true, cause: null })
-    assert.match(sandbox.runs.at(-1).spec.argv.at(-1), new RegExp(`^New: none\\nGiven before: 1042 \\(attempt ${attempt} of 4\\)$`, 'm'))
+    assert.match(sandbox.runs.at(-1).spec.argv.at(-1), new RegExp(`^Given before: 1042 \\(attempt ${attempt} of 4\\)\\nNew: none$`, 'm'))
     if (attempt < 4) await clock.advance(MINUTE - SECOND)
   }
   assert.deepEqual(state().retry, [])
@@ -810,7 +810,7 @@ test('run: an edit of a failed message brings it back into the batch, and it lea
   add(line.edit(1043, '2026-11-09T15:51:00Z', 1042, 'coffee 150'))
   await runNext(runner, clock)
   assert.deepEqual(state().lastRun.seqs, [1042, 1043])
-  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^New: 1043\nGiven before: 1042 \(attempt 1 of 4\)$/m)
+  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^Given before: 1042 \(attempt 1 of 4\)\nNew: 1043$/m)
   assert.deepEqual(state().failed, [])
   assert.deepEqual(state().retry, [])
 })
@@ -819,7 +819,7 @@ test('run: a message deleted before it was given is never given, and its deletio
   const { runner, clock, state, add, sandbox, outbox } = await openWith(t, [line.text(1042, '2026-11-09T15:50:00Z', 'coffee 120'), line.delete(1043, '2026-11-09T15:50:01Z', 1042)])
   await runNext(runner, clock)
   assert.deepEqual(state().lastRun.seqs, [1043])
-  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^New: 1043\nGiven before: none$/m)
+  assert.match(sandbox.runs.at(-1).spec.argv.at(-1), /^Given before: none\nNew: 1043$/m)
   assert.deepEqual([state().cursor, state().retry, state().failed], [1043, [], []])
   // No ✅ for a deletion, nor for the message it deleted.
   assert.deepEqual(outbox(), [])
