@@ -47,7 +47,7 @@ The principles, which hold everywhere:
 1. The owner sends a receipt photo to the bot. wacli, a linked device of the bot's number, receives it and posts a signed webhook to the bridge on loopback ([The webhook](architecture/whatsapp.md#the-webhook)).
 2. The WhatsApp channel checks the signature and drops anything that isn't the owner's ([From a message to a record](architecture/whatsapp.md#from-a-message-to-a-record)). Intake downloads the photo, and the store gives the message the next `seq` and appends one line to the datastore ([Intake](architecture/bridge.md#intake), [Writing](architecture/datastore.md#writing)).
 3. The runner polls the datastore and sees a new work item. Once the owner has been quiet for `BATCH_SECONDS`, it builds a batch, fills in the prompt of the trigger `on: new-messages` with the batch's numbers, here 1042, takes the run lock, boots a fresh VM and runs pi in it ([When the agent runs](architecture/runner.md#when-the-agent-runs), [The prompt](architecture/runner.md#the-prompt), [A run](architecture/run.md#a-run), [A VM for each run](architecture/sandbox.md#a-vm-for-each-run)).
-4. pi reads line 1042 with `show`, and the photo from the datastore, which is mounted read-only, updates `views/expenses.csv`, and runs `mark done 1042` ([send and mark](architecture/agent.md#send-and-mark)). Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
+4. pi reads line 1042 with `show`, and the photo from the datastore, which its VM sees read-only, updates `views/expenses.csv`, and runs `mark done 1042` ([send and mark](architecture/agent.md#send-and-mark)). Each request it makes to the model goes through the runner's network policy, which checks it, swaps in the real key and logs it ([the network policy](architecture/network-policy.md)).
 5. The runner checks the files pi left, commits them, updates its state from pi's marks, and writes an outbox entry, here a ✅ reaction ([After a successful run](architecture/run.md#after-a-successful-run), [What send and mark leave](architecture/run.md#what-send-and-mark-leave), [Outbox entries](architecture/exchange.md#outbox-entries)).
 6. The bridge takes the outbox entry, sends the reaction through wacli, and appends an `out` line to the datastore ([Sending an entry](architecture/delivery.md#sending-an-entry)).
 
@@ -125,7 +125,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | `mail` | `scooter-mail`, 0700 | takes spool folders | no | no | no | writes |
 | `config` | root, group `scooter-runner`; folders 0750, files 0640 | no | reads | sees only the run's copy | no | no |
 
-What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json` in a folder of its own, `status/`, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
+What each holds: `datastore`, the log and its attachments; `agents`, one folder per agent ([The agent's folder](architecture/run.md#the-agents-folder)); `exchange`, `outbox/` and `locks/`; `runner`, the network log, the VM image, `status.json`, `restarts.json`, the runner's socket, and the runner's home and temporary folder; `bridge`, the bridge's state, its `status.json` in a folder of its own, `status/`, its socket, its own outbox, its sending files, `incoming/` and restic's cache; `wacli`, the WhatsApp session and wacli's message store; `mail`, the email reader's position and its spool; `config`, `agents.yaml`, the prompt, the skills and the VM image's build file, in Docker a read-only bind mount of `./config`.
 
 The data folder itself is root's, 0755: every service user passes through it to reach its own. Each service's environment holds only its own settings, and each reads only its own env file ([Secrets](#secrets)). The folders are passive: nothing in them runs. pi sees only what the runner shows its VM: what the agent's `reads` and `writes` name, which the owner may set to name any of these folders ([agents.yaml](architecture/configuration.md#agentsyaml)), and the table gives what the default names.
 
@@ -251,7 +251,7 @@ These were settled with the owner. **Don't change any of them without asking the
 | Agent | pi (`@earendil-works/pi-coding-agent`) through OpenRouter. The model is configurable; the default is `anthropic/claude-sonnet-5.5`. |
 | Sandbox | pi runs in a fresh Gondolin micro-VM for every batch. The runner holds the OpenRouter key and swaps it in on pi's requests; pi only ever sees a placeholder. |
 | Data retention | Every OpenRouter request goes only to endpoints that keep no prompts or responses. The runner adds OpenRouter's zero-data-retention flag to each request (`OPENROUTER_ZDR=on`, the default), and the owner also enforces it on Scooter's OpenRouter key. |
-| Number of agents | One agent, named `lifelog`. The config format allows more later; v2 refuses more than one. |
+| Number of agents | One agent of `agents.yaml`, named `lifelog`. The config format allows more later; v2 refuses more than one. A job of `scooter backfill` can also run an agent given in a file, which writes only in its own folder and sends nothing, to try a prompt or a skill against history (issue 25, [Backfill](architecture/backfill.md)). |
 | Code | Node.js, ES modules. The runner uses `yaml` to read `agents.yaml`, and `@earendil-works/gondolin` to run pi in a VM, each pinned to an exact version. The email reader, which runs apart as its own user, uses `imapflow` and `postal-mime`. The bridge uses no third-party library. Tests use `node:test`. |
 | Platforms | Linux, on amd64 and arm64. pi's VMs run fast with KVM, and fall back to much slower emulation where it isn't available, such as in a container that can't open `/dev/kvm`. macOS comes later, and nothing is built or tested for it until then: the owner decided on 2026-11-15 that Scooter is Linux-only for now. |
 | Deployment | The owner's choice: native systemd services, or Docker Compose with one image and two services (`bridge` and `runner`). Either way there are no published ports. |
@@ -273,7 +273,7 @@ The project's own names, each used one way in these documents.
 | bridge | The service that talks to the channels, writes the datastore, delivers the outbox and makes backups |
 | runner | The service that decides when the agent runs and on what, runs it, and keeps the books |
 | pi | The coding agent program, run in a VM for each run |
-| agent | pi and the model behind it, as one; `lifelog` is its name |
+| agent | pi and the model behind it, as one, by the entry of `agents.yaml` that configures it: `lifelog`, or an agent given in a file for a job |
 | channel | A way to the owner: WhatsApp or email, each one module of the bridge |
 | core | The bridge apart from its channels: the store, intake, delivery and the backups |
 | record | A message as a channel hands it to the core, the same for every channel |
@@ -321,7 +321,7 @@ The project's own names, each used one way in these documents.
 | `reads`, `writes` | What `agents.yaml` lets an agent's VM see, and change: files and folders of the data folder ([agents.yaml](architecture/configuration.md#agentsyaml)) |
 | repository | The agent's folder as git keeps it: what its `writes` names there ([The agent's folder](architecture/run.md#the-agents-folder)) |
 | `sends` | The channels an agent's messages may go out on |
-| session | pi's conversation, kept by the runner for each of the owner's days |
+| session | pi's conversation, kept by the runner for each of the owner's days, unless the agent's `session` is `none`; a job keeps its own |
 | network policy | The runner's rules for what pi's VM may send |
 | network log | The runner's log of every request pi's VM made |
 | placeholder | What pi's VM holds where the OpenRouter key would be |
@@ -368,6 +368,7 @@ The project's own names, each used one way in these documents.
 **Deferred with macOS:** launchd daemons for the two services; Apple's hypervisor for pi's VMs (`AGENT_ACCEL=hvf`, which stays a known value and fails on Linux, as any accelerator that can't be used does); building the VM image on a Mac; a data folder such as `/usr/local/var/scooter` in `setup`; running under Docker Desktop, OrbStack or Colima, the `./config` bind mount included; and the test suite passing on a Mac. Notes for then:
 - Scooter works only while the Mac is awake, so stop it from sleeping (System Settings › Energy, or `caffeinate -s`). Catch-up collects what arrived while it slept.
 - Docker Desktop gives containers no hypervisor, so on a Mac the native install is the fast one.
+- `agents.yaml`'s check of the runner's own names in the agent's folder (`RUNNER_NAMES` in `src/runner/config.mjs`) compares them by exact case: on a file system that doesn't tell case apart, as a Mac's usually doesn't, `writes` naming `agents/lifelog/State.json` or `agents/lifelog/RUN/` would name the runner's own. Compare them without case there.
 - With Docker Desktop, OrbStack or Colima, keep the project folder in the home folder (Colima shares only that), and set Docker to start at login so `restart: unless-stopped` brings Scooter back.
 
 **Not run:** arm64, which the machine Scooter was built on can't run ([Known limits](../README.md#known-limits)). The code stays architecture-neutral.
