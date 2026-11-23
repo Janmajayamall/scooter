@@ -363,7 +363,7 @@ sudo -u scooter-runner scooter backfill lifelog --empty --hold-live
 docker compose run --rm runner backfill lifelog --empty --hold-live
 ```
 
-`--empty` empties what the agent's `writes` names in its folder, `views/` and `memory/` by default, and commits that before the first batch. `--hold-live` keeps new messages and the evening check-in waiting until the job has finished: they are stored, and handled after it, also across a restart. It also has the job take your messages strictly in order: one it couldn't handle is tried again before the ones after it. To keep the memory as it is now, and file everything again by today's rules, add `--writes agents/lifelog/views/`.
+`--empty` empties what the agent's `writes` names in its folder, `views/` and `memory/` by default, and commits that before the first batch. `--hold-live` keeps new messages and the evening check-in waiting until the job has finished. Messages are stored, and handled after it, also across a restart. A check-in that came due meanwhile runs after it, unless the runner restarted during the job: a start drops one already past. It also has the job take your messages strictly in order: one it couldn't handle is tried again before the ones after it. To keep the memory as it is now, and file everything again by today's rules, add `--writes agents/lifelog/views/`.
 
 ### Trying a prompt with an agent of its own
 
