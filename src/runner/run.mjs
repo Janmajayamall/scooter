@@ -207,7 +207,7 @@ function settleJob(job, state, outcome, timing) {
 //   { kind: 'messages', batch, prompt }            from `buildBatch`
 //   { kind: 'scheduled', at, tag, date, prompt }   from `nextAction` and `scheduledPrompt`
 //   { kind: 'backfill', id, batch, prompt, sessionId, skills, writes, settle, save }
-//                                                  a job's batch, from `batchOfJob` (`backfill.mjs`)
+//                                                  a job's batch, from `batch` of `createJobs` (`backfill.mjs`)
 //
 // A job's batch names its session, null for none, the skills pi gets and what it may change,
 // which the sandbox lets through in place of the agent's own `writes`; `settle(outcome, timing)`

@@ -655,7 +655,7 @@ const SKILL_DESCRIPTION_MAX_CHARS = 1024
 // frontmatter, read as pi reads it (`---`, YAML, then a line starting `---`), must give `name`, the
 // skill folder's own name, and a `description`. pi offers the model a skill by its name and
 // description, and leaves out one whose description is missing or whose frontmatter isn't YAML;
-// and the runner, the prompt and a backfill name a skill by its folder. pi also leaves out of
+// and the runner, the prompt and `scooter backfill --skills` name a skill by its folder. pi also leaves out of
 // what it offers the model a skill with `disable-model-invocation: true`.
 export function skillFileProblem(text, folderName) {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')

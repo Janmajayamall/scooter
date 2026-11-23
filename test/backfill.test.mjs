@@ -12,10 +12,14 @@ import path from 'node:path'
 import test from 'node:test'
 import { initialAgentState } from '../src/common/agentstate.mjs'
 import { readJob } from '../src/common/jobfile.mjs'
+import { overrideLimits } from '../src/common/limits.mjs'
+import { releaseLock, takeLock } from '../src/common/locks.mjs'
 import { jobLane, jobSummary, settleJobBatch, tagMessage } from '../src/runner/backfill.mjs'
 import { queueJob } from '../src/runner/enqueue.mjs'
 import { NEW_MESSAGES_PROMPT, line, writeConfig } from './support/runner.mjs'
+import { isRoot } from './support/root.mjs'
 import { MINUTE, SECOND, prepareTestRunner, startTestRunner } from './support/test-runner.mjs'
+import { atEnd } from './support/tmp.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
@@ -570,6 +574,45 @@ test("backfill: a job's file that isn't one, or a job that can't run as the conf
   const again = entries.filter(entry => entry.event === 'runner.job_refused').slice(11)
   assert.deepEqual(again.map(entry => entry.file), ['20261109T150300000-0001.json'])
   assert.match(again[0].reason, /skills names diving, which is no skill of lifelog$/)
+})
+
+test("backfill: a job's file too large, one the runner can't read, and an agent given in a file that isn't one, or names another, are refused too", async t => {
+  const { prepared, runner, paths, entries } = await open(t)
+  const good = await queue(prepared, ['lifelog', ...PEOPLE])
+  const base = jobOn(good.file)
+  const jobs = paths.agentJobs('lifelog')
+  const named = n => path.join(jobs, `20261109T150${n}00000-0001.json`)
+  const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value))
+  write(named(1), { ...base, id: '20261109T150100000-0001', prompt: `Now: $now$${' '.repeat(4096)}` })
+  atEnd(t, overrideLimits({ JOB_FILE_MAX_BYTES: 4096 }))
+  write(named(2), { ...base, id: '20261109T150200000-0001' })
+  if (!isRoot) fs.chmodSync(named(2), 0o000)
+  const tryJobs = paths.agentJobs('lifelog-try')
+  fs.mkdirSync(tryJobs, { recursive: true })
+  const agentFile = { ...base, agent: 'lifelog-try', skills: null, writes: null }
+  write(path.join(tryJobs, '20261109T150300000-0001.json'), { ...agentFile, id: '20261109T150300000-0001', agentFile: 'agents:\n  lifelog-try: {}\n' })
+  write(path.join(tryJobs, '20261109T150400000-0001.json'), { ...agentFile, id: '20261109T150400000-0001', agentFile: jobYaml().replace('  lifelog:', '  lifelog-other:').replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog-other/views/]').replace('sends: [whatsapp]', 'sends: []') })
+  assert.deepEqual((await runner.tick()).action, { kind: 'backfill-start', id: good.job.id })
+  const reasons = Object.fromEntries(entries.filter(entry => entry.event === 'runner.job_refused').map(entry => [entry.file, entry.reason]))
+  assert.match(reasons['20261109T150100000-0001.json'], /too large/)
+  if (!isRoot) assert.match(reasons['20261109T150200000-0001.json'], /EACCES|permission denied/)
+  assert.match(reasons['20261109T150300000-0001.json'], /its agentFile, line 2: agents\.lifelog-try\.model is missing/)
+  assert.match(reasons['20261109T150400000-0001.json'], /its agentFile gives lifelog-other, where the job is of lifelog-try/)
+  // Nothing of theirs was made: no folder for an agent given in a file that wasn't taken.
+  assert.deepEqual(fs.readdirSync(paths.agentDir('lifelog-try')), ['jobs'])
+})
+
+test("backfill: a job's start gives way to a backup, as a run does, and changes nothing until the backup is over", async t => {
+  const { prepared, runner, paths, git } = await open(t)
+  const { job } = await queue(prepared, ['lifelog', ...PEOPLE, '--empty'])
+  assert.equal(takeLock(paths.backupLock, { clock: prepared.clock }), true)
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill-start', id: job.id }, outcome: 'waiting' })
+  assert.equal(git('tag', '-l'), '')
+  assert.equal(jobOn(path.join(paths.agentJobs('lifelog'), `${job.id}.json`)).progress, null)
+  assert.equal(fs.existsSync(paths.runLock), false)
+  releaseLock(paths.backupLock)
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill-start', id: job.id }, outcome: 'started' })
+  assert.equal(git('tag', '-l'), `before-backfill-${job.id}\n`)
 })
 
 test('backfill: a job file rewritten while the runner holds it is written over with the runner\'s own count, and logged; one replaced by something else is dropped and left alone', async t => {

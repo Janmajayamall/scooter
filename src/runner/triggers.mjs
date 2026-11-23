@@ -102,7 +102,7 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 // - `agent`: the agent's config (`config.mjs`); `state`: its state; `index`: the datastore's.
 // - `now`: the time, in milliseconds; `timeZone`: `SCOOTER_TZ`; `batchSeconds`: `BATCH_SECONDS`.
 // - `incomingSeenAt`: when the runner last saw an incoming line arrive, or null.
-// - `job`: the job the runner holds, as `jobPlan` in `backfill.mjs` gives it, or null.
+// - `job`: the job the runner holds, as `poll` of `createJobs` in `backfill.mjs` gives it, or null.
 export function nextAction({ agent, state, index, now, timeZone, batchSeconds, incomingSeenAt, job = null }) {
   if (state.paused && now < parseIsoSeconds(state.paused.next)) return { kind: 'idle', reason: 'paused' }
 
