@@ -14,7 +14,7 @@ import { ZDR_ENDPOINTS_URL, accelCheck, bootCheckResult, envFileCheck, kvmFix, o
 import { USERS, dataFolders } from '../src/ops/setup.mjs'
 import { makePaths } from '../src/common/paths.mjs'
 import { makeFakeImage } from './support/fake-image.mjs'
-import { writeConfig } from './support/runner.mjs'
+import { exampleYaml, writeConfig } from './support/runner.mjs'
 import { runnerSettings } from './support/test-runner.mjs'
 import { skipIfRoot } from './support/root.mjs'
 import { atEnd, makeTestDir } from './support/tmp.mjs'
@@ -263,6 +263,12 @@ test('doctor: a bad agents.yaml names the field; the ZDR check is then left for 
   assert.match(config.text, /agents\.lifelog\.model/)
   assert.equal(config.fix, `correct ${paths.agentsYaml}`)
   assert.deepEqual(byName(checks, 'ZDR').map(entry => [entry.status, entry.text]), [['warn', "not checked: agents.yaml can't be read"]])
+
+  // A trigger's prompt is checked as the runner checks it, with the runner's settings.
+  fs.writeFileSync(paths.agentsYaml, exampleYaml().replace('New: $seq.unread$', 'New: $seq.new$'))
+  const [prompt] = byName(await check(), 'config')
+  assert.equal(prompt.status, 'fail')
+  assert.match(prompt.text, /agents\.lifelog\.run\[0\]\.prompt holds \$seq\.new\$, which is no variable the runner knows/)
 })
 
 test('doctor: OpenRouter out of reach, a model with no endpoint that keeps no data, and ZDR off', async t => {

@@ -88,7 +88,7 @@ test('triggers: new messages wait until the owner has been quiet for BATCH_SECON
   assert.deepEqual(ask({ state: HANDLED, lines, seenAgo: null }), { kind: 'messages' })
   // Only the cursor's side counts: everything here is dealt with.
   assert.deepEqual(ask({ state: { ...HANDLED, cursor: 4 }, lines }), { kind: 'idle', reason: 'nothing' })
-  // Lines that aren't work don't start a batch: context, and channels no trigger names.
+  // Lines that aren't work don't start a batch: what Scooter sent, a reaction, and channels no trigger names.
   const other = [...EARLIER, line.sent(4, '2026-11-09T15:50:00Z', 'Noted.'), line.reaction(5, '2026-11-09T15:50:00Z', 3, '👍'), line.email(6, '2026-11-09T15:50:00Z', 'Hi', 'x')]
   assert.deepEqual(ask({ agent: agentWith({ channels: ['whatsapp'] }), state: HANDLED, lines: other }), { kind: 'idle', reason: 'nothing' })
   assert.deepEqual(ask({ agent: agentWith({ channels: ['email'] }), state: HANDLED, lines: other }), { kind: 'messages' })

@@ -241,7 +241,20 @@ A guess is marked ❓ at the start of a row's `note`, and the open questions are
 
 They are your files, in the config folder (`/etc/scooter/config` natively, `./config` in Docker): `agents.yaml`, the prompt `prompts/lifelog.md`, and a folder for each skill under `skills/`, each with a `SKILL.md`. The agent can't change them. The prompt tells the agent to read its memory and the runner's own skill, `scooter`, before anything else: the runner shows it neither, and the skill says how it marks each message and sends you one. Restart the runner after a change; it checks the files at its start, and refuses to start, naming the field, when something is wrong.
 
-- **The default `agents.yaml`** sends an evening check-in at 21:30 (`- at: "21:30"`). Remove that entry for a quieter bot.
+- **What the agent is told for each run** is the `prompt` of the entry under `run` that starts it, in `agents.yaml`. The runner fills in its variables, and adds nothing: a run for new messages is given their numbers, and the agent reads each with `show`.
+
+  | Variable | Holds |
+  |---|---|
+  | `$now$` | The run's time, in `SCOOTER_TZ`, such as `Monday 9 November 2026, 21:20`; in a backfill's or a rebuild's batch, the time of its newest message |
+  | `$user.timezone$`, `$user.currency$` | `SCOOTER_TZ` and `HOME_CURRENCY` |
+  | `$reply_mode$`, `$internet$` | `quiet` or `confirm`; `on` or `off` |
+  | `$agent.dir$`, `$datastore.dir$` | The agent's folder and the datastore, as the agent's VM has them |
+  | `$seq.unread$` | The numbers of the new messages, such as `1051 1054 1060`, or `none` |
+  | `$seq.retry$` | The numbers of those given before and not finished, each with its attempt, such as `1047 (attempt 2 of 4)`, or `none` |
+  | `$run.writes$` | What the run may change, as the agent's VM has it |
+
+  Any other `$`, as in "$5", is your own text. A variable the runner doesn't know, such as `$nwo$`, a prompt that starts with `@`, which pi would take as a file, and one that could be too long once filled in, stop the runner's start, naming the field. The default prompt for new messages gives every variable, and `prompts/lifelog.md` goes by what it gives: keep `Now:`, `New:`, `Given before:` and `This run may change:` in it, or change both together.
+- **The default `agents.yaml`** sends an evening check-in at 21:30 (`- at: "21:30"`), with its own prompt. Remove that entry for a quieter bot.
 - **What the agent sees, changes and sends** is in `agents.yaml` too, as paths of the data folder, a folder ending in `/`: `reads`, by default the datastore and the agent's own folder; `writes`, by default `agents/lifelog/views/` and `agents/lifelog/memory/`, which is what the agent's git repository keeps; and `sends`, the channels its messages may go out on, by default `[whatsapp]`. The trigger `on: new-messages` names the `channels` whose messages it works on, by default `[whatsapp, email]`. The agent's VM can't change anything `writes` doesn't name. Nothing limits what they may name but what a file system can't take, a name longer than 255 bytes or a path longer than 4,095 bytes, the data folder's included, and, in `writes`, the runner's own files, in the agent's folder and in `agents/.discarded/` beside it, where a clean-up sets aside what it throws away: a path of the datastore, the outbox or the runner's folder in `writes` is yours to choose, with what it gives the agent. A path of `writes` outside the agent's folder isn't in git, a failed run's changes there aren't undone, and it is in a backup only when it lies in a folder a backup holds ([Backups and restore](#backups-and-restore)).
 - **To add a skill**, for a new view:
   1. Make a folder `skills/<name>/` with a `SKILL.md` whose frontmatter gives the folder's name as `name` and a `description` that says when to use it, then the instructions:
@@ -339,7 +352,7 @@ A backfill files the messages from before a skill was added, for that skill alon
         writes: [agents/lifelog/views/books.csv]   # what it may change, in the agent's writes
 ```
 
-It works only while nothing live is waiting, and its VM can change only what its `writes` names. It sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
+It works only while nothing live is waiting, and its VM can change only what its `writes` names. Its batches are given the prompt for new messages, with what the backfill may change as `$run.writes$`: the default `prompts/lifelog.md` has a batch that may change a view but not `memory/` file its guesses with ❓ and ask nothing. It sends one message when it is done, with the rows it filed and those marked ❓. `scooter status` shows how far it has got.
 
 ## When something goes wrong
 
@@ -473,6 +486,7 @@ Some things can only be checked with your phone, your accounts and your keys. Se
 - [ ] A note that fits no view, such as "a slow Sunday at home", gets its ✅, and no view changes: the prompt has the agent file nothing for it.
 - [ ] A real batch runs end to end in the sandbox, with your key.
 - [ ] The agent reads its memory files and the `scooter` skill first, marks each message it was given with `mark`, and says what it says with `send`, as its instructions ask: nothing it prints is read, so a message it doesn't mark is given to it again, and is given up on after 4 attempts.
+- [ ] Given only the numbers of its messages, the agent reads each with `show`, files what it holds, and, for an edit or a deletion you send, changes or removes the row it filed from the message: edit a filed expense's amount, and delete another, and look at `expenses.csv`. A backfill's batch, which may change a view and not `memory/`, files its guesses with ❓ and asks nothing.
 - [ ] OpenRouter's messages route accepts the `provider` fields Scooter adds for zero data retention; ZDR-only routing works for the model, and how much latency it adds.
 - [ ] wacli: that its webhooks reach the bridge, signed, and a photo downloads while sync runs; how an edit and a deletion of yours arrive, `FromMe` and `Chat` included ([wacli's formats](docs/architecture/whatsapp.md#waclis-formats)); `send react --sender` in a one-to-one chat; that you are recognized when your messages come from an `@lid` ID; that a text with a link, sent with `--no-preview`, arrives without a preview and wacli fetches nothing for it (to tell, send a text with a link to a name that can't resolve, such as `https://scooter-check.invalid/`: without the flag wacli prints its `link preview skipped` warning, and with it none); how `send text` and `send react` fail while wacli can't reach WhatsApp, and whether 8 attempts, and dropping the quote from the fifth, fit those failures; and what the two return as `id`.
 - [ ] WhatsApp after downtime: stop the bridge for a few minutes, send messages meanwhile, start it again, and check that each is stored once, in its order, and handled. This is catch-up with the real wacli ([Catch-up](docs/architecture/whatsapp.md#catch-up)): how wacli stores and lists your chat after downtime; that the bot's own rows carry the time they were sent; and, if your messages come from an `@lid` ID, that each chat is listed from its own place. Look at `wacli messages changes` then too, which could close the case catch-up leaves (see [Known limits](#known-limits)).

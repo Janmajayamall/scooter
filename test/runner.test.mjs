@@ -646,6 +646,19 @@ test('startup: one runner per data folder, and a bad agents.yaml stops it with e
   const code = await runRunner({ settings: { ...prepared.settings, dataDir: path.join(prepared.root, 'other') }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock })
   assert.equal(code, 2)
   assert.match(err, /^scooter runner: .*agents\.yaml, line \d+: agents\.lifelog\.reply_mode must be quiet or confirm\n$/)
+
+  // A prompt's variable the runner doesn't know, and one that its settings and paths make too
+  // long once filled in, are faults of agents.yaml too, at the start, before anything runs.
+  fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('New: $seq.unread$', 'New: $seq.new$'))
+  err = ''
+  assert.equal(await runRunner({ settings: { ...prepared.settings, dataDir: path.join(prepared.root, 'other') }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock }), 2)
+  assert.match(err, /^scooter runner: .*agents\.yaml, line \d+: agents\.lifelog\.run\[0\]\.prompt holds \$seq\.new\$, which is no variable the runner knows: /)
+  fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('New: $seq.unread$', () => `New: $seq.unread$ ${'$agent.dir$ '.repeat(800)}`))
+  err = ''
+  const deep = path.join(prepared.root, 'other', 'a'.repeat(100))
+  assert.equal(await runRunner({ settings: { ...prepared.settings, dataDir: deep }, stderr: { write: text => (err += text) }, openSandbox: async () => prepared.sandbox, clock: prepared.clock }), 2)
+  assert.match(err, /agents\.lifelog\.run\[0\]\.prompt can make a prompt of \d+ bytes, filled in with the longest values its variables can take, where pi can be given 98304 at most/)
+  assert.ok(!fs.existsSync(path.join(deep, 'agents')))
 })
 
 // ---------------------------------------------------------------------------------------------

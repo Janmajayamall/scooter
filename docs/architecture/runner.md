@@ -1,19 +1,19 @@
 # The runner
 
-The runner is the agent's supervisor and bookkeeper. It watches the datastore and decides when the agent runs and on what, builds the batch and the prompt, and hands each run to [A run, and the agent's folder](run.md), which runs pi in [the sandbox](sandbox.md) under [the network policy](network-policy.md), checks and commits what pi left, and writes the outbox entries. It keeps the state and runs backfills; a rebuild runs with the runner stopped ([rebuild and backfill](rebuild-and-backfill.md)). Its user, its folders and what it can reach are in [The boundaries](../ARCHITECTURE.md#the-boundaries).
+The runner is the agent's supervisor and bookkeeper. It watches the datastore and decides when the agent runs and on what, builds the batch and fills in its prompt, and hands each run to [A run, and the agent's folder](run.md), which runs pi in [the sandbox](sandbox.md) under [the network policy](network-policy.md), checks and commits what pi left, and writes the outbox entries. It keeps the state and runs backfills; a rebuild runs with the runner stopped ([rebuild and backfill](rebuild-and-backfill.md)). Its user, its folders and what it can reach are in [The boundaries](../ARCHITECTURE.md#the-boundaries).
 
 This document covers the planner, pure functions from the state, the datastore and the clock to the next action (`nextAction`), and the service around it: its start, its loop, its state and its restarts. [A run, and the agent's folder](run.md) covers the executor, one run from the lock to the state (`performRun`).
 
 The runner never:
-- judges what a message says: it shows it to the model;
+- judges what a message says, or shows it: it gives the model the line's number, and the model reads it ([The prompt](#the-prompt));
 - trusts pi beyond what `send` and `mark` leave, which it reads as files pi controls, once a run has passed ([What send and mark leave](run.md#what-send-and-mark-leave)). The file check and git are the gate for what pi wrote ([After a successful run](run.md#after-a-successful-run)).
 
 ## Files
 
 - `src/runner/main.mjs`: starting up, and the loop: `openRunner`, `startRunner` and `runRunner`.
 - `src/runner/triggers.mjs`: what the agent does next, `nextAction`.
-- `src/runner/batch.mjs`: the batch, its context and its size.
-- `src/runner/prompt.mjs`: the prompt.
+- `src/runner/batch.mjs`: the batch, and the trigger whose prompt it is given.
+- `src/runner/prompt.mjs`: the prompt's variables, their values, and how long a prompt can be once they are filled in.
 - `src/runner/datastore.mjs`: the runner's view of the datastore: the index, and when it last saw an incoming line.
 - `src/runner/state.mjs`: reading and writing `state.json`; sessions; the state at a start.
 - `src/runner/status.mjs`: `status.json`, and the emulation notice.
@@ -29,7 +29,7 @@ In `runner.env`, beside the settings of [the network policy](network-policy.md#s
 |---|---|---|
 | `BATCH_SECONDS` | `8` | How long the owner must be quiet before a batch runs ([When the agent runs](#when-the-agent-runs)) |
 | `SESSION_ROLLOVER_HOUR` | `4` | The local hour at which the daily session changes ([Sessions](#sessions)) |
-| `HOME_CURRENCY` | `INR` | An ISO currency code, given to the agent in the prompt ([The prompt](#the-prompt)) |
+| `HOME_CURRENCY` | `INR` | An ISO currency code, `$user.currency$` in a prompt ([The prompt](#the-prompt)) |
 
 ## Starting up
 
@@ -60,14 +60,14 @@ One thing at a time: a round reads the new lines, asks `nextAction` what comes n
 The runner notices new lines by polling, every `POLL_INTERVAL`, the size of the newest `log.jsonl` and whether there is a newer day folder; it makes no network calls for this. What comes first, in each round:
 
 1. **Nothing while paused** ([Failures](run.md#failures)) until the next try: no batches, scheduled tasks or backfill batches.
-2. **New messages**, of the channels the triggers `on: new-messages` name: when there are work items after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without such a trigger no line is work, and messages wait.
+2. **New messages**, of the channels the triggers `on: new-messages` name: when there are work items to give after the cursor, or retries that are due, and the runner saw the newest incoming line arrive at least `BATCH_SECONDS` ago. Without such a trigger no line is work, and messages wait. A message already deleted is no work to give ([The batch](#the-batch)), so it starts no run.
 3. **A scheduled task** (`at`) that is due. It waits for messages that are ready, and doesn't wait for messages still in their quiet period.
 4. **A backfill batch**, only when nothing live is waiting ([Backfill](rebuild-and-backfill.md#backfill)).
 
 *Why this order:* messages before a scheduled task, because the evening check-in reports what was filed; the backfill last, so that it never holds up live work.
 
 - **The quiet period** counts from when the runner saw the newest incoming line arrive, not from its `at`. Any `in` line counts, of any kind and any source. Lines already there when the runner starts count as seen then, so a start waits `BATCH_SECONDS`. *Why:* `at` is the channel's: a message caught up after downtime has an old one, and a batch would start while catch-up is still storing lines; an email's comes from its `Date` header, which can lie in the future.
-- **Scheduled tasks.** `at` is `HH:MM`, or a weekday and `HH:MM`, in `SCOOTER_TZ`, by the rule of [Time](shared-code.md#time) (`previousLocalTime`). `scheduled[at]` is the owner's date of the last occurrence dealt with. A task is due when its last occurrence has a later date. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once. Its date is recorded once it has run, or failed for pi's own reasons; one that meets a setup error or an outage keeps its old date, so it stays due. A scheduled run gets its task and no messages.
+- **Scheduled tasks.** `at` is `HH:MM`, or a weekday and `HH:MM`, in `SCOOTER_TZ`, by the rule of [Time](shared-code.md#time) (`previousLocalTime`). `scheduled[at]` is the owner's date of the last occurrence dealt with. A task is due when its last occurrence has a later date. One that comes due during a run or a pause is still due afterwards, and several that passed during a long pause run once. Its date is recorded once it has run, or failed for pi's own reasons; one that meets a setup error or an outage keeps its old date, so it stays due. A scheduled run gets its trigger's prompt and no lines ([The prompt](#the-prompt)).
 - **At a start**, every occurrence up to now counts as dealt with: `scheduled[at]` becomes the date of the last one, in the zone the runner starts with, so a runner that starts after the time waits until the next day, and a changed `SCOOTER_TZ` takes effect at once. The dates of `at` values no longer in the config are dropped. A start during a pause keeps every date as it is instead, so a task a pause holds back stays due across the start, and is the try the start brings forward; a task new in the config starts from now, as at any start. *Why:* comparing dates of the owner's day keeps one run a day across clock changes, and overwriting at a start lets a changed zone start from where it is, where a date from a zone far ahead would hold the task back for up to two days. *Cost:* on the day the zone changes, a task can run twice or not at all; and a zone changed during a pause takes effect for the dates only at the first start after the pause.
 - **Overlap:** runs never overlap ([The loop](#the-loop)). A run's lock is in [A run](run.md#a-run), and how it keeps runs and backups apart in [The locks](exchange.md#the-locks).
 
@@ -96,7 +96,7 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 - Times are UTC. The dates in `scheduled` are dates of the owner's day, since the schedule follows it.
 - The check is strict: every field above, of its type, and no other. It refuses an item in `retry` after its lane's cursor, the backfill's included.
 
-**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work: the cursor moves past it, and the agent doesn't mark it. Of that, the messages Scooter sent and the reactions are shown to the agent as context ([The prompt](#the-prompt)); a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs, is passed over, as neither work nor context.
+**Work items** are `in` lines from a channel one of the agent's triggers `on: new-messages` names in its `channels` ([agents.yaml](configuration.md#agentsyaml)), of kind `message`, `edit` or `delete`, of the lines this version knows ([Reading a line](datastore.md#reading-a-line)). The channels of every such trigger are the agent's, whichever trigger names one, so one cursor is enough. Everything else isn't work: the cursor moves past it, the agent isn't given it, and doesn't mark it: the messages Scooter sent, the reactions, the owner's among them, lines of a channel no trigger names, and a line this version doesn't know, of a kind or a channel it doesn't have or without a field its kind needs. The agent can read any of them with `show` ([show, and the runner's skill](agent.md#show-and-the-runners-skill)). *Why the owner's reactions aren't work:* the owner, on 2026-11-21: "Leave user reactions out". A work item that is a message already deleted is the runner's to settle, and is never given ([The batch](#the-batch)).
 
 **At a start**, besides the scheduled tasks' dates ([When the agent runs](#when-the-agent-runs)), the runner starts or drops a backfill, as [Backfill](rebuild-and-backfill.md#backfill) says.
 
@@ -108,61 +108,49 @@ The runner alone writes `agents/<agent>/state.json`, atomically, mode 0600, inde
 
 ## The batch
 
-A batch is due retries first, then work items after the cursor, oldest first, at most `BATCH_MAX_ITEMS` in all.
+A batch is due retries first, then work items to give after the cursor, oldest first, at most `BATCH_MAX_ITEMS` in all (`selectCandidates` and `assembleBatch`, in `src/runner/batch.mjs`).
 
-- **An edit or a deletion in the batch brings in the message it changes** when that message waits in `retry`, due or not, or is in `failed`. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. These may take the batch past `BATCH_MAX_ITEMS`. *Why:* otherwise the edit could be handled before the message it changes, and the retry would later file the old text.
-- An item in `retry` whose line isn't a work item of the agent, which only changed `channels`, a damaged state, or a line this version no longer knows gives, is never due, and starts no batch.
-- **What it covers:** the lines up to the first work item it leaves for later, or up to the newest line, with the context and the lines of channels no trigger names in that stretch. Where the cursor goes after the run is in [Failures](run.md#failures).
-- **The context:** the messages Scooter sent and the reactions, of the lines this version knows, from the oldest item to the end of what the batch covers, plus every message an item quotes.
+- **A message already deleted is never given:** one the index shows deleted when the batch is drawn. The runner settles it itself, and gives only its deletion, a work item of its own. One after the cursor is passed over, as the lines the batch covers are. One that waits in `retry` is due no more, and leaves it with the next batch, whatever comes of that run. One given up on, in `failed`, leaves it when its deletion is in the batch, as an edit or a deletion brought such a message back before. Its deletion comes after it, so the batch that settles it always comes. *Why:* issue 25, the owner's decision: "A message that is already deleted is never given: the runner settles it itself, and gives only its deletion." Nothing is to be filed from a message the owner has deleted, and its deletion, given in its turn, has the agent remove what a run filed from it, if anything.
+- **An edit in the batch brings in the message it changes** when that message waits in `retry`, due or not, or is in `failed`, and isn't deleted. It joins as a retry; one taken from `failed` leaves it and starts again at attempt 1. These may take the batch past `BATCH_MAX_ITEMS`, by at most one for each edit. *Why:* otherwise the edit could be handled before the message it changes, and the retry would later file the old text. A deletion brings in nothing: its message is already deleted.
+- **The runner settles no line because of another.** A message and its edit are each marked on their own; marking one leaves the other as it was. The one exception is a message already deleted, above.
+- An item in `retry` whose line isn't a work item of the agent, which only a changed `channels`, a damaged state, or a line this version no longer knows gives, is never due, and starts no batch. It waits there, with its attempts, and is given again once a trigger names its channel again. *Cost:* the lines of a channel no trigger names are no work, so those new after the cursor when the channel left every trigger, and those that arrive while none names it, are passed over for good, as the next batch's cursor goes past them.
+- **What it covers:** the lines up to the first work item to give that it leaves for later, or up to the newest line. The lines in that stretch that aren't work, and the messages already deleted, are dealt with too. Where the cursor goes after the run is in [Failures](run.md#failures).
 - **The newest item**, which a message `send` queued without `--reply-to` is about ([What send and mark leave](run.md#what-send-and-mark-leave)), is the item with the highest `seq`.
 
-**The size limit.** The prompt is one command-line argument, so the batch also stops growing before the prompt would pass `PROMPT_MAX_BYTES`, though it always keeps at least one item. It grows one item at a time, with what each brings in. When even the first item is too long:
-1. if it fits on its own, the oldest context lines are left out, and a line says how many;
-2. otherwise its texts, and those of the messages it quotes, are cut, as little as will do, keeping all the context if that then fits and none if not. A cut text is followed by where the rest is: `(cut; the whole text is line 3 of /data/datastore/2026/11/09/log.jsonl)`, the line its current text is in, which the index keeps, or `(cut; the whole email is …/1071.eml)`. The context's texts are never cut: each is a sent chunk or a reaction;
-3. if even that is too long, as an email with hundreds of attachments could be, the prompt is cut at the limit, and says so.
-
-The cut is searched for a stretch at a time, between the lengths of the texts it applies to, from the highest down: within a stretch the prompt grows with the cut, but at a text's whole length it is shorter than just below, since the text is then shown without its note.
-
-*Why:* Linux refuses a single argument of 128 KB or more: in a VM from the image, a prompt of 131,071 bytes reached the model whole, and one of 131,072 never started, exit code 127 and `exec failed` on stderr, with no request; on Ubuntu 24.04 an argument of 120,000 bytes worked and one of 140,000 failed, "Argument list too long". Thirty arguments of 100 KB each were taken together, so only the single argument matters. Without the limit, a prompt over it would look like a crash of pi, and a batch of long emails would fail on every attempt and end in `failed`.
+A batch has no limit in bytes: its prompt holds numbers, not texts, and how long a prompt can be is held at the start ([The prompt](#the-prompt)).
 
 ## The prompt
 
-The prompt is pi's user message: a header, then the batch's items, their context, or a task. `src/runner/prompt.mjs` defines it.
+The prompt is pi's user message, the one argument after `--` ([How pi is run](agent.md#how-pi-is-run)): the `prompt` of the trigger that starts the run, as `agents.yaml` gives it ([agents.yaml](configuration.md#agentsyaml)), with each of its variables filled in, and nothing else. `src/runner/prompt.mjs` defines the variables and fills them in. The owner, on 2026-11-21: "I think the trigger should define the prompt in YAML; It should not be hardcoded."
 
+- **Which trigger's:** a batch's is the first trigger `on: new-messages`, in the order of `run`, that names the channel of one of the lines the batch gives (`triggerOf`). The batch holds what is pending from every channel the triggers name, up to its limit ([The batch](#the-batch)). A scheduled run's is its own. A rebuild's and a backfill's batches are given a live batch's, with what they may change ([Replayed batches](rebuild-and-backfill.md#replayed-batches)). *Why the lines it gives:* the first trigger with a line pending from one of its channels starts the run, with its own prompt, which the owner agreed to on 2026-11-21, among the six points the plan of the agent model added to issue 25: "yes to all". Read as the lines the run is given, the prompt is always that of a channel whose lines are in it, also when the batch's limit leaves the line of another channel for later.
+- **A variable** is `$`, a name of letters, dots and `_` that starts with a letter, and `$`, such as `$seq.unread$`. Any other `$` is the prompt's own text, as in "costs $5", or `$1x$`. Each variable is replaced by its value once, as it is: a value is never read again for variables, and nothing in it is read as a pattern of the replacement. *Why `_`:* `$reply_mode$`, a name issue 25 gives, holds one.
+
+| Variable | Holds | Such as |
+|---|---|---|
+| `$now$` | The run's time in the owner's time zone, `SCOOTER_TZ`; in a rebuild's or a backfill's batch, the time of the batch's newest line | `Monday 9 November 2026, 21:20` |
+| `$user.timezone$`, `$user.currency$` | `SCOOTER_TZ` and `HOME_CURRENCY` | `Asia/Kolkata`, `INR` |
+| `$reply_mode$`, `$internet$` | The agent's `reply_mode`, `quiet` or `confirm`; and `AGENT_INTERNET`, `on` or `off` ([Settings](network-policy.md#settings)) | `quiet`, `off` |
+| `$agent.dir$`, `$datastore.dir$` | The agent's folder and the datastore, at the same paths inside the VM | `/data/agents/lifelog`, `/data/datastore` |
+| `$seq.unread$` | The numbers of the new lines, by `seq`, a space between each | `1050 1051 1052` |
+| `$seq.retry$` | The numbers of the lines given before and not finished, by `seq`, each with the attempt this run is, `, ` between each | `1047 (attempt 2 of 4)` |
+| `$run.writes$` | What this run may change: the agent's `writes`, or a backfill's, each as a path in the VM, a folder ending in `/`, a space between each; a path that holds a space, a quote or a control character as a JSON string, so the list reads one way | `/data/agents/lifelog/views/ /data/agents/lifelog/memory/` |
+
+A list with nothing in it reads `none`: the two lists of lines in a scheduled run, and `$run.writes$` when the run may change nothing. A line brought back from `failed` by an edit is given before, at attempt 1.
+
+- **The numbers, not the lines.** Nothing a channel delivered goes into the prompt: no text, name, subject or path of a message's, nor a number of its own. The values are the owner's settings, Scooter's own paths, a time and the numbers of the lines. *Why:* so nothing in a message can pass for the prompt's own words, or for a flag of pi's. The agent reads each line with `show`, which prints it as stored ([show, and the runner's skill](agent.md#show-and-the-runners-skill)). A message is given as it was sent: a later edit or deletion of it is a line of its own, given in its turn, and the index file says what each is of ([The index file](run.md#the-index-file)). The owner's reactions and the messages Scooter sent aren't given, and the agent reads any of them with `show`. *Cost:* a run spends a tool call, and its tokens, to read its lines, which the prompt once showed it.
+- **Checked at the start**, as any fault of `agents.yaml` is ([agents.yaml](configuration.md#agentsyaml)): a variable the runner doesn't know is a fault that names it. The owner, on 2026-11-21, of such a variable: "it errors". The system doesn't check that a prompt uses any variable: the owner, the same day, "I don't think the system needs to enforce this." So a prompt for new messages without `$seq.unread$` gives the agent no numbers to mark, and a line it doesn't mark is given again, up to `MAX_ATTEMPTS` ([Failures](run.md#failures)).
+- **How long it can be.** The prompt is one command-line argument, so the runner holds, at its start, each trigger's prompt within `PROMPT_MAX_BYTES` once filled in with the longest value each of its variables can take (`longestValues`, `longestPrompt`): the settings, the paths and `writes` as they are, the prompt for new messages with a backfill's `writes` as well, since its batches are given it; `$now$` at its longest; and `BATCH_MAX_ITEMS` new lines and twice as many given before, the due retries and the messages their edits bring in, each `seq` and attempt of the most digits a safe integer has. Each piece of the prompt's own text is counted apart, so that half of a pair of UTF-16 surrogates on either side of a variable counts as the three bytes it is sent as. One past the limit is a fault that says how long it can be. *Why:* Linux refuses a single argument of 128 KB or more: in a VM from the image, a prompt of 131,071 bytes reached the model whole, and one of 131,072 never started, exit code 127 and `exec failed` on stderr, with no request (`pi 7` in `test/tools/pi.test.mjs`); on Ubuntu 24.04 an argument of 120,000 bytes worked and one of 140,000 failed, "Argument list too long". Thirty arguments of 100 KB each were taken together, so only the single argument matters. A prompt over it would look like a crash of pi in every run of its trigger, and use the attempts of its lines.
+- **What pi can't be given.** A prompt that holds U+0000, which no command line can carry, is refused at the start, and so is one that starts with `@`: pi 1.5.2 takes an argument that starts with `@` as the name of a file to attach, after `--` too, and with no such file fails before any request (`pi 9` in `test/tools/pi.test.mjs`). No variable's value starts with `@`. Anything else reaches the model as it is: a prompt that starts with `/`, `!` or `-`, a variable's path among them, and the patterns a JavaScript replacement reads, such as `$&`. `/skill:` and the name of one of the run's skills, at its start, puts the skill's text in the message ([Facts about pi 1.5.2](agent.md#facts-about-pi-152)).
+
+The default prompt for new messages ([agents.yaml](configuration.md#agentsyaml)), filled in for a batch of #1050 to #1054, new, and #1047, given a second time, at 21:20 in Kolkata, with the data folder at `/data`:
+
+```text
+Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
+Your folder: /data/agents/lifelog. The datastore: /data/datastore. This run may change: /data/agents/lifelog/views/ /data/agents/lifelog/memory/.
+New: 1050 1051 1052 1053 1054
+Given before: 1047 (attempt 2 of 4)
 ```
-[scooter] Now: Monday 9 November 2026, 21:20 (Asia/Kolkata). Home currency: INR. Reply mode: quiet. Internet: off.
-Your folder: /data/agents/lifelog. Attachments are in /data/datastore (read-only).
-
-New messages:
-#1050 21:13 photo /data/datastore/2026/11/09/1050.jpg (image/jpeg), caption: "lunch with sam"
-#1051 21:14 text: "coffee 150" (edited in #1054)
-#1052 21:15 document "ticket.pdf" /data/datastore/2026/11/09/1052.pdf (application/pdf)
-#1053 21:20 text: "work"
-      ↳ reply to #1043, which you sent: "Blue Tokai, ₹450 at 12:40: work or personal?"
-#1054 21:22 edit of #1051, now: "coffee 150"
-
-Retrying (not handled yet):
-#1047 20:02 text: "ran 5k in 28 min" (attempt 2 of 4)
-
-For context only (no action, nothing to mark):
-#1049 21:05 you sent: "Logged ₹340 Uber."
-#1048 21:04 the owner reacted 👍 to #1046
-```
-
-- **Times** are in `SCOOTER_TZ`, converted from the datastore's UTC times, because the agent writes the dates the owner reads: an item's time is shown by `shortLocalTime` ([Time](shared-code.md#time)), against `Now:`, and "today" is the owner's local date. The header gives the home currency, the reply mode and whether internet access is on ([Settings](network-policy.md#settings)).
-- **Every text** the owner or the agent wrote is a JSON string, so a line break or a quote in it can't pass for the prompt's own lines.
-- **A file's kind** comes from its MIME type: `photo`, `video`, `audio` or `document`, with its absolute path, its MIME type and its original name. A message's further files are `attachment` lines under it. Media that couldn't be stored says so: `photo, not stored (download failed)`, with the caption if there is one.
-- **Every message is shown as it is now:** with the text of its latest edit, marked `(edited in #<seq>)`, or, if it was deleted, `(deleted in #<seq>)` in place of its content. That holds for new items, retries and quoted messages. An edit is `edit of #1051, now: "<its own text>"`, and a deletion `deletion of #1051`.
-- **A reply** shows the quoted message and who sent it: "you sent", "the owner sent", `↳ reply to an earlier message: "<the quoted preview>"` when Scooter doesn't have it, or `↳ reply to #N: "<quoted>"` for a line the index can't show as a message, such as one this version doesn't know. A reply to a photo shows the photo's path. Forwarded messages are marked as forwarded.
-- **What the prompt takes from a line's `data`**, the quoted preview, whether it was forwarded, an email's subject and a reaction's emoji ([data](datastore.md#data)), it takes only when it is of its type there: a preview that isn't a string isn't shown, a message is forwarded only when `forwarded` is `true`, an email without a subject shows `email ""`, and a reaction without an emoji `the owner reacted to #1046`.
-- **Context lines** are listed newest first, and say who sent them: `you` for the agent's own, `the owner` for the owner's, and `Scooter` for the runner's and the bridge's, such as notices. One is shown with the message it replies to: `you sent, in reply to #1047: "…"`.
-- **An email** shows `email`, its subject and its text, then each attachment, and the whole message; one that couldn't be read adds `email not stored (could not be parsed)`:
-  ```
-  #1071 21:42 email "Call with Sam": "Recording from today's call."
-        attachment "Call with Sam.m4a" /data/datastore/2026/11/09/1071-2.m4a (audio/mp4)
-        whole email /data/datastore/2026/11/09/1071.eml
-  ```
-- **A scheduled run** shows `Scheduled task (from your configuration, not a message from the owner):` and the task, instead of messages.
 
 **The system prompt** is pi's own, with the run's copy of the agent's prompt appended ([How pi is run](agent.md#how-pi-is-run)): the runner adds nothing to it. What the system says to the agent is in the runner's skill ([show, and the runner's skill](agent.md#show-and-the-runners-skill)), and the memory files are the agent's to read, as its prompt says ([Memory](agent.md#memory)): the runner reads nothing in `memory/`.
 
