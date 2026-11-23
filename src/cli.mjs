@@ -59,12 +59,13 @@ export const COMMANDS = {
     where: 'runner',
     summary: 'Check what the runner needs, and change nothing',
     wrongUser: async () => (await import('./ops/doctor.mjs')).wrongUser,
-    // Its checks of the config, the image, the accelerator and a VM's boot are the runner's own
-    // code, which `src/ops` doesn't import.
+    // Its checks of the config, the zone rules, the image, the accelerator and a VM's boot are the
+    // runner's own code, which `src/ops` doesn't import.
     load: async () => {
-      const [{ runDoctor }, config, image, accel, gondolin] = await Promise.all([
+      const [{ runDoctor }, config, agentdir, image, accel, gondolin] = await Promise.all([
         import('./ops/doctor.mjs'),
         import('./runner/config.mjs'),
+        import('./runner/agentdir.mjs'),
         import('./runner/sandbox/image.mjs'),
         import('./runner/sandbox/accel.mjs'),
         import('./runner/sandbox/gondolin.mjs'),
@@ -72,6 +73,7 @@ export const COMMANDS = {
       const runner = {
         loadConfig: config.loadConfig,
         ConfigError: config.ConfigError,
+        icuTzRelease: () => agentdir.icuTzRelease(),
         readBuildFile: image.readBuildFile,
         pinnedPiVersion: image.pinnedPiVersion,
         checkImage: image.checkImage,

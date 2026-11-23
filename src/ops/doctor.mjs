@@ -7,6 +7,7 @@
 // - the VM image, and the pi version it holds against the one the build file pins;
 // - that a VM boots from it, with that accelerator, and how long it took;
 // - `agents.yaml`, which the runner checks at its start;
+// - the zone rules that ship with the runner, which it checks at its start too;
 // - the owners and modes of the data folder's folders, and of the two env files;
 // - whether `openrouter.ai` can be reached from here;
 // - with ZDR on, which of the configured model's endpoints keep no data.
@@ -18,8 +19,9 @@
 // where that user is there (`wrongUser`, which `src/cli.mjs` asks before the runner's settings are
 // read).
 //
-// What it checks of the runner, the config, the image, the accelerator and the VM's boot is the
-// runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`.
+// What it checks of the runner, the config, the zone rules, the image, the accelerator and the VM's
+// boot is the runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only
+// `src/common`.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -221,6 +223,19 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
     checks.push({ name: 'config', status: 'fail', text: error.problems.map(problem => problem.message).join('; '), fix: `correct ${paths.agentsYaml}` })
   }
 
+  // The zone rules that ship with the runner, which the runner checks at its start, and refuses to
+  // start without (`icuTzRelease`).
+  try {
+    checks.push({ name: 'zone rules', status: 'ok', text: `the zone rules that ship with the runner are whole, of tz ${runner.icuTzRelease()}` })
+  } catch (error) {
+    checks.push({
+      name: 'zone rules',
+      status: 'fail',
+      text: `${error.code === undefined ? error.message : `${error.code}: ${error.message}`}; the runner doesn't start without them`,
+      fix: docker ? 'put the code back as the repository has it, git checkout -- src/runner/vm/icu-tz, then docker compose build' : 'put the code back as the repository has it: sudo git -C /opt/scooter checkout -- src/runner/vm/icu-tz',
+    })
+  }
+
   checks.push(accelCheck(settings.agentAccel, settings.agentAccel === 'emulation' || settings.agentAccel === 'hvf' ? null : runner.kvmProblem(), { docker }))
   checks.push(qemuCheck({ program: runner.qemuProgram() }))
 
@@ -232,7 +247,7 @@ export async function runChecks({ settings, runner, proc, fetch = globalThis.fet
     checks.push({ name: 'VM image', status: 'fail', text: error.message, fix: docker ? 'docker compose run --rm build-image, with the runner stopped' : 'sudo scooter build-image' })
   }
   // A VM boots from the image, when everything it needs is there.
-  if (runner.bootCheck && checks.every(check => check.status !== 'fail' || check.name === 'config')) {
+  if (runner.bootCheck && checks.every(check => check.status !== 'fail' || check.name === 'config' || check.name === 'zone rules')) {
     try {
       checks.push(bootCheckResult({ booted: await runner.bootCheck({ paths, settings, signal }), docker }))
     } catch (error) {

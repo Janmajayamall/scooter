@@ -431,7 +431,7 @@ What the job filed so far stays, committed. To go back to before it, with the ru
 
 ## When something goes wrong
 
-**`doctor`** checks what the runner needs, and changes nothing: the config, the accelerator, QEMU, the VM image, that a VM boots from it and how long it took, the folders' owners and modes, the env files, that OpenRouter answers, and the model's endpoints that keep no data. It gives each problem with its fix, and exits with 1 when something must be fixed.
+**`doctor`** checks what the runner needs, and changes nothing: the config, the zone rules that ship with the runner, the accelerator, QEMU, the VM image, that a VM boots from it and how long it took, the folders' owners and modes, the env files, that OpenRouter answers, and the model's endpoints that keep no data. It gives each problem with its fix, and exits with 1 when something must be fixed.
 
 ```sh
 sudo -u scooter-runner scooter doctor      # natively
