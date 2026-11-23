@@ -17,16 +17,14 @@ const EXAMPLE = {
   cursor: 1049,
   retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }],
   failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: 'unreadable PDF' }],
-  backfill: { id: 'people-1', until: 1890, cursor: 812, retry: [], skipped: [1031] },
-  backfillDone: [],
   scheduled: { '21:30': '2026-11-09' },
   lastRun: { at: '2026-11-09T15:50:15Z', ok: true, seqs: [1050, 1051, 1053], durationMs: 48211 },
   paused: { since: '2026-11-09T15:50:15Z', cause: 'setup', reason: 'OpenRouter answered 401', next: '2026-11-09T16:20:15Z', tries: 1 },
 }
 
 // An agent's config, with only what these functions read.
-function agentWith({ scheduled = [], backfill = [] } = {}) {
-  return { name: 'lifelog', run: { newMessages: [{ channels: ['whatsapp'] }], scheduled, backfill } }
+function agentWith({ scheduled = [] } = {}) {
+  return { name: 'lifelog', run: { newMessages: [{ channels: ['whatsapp'] }], scheduled } }
 }
 
 test('state: an example state, and the state of an agent that has never run, are well formed', () => {
@@ -36,7 +34,6 @@ test('state: an example state, and the state of an agent that has never run, are
     cursor: 0,
     retry: [],
     failed: [],
-    backfillDone: [],
     scheduled: {},
     lastRun: null,
   })
@@ -52,14 +49,14 @@ test('state: each fault names its field', () => {
     [{ retry: [EXAMPLE.retry[0], EXAMPLE.retry[0]] }, 'retry holds a seq twice'],
     // Everything in a retry list has been given to the agent, so it is at or before the cursor.
     [{ retry: [{ ...EXAMPLE.retry[0], seq: 1050 }] }, 'retry[0].seq is after the cursor'],
-    [{ backfill: { ...EXAMPLE.backfill, retry: [{ ...EXAMPLE.retry[0], seq: 813 }] } }, 'backfill.retry[0].seq is after the cursor'],
     [{ failed: [{ seq: 1031, at: '2026-11-09T12:32:11Z', reason: '' }] }, "failed[0].reason must be a string that isn't empty"],
     // The fields of the commands and of `/new`, which are gone.
     [{ commandSeq: 1038 }, 'commandSeq is not a field of the state'],
     [{ session: { day: '2026-11-09', bump: 0 } }, 'session is not a field of the state'],
-    [{ backfillDone: [''] }, "backfillDone[0] must be a string that isn't empty"],
-    [{ backfill: { ...EXAMPLE.backfill, skipped: [1031, 1031] } }, 'backfill.skipped holds a seq twice'],
-    [{ backfill: { ...EXAMPLE.backfill, cursor: undefined } }, 'backfill.cursor is missing'],
+    // The fields of the backfill trigger, which is gone: a job of `scooter backfill` keeps its own
+    // lane in its file.
+    [{ backfill: { id: 'people-1', until: 1890, cursor: 812, retry: [], skipped: [] } }, 'backfill is not a field of the state'],
+    [{ backfillDone: [] }, 'backfillDone is not a field of the state'],
     [{ scheduled: { '21:30': 'today' } }, 'scheduled.21:30 must be a date such as 2026-11-09'],
     [{ lastRun: { ...EXAMPLE.lastRun, ok: 'yes' } }, 'lastRun.ok must be true or false'],
     [{ paused: { ...EXAMPLE.paused, cause: 'storm' } }, 'paused.cause must be one of setup, outage'],
@@ -133,15 +130,15 @@ test('state: at startup, scheduled tasks already past wait for their next time, 
   })
   const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-01', '07:00': '2026-11-08' } }
   // Monday 9 November, 21:31 in Kolkata: today's 21:30 has passed, and Sunday's 18:00 was yesterday.
-  const { state } = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
+  const state = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
   assert.deepEqual(state.scheduled, { '21:30': '2026-11-09', 'Sun 18:00': '2026-11-08' })
   // A minute earlier, today's 21:30 is still to come.
   const early = startupState(before, agent, { now: at('2026-11-09T15:59:00Z'), timeZone: 'Asia/Kolkata' })
-  assert.equal(early.state.scheduled['21:30'], '2026-11-08')
+  assert.equal(early.scheduled['21:30'], '2026-11-08')
 })
 
 test('state: at startup, a pause is tried again at once', () => {
-  const { state } = startupState({ ...initialAgentState(), paused: EXAMPLE.paused }, agentWith(), { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' })
+  const state = startupState({ ...initialAgentState(), paused: EXAMPLE.paused }, agentWith(), { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' })
   assert.deepEqual(state.paused, { ...EXAMPLE.paused, next: '2026-11-09T15:55:00Z' })
 })
 
@@ -155,31 +152,9 @@ test('state: at startup during a pause, scheduled tasks keep their dates, so one
   const before = { ...initialAgentState(), scheduled: { '21:30': '2026-11-08' }, paused: EXAMPLE.paused }
   // Monday 9 November, 21:31 in Kolkata: today's 21:30 failed on a setup error, and is still due.
   // A task new in the config starts from now, as always.
-  const { state } = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
+  const state = startupState(before, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' })
   assert.deepEqual(state.scheduled, { '21:30': '2026-11-08', '07:00': '2026-11-09' })
   const { paused, ...unpaused } = before
-  assert.equal(startupState(unpaused, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' }).state.scheduled['21:30'], '2026-11-09')
+  assert.equal(startupState(unpaused, agent, { now: at('2026-11-09T16:01:00Z'), timeZone: 'Asia/Kolkata' }).scheduled['21:30'], '2026-11-09')
 })
 
-test('state: at startup, the first backfill not done starts from the live cursor, and one removed from the config is dropped', () => {
-  const options = { now: at('2026-11-09T15:55:00Z'), timeZone: 'UTC' }
-  const entries = [
-    { id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv'] },
-    { id: 'runs-1', skill: 'runs', writes: ['agents/lifelog/views/runs.csv'] },
-  ]
-  const fresh = { ...initialAgentState(), cursor: 1890, backfillDone: ['people-1'] }
-  const started = startupState(fresh, agentWith({ backfill: entries }), options)
-  assert.deepEqual([started.started, started.dropped], ['runs-1', null])
-  assert.deepEqual(started.state.backfill, { id: 'runs-1', until: 1890, cursor: 0, retry: [], skipped: [] })
-
-  // One in progress goes on, from where it was.
-  const going = { ...started.state, cursor: 1950, backfill: { ...started.state.backfill, cursor: 812 } }
-  const restarted = startupState(going, agentWith({ backfill: entries }), options)
-  assert.deepEqual([restarted.started, restarted.dropped, restarted.state.backfill.cursor, restarted.state.backfill.until], [null, null, 812, 1890])
-
-  // Its entry removed from the config, it is dropped, and the next one not done starts.
-  const removed = startupState(going, agentWith({ backfill: [entries[0]] }), options)
-  assert.deepEqual([removed.started, removed.dropped, removed.state.backfill], [null, 'runs-1', undefined])
-  assert.equal(Object.hasOwn(removed.state, 'backfill'), false)
-  assert.deepEqual(checkAgentState(removed.state), [])
-})

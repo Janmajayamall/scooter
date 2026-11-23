@@ -1,6 +1,6 @@
 // What the agent does next: nothing while
 // paused, new messages after the quiet period, scheduled tasks at the right local time, and a
-// backfill batch only when nothing live is waiting.
+// job's steps only when nothing live is waiting, or before live runs with --hold-live.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -16,20 +16,20 @@ const MINUTE = 60 * SECOND
 
 // An agent whose one trigger for new messages names `channels`, or with none when they are none;
 // with a scheduled trigger for each `[at, prompt, tag]` of `scheduled`.
-function agentWith({ scheduled = [], backfill = [], channels = ['whatsapp', 'email'] } = {}) {
+function agentWith({ scheduled = [], channels = ['whatsapp', 'email'] } = {}) {
   return {
     name: 'lifelog',
     channels,
     run: {
       newMessages: channels.length > 0 ? [{ channels }] : [],
       scheduled: scheduled.map(([time, prompt, tag = 'task']) => ({ at: time, tag, schedule: parseLocalTime(time), prompt })),
-      backfill: backfill.map(id => ({ id, skill: 'people', writes: ['agents/lifelog/views/people.csv'] })),
     },
   }
 }
 
-// Asks for the next action at `now`, with the owner last heard from `seenAgo` before it.
-function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now = '2026-11-09T15:50:30Z', seenAgo = 60 * SECOND, timeZone = 'Asia/Kolkata' } = {}) {
+// Asks for the next action at `now`, with the owner last heard from `seenAgo` before it, and the
+// runner holding `job`, as `poll` in `backfill.mjs` gives it.
+function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now = '2026-11-09T15:50:30Z', seenAgo = 60 * SECOND, timeZone = 'Asia/Kolkata', job = null } = {}) {
   const time = typeof now === 'string' ? at(now) : now
   return nextAction({
     agent,
@@ -39,7 +39,14 @@ function ask({ agent = agentWith(), state = initialAgentState(), lines = [], now
     timeZone,
     batchSeconds: 8,
     incomingSeenAt: seenAgo === null ? null : time - seenAgo,
+    job,
   })
+}
+
+// A job the runner holds, started with `progress`, or not started without it.
+function jobWith({ id = '20261109T155000000-0001', holdLive = false, progress = null, channels = ['whatsapp', 'email'] } = {}) {
+  const lane = progress === null ? null : { cursor: progress.cursor, retry: progress.retry ?? [], failed: [] }
+  return { id, holdLive, started: progress !== null, lane, until: progress?.until ?? null, wait: progress?.wait ?? null, channels }
 }
 
 const HANDLED = { ...initialAgentState(), cursor: 3 }
@@ -170,7 +177,7 @@ test('triggers: a scheduled task runs at its time, once, and waits for messages 
 // Runs the schedule from `start` to `end`, asking every `step`, as the runner's loop would after
 // starting at `start`. Returns the instants at which tasks ran, as `<at> <UTC time>`.
 function runSchedule(agent, { start, end, step = MINUTE, timeZone }) {
-  let { state } = startupState(HANDLED, agent, { now: at(start), timeZone })
+  let state = startupState(HANDLED, agent, { now: at(start), timeZone })
   const ran = []
   for (let now = at(start); now <= at(end); now += step) {
     const due = dueScheduled(agent, state, { now, timeZone })
@@ -216,7 +223,7 @@ test('time: a SCOOTER_TZ changed between restarts doesn\'t stall the schedule or
   // In Kolkata the task ran at 21:30 on 9 November, 16:00 UTC. The runner restarts in New York,
   // where it is then 12:00 on the same day: the task runs at 21:30 there, that evening.
   const fromKolkata = { ...HANDLED, scheduled: { '21:30': '2026-11-09' } }
-  const york = startupState(fromKolkata, agent, { now: at('2026-11-09T17:00:00Z'), timeZone: 'America/New_York' }).state
+  const york = startupState(fromKolkata, agent, { now: at('2026-11-09T17:00:00Z'), timeZone: 'America/New_York' })
   assert.equal(dueScheduled(agent, york, { now: at('2026-11-10T02:29:00Z'), timeZone: 'America/New_York' }), null)
   assert.deepEqual(dueScheduled(agent, york, { now: at('2026-11-10T02:30:00Z'), timeZone: 'America/New_York' }), { at: '21:30', tag: 'check-in', date: '2026-11-09', prompt: 'Check in.' })
 
@@ -224,13 +231,13 @@ test('time: a SCOOTER_TZ changed between restarts doesn\'t stall the schedule or
   // already 08:00 on the 10th in Kolkata. Its date there is ahead of nothing, and the task runs at
   // 21:30 on the 10th, Kolkata time.
   const fromYork = { ...HANDLED, scheduled: { '21:30': '2026-11-09' } }
-  const kolkata = startupState(fromYork, agent, { now: at('2026-11-10T03:00:00Z'), timeZone: 'Asia/Kolkata' }).state
+  const kolkata = startupState(fromYork, agent, { now: at('2026-11-10T03:00:00Z'), timeZone: 'Asia/Kolkata' })
   assert.equal(dueScheduled(agent, kolkata, { now: at('2026-11-10T15:59:00Z'), timeZone: 'Asia/Kolkata' }), null)
   assert.equal(dueScheduled(agent, kolkata, { now: at('2026-11-10T16:00:00Z'), timeZone: 'Asia/Kolkata' })?.date, '2026-11-10')
   // Even a date from a zone far ahead, which the new zone hasn't reached yet, is set right at the
   // start, so the task isn't held back for days.
   const ahead = { ...HANDLED, scheduled: { '21:30': '2026-11-12' } }
-  const reset = startupState(ahead, agent, { now: at('2026-11-10T03:00:00Z'), timeZone: 'Pacific/Pago_Pago' }).state
+  const reset = startupState(ahead, agent, { now: at('2026-11-10T03:00:00Z'), timeZone: 'Pacific/Pago_Pago' })
   assert.equal(reset.scheduled['21:30'], '2026-11-08')
   assert.equal(dueScheduled(agent, reset, { now: at('2026-11-10T08:30:00Z'), timeZone: 'Pacific/Pago_Pago' })?.date, '2026-11-09')
 
@@ -241,44 +248,94 @@ test('time: a SCOOTER_TZ changed between restarts doesn\'t stall the schedule or
   }
 })
 
-test('triggers: a backfill batch runs only when nothing live is waiting, and finishes when its work is done', () => {
-  const agent = agentWith({ backfill: ['people-1'], scheduled: [['21:30', 'Check in.']] })
+test("triggers: a job's steps run only when nothing live is waiting: its start, then its batches, and it finishes when its work is done", () => {
+  const agent = agentWith({ scheduled: [['21:30', 'Check in.']] })
   const lines = [...EARLIER, line.text(4, '2026-11-09T15:40:00Z', 'met sam'), line.text(5, '2026-11-09T15:50:00Z', 'lunch')]
-  const backfill = { id: 'people-1', until: 4, cursor: 0, retry: [], skipped: [] }
-  const state = { ...initialAgentState(), cursor: 4, scheduled: { '21:30': '2026-11-09' }, backfill }
+  const id = '20261109T155000000-0001'
+  const state = { ...initialAgentState(), cursor: 4, scheduled: { '21:30': '2026-11-09' } }
+  const job = jobWith({ progress: { until: 4, cursor: 0 } })
 
-  // #5 waits after the cursor, quiet or not: no backfill batch.
-  assert.deepEqual(ask({ agent, state, lines, seenAgo: SECOND }), { kind: 'idle', reason: 'quiet' })
-  assert.deepEqual(ask({ agent, state, lines }), { kind: 'messages' })
-  // Once it is handled, the backfill has its turn.
-  assert.deepEqual(ask({ agent, state: { ...state, cursor: 5 }, lines }), { kind: 'backfill', id: 'people-1' })
+  // #5 waits after the cursor, quiet or not: nothing of the job's.
+  for (const held of [jobWith(), job]) {
+    assert.deepEqual(ask({ agent, state, lines, seenAgo: SECOND, job: held }), { kind: 'idle', reason: 'quiet' })
+    assert.deepEqual(ask({ agent, state, lines, job: held }), { kind: 'messages' })
+  }
+  // Once it is handled, the job has its turn: its start first, then its batches.
+  const handled = { ...state, cursor: 5 }
+  assert.deepEqual(ask({ agent, state: handled, lines, job: jobWith() }), { kind: 'backfill-start', id })
+  assert.deepEqual(ask({ agent, state: handled, lines, job }), { kind: 'backfill', id })
   // A due retry or a scheduled task comes first.
   const retry = [{ seq: 5, attempts: 1, due: '2026-11-09T15:50:00Z', reason: 'not marked' }]
-  assert.deepEqual(ask({ agent, state: { ...state, cursor: 5, retry }, lines }), { kind: 'messages' })
-  assert.equal(ask({ agent, state: { ...state, cursor: 5, scheduled: { '21:30': '2026-11-08' } }, lines, now: '2026-11-09T16:00:00Z' }).kind, 'scheduled')
-  // So does a pause.
+  assert.deepEqual(ask({ agent, state: { ...handled, retry }, lines, job }), { kind: 'messages' })
+  assert.equal(ask({ agent, state: { ...handled, scheduled: { '21:30': '2026-11-08' } }, lines, now: '2026-11-09T16:00:00Z', job }).kind, 'scheduled')
+  // So does a pause, also for its start.
   const paused = { since: '2026-11-09T15:40:00Z', cause: 'outage', reason: 'no answer', next: '2026-11-09T16:10:00Z', tries: 1 }
-  assert.deepEqual(ask({ agent, state: { ...state, cursor: 5, paused }, lines }), { kind: 'idle', reason: 'paused' })
+  for (const held of [jobWith(), job]) assert.deepEqual(ask({ agent, state: { ...handled, paused }, lines, job: held }), { kind: 'idle', reason: 'paused' })
 
   // Its work is up to `until`: #5, after it, is the live lane's.
-  const done = { ...state, cursor: 5, backfill: { ...backfill, cursor: 4 } }
-  assert.deepEqual(ask({ agent, state: done, lines }), { kind: 'backfill-finished', id: 'people-1' })
-  // Not while its own retries wait; and they start a batch when they are due.
-  const waiting = { ...done, backfill: { ...done.backfill, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }] } }
-  assert.deepEqual(ask({ agent, state: waiting, lines }), { kind: 'idle', reason: 'nothing' })
-  assert.deepEqual(ask({ agent, state: waiting, lines, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill', id: 'people-1' })
+  const done = jobWith({ progress: { until: 4, cursor: 4 } })
+  assert.deepEqual(ask({ agent, state: handled, lines, job: done }), { kind: 'backfill-finished', id })
+  // Not while its own retries wait; and they start a batch when they are due, though nothing new
+  // waits.
+  const waiting = jobWith({ progress: { until: 4, cursor: 4, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:51:00Z', reason: 'not marked' }] } })
+  assert.deepEqual(ask({ agent, state: handled, lines, job: waiting }), { kind: 'idle', reason: 'nothing' })
+  assert.deepEqual(ask({ agent, state: handled, lines, now: '2026-11-09T15:51:00Z', job: waiting }), { kind: 'backfill', id })
   // A message of its retries that was deleted since, live, holds it back no more: the runner
   // settles it, and no batch would give it.
   const deletedSince = [...lines, line.delete(6, '2026-11-09T15:50:20Z', 3)]
-  assert.deepEqual(ask({ agent, state: { ...waiting, cursor: 6 }, lines: deletedSince }), { kind: 'backfill-finished', id: 'people-1' })
-  assert.deepEqual(ask({ agent, state: { ...waiting, cursor: 6 }, lines: deletedSince, now: '2026-11-09T15:51:00Z' }), { kind: 'backfill-finished', id: 'people-1' })
-  // One whose entry left the config is left alone until the next start drops it.
-  assert.deepEqual(ask({ agent: agentWith(), state: { ...state, cursor: 5 }, lines }), { kind: 'idle', reason: 'nothing' })
+  for (const now of ['2026-11-09T15:50:30Z', '2026-11-09T15:51:00Z']) {
+    assert.deepEqual(ask({ agent, state: { ...handled, cursor: 6 }, lines: deletedSince, now, job: waiting }), { kind: 'backfill-finished', id })
+  }
+  // Without a job, nothing.
+  assert.deepEqual(ask({ agent, state: handled, lines }), { kind: 'idle', reason: 'nothing' })
 
-  // A channel no trigger names is no work, live or a backfill's: its lines don't hold the backfill
-  // back, and aren't its to take.
-  const onEmail = agentWith({ channels: ['email'], backfill: ['people-1'] })
-  assert.deepEqual(ask({ agent: onEmail, state, lines }), { kind: 'backfill-finished', id: 'people-1' })
+  // A channel none of the job's agent's triggers names is no work of its: its lines aren't the
+  // job's to take. A job of an agent given in a file goes by that agent's channels.
+  const onEmail = jobWith({ progress: { until: 4, cursor: 0 }, channels: ['email'] })
+  assert.deepEqual(ask({ agent, state: handled, lines, job: onEmail }), { kind: 'backfill-finished', id })
   const withEmail = [...lines, { ...line.email(6, '2026-11-09T15:30:00Z', 'Hi', 'x'), day: undefined }]
-  assert.deepEqual(ask({ agent: onEmail, state: { ...state, cursor: 6, backfill: { ...backfill, until: 6 } }, lines: withEmail }), { kind: 'backfill', id: 'people-1' })
+  assert.deepEqual(ask({ agent, state: { ...handled, cursor: 6 }, lines: withEmail, job: jobWith({ progress: { until: 6, cursor: 0 }, channels: ['email'] }) }), { kind: 'backfill', id })
+})
+
+test("triggers: a job that waits after a setup error or an outage of its own gives no batch before its next try, and holds nothing live back", () => {
+  const agent = agentWith({ scheduled: [['21:30', 'Check in.']] })
+  const lines = [...EARLIER, line.text(4, '2026-11-09T15:40:00Z', 'met sam')]
+  const id = '20261109T155000000-0001'
+  const state = { ...initialAgentState(), cursor: 3, scheduled: { '21:30': '2026-11-09' } }
+  const wait = { since: '2026-11-09T15:40:00Z', cause: 'setup', reason: 'OpenRouter answered 403', next: '2026-11-09T16:10:00Z', tries: 1 }
+  const retry = [{ seq: 1, attempts: 0, due: '2026-11-09T15:40:00Z', reason: 'OpenRouter answered 403' }]
+  const waiting = jobWith({ progress: { until: 3, cursor: 1, retry, wait } })
+  // Live work goes first, as for any job; the job's batch waits for its next try.
+  assert.deepEqual(ask({ agent, state, lines, job: waiting }), { kind: 'messages' })
+  const handled = { ...state, cursor: 4 }
+  assert.deepEqual(ask({ agent, state: handled, lines, job: waiting }), { kind: 'idle', reason: 'backfill-waits' })
+  assert.deepEqual(ask({ agent, state: handled, lines, now: '2026-11-09T16:10:00Z', job: waiting }), { kind: 'backfill', id })
+  // A job whose work is done finishes, wait or not: its message is the runner's own.
+  assert.deepEqual(ask({ agent, state: handled, lines, job: jobWith({ progress: { until: 3, cursor: 3, wait } }) }), { kind: 'backfill-finished', id })
+})
+
+test('triggers: a job with --hold-live comes before live runs and scheduled tasks until it has finished, and replays in order', () => {
+  const agent = agentWith({ scheduled: [['21:30', 'Check in.']] })
+  const lines = [...EARLIER, line.text(4, '2026-11-09T15:40:00Z', 'met sam'), line.text(5, '2026-11-09T15:50:00Z', 'lunch')]
+  const id = '20261109T155000000-0001'
+  // #4 and #5 wait for the live runs, a retry is due, and so is the check-in.
+  const state = { ...initialAgentState(), cursor: 3, retry: [{ seq: 3, attempts: 1, due: '2026-11-09T15:00:00Z', reason: 'not marked' }], scheduled: { '21:30': '2026-11-08' } }
+  const now = '2026-11-09T16:05:00Z'
+  assert.deepEqual(ask({ agent, state, lines, now, job: jobWith({ holdLive: true }) }), { kind: 'backfill-start', id })
+  const held = jobWith({ holdLive: true, progress: { until: 3, cursor: 0 } })
+  assert.deepEqual(ask({ agent, state, lines, now, job: held }), { kind: 'backfill', id })
+  // While a line waits to be tried again, it takes nothing after it, and live runs wait too.
+  const retry = [{ seq: 1, attempts: 1, due: '2026-11-09T16:06:00Z', reason: 'not marked' }]
+  const waiting = jobWith({ holdLive: true, progress: { until: 3, cursor: 2, retry } })
+  assert.deepEqual(ask({ agent, state, lines, now, job: waiting }), { kind: 'idle', reason: 'backfill' })
+  // Also when another is due.
+  const both = jobWith({ holdLive: true, progress: { until: 3, cursor: 2, retry: [...retry, { seq: 2, attempts: 1, due: '2026-11-09T16:00:00Z', reason: 'not marked' }] } })
+  assert.deepEqual(ask({ agent, state, lines, now, job: both }), { kind: 'idle', reason: 'backfill' })
+  assert.deepEqual(ask({ agent, state, lines, now: '2026-11-09T16:06:00Z', job: waiting }), { kind: 'backfill', id })
+  // Its finish too comes before the live runs; then they go on.
+  assert.deepEqual(ask({ agent, state, lines, now, job: jobWith({ holdLive: true, progress: { until: 3, cursor: 3 } }) }), { kind: 'backfill-finished', id })
+  assert.deepEqual(ask({ agent, state, lines, now }), { kind: 'messages' })
+  // A pause holds the job back as it holds every run.
+  const paused = { since: '2026-11-09T15:40:00Z', cause: 'setup', reason: 'OpenRouter answered 401', next: '2026-11-09T16:10:00Z', tries: 1 }
+  assert.deepEqual(ask({ agent, state: { ...state, paused }, lines, now, job: held }), { kind: 'idle', reason: 'paused' })
 })

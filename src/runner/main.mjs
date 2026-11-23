@@ -10,15 +10,16 @@
 // 4. It opens the sandbox, which checks the VM image and picks the accelerator.
 // 5. It removes a leftover `run.lock`.
 // 6. It writes `status.json`, and tells the owner if its VMs have just fallen back to emulation.
-// 7. It brings the state up to date: scheduled tasks already past, a pause tried again at once, and
-//    backfills started or dropped.
-// 8. It reads the datastore.
+// 7. It brings the state up to date: scheduled tasks already past, and a pause tried again at once.
+// 8. It reads the datastore, and removes the sessions of jobs of `scooter backfill` whose files are
+//    gone (`backfill.mjs`).
 // 9. Where its service manager doesn't wait between its starts, as Docker's doesn't, and this start
 //    follows a stop on an error, it waits as the native unit would have, then records itself as the
 //    next stop in a row until a run is recorded (`restarts.mjs`). Nothing before this runs pi.
 //
-// Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, asks the planner what
-// is next (`nextAction`), and does it. One thing at a time, so runs never overlap.
+// Then it loops, once every `POLL_INTERVAL`: it reads the lines that are new, looks at the jobs of
+// `scooter backfill`, asks the planner what is next (`nextAction`), and does it. One thing at a
+// time, so runs never overlap.
 //
 // `scooter runner` (`src/cli.mjs`) runs `runRunner` with the Gondolin sandbox
 // (`sandbox/gondolin.mjs`). The tests give the fake one.
@@ -34,12 +35,11 @@ import { createProc } from '../common/proc.mjs'
 import { RunnerStatusError, readRunnerStatus } from '../common/runnerstatus.mjs'
 import { systemClock } from '../common/time.mjs'
 import { ensureAgentDir, icuTzRelease } from './agentdir.mjs'
-import { backfillJob, finishBackfill } from './backfill.mjs'
+import { createJobs } from './backfill.mjs'
 import { buildBatch, scheduledPrompt } from './batch.mjs'
 import { ConfigError, loadConfig } from './config.mjs'
 import { openDatastore } from './datastore.mjs'
 import { createGit } from './git.mjs'
-import { removeReplaySessions } from './replay.mjs'
 import { openRestarts } from './restarts.mjs'
 import { performRun } from './run.mjs'
 import { SandboxSetupError } from './sandbox/index.mjs'
@@ -48,9 +48,9 @@ import { emulationNotice, runnerStatus, writeRunnerStatus } from './status.mjs'
 import { nextAction } from './triggers.mjs'
 
 // Makes the data folder's folders that the runner uses, if they are missing: `setup` makes them in
-// an install, so this is for development. Then holds `runner/runner.sock`, for a runner or a
-// rebuild, and returns what `holdInstance` returns: nothing else of the runner's may run on the
-// data folder meanwhile. It throws if something else holds it.
+// an install, so this is for development. Then holds `runner/runner.sock`, and returns what
+// `holdInstance` returns: nothing else of the runner's may run on the data folder meanwhile, a
+// second runner or `build-image`. It throws if something else holds it.
 export async function holdRunnerFolder(paths) {
   ensureDir(paths.dataDir, { mode: 0o755 })
   for (const folder of [paths.runner, paths.agents, paths.exchange, paths.locks]) ensureDir(folder, { mode: 0o700 })
@@ -61,7 +61,8 @@ export async function holdRunnerFolder(paths) {
 // what pi wrote that a crash or a stop left taking room, before it makes any folder; creates the
 // folder if it is new; removes the lock files a git that was killed left; and throws away
 // the changes of a run that a crash or a stop cut short, so the next run starts from the last
-// commit. Returns git for the folder (`createGit`). The caller holds `runner.sock`.
+// commit. Returns git for the folder (`createGit`). The caller holds `runner.sock`. A job's agent
+// given in a file has its folder readied so when the job is taken (`backfill.mjs`).
 export async function readyAgentFolder({ paths, agent, proc, log, clock }) {
   const git = createGit({ proc, dir: paths.agentDir(agent.name), entries: agent.repository, discardDir: paths.agentDiscarded(agent.name), log, clock })
   await ensureAgentDir({ paths, name: agent.name, git, log })
@@ -114,18 +115,12 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     log.info('runner.accelerator', { accel: sandbox.accel, setting: settings.agentAccel, noticed: notice !== null })
 
     const stateFile = paths.agentState(agent.name)
-    const started = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: settings.timeZone })
-    let state = started.state
+    let state = startupState(loadState(stateFile), agent, { now: clock.now(), timeZone: settings.timeZone })
     saveState(stateFile, state)
-    if (started.dropped) {
-      // Its sessions served it alone.
-      const sessions = removeReplaySessions({ paths, agent, backfill: started.dropped, log })
-      log.info('runner.backfill_dropped', { agent: agent.name, backfill: started.dropped, sessions })
-    }
-    if (started.started) log.info('runner.backfill_started', { agent: agent.name, backfill: started.started, until: state.backfill.until })
 
     const datastore = openDatastore({ paths, clock })
     datastore.poll()
+    const jobs = createJobs({ agent, git, paths, settings, proc, log, clock })
     // The VM's Node converts times with the zone rules that ship with the runner, and the runner's
     // own Node with its built-in ones; the two can be of different releases, which the owner
     // accepts, so the log only says so.
@@ -133,9 +128,8 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
     if (vmTz !== runnerTz) log.info('runner.zone_rules_differ', { runner: runnerTz, vm: vmTz })
     let waitingFor = null
 
-    async function run(job, signal) {
-      const done = await performRun({ agent, settings, paths, sandbox, git, ids, log, clock, index: datastore.index, state, stateFile, job, signal })
-      state = done.state
+    // Logs a wait for the locks once, when it starts.
+    function waited(done) {
       if (done.outcome === 'waiting') {
         if (waitingFor !== done.why) log.info('runner.waiting', { agent: agent.name, for: done.why })
         waitingFor = done.why
@@ -145,10 +139,19 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       return done
     }
 
-    // One round of the loop: reads the new lines, and does what comes next. Returns
-    // `{ action, outcome }`: what `nextAction` said, and for a run, what came of it (`performRun`).
+    // A run of `job`, of the runner's agent, or with `of`, of a job's agent and its git.
+    async function run(job, signal, of = { agent, git }) {
+      const done = await performRun({ ...of, settings, paths, sandbox, ids, log, clock, index: datastore.index, state, stateFile, job, signal })
+      state = done.state
+      return waited(done)
+    }
+
+    // One round of the loop: reads the new lines, looks at the jobs, and does what comes next.
+    // Returns `{ action, outcome }`: what `nextAction` said, and for a run, what came of it
+    // (`performRun`), and for a job's start, `started` or `waiting`.
     async function tick({ signal } = {}) {
       datastore.poll()
+      const job = await jobs.poll()
       const now = clock.now()
       const action = nextAction({
         agent,
@@ -158,6 +161,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         timeZone: settings.timeZone,
         batchSeconds: settings.batchSeconds,
         incomingSeenAt: datastore.incomingSeenAt,
+        job,
       })
       const prompts = { agent, paths, settings, now }
 
@@ -172,18 +176,19 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
         const { outcome } = await run({ kind: 'scheduled', at: action.at, tag: action.tag, date: action.date, prompt }, signal)
         return { action, outcome }
       }
-      // A backfill's batch, and finishing it (`backfill.mjs`). `nextAction` names only a
-      // backfill whose entry is in the config.
+      // The job the runner holds: its start, a batch, and finishing it (`backfill.mjs`).
+      if (action.kind === 'backfill-start') {
+        const { outcome } = waited(await jobs.start({ state, index: datastore.index }))
+        return { action, outcome }
+      }
       if (action.kind === 'backfill') {
-        const entry = agent.run.backfill.find(candidate => candidate.id === action.id)
-        const job = backfillJob({ agent, entry, state, index: datastore.index, ...prompts })
-        if (job === null) return { action }
-        const { outcome } = await run(job, signal)
+        const built = jobs.batch({ index: datastore.index, now })
+        if (built === null) return { action }
+        const { outcome } = await run(built.job, signal, { agent: built.agent, git: built.git })
         return { action, outcome }
       }
       if (action.kind === 'backfill-finished') {
-        const entry = agent.run.backfill.find(candidate => candidate.id === action.id)
-        state = await finishBackfill({ agent, entry, state, stateFile, paths, ids, log })
+        await jobs.finish({ ids })
         return { action }
       }
       return { action }
@@ -195,6 +200,7 @@ export async function openRunner({ settings, openSandbox, clock = systemClock, l
       sandbox,
       datastore,
       restarts,
+      jobs,
       tick,
       // A start stopped while it waited no longer waits, and `scooter status` mustn't go on
       // saying it does until the next start: `status.json` loses its `restart`.

@@ -44,6 +44,8 @@ export function makePaths({ dataDir, configDir }) {
     agentRunSkills: name => path.join(agent(name), 'run', 'skills'),
     agentRunIcuTz: name => path.join(agent(name), 'run', 'icu-tz'),
     agentState: name => path.join(agent(name), 'state.json'),
+    // The jobs of `scooter backfill` that run the agent, one file each (`jobfile.mjs`).
+    agentJobs: name => path.join(agent(name), 'jobs'),
     // Where the clean-up sets aside what an agent's `writes` names in its folder before it removes it:
     // beside the agent's folder, so on the same file system, and outside everything pi's VM sees.
     // Backups leave the whole of `agents/.discarded/` out: it holds what is being removed.

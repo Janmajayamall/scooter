@@ -5,11 +5,13 @@
 //     sessions/                pi's sessions, not in git; hidden from the VM
 //     run/                     not in git: config/, session/, send/, marks.txt, index.txt, bin/,
 //                              skills/ and icu-tz/
+//     jobs/                    the jobs of `scooter backfill` that run the agent, not in git;
+//                              hidden from the VM
 //     state.json               the runner's state, not in git, 0600
 //
 // What pi's VM sees of the folder, and may change, is what the agent's `reads` and `writes` name,
 // with `run/` read-only but for `run/session/`, `run/send/` and `run/marks.txt`, and never
-// `sessions/` (`piFiles` in `run.mjs`). Everything in it belongs to the runner's user.
+// `sessions/` or `jobs/` (`piFiles` in `run.mjs`). Everything in it belongs to the runner's user.
 
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
@@ -59,7 +61,7 @@ export function icuTzRelease(dir = ICU_TZ_DIR) {
 
 // What git leaves out, anchored with `/` so that the names can't match anything inside what
 // `writes` names.
-export const GITIGNORE = '/sessions/\n/run/\n/state.json\n'
+export const GITIGNORE = '/sessions/\n/run/\n/jobs/\n/state.json\n'
 
 const FOLDER_MODE = 0o700
 const FILE_MODE = 0o600

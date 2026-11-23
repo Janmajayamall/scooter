@@ -201,9 +201,18 @@ function withoutPause(state) {
 
 // What every run does to the pause, whatever it ran: a run that got through to OpenRouter, a
 // success or a failure of pi's own, ends it; a setup error or an outage starts or continues one.
+// A batch of a job of an agent given in a file leaves it alone, and does the same to the job's own
+// wait instead (`waitAfterRun`).
 export function pauseAfterRun(state, outcome, { now }) {
   if (outcome.ok || outcome.cause === 'other') return withoutPause(state)
   return { ...state, paused: pauseAfter(state.paused, { cause: outcome.cause, reason: outcome.reason, now }) }
+}
+
+// A job's wait after one of its batches, as `pauseAfterRun` does to the pause: null once a batch
+// gets through to OpenRouter, and otherwise the wait started or continued.
+export function waitAfterRun(wait, outcome, { now }) {
+  if (outcome.ok || outcome.cause === 'other') return null
+  return pauseAfter(wait, { cause: outcome.cause, reason: outcome.reason, now })
 }
 
 // What every live run does to the state, whatever it ran: `lastRun`, and the pause. A backfill's
@@ -305,6 +314,18 @@ export function failureNotice(job, { cause, reason }) {
   else if (cause === 'outage' || job.kind === 'messages') next = "I'll try again."
   else next = 'It runs again at its next time.'
   return { type: 'text', by: 'runner', text: `⚠️ I couldn't ${what} (${reason}). ${next}` }
+}
+
+// The notice of a job of an agent given in a file whose batch met a setup error or an outage of
+// its own, when the job starts to wait (`backfill.mjs`): the job, by its ID and its agent; why; and
+// that the owner's messages go on meanwhile, and later jobs wait for it.
+export function jobWaitNotice({ id, agent }, { cause, reason }) {
+  const next = cause === 'setup' ? `It waits until this is fixed, and tries again every ${minutes(limits.SETUP_RETRY_WAIT)} minutes` : 'It waits, and tries again'
+  return {
+    type: 'text',
+    by: 'runner',
+    text: `⚠️ Backfill ${id} of ${agent} couldn't run a batch (${reason}). ${next}; your messages are handled as usual meanwhile, and later backfills wait for it. Remove its file to cancel it.`,
+  }
 }
 
 // A short way to name a message to the owner: its text as it is now, cut, or what it holds.

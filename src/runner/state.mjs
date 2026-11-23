@@ -60,12 +60,8 @@ export function lastOccurrence(schedule, { now, timeZone }) {
 //   pause that only a task held would be left with nothing to try.
 // - **A pause** is tried again at once: runs pause "until the next try, every 30 minutes and
 //   whenever it restarts".
-// - **Backfills.** One whose entry is gone from the config is dropped. If none is in progress, the
-//   first entry not in `backfillDone` starts, from the beginning of the datastore up to `until`,
-//   the live cursor now.
 //
-// Returns `{ state, started, dropped }`, the last two being the backfill IDs started and dropped,
-// or null.
+// Returns the new state.
 export function startupState(state, agent, { now, timeZone }) {
   const scheduled = {}
   for (const { at, schedule } of agent.run.scheduled) {
@@ -75,20 +71,5 @@ export function startupState(state, agent, { now, timeZone }) {
   let next = { ...state, scheduled }
 
   if (next.paused) next = { ...next, paused: { ...next.paused, next: isoSeconds(now) } }
-
-  let dropped = null
-  let started = null
-  if (next.backfill && !agent.run.backfill.some(entry => entry.id === next.backfill.id)) {
-    dropped = next.backfill.id
-    const { backfill, ...rest } = next
-    next = rest
-  }
-  if (!next.backfill) {
-    const entry = agent.run.backfill.find(candidate => !next.backfillDone.includes(candidate.id))
-    if (entry) {
-      started = entry.id
-      next = { ...next, backfill: { id: entry.id, until: next.cursor, cursor: 0, retry: [], skipped: [] } }
-    }
-  }
-  return { state: next, started, dropped }
+  return next
 }

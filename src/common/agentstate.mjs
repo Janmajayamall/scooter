@@ -4,8 +4,6 @@
 //     "cursor": 1049,
 //     "retry": [{"seq": 1047, "attempts": 1, "due": "2026-11-09T15:51:00Z", "reason": "not marked"}],
 //     "failed": [{"seq": 1031, "at": "2026-11-09T12:32:11Z", "reason": "unreadable PDF"}],
-//     "backfill": {"id": "people-1", "until": 1890, "cursor": 812, "retry": [], "skipped": [1031]},
-//     "backfillDone": [],
 //     "scheduled": {"21:30": "2026-11-09"},
 //     "lastRun": {"at": "2026-11-09T15:50:15Z", "ok": true, "seqs": [1050, 1051, 1053], "durationMs": 48211},
 //     "paused": {"since": "2026-11-09T15:50:15Z", "cause": "setup", "reason": "OpenRouter answered 401", "next": "2026-11-09T16:20:15Z", "tries": 1}
@@ -17,9 +15,6 @@
 //   been in that counted, and `due` when they are next tried. Each is at or before the cursor: a
 //   run moves the cursor past its batch, whether it succeeds or fails.
 // - `failed`: items given up on, the newest `FAILED_KEEP`.
-// - `backfillDone`: the IDs of the backfills that have finished.
-// - `backfill`: only while a backfill is in progress. Its own cursor, its retries, and the
-//   items it gave up on.
 // - `scheduled`: for each `at` of the config, the owner's date of the last time it came due that
 //   has been dealt with.
 // - `lastRun`: the last live run, null before the first.
@@ -28,14 +23,15 @@
 //
 // Times are UTC to the second. The dates in `scheduled` are dates of the owner's day in
 // `SCOOTER_TZ`. The runner alone writes the file, atomically. `scooter status` reads it, which is
-// why its format is here.
+// why its format is here. A job of `scooter backfill` keeps its own lane in its job file
+// (`jobfile.mjs`).
 
 import { readJsonFile, readUntrustedFile } from './files.mjs'
 import { isDate, parseIsoSeconds } from './time.mjs'
 
 export const PAUSE_CAUSES = ['setup', 'outage']
 
-const FIELDS = ['cursor', 'retry', 'failed', 'backfill', 'backfillDone', 'scheduled', 'lastRun', 'paused']
+const FIELDS = ['cursor', 'retry', 'failed', 'scheduled', 'lastRun', 'paused']
 
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isCount = value => Number.isSafeInteger(value) && value >= 0
@@ -49,7 +45,6 @@ export function initialAgentState() {
     cursor: 0,
     retry: [],
     failed: [],
-    backfillDone: [],
     scheduled: {},
     lastRun: null,
   }
@@ -86,11 +81,6 @@ export function checkAgentState(state) {
     })
     if (Array.isArray(value) && new Set(value).size !== value.length) problems.push(`${field} holds a seq twice`)
   }
-  function ids(field, value) {
-    list(field, value, (name, item) => {
-      if (!isText(item)) fault(name, "a string that isn't empty")
-    })
-  }
   const retryEntry = (name, item) =>
     shape(name, item, {
       seq: [isSeq, 'a seq'],
@@ -110,7 +100,7 @@ export function checkAgentState(state) {
     if (!FIELDS.includes(name)) problems.push(`${name} is not a field of the state`)
   }
   for (const name of FIELDS) {
-    if (state[name] === undefined && !['backfill', 'paused'].includes(name)) problems.push(`${name} is missing`)
+    if (state[name] === undefined && name !== 'paused') problems.push(`${name} is missing`)
   }
 
   // Every item waiting in a retry list has been given to the agent, so it is at or before its
@@ -132,21 +122,6 @@ export function checkAgentState(state) {
     list('failed', state.failed, (name, item) =>
       shape(name, item, { seq: [isSeq, 'a seq'], at: [isTime, 'a UTC time to the second'], reason: [isText, "a string that isn't empty"] }),
     )
-  }
-  if (state.backfillDone !== undefined) ids('backfillDone', state.backfillDone)
-  if (state.backfill !== undefined) {
-    shape('backfill', state.backfill, {
-      id: [isText, "a string that isn't empty"],
-      until: [isCount, 'a whole number, 0 or more'],
-      cursor: [isCount, 'a whole number, 0 or more'],
-      retry: [Array.isArray, 'a list'],
-      skipped: [Array.isArray, 'a list'],
-    })
-    if (Array.isArray(state.backfill?.retry)) {
-      retries('backfill.retry', state.backfill.retry)
-      behindCursor('backfill.retry', state.backfill.retry, state.backfill.cursor)
-    }
-    if (Array.isArray(state.backfill?.skipped)) seqs('backfill.skipped', state.backfill.skipped)
   }
   if (state.scheduled !== undefined) {
     if (!isObject(state.scheduled)) fault('scheduled', 'an object')

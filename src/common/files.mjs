@@ -93,6 +93,29 @@ export function writeFileAtomic(file, data, { mode = 0o600, owner } = {}) {
   fsyncPath(dir)
 }
 
+// Writes a file that isn't there yet, so that a reader sees it whole or not at all, and never in
+// another's place: a temporary file beside it, synced, then linked to its name, which fails with
+// `EEXIST` when the name is taken, and the temporary name removed. While it has both names, for an
+// instant, a reader that refuses a file of two names (`readUntrustedFile`) refuses it.
+export function writeNewFile(file, data, { mode = 0o600 } = {}) {
+  const dir = path.dirname(file)
+  const tmp = path.join(dir, `${TMP_PREFIX}${path.basename(file)}-${process.pid}-${++tmpCounter}`)
+  try {
+    const fd = fs.openSync(tmp, 'wx', mode)
+    try {
+      fs.writeFileSync(fd, data)
+      fs.fchmodSync(fd, mode)
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
+    }
+    fs.linkSync(tmp, file)
+  } finally {
+    fs.rmSync(tmp, { force: true })
+  }
+  fsyncPath(dir)
+}
+
 // Reads a JSON file. Returns undefined when there is no such file.
 export function readJsonFile(file) {
   let text

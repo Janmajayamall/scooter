@@ -7,8 +7,8 @@
 #   docker compose run --rm runner doctor        what the runner has, and how to enable KVM
 #
 # Other commands run the same way: `docker compose run --rm bridge pair`, `… bridge status`,
-# `… bridge backup-init`, `… runner rebuild lifelog` with the runner stopped, `… bridge restore`
-# with both stopped.
+# `… bridge backup-init`, `… runner backfill lifelog --skills people`, `… bridge restore` with both
+# stopped.
 #
 # - **The data.** One volume, `data`, holds the whole data folder, at /data in every container.
 #   A new volume starts as a copy of the image's /data, whose folders have the same owners and modes

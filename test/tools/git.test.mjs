@@ -15,10 +15,11 @@ import { makeTestDir } from '../support/tmp.mjs'
 // no config of the system's or the user's.
 function repository(t) {
   const dir = makeTestDir(t)
-  const git = (args, env = {}) =>
-    spawnSync('git', ['-c', 'user.name=Scooter', '-c', 'user.email=scooter@localhost', '-c', 'commit.gpgSign=false', ...args], {
+  const git = (args, env = {}, input = undefined) =>
+    spawnSync('git', ['-c', 'user.name=Scooter', '-c', 'user.email=scooter@localhost', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', ...args], {
       cwd: dir,
       encoding: 'utf8',
+      input,
       env: { PATH: process.env.PATH, GIT_DIR: path.join(dir, '.git'), GIT_WORK_TREE: dir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', ...env },
     })
   assert.equal(git(['init', '--quiet', '--initial-branch=main']).status, 0)
@@ -117,4 +118,33 @@ test('git: add -A stages a path whose kind changed, a file become a folder or th
   const through = git(['add', '-A', '--ignore-errors', '--', 'notes/2026/books.csv'], literal)
   assert.equal(through.status, 128)
   assert.match(through.stderr, /pathspec 'notes\/2026\/books.csv' did not match any files/)
+})
+
+// A job's tag (`tag` in `src/runner/git.mjs`, `docs/architecture/backfill.md`) keeps the job's prompt
+// as its message, which can hold anything a prompt can: lines that start with `#`, blank lines at
+// either end, spaces at a line's end, a carriage return, and any character but U+0000.
+test('git: an annotated tag given its message on stdin with --cleanup=verbatim keeps it byte for byte, and a name taken fails', t => {
+  const { git } = repository(t)
+  const message = '\n# A heading\nNow: $now$  \r\n\n\t- a ❓ line\n\n\n'
+  assert.equal(git(['tag', '-a', '--cleanup=verbatim', '-F', '-', 'before-backfill-x', 'HEAD'], {}, message).status, 0)
+  // The tag object holds it as it was given, after its header and a blank line; it points at the
+  // commit, and names the tagger.
+  const object = git(['cat-file', 'tag', 'before-backfill-x']).stdout
+  assert.equal(object.split('\n')[0], `object ${git(['rev-parse', 'HEAD']).stdout.trim()}`)
+  assert.match(object, /\ntagger Scooter <scooter@localhost> \d+ [+-]\d{4}\n\n/)
+  assert.ok(object.endsWith(`\n\n${message}`), object)
+  // `%(contents)` shows it from its first line that isn't blank.
+  assert.equal(git(['for-each-ref', '--format=%(contents)', 'refs/tags/before-backfill-x']).stdout, `${message.slice(1)}\n`)
+
+  // Without --cleanup=verbatim, the lines that start with # go, and so do the blank lines at the ends.
+  assert.equal(git(['tag', '-a', '-F', '-', 'stripped', 'HEAD'], {}, message).status, 0)
+  assert.equal(git(['for-each-ref', '--format=%(contents)', 'refs/tags/stripped']).stdout, 'Now: $now$\n\n\t- a ❓ line\n\n')
+
+  // A name taken fails, and leaves the tag as it was; rev-parse says whether a tag is there.
+  const again = git(['tag', '-a', '--cleanup=verbatim', '-F', '-', 'before-backfill-x', 'HEAD'], {}, 'other\n')
+  assert.equal(again.status, 128)
+  assert.match(again.stderr, /already exists/)
+  assert.ok(git(['cat-file', 'tag', 'before-backfill-x']).stdout.endsWith(`\n\n${message}`))
+  assert.equal(git(['rev-parse', '--verify', '--quiet', 'refs/tags/before-backfill-x']).status, 0)
+  assert.equal(git(['rev-parse', '--verify', '--quiet', 'refs/tags/none']).status, 1)
 })

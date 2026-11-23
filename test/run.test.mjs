@@ -19,7 +19,7 @@ const START = '2026-11-09T15:50:30Z'
 test('run: the pi stub takes a message from the datastore to a committed view and a correct state.json', async t => {
   const { runner, clock, state, outbox, git, views, paths, sandbox } = await openTestRunner(t, {
     lines: [...fillerLines(1041), line.text(1042, '2026-11-09T15:50:00Z', 'coffee 150')],
-    state: { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null },
+    state: { cursor: 1041, retry: [], failed: [], scheduled: {}, lastRun: null },
     start: START,
   })
 
@@ -55,7 +55,7 @@ test('run: the pi stub takes a message from the datastore to a committed view an
 })
 
 // A state that has dealt with the 1,041 lines of filler.
-const HANDLED = { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, retry: [], failed: [], scheduled: {}, lastRun: null }
 
 // A runner with the filler and `lines` after it, at 21:20 in Kolkata.
 function openWith(t, lines, options = {}) {
@@ -80,7 +80,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
   assert.equal(spec.cwd, agent)
   assert.equal(spec.timeoutMs, 10 * MINUTE)
   // The data folder, of which the VM sees what reads and writes name, and run/, and may change what
-  // writes names, and run/session/, run/send/ and run/marks.txt; never sessions/.
+  // writes names, and run/session/, run/send/ and run/marks.txt; never sessions/ or jobs/.
   assert.deepEqual(spec.files, {
     root: paths.dataDir,
     reads: [paths.datastore, agent, path.join(agent, 'views'), path.join(agent, 'memory'), run],
@@ -91,7 +91,7 @@ test('run: the sandbox gets pi\'s command, what the VM sees and may change with 
       { path: path.join(run, 'send'), folder: true },
       { path: path.join(run, 'marks.txt'), folder: false },
     ],
-    hide: [paths.agentSessions('lifelog')],
+    hide: [paths.agentSessions('lifelog'), paths.agentJobs('lifelog')],
   })
   assert.deepEqual(spec.argv.slice(0, -1), [
     'pi',

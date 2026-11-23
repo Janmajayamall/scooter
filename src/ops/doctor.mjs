@@ -15,7 +15,8 @@
 // the endpoints that keep no data, which also says whether OpenRouter can be reached.
 //
 // It checks what the runner's user can reach, so it runs as that user, and refuses to run as another
-// where that user is there.
+// where that user is there (`wrongUser`, which `src/cli.mjs` asks before the runner's settings are
+// read).
 //
 // What it checks of the runner, the config, the image, the accelerator and the VM's boot is the
 // runner's own code, which `src/cli.mjs` hands it as `runner`: `src/ops` imports only `src/common`.
@@ -275,24 +276,22 @@ export function reportText(checks) {
 // Why `doctor` doesn't run as the user it runs as, or null: it checks what the runner's user can
 // reach, the accelerator, the folders and the env files, which another user, root above all, sees
 // otherwise. Where that user isn't there, as in
-// development, it runs as whoever runs it.
-export async function wrongUser({ proc, uid = process.getuid?.(), docker = inDocker() }) {
+// development, it runs as whoever runs it. `src/cli.mjs` asks it before the runner's settings are
+// read: natively `runner.env` is the runner's user's alone, so another user would be told it can't
+// be read, and not how to run `doctor`.
+export async function wrongUser({ proc = createProc({ log: createLog({ component: 'doctor' }) }), uid = process.getuid?.(), docker = inDocker() } = {}) {
   const runnerUser = await proc.findUser(USERS.runner)
   if (runnerUser === null || runnerUser.uid === uid) return null
   const how = docker ? 'docker compose run --rm runner doctor' : `sudo -u ${USERS.runner} scooter doctor`
   return `doctor checks what the runner can reach, so it runs as ${USERS.runner}, not as uid ${uid}: ${how}`
 }
 
-// `scooter doctor`: prints the checks. Exits with 0 when nothing failed, 1 when something did, and 2
-// when it runs as another user than the runner's. `runner` is what `src/cli.mjs` gives it.
+// `scooter doctor`: prints the checks. Exits with 0 when nothing failed, and 1 when something did.
+// Run as another user than the runner's, it never starts: `src/cli.mjs` refuses that user first,
+// with 2 (`wrongUser`). `runner` is what `src/cli.mjs` gives it.
 export async function runDoctor({ settings, env = process.env, stdout = process.stdout, stderr = process.stderr, runner }) {
   const log = createLog({ component: 'doctor' })
   const proc = createProc({ log })
-  const wrong = await wrongUser({ proc })
-  if (wrong !== null) {
-    stderr.write(`scooter doctor: ${wrong}\n`)
-    return 2
-  }
   const envDir = env[ENV_DIR_VARIABLE] || DEFAULT_ENV_DIR
   // Stopped, by a signal of the terminal's or a `kill`, it closes the VM its boot check started
   // before it ends: nothing else stops a VM of Gondolin's whose starter was killed.

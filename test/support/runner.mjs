@@ -91,8 +91,8 @@ New: $seq.unread$
 export const CHECK_IN_PROMPT =
   'Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled task from your configuration, not a message from the owner: send the owner, in a few lines, what you filed today, anything that looks missing, and the open questions.'
 
-// The example `agents.yaml`, with the backfill entry when `backfill` is true.
-export function exampleYaml({ backfill = false } = {}) {
+// The example `agents.yaml`.
+export function exampleYaml() {
   return `agents:
   lifelog:
     model: anthropic/claude-sonnet-5.5   # OpenRouter model ID; it must accept images
@@ -130,7 +130,7 @@ ${NEW_MESSAGES_PROMPT.trimEnd()
           Now: $now$ ($user.timezone$). Reply mode: $reply_mode$. Evening check-in, a scheduled
           task from your configuration, not a message from the owner: send the owner, in a few
           lines, what you filed today, anything that looks missing, and the open questions.
-${backfill ? '      - backfill: people-1\n        skill: people\n        writes: [agents/lifelog/views/people.csv]\n' : ''}`
+`
 }
 
 // Makes a config folder: `agents.yaml`, `prompts/lifelog.md`, and a folder with a `SKILL.md` for
@@ -180,7 +180,6 @@ export function exampleState() {
     cursor: 1049,
     retry: [{ seq: 1047, attempts: 1, due: '2026-11-09T14:33:30Z', reason: 'not marked' }],
     failed: [],
-    backfillDone: [],
     scheduled: { '21:30': '2026-11-08' },
     lastRun: { at: '2026-11-09T14:32:30Z', ok: true, seqs: [1047], durationMs: 41000 },
   }

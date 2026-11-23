@@ -520,7 +520,7 @@ export async function buildImage({ paths, proc, log, clock = systemClock, isRoot
     instance = await holdInstance(paths.runnerSocket, RUNNER_SOCKET_HOLDERS)
   } catch (error) {
     if (refusedWriting(error)) throw cantWrite(paths.runner, error)
-    throw new ImageError(`build-image can't run while the runner, a rebuild or another build-image does (${error.message}): stop the runner first`)
+    throw new ImageError(`build-image can't run while the runner or another build-image does (${error.message}): stop the runner first`)
   }
   try {
     const staging = canWrite(paths.dataDir, () => openStaging(paths, isRoot))

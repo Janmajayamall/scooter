@@ -117,6 +117,15 @@ const values = {
   // reads before a backup. They are a few kilobytes at most, written by another user, and read as
   // root, as files that user controls. The bridge's own `status.json` is read with the same bound.
   STATUS_FILE_MAX_BYTES: 4 * MB,
+  // The largest job file of `scooter backfill` that the runner, or `scooter status`, reads. One
+  // holds a prompt of at most `PROMPT_MAX_BYTES`, an agent's file of at most
+  // `JOB_AGENT_FILE_MAX_BYTES`, each at most six times as long once written as JSON, and the lines
+  // it gave up on, about 17 bytes each: room for a million of them. The runner refuses to write
+  // one larger, which it couldn't read back.
+  JOB_FILE_MAX_BYTES: 24 * MB,
+  // The largest file of an agent that `scooter backfill --agent-file` reads: one agent in the
+  // format of `agents.yaml`.
+  JOB_AGENT_FILE_MAX_BYTES: 1 * MB,
   // The largest model request the network policy reads.
   MODEL_REQUEST_MAX_BYTES: 50 * MB,
   // Restart waits for wacli and the email reader: the first wait, then doubling up to `max`.

@@ -7,7 +7,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { makePaths } from '../src/common/paths.mjs'
 import { limits } from '../src/common/limits.mjs'
-import { ConfigError, RUNNER_SKILL, loadConfig, parseConfig } from '../src/runner/config.mjs'
+import { ConfigError, checkJobWrites, jobPromptProblems, RUNNER_SKILL, loadConfig, parseConfig } from '../src/runner/config.mjs'
 import { longestValues } from '../src/runner/prompt.mjs'
 import { CHECK_IN_PROMPT, NEW_MESSAGES_PROMPT, SKILLS, exampleYaml, writeConfig } from './support/runner.mjs'
 import { skipIfRoot } from './support/root.mjs'
@@ -38,7 +38,7 @@ const change = (text, key, value) => text.replace(new RegExp(`^(\\s*)${key}:.*$`
 
 test('config: the example config is read as it stands', t => {
   const { configDir, parse } = setup(t)
-  const { agents } = parse(exampleYaml({ backfill: true }))
+  const { agents } = parse(exampleYaml())
   assert.equal(agents.length, 1)
   const [agent] = agents
   const real = fs.realpathSync(configDir)
@@ -60,7 +60,6 @@ test('config: the example config is read as it stands', t => {
     run: {
       newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }],
       scheduled: [{ at: '21:30', tag: 'check-in', schedule: { weekday: null, hour: 21, minute: 30 }, prompt: CHECK_IN_PROMPT }],
-      backfill: [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv'] }],
     },
   })
 })
@@ -92,9 +91,6 @@ test('config: what else is accepted', t => {
       - at: Sun 18:00
         tag: weekly-review-2
         prompt: Weekly review.
-      - backfill: people-1
-        skill: people
-        writes: [agents/lifelog/views/people.csv, agents/lifelog/views/people/]
 `
   const { run, channels } = parse(base.replace(/    run:[\s\S]*$/, runs)).agents[0]
   assert.deepEqual(run.newMessages, [])
@@ -106,7 +102,6 @@ test('config: what else is accepted', t => {
       ['Sun 18:00', 'weekly-review-2', { weekday: 7, hour: 18, minute: 0 }],
     ],
   )
-  assert.deepEqual(run.backfill, [{ id: 'people-1', skill: 'people', writes: ['agents/lifelog/views/people.csv', 'agents/lifelog/views/people/'] }])
   // Paths are cleaned: a leading ./ and a trailing / don't matter.
   const agent = parse(base.replace('prompt: prompts/lifelog.md', 'prompt: ./prompts//lifelog.md').replace('- skills/runs', '- skills/runs/')).agents[0]
   assert.equal(agent.prompt.path, 'prompts/lifelog.md')
@@ -186,8 +181,11 @@ test('config: each error in `run` names the entry and the field', t => {
   const withRun = entries => base.replace(/    run:[\s\S]*$/, `    run:\n${entries}`)
   const cases = [
     ['    run: new-messages\n', 'agents.lifelog.run', /must be a list of when the agent runs/],
-    ['      - new-messages\n', 'agents.lifelog.run[0]', /must be a map with one of on, at or backfill/],
-    ['      - on: new-messages\n        at: "21:30"\n', 'agents.lifelog.run[0]', /must have exactly one of on, at or backfill/],
+    ['      - new-messages\n', 'agents.lifelog.run[0]', /must be a map with one of on or at$/],
+    ['      - on: new-messages\n        at: "21:30"\n', 'agents.lifelog.run[0]', /must have exactly one of on or at$/],
+    // The backfill trigger is gone: a backfill is a job of `scooter backfill`.
+    ['      - backfill: people-1\n        skill: people\n        writes: [agents/lifelog/views/people.csv]\n', 'agents.lifelog.run[0]', /must have exactly one of on or at$/],
+    ['      - at: "21:30"\n        tag: check-in\n        prompt: Check in.\n        backfill: people-1\n', 'agents.lifelog.run[0].backfill', /doesn't belong with at/],
     ['      - prompt: Something.\n', 'agents.lifelog.run[0]', /must have exactly one of/],
     ['      - on: old-messages\n        channels: [whatsapp]\n        prompt: New.\n', 'agents.lifelog.run[0].on', /must be new-messages/],
     ['      - on: new-messages\n', 'agents.lifelog.run[0].channels', /is missing/],
@@ -214,28 +212,11 @@ test('config: each error in `run` names the entry and the field', t => {
     ['      - at: "21:30"\n        tag: ""\n        prompt: Check in.\n', 'agents.lifelog.run[0].tag', /must be a tag of lowercase letters, digits and hyphens/],
     ['      - at: "21:30"\n        tag: check-in\n        prompt: One.\n      - at: "07:00"\n        tag: check-in\n        prompt: Two.\n', 'agents.lifelog.run[1].tag', /is check-in, which another entry has too$/],
     ['      - on: new-messages\n        channels: [whatsapp]\n        tag: new\n        prompt: New.\n', 'agents.lifelog.run[0].tag', /doesn't belong with on/],
-    ['      - backfill: b1\n        skill: people\n        tag: b1\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].tag', /doesn't belong with backfill/],
     ['      - at: "21:30"\n', 'agents.lifelog.run[0].prompt', /is missing/],
     ['      - at: "21:30"\n        prompt: "  "\n', 'agents.lifelog.run[0].prompt', /must be the message pi is given for the run, as text/],
     ['      - at: "21:30"\n        task: Check in.\n', 'agents.lifelog.run[0].task', /doesn't belong with at/],
     ['      - at: "21:30"\n        prompt: Check in.\n        skill: people\n', 'agents.lifelog.run[0].skill', /doesn't belong with at/],
     ['      - at: "21:30"\n        prompt: Check in.\n        channels: [whatsapp]\n', 'agents.lifelog.run[0].channels', /doesn't belong with at/],
-    ['      - backfill: People!\n        skill: people\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].backfill', /must be an ID of lowercase letters, digits and hyphens/],
-    ['      - backfill: b1\n        skill: people\n        writes: [agents/lifelog/views/x.csv]\n        prompt: Also this.\n', 'agents.lifelog.run[0].prompt', /doesn't belong with backfill/],
-    ['      - backfill: b1\n        skill: swimming\n        writes: [agents/lifelog/views/x.csv]\n', 'agents.lifelog.run[0].skill', /must name one of the agent's skills/],
-    ['      - backfill: b1\n        skill: people\n        writes: agents/lifelog/views/people.csv\n', 'agents.lifelog.run[0].writes', /must be a list of what the backfill may change/],
-    ['      - backfill: b1\n        skill: people\n        writes: []\n', 'agents.lifelog.run[0].writes', /must be a list/],
-    ['      - backfill: b1\n        skill: people\n', 'agents.lifelog.run[0].writes', /is missing/],
-    [
-      '      - backfill: b1\n        skill: people\n        writes: [agents/lifelog/views/a.csv, agents/lifelog/views/a.csv]\n',
-      'agents.lifelog.run[0].writes[1]',
-      /is agents\/lifelog\/views\/a.csv, which writes\[0\] names too/,
-    ],
-    [
-      '      - backfill: b1\n        skill: people\n        writes: [agents/lifelog/views/a.csv]\n      - backfill: b1\n        skill: runs\n        writes: [agents/lifelog/views/b.csv]\n',
-      'agents.lifelog.run[1].backfill',
-      /is b1, which another backfill entry has too/,
-    ],
   ]
   for (const [entries, field, message] of cases) {
     const problems = faults(entries.startsWith('    run:') ? base.replace(/    run:[\s\S]*$/, entries) : withRun(entries))
@@ -256,27 +237,6 @@ test('config: each error in `run` names the entry and the field', t => {
     { channels: ['whatsapp'], prompt: 'Messages.' },
   ])
   assert.deepEqual(two.channels, ['email', 'whatsapp'])
-
-  // What a backfill may change lies in what the agent may: each path in a folder of the agent's
-  // writes, or a file it names.
-  for (const write of ['agents/lifelog/views/', 'agents/lifelog/views/people.csv', 'agents/lifelog/memory/a/b.md']) {
-    const agent = parse(withRun(`      - backfill: b1\n        skill: people\n        writes: ["${write}"]\n`)).agents[0]
-    assert.deepEqual(agent.run.backfill[0].writes, [write], write)
-  }
-  for (const write of ['agents/lifelog/views', 'agents/lifelog/', 'agents/lifelog/state.json', 'agents/lifelog/viewsx/a.csv', 'datastore/']) {
-    const problems = faults(withRun(`      - backfill: b1\n        skill: people\n        writes: ["${write}"]\n`))
-    assert.ok(
-      problems.some(problem => problem.field === 'agents.lifelog.run[0].writes[0]' && problem.message.endsWith("which isn't in the agent's writes: a backfill may change only what the agent may")),
-      `${write}: ${JSON.stringify(problems)}`,
-    )
-  }
-  for (const write of ['agents/lifelog/views/../memory/x.md', 'agents/lifelog/views/./x.csv', 'agents/lifelog/views//x.csv', '/agents/lifelog/views/x.csv', '']) {
-    const problems = faults(withRun(`      - backfill: b1\n        skill: people\n        writes: ["${write}"]\n`))
-    assert.ok(
-      problems.some(problem => problem.field === 'agents.lifelog.run[0].writes[0]' && /must be a path in the data folder/.test(problem.message)),
-      `${write}: ${JSON.stringify(problems)}`,
-    )
-  }
 })
 
 test('config: reads and writes name paths of the data folder, of any kind, and writes none the runner keeps for itself', t => {
@@ -291,13 +251,15 @@ test('config: reads and writes name paths of the data folder, of any kind, and w
   assert.deepEqual(parse(change(base, 'writes', '[agents/lifelog/views/books.csv, agents/lifelog/memory/a.md]')).agents[0].repository, ['views/books.csv', 'memory/a.md'])
 
   for (const [write, message] of [
-    ['agents/lifelog/', /is agents\/lifelog\/, which holds agents\/lifelog\/, the agent's folder, where the runner keeps its state, its repository, run\/ and the sessions: name what the agent may write in it, such as agents\/lifelog\/views\//],
+    ['agents/lifelog/', /is agents\/lifelog\/, which holds agents\/lifelog\/, the agent's folder, where the runner keeps its state, its repository, run\/, the sessions and the jobs: name what the agent may write in it, such as agents\/lifelog\/views\//],
     ['agents/', /which holds agents\/lifelog\/, the agent's folder/],
     ['agents/lifelog', /which holds agents\/lifelog\/, the agent's folder/],
-    ['agents/lifelog/state.json', /is agents\/lifelog\/state.json, which the agent can't write: in its folder the runner keeps state.json, run\/, sessions\/ and its repository's .git, and the commit refuses a name that starts with a dot/],
+    ['agents/lifelog/state.json', /is agents\/lifelog\/state.json, which the agent can't write: in its folder the runner keeps state.json, run\/, sessions\/, jobs\/ and its repository's .git, and the commit refuses a name that starts with a dot/],
     ['agents/lifelog/run/', /which the agent can't write/],
     ['agents/lifelog/run/session/', /which the agent can't write/],
     ['agents/lifelog/sessions/', /which the agent can't write/],
+    ['agents/lifelog/jobs/', /which the agent can't write/],
+    ['agents/lifelog/jobs/20261123T101500123-0001.json', /which the agent can't write/],
     ['agents/lifelog/.git/', /which the agent can't write/],
     ['agents/lifelog/.gitignore', /which the agent can't write/],
     ['agents/lifelog/views/.hidden/', /which the agent can't write/],
@@ -557,7 +519,7 @@ test("config: a trigger's prompt is text pi can be given, and holds no variable 
   assert.deepEqual(both.map(problem => problem.field).sort(), ['agents.lifelog.run[0].prompt', 'agents.lifelog.run[1].channels', 'agents.lifelog.run[1].prompt'])
 })
 
-test("config: a trigger's prompt, filled in with the longest values its variables can take, is within PROMPT_MAX_BYTES, a backfill's writes and the settings counted", t => {
+test("config: a trigger's prompt, filled in with the longest values its variables can take, is within PROMPT_MAX_BYTES, the settings counted", t => {
   const { configDir } = setup(t)
   const dataDir = '/data'
   const faultsOf = (text, settings = SETTINGS) => {
@@ -569,7 +531,7 @@ test("config: a trigger's prompt, filled in with the longest values its variable
       return error.problems
     }
   }
-  const base = exampleYaml({ backfill: true })
+  const base = exampleYaml()
   // The example's own prompts are far within it.
   assert.deepEqual(faultsOf(base), [])
 
@@ -581,6 +543,12 @@ test("config: a trigger's prompt, filled in with the longest values its variable
   const past = faultsOf(withCheckIn(base, `"${within}x"`))
   assert.deepEqual(past.map(problem => problem.field), ['agents.lifelog.run[1].prompt'])
   assert.match(past[0].message, new RegExp(`can make a prompt of ${limits.PROMPT_MAX_BYTES + 1} bytes, filled in with the longest values its variables can take, where pi can be given ${limits.PROMPT_MAX_BYTES} at most, as one argument: shorten it$`))
+  // Held whatever else of its trigger is at fault, so every fault is reported at once: a time or
+  // channels at fault, beside a prompt too long.
+  const badAt = faultsOf(withCheckIn(base, `"${within}x"`).replace('- at: "21:30"', '- at: "25:30"'))
+  assert.deepEqual(badAt.map(problem => problem.field).sort(), ['agents.lifelog.run[1].at', 'agents.lifelog.run[1].prompt'])
+  const badChannels = faultsOf(base.replace('channels: [whatsapp, email]', 'channels: [sms]').replace('New: $seq.unread$', `New: $seq.unread$ ${'x'.repeat(limits.PROMPT_MAX_BYTES)}`))
+  assert.deepEqual(badChannels.map(problem => problem.field).sort(), ['agents.lifelog.run[0].channels', 'agents.lifelog.run[0].prompt'])
   // A variable counts as the longest it can be: each line's number as the largest a seq can be.
   const numbers = `"${'$seq.unread$ '.repeat(Math.ceil(limits.PROMPT_MAX_BYTES / (limits.BATCH_MAX_ITEMS * 17)))}"`
   assert.equal(faultsOf(withCheckIn(base, numbers)).length, 1)
@@ -592,9 +560,81 @@ test("config: a trigger's prompt, filled in with the longest values its variable
   assert.deepEqual(faultsOf(withCheckIn(base, zones)), [])
   assert.equal(faultsOf(withCheckIn(base, zones), { ...SETTINGS, timeZone: 'America/Argentina/ComodRivadavia' }).length, 1)
 
-  // The prompt for new messages is a backfill's too, filled in with the backfill's writes, which
-  // can be longer than the agent's own; a scheduled task's isn't.
+  // The agent's writes count, as `$run.writes$` gives them.
   const files = Array.from({ length: 450 }, (_, n) => `agents/lifelog/views/${'f'.repeat(200)}-${n}.csv`)
-  const longBackfill = base.replace('writes: [agents/lifelog/views/people.csv]', `writes: [${files.join(', ')}]`)
-  assert.deepEqual(faultsOf(withCheckIn(longBackfill, '"$run.writes$"')).map(problem => problem.field), ['agents.lifelog.run[0].prompt'])
+  const longWrites = base.replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', `writes: [${files.join(', ')}]`)
+  assert.deepEqual(faultsOf(withCheckIn(longWrites, '"$run.writes$"')).map(problem => problem.field), ['agents.lifelog.run[0].prompt', 'agents.lifelog.run[1].prompt'])
+})
+
+test("config: a job's writes lie in the agent's, and its prompt is checked as a trigger's is, with the job's writes as $run.writes$", t => {
+  const { configDir, parse } = setup(t)
+  const agent = parse(exampleYaml()).agents[0]
+  const check = values => checkJobWrites(agent, values, { dataDir: '/data' })
+  // Each path in a folder of the agent's writes, or a file it names, cleaned as writes are.
+  for (const write of ['agents/lifelog/views/', 'agents/lifelog/views/people.csv', 'agents/lifelog/memory/a/b.md']) {
+    assert.deepEqual(check([write]), { writes: [write], problems: [] }, write)
+  }
+  for (const write of ['agents/lifelog/views', 'agents/lifelog/', 'agents/lifelog/state.json', 'agents/lifelog/viewsx/a.csv', 'datastore/']) {
+    assert.deepEqual(check([write]).problems, [`--writes 1 is ${write}, which isn't in the writes of lifelog: a job may change only what its agent may`], write)
+  }
+  for (const write of ['agents/lifelog/views/../memory/x.md', 'agents/lifelog/views/./x.csv', 'agents/lifelog/views//x.csv', '/agents/lifelog/views/x.csv', '']) {
+    assert.match(check([write]).problems[0], /^--writes 1 must be a path in the data folder, such as agents\/lifelog\/views\/books.csv: relative to it, without a \., \.\. or empty part, and a folder ending in \/$/, write)
+  }
+  // Every fault at once, each by its place: one named twice, one in a file another names.
+  assert.deepEqual(check(['agents/lifelog/views/a.csv', 'agents/lifelog/views/a.csv', 'agents/lifelog/views/a.csv/b', 'datastore/']), {
+    writes: ['agents/lifelog/views/a.csv'],
+    problems: [
+      '--writes 2 is agents/lifelog/views/a.csv, which writes[0] names too',
+      '--writes 3 is agents/lifelog/views/a.csv/b, which lies in agents/lifelog/views/a.csv, a file',
+      "--writes 4 is datastore/, which isn't in the writes of lifelog: a job may change only what its agent may",
+    ],
+  })
+
+  // A job's prompt: what any prompt may not be, and too long with the job's writes.
+  const paths = makePaths({ dataDir: '/data', configDir })
+  const problems = (template, writes = agent.writes) => jobPromptProblems({ agent, template, writes, paths, settings: SETTINGS })
+  assert.deepEqual(problems('New: $seq.unread$. May change: $run.writes$.'), [])
+  assert.deepEqual(problems('  '), ['must be the message pi is given for the run, as text'])
+  assert.deepEqual(problems('@views'), ['starts with @, which makes pi take the whole prompt as the name of a file to attach: start it with anything else'])
+  assert.match(problems('Now: $nwo$')[0], /^holds \$nwo\$, which is no variable the runner knows/)
+  assert.deepEqual(problems('a\0b'), ["holds the character U+0000, which a command line can't carry"])
+  const files = Array.from({ length: 450 }, (_, n) => `agents/lifelog/views/${'f'.repeat(200)}-${n}.csv`)
+  assert.deepEqual(problems('$run.writes$'), [])
+  assert.match(problems('$run.writes$', files)[0], /^can make a prompt of \d+ bytes, filled in with the longest values its variables can take, where pi can be given 98304 at most/)
+})
+
+test('config: an agent given in a file is one agent of the same format, named as none of agents.yaml is, writing only in its own folder, sending nothing, and with a trigger for new messages', t => {
+  const { configDir } = setup(t)
+  const parseFile = text => parseConfig(text, { configDir, dataDir: '/data', settings: SETTINGS, file: 'try.yaml', agentFile: { taken: ['lifelog'] } })
+  const own = exampleYaml()
+    .replace('  lifelog:', '  lifelog-try:')
+    .replace('writes: [agents/lifelog/views/, agents/lifelog/memory/]', 'writes: [agents/lifelog-try/views/]')
+    .replace('sends: [whatsapp]', 'sends: []')
+  const [agent] = parseFile(own).agents
+  assert.deepEqual([agent.name, agent.writes, agent.repository, agent.sends, agent.channels], ['lifelog-try', ['agents/lifelog-try/views/'], ['views/'], [], ['whatsapp', 'email']])
+  // It may read what it likes, another agent's views among them.
+  assert.deepEqual(parseFile(own.replace('reads: [datastore/, agents/lifelog/]', 'reads: [datastore/, agents/lifelog/views/]')).agents[0].reads, ['datastore/', 'agents/lifelog/views/'])
+
+  const faultsOf = text => {
+    try {
+      parseFile(text)
+      return []
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error
+      return error.problems.map(problem => problem.message)
+    }
+  }
+  assert.deepEqual(faultsOf(own.replace('  lifelog-try:', '  lifelog:').replaceAll('agents/lifelog-try/', 'agents/lifelog/')), [
+    'try.yaml, line 3: agents.lifelog is the name of an agent of agents.yaml: an agent given in a file needs a name of its own, and runs in a folder of its own',
+  ])
+  assert.deepEqual(faultsOf(own.replace('writes: [agents/lifelog-try/views/]', 'writes: [agents/lifelog-try/views/, agents/lifelog/views/books.csv]')), [
+    "try.yaml, line 15: agents.lifelog-try.writes[1] is agents/lifelog/views/books.csv, which isn't in agents/lifelog-try/: an agent given in a file writes only in its own folder",
+  ])
+  assert.deepEqual(faultsOf(own.replace('sends: []', 'sends: [whatsapp]')), ['try.yaml, line 16: agents.lifelog-try.sends must be []: an agent given in a file sends nothing'])
+  const scheduledOnly = own.replace(/      - on: new-messages[\s\S]*?(?=      - at:)/, '')
+  assert.deepEqual(faultsOf(scheduledOnly), [
+    "try.yaml, line 25: agents.lifelog-try.run must have a trigger on: new-messages: its prompt is what the job's runs are given, and its channels say which lines are their work",
+  ])
+  // Faults of the format are faults too, named in the file.
+  assert.match(faultsOf(own.replace('reply_mode: quiet', 'reply_mode: chatty'))[0], /^try\.yaml, line \d+: agents\.lifelog-try\.reply_mode must be quiet or confirm$/)
 })

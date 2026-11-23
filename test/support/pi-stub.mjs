@@ -14,7 +14,7 @@
 // |                   | `--reply-to` the line, and marks the line done                          |
 // | `SAY`             | files it, and sends a message that says so                              |
 // | `UNSURE`          | files it with a ❓ in its row                                           |
-// | `OUTSIDE`         | also tries to file it in `views/notes.csv`, which a backfill's batch    |
+// | `OUTSIDE`         | also tries to file it in `views/notes.csv`, which a job's batch         |
 // |                   | may not change                                                          |
 //
 // `{"words": ["FAIL"]}` in `behavior.json`, below, puts such a keyword in every line.
@@ -25,7 +25,7 @@
 // sent, "Today: nothing missing."
 //
 // A row for a line is its number and its text. Where its run may not write `views/notes.csv`, as a
-// backfill's batch may not, it files each line in the first CSV file its `writes` names instead.
+// job's batch may not, it files each line in the first CSV file its `writes` names instead.
 //
 // It writes only what the run's `writes` names (`PI_STUB_WRITES`), as the VM lets pi: a row, a line
 // or what a keyword leaves, which it would write anywhere else, is left out, and its path noted in

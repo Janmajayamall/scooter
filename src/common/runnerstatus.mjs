@@ -44,9 +44,10 @@ const AGENT_FIELDS = ['model', 'timeoutMinutes', 'channels']
 const isObject = value => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isTime = value => parseIsoSeconds(value) !== null
 // An agent's name, as `agents.yaml` allows it: not the name of Scooter's own messages either.
-// `scooter status` makes paths of it.
+// `scooter status` makes paths of it, of the names in `status.json` and of those of the agents'
+// folders that hold jobs (`jobfile.mjs`).
 const AGENT_NAME = /^[a-z][a-z0-9-]*$/
-const isAgentName = name => AGENT_NAME.test(name) && !OWN_AUTHORS.includes(name)
+export const isAgentName = name => AGENT_NAME.test(name) && !OWN_AUTHORS.includes(name)
 
 // What is wrong with a status, as a list of statements that name fields. An empty list means it is
 // well formed.

@@ -23,7 +23,7 @@ const AGENT = {
   channels: ['whatsapp', 'email'],
   replyMode: 'quiet',
   writes: ['agents/lifelog/views/', 'agents/lifelog/memory/'],
-  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }], scheduled: [], backfill: [] },
+  run: { newMessages: [{ channels: ['whatsapp', 'email'], prompt: NEW_MESSAGES_PROMPT }], scheduled: [] },
 }
 const withPrompt = (prompt, agent = AGENT) => ({ ...agent, run: { ...agent.run, newMessages: [{ channels: agent.channels, prompt }] } })
 
@@ -295,14 +295,15 @@ test('prompt: its variables, and the longest value each can take, which no promp
   // a time of the longest names.
   atEnd(t, overrideLimits({ BATCH_MAX_ITEMS: 3 }))
   const agent = { ...AGENT, writes: ['agents/lifelog/views/'] }
-  const backfill = ['agents/lifelog/views/a.csv', 'agents/lifelog/views/my b.csv']
-  const longest = longestValues({ agent, paths: PATHS, settings: SETTINGS, writesLists: [agent.writes, backfill] })
+  // A job's writes, longer than the agent's.
+  const job = ['agents/lifelog/views/a.csv', 'agents/lifelog/views/my b.csv']
+  const longest = longestValues({ agent, paths: PATHS, settings: SETTINGS, writes: job })
   const big = Number.MAX_SAFE_INTEGER
   const items = [
     ...[0, 1, 2].map(n => ({ seq: big - n, origin: 'new', attempt: 1 })),
     ...[3, 4, 5, 6, 7, 8].map(n => ({ seq: big - n, origin: 'retry', attempt: big })),
   ]
-  const filled = promptValues({ agent, paths: PATHS, settings: SETTINGS, now: Date.parse('2026-09-30T18:29:00Z'), items, writes: backfill })
+  const filled = promptValues({ agent, paths: PATHS, settings: SETTINGS, now: Date.parse('2026-09-30T18:29:00Z'), items, writes: job })
   assert.equal(filled.now, 'Wednesday 30 September 2026, 23:59')
   for (const name of VARIABLES) assert.ok(Buffer.byteLength(filled[name]) <= longest[name], name)
   for (const name of ['seq.unread', 'seq.retry', 'run.writes', 'user.timezone', 'agent.dir']) assert.equal(Buffer.byteLength(filled[name]), longest[name], name)

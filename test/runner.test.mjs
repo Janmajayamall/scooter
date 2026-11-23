@@ -21,7 +21,7 @@ import { atEnd } from './support/tmp.mjs'
 
 // 21:20 in Asia/Kolkata on Monday 9 November 2026.
 const START = '2026-11-09T15:50:30Z'
-const HANDLED = { cursor: 1041, retry: [], failed: [], backfillDone: [], scheduled: {}, lastRun: null }
+const HANDLED = { cursor: 1041, retry: [], failed: [], scheduled: {}, lastRun: null }
 
 function openWith(t, lines, options = {}) {
   return openTestRunner(t, { lines: [...fillerLines(1041), ...lines], state: HANDLED, start: START, ...options })
@@ -359,7 +359,7 @@ test('locks: the runner takes its own lock before it looks for the backup\'s, an
   const deadline = clock.now() + 10 * MINUTE
   assert.equal(acquireRunLock({ paths, deadline, clock }), 'taken')
   assert.equal(readLock(paths.runLock).deadline, Math.floor(deadline / 1000) * 1000)
-  // A second run, or a rebuild, can't take it.
+  // A second run can't take it, nor can anything else while it is there.
   assert.equal(acquireRunLock({ paths, deadline, clock }), 'busy')
   fs.rmSync(paths.runLock)
 
@@ -644,7 +644,7 @@ test('startup: on a disk pi filled, a folder of writes that pi removed is made a
 test('startup: one runner per data folder, and a bad agents.yaml stops it with exit code 2, naming the field', async t => {
   const prepared = prepareTestRunner(t, { lines: fillerLines(3), start: START })
   await startTestRunner(t, prepared)
-  await assert.rejects(openRunner({ ...prepared, openSandbox: async () => prepared.sandbox }), /another runner, rebuild or build-image is running on this data folder/)
+  await assert.rejects(openRunner({ ...prepared, openSandbox: async () => prepared.sandbox }), /another runner or build-image is running on this data folder/)
 
   fs.writeFileSync(prepared.paths.agentsYaml, exampleYaml().replace('reply_mode: quiet', 'reply_mode: chatty'))
   let err = ''

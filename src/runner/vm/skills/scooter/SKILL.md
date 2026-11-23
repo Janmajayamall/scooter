@@ -23,7 +23,7 @@ Each run starts with a message from the owner's configuration, not from the owne
 - The owner's reactions, and what Scooter sent, aren't given to you. `show` prints any line by its number, and the index file lists them all.
 - A scheduled run, at a time the owner's configuration gives, has no lines to work on: its message says what to do.
 
-The time the message gives as now is now, for you: "today" and "yesterday" in the messages are counted from it. Take dates from it, not from the machine's clock, which can differ: when Scooter goes over old messages again, in a backfill or a rebuild, it is the time they were sent.
+The time the message gives as now is now, for you: "today" and "yesterday" in the messages are counted from it. Take dates from it, not from the machine's clock, which can differ: when Scooter goes over old messages again, in a backfill, it is the time they were sent.
 
 ## mark
 
@@ -59,7 +59,7 @@ send: queued; it goes to the owner once this run has passed
   - **quiet:** send only when you have a question or were asked something. Scooter reacts ✅ to each message you mark done that no message of yours replies to, so the owner knows it arrived.
   - **confirm:** send one short message per batch saying what you filed.
 - For a scheduled run, send what its message asks for, if anything.
-- When Scooter goes over old messages again, in a backfill or a rebuild, nothing you send goes out.
+- When Scooter goes over old messages again, in a backfill, nothing you send goes out.
 
 ## What you can change and reach
 

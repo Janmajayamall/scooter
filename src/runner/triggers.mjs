@@ -10,8 +10,13 @@
 //    names in its `channels`, so without such a trigger there is none.
 // 3. **Scheduled tasks** whose time has come since they were last dealt with. One that comes due
 //    during a run or a pause waits, and runs afterwards.
-// 4. **A backfill batch**, only when nothing live is waiting: no work items to give after the
-//    cursor, quiet or not, and no due retries. When its work is done, the backfill finishes.
+// 4. **A job of `scooter backfill`**, the one the runner holds, only when nothing live is waiting:
+//    no work items to give after the cursor, quiet or not, no due retries and no scheduled task.
+//    First its start, then its batches; when its work is done, it finishes. A job with
+//    `--hold-live` comes before 2 and 3 instead, until it has finished: live runs wait for it,
+//    and it waits for a line to be tried again before it takes the lines after it. A job that
+//    waits after a setup error or an outage of its own, which only one of an agent given in a
+//    file does, gives no batch until its wait's next try.
 // 5. Otherwise, nothing.
 //
 // A message that is already deleted is never given: the runner settles it itself, and gives only
@@ -88,17 +93,25 @@ export function dueScheduled(agent, state, { now, timeZone }) {
 //
 //   { kind: 'messages' }               run a batch of messages (`buildBatch`)
 //   { kind: 'scheduled', at, tag, date, prompt }
-//   { kind: 'backfill', id }           run a batch of the backfill in progress
-//   { kind: 'backfill-finished', id }  the backfill has covered everything up to `until`
+//   { kind: 'backfill-start', id }     start the job: its tag, `--empty`, and where it stops
+//   { kind: 'backfill', id }           run a batch of the job
+//   { kind: 'backfill-finished', id }  the job has covered everything up to where it stops
 //   { kind: 'idle', reason }           nothing now: `paused`, `quiet` (messages wait for the owner
-//                                      to be quiet), or `nothing`
+//                                      to be quiet), `backfill` (a job that holds live runs back
+//                                      waits for a line to be tried again), `backfill-waits` (the
+//                                      job waits after a setup error or an outage of its own), or
+//                                      `nothing`
 //
 // Input:
 // - `agent`: the agent's config (`config.mjs`); `state`: its state; `index`: the datastore's.
 // - `now`: the time, in milliseconds; `timeZone`: `SCOOTER_TZ`; `batchSeconds`: `BATCH_SECONDS`.
 // - `incomingSeenAt`: when the runner last saw an incoming line arrive, or null.
-export function nextAction({ agent, state, index, now, timeZone, batchSeconds, incomingSeenAt }) {
+// - `job`: the job the runner holds, as `poll` of `createJobs` in `backfill.mjs` gives it, or null.
+export function nextAction({ agent, state, index, now, timeZone, batchSeconds, incomingSeenAt, job = null }) {
   if (state.paused && now < parseIsoSeconds(state.paused.next)) return { kind: 'idle', reason: 'paused' }
+
+  // Live runs wait for a job with `--hold-live`, scheduled tasks among them.
+  if (job?.holdLive) return jobAction(job, index, now)
 
   // Only a line of a channel a trigger names is work: a line of any other holds nothing back.
   const live = hasWorkAfter(index, agent.channels, state.cursor) || dueRetries(state.retry, index, agent.channels, now).length > 0
@@ -109,16 +122,28 @@ export function nextAction({ agent, state, index, now, timeZone, batchSeconds, i
   if (scheduled) return { kind: 'scheduled', ...scheduled }
 
   if (live) return { kind: 'idle', reason: 'quiet' }
+  if (job) return jobAction(job, index, now)
+  return { kind: 'idle', reason: 'nothing' }
+}
 
-  const backfill = state.backfill
-  if (backfill && agent.run.backfill.some(entry => entry.id === backfill.id)) {
-    const upTo = Math.min(backfill.until, index.lastSeq)
-    if (hasWorkAfter(index, agent.channels, backfill.cursor, upTo) || dueRetries(backfill.retry, index, agent.channels, now).length > 0) {
-      return { kind: 'backfill', id: backfill.id }
-    }
-    // A message deleted since it was given waits for nothing: the runner settles it, and it goes
-    // with the backfill's lane.
-    if (backfill.retry.every(entry => isDeletedMessage(index, entry.seq))) return { kind: 'backfill-finished', id: backfill.id }
+// What comes next of a job: its start, before anything else; then a batch, while there are work
+// items to give after its cursor, up to where it stops, or retries that are due; and when there
+// are neither, and no line waits to be tried again, it has finished. A line in its retries that is
+// no work item to give, a message deleted since it was given among them, waits for nothing: no
+// batch would give it.
+//
+// A job with `--hold-live` replays in order: while a line waits to be tried again, it takes
+// nothing, also when another is due, and waits, as live runs wait for it. A job whose `wait`
+// holds it back gives no batch before the wait's next try.
+function jobAction(job, index, now) {
+  if (!job.started) return { kind: 'backfill-start', id: job.id }
+  const { lane, until, channels, wait = null } = job
+  const waiting = lane.retry.filter(entry => isToGive(index, entry.seq, channels))
+  if (job.holdLive && waiting.some(entry => parseIsoSeconds(entry.due) > now)) return { kind: 'idle', reason: 'backfill' }
+  if (dueRetries(lane.retry, index, channels, now).length > 0 || hasWorkAfter(index, channels, lane.cursor, Math.min(until, index.lastSeq))) {
+    if (wait !== null && now < parseIsoSeconds(wait.next)) return { kind: 'idle', reason: 'backfill-waits' }
+    return { kind: 'backfill', id: job.id }
   }
+  if (waiting.length === 0) return { kind: 'backfill-finished', id: job.id }
   return { kind: 'idle', reason: 'nothing' }
 }
