@@ -757,7 +757,7 @@ test("backfill: the job's message names how many lines it was given and which it
   )
 })
 
-test('backfill: the config given again to a runner, with a job in progress, a config changed under it refuses it', async t => {
+test('backfill: a job in progress whose config changed while the runner was stopped, its skill gone from agents.yaml, is refused at the next start, and nothing of it runs', async t => {
   const { prepared, runner, paths, entries } = await open(t)
   const { job } = await queue(prepared, ['lifelog', ...PEOPLE])
   await runner.tick()
