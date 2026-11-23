@@ -185,7 +185,7 @@ test('backfill command: an agent of agents.yaml, its skills and its writes, each
 test('backfill command: --prompt is read now, kept in the job, and checked as a trigger\'s prompt is, with the job\'s writes', async t => {
   const { queue, file, root } = setup(t)
   const text = '# People\nFile only what belongs in $run.writes$. It costs $5.\nNew: $seq.unread$\n'
-  const { job } = await queue(['lifelog', '--prompt', file('p.md', `﻿${text}`)])
+  const { job } = await queue(['lifelog', '--prompt', file('p.md', `\uFEFF${text}`)])
   assert.equal(job.prompt, text)
 
   const faults = async (name, contents, extra = []) => {

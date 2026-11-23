@@ -109,7 +109,8 @@ export function parseArgs(args) {
 }
 
 // The text of a file given on the command line: a regular file, once links are followed, of at
-// most `maxBytes`, in UTF-8, without a byte-order mark at its start. `flag` names it in a fault.
+// most `maxBytes`, in UTF-8, without a byte-order mark at its start, which the decoder leaves out
+// itself (`ignoreBOM` is false by default). `flag` names it in a fault.
 function readGivenFile(file, { flag, maxBytes }) {
   const fault = what => new BackfillError([`${flag} ${file} ${what}`])
   let stat
@@ -128,7 +129,7 @@ function readGivenFile(file, { flag, maxBytes }) {
   }
   if (bytes.length > maxBytes) throw fault(`is more than ${maxBytes} bytes`)
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^﻿/, '')
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     throw fault("isn't text in UTF-8")
   }
