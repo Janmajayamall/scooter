@@ -935,6 +935,50 @@ test("backfill: the job's message names how many lines it was given and which it
   )
 })
 
+test('backfill: with session: none, a job\'s batches keep no session, as live runs keep none', async t => {
+  const { prepared, runner, sandbox, paths } = await open(t, { yaml: jobYaml().replace('session: daily', 'session: none') })
+  const { job } = await queue(prepared, ['lifelog', ...PEOPLE])
+  assert.equal((await runner.tick()).action.kind, 'backfill-start')
+  assert.deepEqual(await runner.tick(), { action: { kind: 'backfill', id: job.id }, outcome: { ok: true, cause: null } })
+  const [first] = sandbox.seen()
+  assert.deepEqual(first.items, [1, 3])
+  assert.ok(first.argv.includes('--no-session'))
+  assert.ok(!first.argv.includes('--session-id'))
+  assert.deepEqual(fs.readdirSync(paths.agentSessions('lifelog')), [])
+})
+
+test("backfill: a batch saves the job's progress, then the state, so an error saving the state leaves the batch recorded in the job's file, whether it passed or failed", async t => {
+  for (const words of [{}, { 1: 'CRASH' }]) {
+    await t.test(words[1] ?? 'passed', async t => {
+      const { prepared, runner, paths, git } = await open(t, { words })
+      const { job, file } = await queue(prepared, ['lifelog', ...PEOPLE])
+      assert.equal((await runner.tick()).action.kind, 'backfill-start')
+      // The state's rename fails, once: the job's file was written before it.
+      const stateFile = paths.agentState('lifelog')
+      const rename = fs.renameSync
+      let failed = 0
+      t.mock.method(fs, 'renameSync', (from, to) => {
+        if (to === stateFile && failed === 0) {
+          failed += 1
+          throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' })
+        }
+        return rename(from, to)
+      })
+      await assert.rejects(runner.tick(), /EIO/)
+      assert.equal(failed, 1)
+      const { progress } = jobOn(file)
+      if (words[1] === undefined) {
+        assert.equal(git('log', '-1', '--format=%s'), `lifelog: backfill ${job.id} #1-#3\n`)
+        assert.deepEqual(progress, { started: '2026-11-09T15:50:30Z', until: 5, cursor: 3, given: 2, retry: [], skipped: [], wait: null })
+      } else {
+        // Failed: both lines wait to be tried again, each at its first attempt used.
+        assert.equal(progress.cursor, 3)
+        assert.deepEqual(progress.retry.map(entry => [entry.seq, entry.attempts]), [[1, 1], [3, 1]])
+      }
+    })
+  }
+})
+
 test('backfill: a job in progress whose config changed while the runner was stopped, its skill gone from agents.yaml, is refused at the next start, and nothing of it runs', async t => {
   const { prepared, runner, paths, entries } = await open(t)
   const { job } = await queue(prepared, ['lifelog', ...PEOPLE])
@@ -945,4 +989,20 @@ test('backfill: a job in progress whose config changed while the runner was stop
   const again = await startTestRunner(t, prepared)
   assert.deepEqual((await again.runner.tick()).action, { kind: 'idle', reason: 'nothing' })
   assert.match(entries.filter(entry => entry.event === 'runner.job_refused').at(-1).reason, new RegExp(`${job.id}\\.json: skills names people, which is no skill of lifelog$`))
+})
+
+test('backfill: a job whose agent has lost its trigger for new messages since the job was written is refused, and nothing of it runs, --empty\'s emptying among it', async t => {
+  const { prepared, runner, paths, entries, git } = await open(t)
+  const { job } = await queue(prepared, ['lifelog', '--empty'])
+  await runner.close()
+  const yaml = jobYaml({ checkIn: true }).replace(/      - on: new-messages\n.*\n.*\n/, '')
+  assert.ok(!yaml.includes('new-messages') && yaml.includes('check-in'))
+  writeConfig(paths.configDir, { yaml })
+  const head = git('rev-parse', 'HEAD').trim()
+  const again = await startTestRunner(t, prepared)
+  assert.notEqual((await again.runner.tick()).action.kind, 'backfill-start')
+  assert.match(entries.filter(entry => entry.event === 'runner.job_refused').at(-1).reason, new RegExp(`${job.id}\\.json: lifelog has no trigger on: new-messages, whose channels its runs are given the lines of$`))
+  // Not started: no tag, and nothing emptied or committed.
+  assert.equal(git('tag', '-l'), '')
+  assert.equal(git('rev-parse', 'HEAD').trim(), head)
 })

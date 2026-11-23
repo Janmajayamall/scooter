@@ -354,7 +354,7 @@ test('show: a line of a kind, a channel or a field this version doesn\'t know is
 
 test('show: a path that could break its line is printed as a JSON string, and a data folder with spaces in its path is read', t => {
   const dataDir = path.join(makeTestDir(t), 'my data', 'scooter folder')
-  const lines = [...fillerLines(1), line.text(2, '2026-11-09T15:50:00Z', 'x', { files: [{ path: 'a b.jpg', mime: 'image/jpeg', bytes: 1 }, { path: 'c\nd.jpg', mime: 'image/jpeg', bytes: 1 }, { path: 'e f.jpg', mime: 'image/jpeg', bytes: 1 }] })]
+  const lines = [...fillerLines(1), line.text(2, '2026-11-09T15:50:00Z', 'x', { files: [{ path: 'a b.jpg', mime: 'image/jpeg', bytes: 1 }, { path: 'c\nd.jpg', mime: 'image/jpeg', bytes: 1 }, { path: 'e\u2028f.jpg', mime: 'image/jpeg', bytes: 1 }] })]
   const { show, paths, stored } = setup(t, lines, { dataDir })
   const result = show(['2'])
   assert.equal(result.code, 0, result.stderr)
@@ -366,7 +366,7 @@ test('show: a path that could break its line is printed as a JSON string, and a 
       stored(2).text,
       `  file ${day}/a b.jpg`,
       `  file ${JSON.stringify(`${day}/c\nd.jpg`)}`,
-      `  file ${JSON.stringify(`${day}/e f.jpg`)}`,
+      `  file ${JSON.stringify(`${day}/e\u2028f.jpg`)}`,
       '',
     ].join('\n'),
   )

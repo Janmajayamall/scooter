@@ -118,13 +118,14 @@ const values = {
   // root, as files that user controls. The bridge's own `status.json` is read with the same bound.
   STATUS_FILE_MAX_BYTES: 4 * MB,
   // The largest job file of `scooter backfill` that the runner, or `scooter status`, reads. One
-  // holds a prompt of at most `PROMPT_MAX_BYTES`, an agent's file of at most
+  // the command writes holds a prompt of at most `PROMPT_MAX_BYTES`, an agent's file of at most
   // `JOB_AGENT_FILE_MAX_BYTES`, each at most six times as long once written as JSON, and the lines
   // it gave up on, about 17 bytes each: room for a million of them. The runner refuses to write
-  // one larger, which it couldn't read back.
+  // one larger, which it couldn't read back. A job's file written by hand is held to this bound,
+  // and not to `JOB_AGENT_FILE_MAX_BYTES`, so its agent's file can be longer.
   JOB_FILE_MAX_BYTES: 24 * MB,
   // The largest file of an agent that `scooter backfill --agent-file` reads: one agent in the
-  // format of `agents.yaml`.
+  // format of `agents.yaml`. The command's alone: the runner takes the text a job's file holds.
   JOB_AGENT_FILE_MAX_BYTES: 1 * MB,
   // The largest model request the network policy reads.
   MODEL_REQUEST_MAX_BYTES: 50 * MB,

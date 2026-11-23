@@ -450,6 +450,8 @@ docker compose run --rm runner doctor      # Docker
 
 The logs say what went wrong: `journalctl -u scooter-runner` natively, `docker compose logs runner` in Docker. They hold IDs, kinds, sizes and timings, never the text of your messages.
 
+**A backfill that stays "waiting to start"** in `scooter status`, while nothing else runs, may have been refused: the runner checks a job against the config as it is when it takes it, and logs `runner.job_refused` with the reason, such as a skill or a prompt that has left the config folder since, or an agent without a trigger for new messages. `scooter status` reads no config, so it can't say so. Put the config right and restart the runner, and the job is taken at its next look; or remove the job's file (see [Cancelling a job](#cancelling-a-job)).
+
 **The bridge** restarts wacli and the email reader after 5 seconds, doubling up to 5 minutes, and natively its own service restarts the same way. While wacli isn't linked the bridge logs that you should run `pair`, and replies wait.
 
 ## The security model

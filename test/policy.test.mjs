@@ -410,7 +410,7 @@ test('policy: a line keeps a bounded path, and a host and a reason a reader take
   const long = `/${'a'.repeat(5000)}/b`
   await policy.send(new Request(`https://example.com${long}?token=secret`))
   await policy.send(new Request('https://a!b_c.example.com/x'))
-  const field = `odd​${'f'.repeat(1000)}`
+  const field = `odd\u200B${'f'.repeat(1000)}`
   await policy.send(piRequest('messages', 'first', body => (body[field] = 1)))
   const [request, odd, refused] = policy.lines()
   assert.equal(request.path, `/${'a'.repeat(limits.NETLOG_PATH_MAX_CHARS - 1)}…`)

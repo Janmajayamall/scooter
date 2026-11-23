@@ -117,7 +117,7 @@ Paths are under the data folder: `DATA_DIR`, `/var/lib/scooter` in a native inst
 | Folder | Owner and mode | Bridge | Runner | pi | wacli | Email reader |
 |---|---|---|---|---|---|---|
 | `datastore` | root, group `scooter-runner`; folders 0750, files 0640 | writes | reads | reads, as the default `reads` names it | no | no |
-| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | what `reads` names, by default its own folder, never `sessions/` or `jobs/`; writes what `writes` names, by default `views/` and `memory/`, and `run/session/`, `run/send/` and `run/marks.txt` | no | no |
+| `agents` | `scooter-runner`, 0700 | reads; writes only on restore | writes | what `reads` names, by default its own folder, never its own `sessions/` or `jobs/`; writes what `writes` names, by default `views/` and `memory/`, and `run/session/`, `run/send/` and `run/marks.txt` | no | no |
 | `exchange` | `scooter-runner`, 0700 | takes entries, and keeps a sending file of each in `bridge/`; writes `backup.lock` | writes entries and `run.lock` | no | no | no |
 | `runner` | `scooter-runner`, 0700 | reads the network log and `status.json`; connects to `runner.sock` | writes | no | no | no |
 | `bridge` | root, 0700 | writes | no | no | no | no |

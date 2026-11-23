@@ -194,6 +194,12 @@ export async function queueJob({ args, settings, clock = systemClock }) {
   }
 
   const problems = []
+  // A job's runs are given the lines of the channels of the agent's triggers for new messages, as an
+  // agent given in a file must have one (`config.mjs`): without one, a job would give nothing, and
+  // `--empty` would still empty what it names.
+  if (agentFile === null && agent.run.newMessages.length === 0) {
+    problems.push(`${agent.name} has no trigger on: new-messages in agents.yaml: a job's runs are given the lines of its channels, so this one would be given none`)
+  }
   for (const name of given.skills ?? []) {
     if (!agent.skills.some(skill => skill.name === name)) problems.push(`--skills names ${name}, which is no skill of ${agent.name}: its skills are ${agent.skills.map(skill => skill.name).join(', ') || 'none'}`)
   }

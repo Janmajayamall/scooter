@@ -169,7 +169,7 @@ test('mark: done and failed, each a line of the marks file, which the runner rea
   assert.deepEqual(mark(['done', '1050', '#1051', '01052', '1050']), { code: 0, stdout: 'mark: 1050, 1051 and 1052 marked done\n', stderr: '' })
   assert.deepEqual(mark(['failed', '1053', 'the PDF needs a password']), { code: 0, stdout: 'mark: 1053 marked failed\n', stderr: '' })
   // A reason in several words, and with line breaks: one line, its spaces one each.
-  assert.equal(mark(['failed', '#1054', 'blurry', ' photo\n\nof a receipt ']).code, 0)
+  assert.equal(mark(['failed', '#1054', 'blurry', ' photo\n\nof a\u2028receipt ']).code, 0)
   assert.equal(mark(['done', '1055']).stdout, 'mark: 1055 marked done\n')
   assert.equal(fs.readFileSync(marksFile, 'utf8'), 'done 1050\ndone 1051\ndone 1052\nfailed 1053 the PDF needs a password\nfailed 1054 blurry photo of a receipt\ndone 1055\n')
   assert.deepEqual(marks(), {

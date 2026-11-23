@@ -196,6 +196,9 @@ export function createJobs({ agent: own, git: ownGit, paths, settings, proc, log
       throw new JobError(`${entry.file}: ${job.agent} is no agent of agents.yaml, which has ${own.name}`)
     }
     const problems = []
+    // As the command refuses it: a job's runs are given the lines of the channels of the agent's
+    // triggers for new messages, and an agent of agents.yaml can be left without one.
+    if (agent.run.newMessages.length === 0) problems.push(`${agent.name} has no trigger on: new-messages, whose channels its runs are given the lines of`)
     const skills = job.skills === null ? agent.skills : job.skills.map(name => agent.skills.find(skill => skill.name === name) ?? name)
     for (const name of skills.filter(skill => typeof skill === 'string')) problems.push(`skills names ${name}, which is no skill of ${agent.name}`)
     let writes = agent.writes
