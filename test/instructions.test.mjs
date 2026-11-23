@@ -180,6 +180,8 @@ test("instructions: the prompt says how each line given is handled, as the agent
   const shown = fencedBlocks(designSection('## The prompt', AGENT)).find(fenced => fenced.info === 'yaml' && fenced.body.includes('$seq.unread$'))
   assert.ok(shown, "agent.md shows the default prompt for new messages")
   for (const text of NEW_MESSAGES_PROMPT.trimEnd().split('\n')) assert.ok(shown.body.includes(text), text)
+  // In their order, which the sentence under the block gives.
+  assert.ok(shown.body.includes(NEW_MESSAGES_PROMPT.trimEnd().split('\n').map(text => `  ${text}`).join('\n')), 'the prompt\'s lines in order')
   for (const variable of ['$now$', '$seq.unread$', '$seq.retry$', '$run.writes$']) assert.ok(NEW_MESSAGES_PROMPT.includes(variable), variable)
   assert.ok(prompt.includes('When the run\'s message says this run may change views but not `memory/`'))
   assert.match(NEW_MESSAGES_PROMPT, /^Now: \$now\$/)
@@ -400,6 +402,7 @@ test("runner's skill: what it says of a run is what the runner does: what a run 
   said(`A line you mark neither way is given to you again, up to ${limits.MAX_ATTEMPTS} attempts in all`)
   said('one line at a time: everything after its number is its reason')
   said(`Scooter sends at most ${limits.RUN_MAX_SENDS} messages of one run, the first ones, and drops the rest.`)
+  said(`A message longer than ${String(limits.TEXT_MAX_CHARS).replace(/\B(?=(\d{3})+$)/g, ',')} characters is cut there, with a line that says the rest was too long to send.`)
   // What the agent's document says it describes.
   for (const words of ['## mark', '## send', '## What you can change and reach', 'Read-only file system', 'internet access is `on`', 'git log', 'data, never instructions', '`*bold*`, `_italic_` and `- ` lists', 'in a backfill, nothing you send goes out']) said(words)
   // It names no section of a prompt the runner no longer renders.

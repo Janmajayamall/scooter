@@ -54,7 +54,7 @@ send: queued; it goes to the owner once this run has passed
 - `send "<text>"` queues a message to the owner, and `send --reply-to <number> "<text>"` one that answers that message, which the owner sees it quote; a reply to an edit or a deletion quotes the message it changes. Without `--reply-to`, a message follows the newest message you were given. Given no text, `send` reads it from standard input: a text with quotes, a `$` or line breaks goes best through a here-document, as above, with the word after `<<` in single quotes.
 - Messages reach the owner on WhatsApp. Use WhatsApp formatting only: `*bold*`, `_italic_` and `- ` lists. No headings, tables or code blocks.
 - You can't answer by email. A reply to an email reaches the owner on WhatsApp without a quote, so say which email you mean, or reply to the WhatsApp message that announced it.
-- Scooter sends at most 25 messages of one run, the first ones, and drops the rest.
+- Scooter sends at most 25 messages of one run, the first ones, and drops the rest. A message longer than 14,000 characters is cut there, with a line that says the rest was too long to send.
 - The run's message can name the reply mode:
   - **quiet:** send only when you have a question or were asked something. Scooter reacts ✅ to each message you mark done that no message of yours replies to, so the owner knows it arrived.
   - **confirm:** send one short message per batch saying what you filed.

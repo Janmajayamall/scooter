@@ -378,7 +378,7 @@ test('state: the first failure in a row is known from lastRun.ok', () => {
 
 test('state: a task that fails on a setup error or an outage stays due; otherwise it is done for its date', () => {
   const state = { ...STATE, scheduled: { '21:30': '2026-11-08' } }
-  const scheduled = { kind: 'scheduled', at: '21:30', date: '2026-11-09' }
+  const scheduled = { kind: 'scheduled', at: '21:30', tag: 'check-in', date: '2026-11-09' }
   assert.deepEqual(settleTask(state, scheduled, { ok: true }, TIMING).scheduled, { '21:30': '2026-11-09' })
   assert.deepEqual(settleTask(state, scheduled, { ok: false, cause: 'other', reason: 'timed out' }, TIMING).scheduled, { '21:30': '2026-11-09' })
   const outage = settleTask(state, scheduled, { ok: false, cause: 'outage', reason: 'x' }, TIMING)

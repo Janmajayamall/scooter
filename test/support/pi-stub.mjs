@@ -1,9 +1,9 @@
 // A stub of pi, which the fake sandbox runs as a local process in place of the real one.
 // It takes pi's command line, reads the prompt, and picks what to do from keywords
 // in the lines it was given, as the real pi would act on the model's answer. It takes their numbers
-// from the prompt's lines `New:` and `Given before:`, as the tests' prompt for new messages gives
-// them (`exampleYaml` in `runner.mjs`), and reads each line as stored, through the run's index file,
-// as the agent can. A run whose prompt gives no number is a scheduled one.
+// from the prompt's lines `Given before:` and `New:`, as the tests' prompt for new messages gives
+// them (`exampleYaml` in `runner.mjs`), lowest first, and reads each line as stored, through the
+// run's index file, as the agent can. A run whose prompt gives no number is a scheduled one.
 //
 // | In a line         | It                                                                      |
 // |-------------------|-------------------------------------------------------------------------|
@@ -140,7 +140,9 @@ const numbersAfter = label => {
   const listed = new RegExp(`^${label}: (.*)$`, 'm').exec(prompt ?? '')?.[1] ?? 'none'
   return listed === 'none' ? [] : [...listed.matchAll(/(\d+)(?: \(attempt \d+ of \d+\))?/g)].map(match => Number(match[1]))
 }
-const given = [...numbersAfter('New'), ...numbersAfter('Given before')]
+// Taken in the order of their numbers, lowest first, whichever of the two lists a number is in, as
+// the agent's instructions tell it to (`docs/architecture/agent.md`, The prompt).
+const given = [...numbersAfter('Given before'), ...numbersAfter('New')].sort((a, b) => a - b)
 const indexRows = given.length === 0 ? [] : fs.readFileSync(inVm(path.join(guestCwd, 'run', 'index.txt')), 'utf8').split('\n')
 const items = given.map(seq => {
   const [, log, number] = /^\d+ (.*):(\d+) [a-z]+(?: \d+)?$/.exec(indexRows[seq - 1])

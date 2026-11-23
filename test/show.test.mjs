@@ -38,7 +38,7 @@ function setup(t, lines, { check = true, dataDir } = {}) {
   const prepare = () => {
     const datastore = openDatastore({ paths })
     datastore.poll()
-    prepareRun({ paths, agent, protocol: '', index: datastore.index })
+    prepareRun({ paths, agent, index: datastore.index })
     return datastore.index
   }
   const index = prepare()
