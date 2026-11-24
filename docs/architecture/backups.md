@@ -2,7 +2,7 @@
 
 The bridge backs Scooter up with restic to an S3-compatible bucket, Cloudflare R2 or Backblaze B2, encrypted before it leaves the machine: nightly at `BACKUP_TIME`, and on `SIGUSR1`. It also restores. The backup logic is a module of [the bridge](bridge.md), and restic is the only program it runs. That backups are restic, nightly and encrypted, and that consistency comes from stopping the writers, not from snapshots, is [the owner's fixed choice](../ARCHITECTURE.md#the-owners-fixed-choices).
 
-*The owner's answer*, 2026-11-15: the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same CLI commands and behavior, so there is one language and one test framework.
+*The owner's answer:* the backups are a Node module in the bridge that runs restic directly, in place of a shell script, with the same CLI commands and behavior, so there is one language and one test framework.
 
 ## Files
 

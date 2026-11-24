@@ -43,7 +43,7 @@
 //
 // Every field above is needed, of its form, and a fault names the field; a job of an agent given
 // in a file has none of the others' flags. A field the runner doesn't know is ignored, at the top,
-// in `progress`, in `wait` or in a retry: the owner decided so on 2026-11-23, so that a file can
+// in `progress`, in `wait` or in a retry: the owner decided so, so that a file can
 // hold more than this version reads, as long as what it needs is there.
 
 import fs from 'node:fs'
