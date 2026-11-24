@@ -38,7 +38,7 @@ A change is done when:
 
 - `npm test` passes from a clean checkout, after `npm ci`, and so do the run with the VM image and the run as root wherever the change reaches what only they run ([Development](README.md#development));
 - its tests exist, and cover its cases, the failures among them;
-- the documents say what the code now does. Each rule it adds or changes is in its component's document, once, with the reason beside it where it needs one. A choice the documents didn't settle goes beside the rule it settles, with its reason, and an answer of the owner's beside the rule it settles, quoted with its date. A contract changed is changed on both sides, and in the frame's table of contracts. The README follows what the owner sees and does. No link leads nowhere;
+- the documents say what the code now does. Each rule it adds or changes is in its component's document, once, with the reason beside it where it needs one. A choice the documents didn't settle goes beside the rule it settles, with its reason. A decision of the owner's is written as the rule it settles, with its reason where it needs one, so that the text around it stays coherent: the documents don't say that the owner decided it, or when. Those two facts go in the pull request, in its description or a comment. A contract changed is changed on both sides, and in the frame's table of contracts. The README follows what the owner sees and does. No link leads nowhere;
 - its description says what was run to verify it, with the results, and what wasn't verified.
 
 ## When to stop and ask the owner
@@ -48,9 +48,9 @@ When the documents don't settle a question, pick the simplest option that keeps 
 - before changing anything among [the owner's fixed choices](docs/ARCHITECTURE.md#the-owners-fixed-choices);
 - when a question is ambiguous, or is an open decision that the documents and the principles don't settle;
 - when two documents disagree, or a document disagrees with the code, and you can't tell which is in force;
-- where a document says to, such as when a fact an answer of the owner's rested on turns out not to hold;
+- where a document says to, such as when a fact a rule rests on turns out not to hold;
 - when a check needs root on the owner's machine, the owner's phone, accounts or keys: don't work around it. The README's [Check on the first real run](README.md#check-on-the-first-real-run) lists what waits for the owner.
-- when a review finds that everything to fix before merging is documentation, in a document or in the pull request's description, and nothing in the code or its tests. The reviewer posts its review, and then stops and shows the owner each point, with the text at fault and the text that would settle it, instead of sending the pull request back to be fixed. Whoever runs the work does the same when such a review comes back. The owner, on 2026-11-21: "whenever a reviewer complains of only documentation related issue, stop and show me the issue, and the suggested solution".
+- when a review finds that everything to fix before merging is documentation, in a document or in the pull request's description, and nothing in the code or its tests. The reviewer posts its review, and then stops and shows the owner each point, with the text at fault and the text that would settle it, instead of sending the pull request back to be fixed. Whoever runs the work does the same when such a review comes back.
 
 ## For whoever writes a plan
 

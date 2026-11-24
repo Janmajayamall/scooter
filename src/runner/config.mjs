@@ -450,9 +450,8 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     }
 
     // What the agent's VM sees, and what it may change. No list limits what they may name: a
-    // mistake there is the owner's. The owner, on 2026-11-21: "I understand that the user can
-    // make mistakes and give write permission to `datastore`. But that is their problem, not
-    // system's problem". What the runner keeps for itself in the agent's folder is the exception.
+    // mistake there is the owner's to avoid, not the system's to prevent.
+    // What the runner keeps for itself in the agent's folder is the exception.
     agent.reads = raw.reads === undefined ? ['datastore/', `agents/${name}/`] : dataPaths(at('reads'), raw.reads, 'datastore/').filter(Boolean)
     const writes = raw.writes === undefined ? [] : dataPaths(at('writes'), raw.writes, `agents/${name}/views/`)
     const own = `agents/${name}`
