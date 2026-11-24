@@ -124,7 +124,7 @@ The running bridge writes what only it knows, each channel's line and the backup
 
 ### No notice when the runner is down
 
-Neither service tells the owner on WhatsApp that the other is down. The owner, on 2026-11-21: "this is a service monitoring problem. Whatsapp is a potential channel to communicate outages, but I wouldn't want to make that decision right now." Until it is decided, the logs of both services, or the service manager, say whether each runs. `scooter status` doesn't say that the runner is down: it prints for a runner that stopped what it prints for one that runs, and shows the outage only in what follows from it, the messages pending and the time of the last run, and in the wait after a stop on an error where the runner keeps that wait itself. *Why:* `runner/status.json` is written at a start, and nothing in it says the runner has stopped; and the command reads only files.
+Neither service tells the owner on WhatsApp that the other is down. The owner holds this to be a matter of monitoring the services: WhatsApp could carry word of an outage, and the owner has left that undecided. Until it is decided, the logs of both services, or the service manager, say whether each runs. `scooter status` doesn't say that the runner is down: it prints for a runner that stopped what it prints for one that runs, and shows the outage only in what follows from it, the messages pending and the time of the last run, and in the wait after a stop on an error where the runner keeps that wait itself. *Why:* `runner/status.json` is written at a start, and nothing in it says the runner has stopped; and the command reads only files.
 
 ## The bridge's state
 

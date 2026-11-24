@@ -69,7 +69,7 @@ The webhook is best-effort, so catch-up is what makes intake complete: it lists 
 - It stops between rows when the channel stops, and hands its rows over one at a time. Each catch-up logs how many rows it read, delivered and dropped.
 - **A state an older bridge wrote** has no `catchUp`: catch-up starts, as that bridge did, from the newest incoming WhatsApp line, in the chat it listed, and saves that at once.
 
-*The owner's answer:* asked on 2026-11-18 whether to close the case of a catch-up cut short, which could leave messages out of the datastore for good ("a catch-up that was cut short runs again from where it started"), the owner answered "yes".
+*The owner's answer:* the owner agreed to close the case of a catch-up cut short, which could leave messages out of the datastore for good: a catch-up that was cut short runs again from where it started.
 
 What catch-up can't close with wacli as it is, a message that reaches wacli late, is in the README's [Known limits](../../README.md#known-limits). wacli's `messages changes` would close it, and isn't used: nothing here can run it against a paired wacli, and it would replace a catch-up the tests check with one nothing has seen.
 
@@ -84,7 +84,7 @@ What catch-up can't close with wacli as it is, a message that reaches wacli late
 For [delivery](delivery.md), WhatsApp can send and react.
 
 - **`sendText`** runs `wacli send text --to <owner chat> --message <text> --no-preview`, with `--reply-to <ID>` when it quotes. The chat is the owner's ([Owner matching](#owner-matching)).
-- **`--no-preview` on every text.** Without it, wacli fetches the first URL in the text to build a link preview. Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request. So links reach the owner as plain text. *The owner's answer*, 2026-11-16, to the proposal "the bridge always passes `--no-preview`, so links arrive as plain text": "Yes, both" (with a second answer, about the agent's sessions). A reaction carries the emoji from the config, and v2 sends no files, so nothing else Scooter sends through wacli carries the agent's words.
+- **`--no-preview` on every text.** Without it, wacli fetches the first URL in the text to build a link preview. Most texts are the agent's, so a misled agent could make the bridge's side fetch a URL of its choosing, with the owner's data in it, while internet access is off, and no log would show the request. So links reach the owner as plain text. *The owner's answer:* the owner agreed that the bridge always passes `--no-preview`, so that links arrive as plain text. A reaction carries the emoji from the config, and v2 sends no files, so nothing else Scooter sends through wacli carries the agent's words.
 - **`react`** runs `wacli send react --to <owner chat> --id <ID> --sender <owner chat> --reaction <emoji>`: in a one-to-one chat the owner's JID is the chat's.
 - Each resolves with `data.id`, the new message's ID, or null when wacli gives none. `signal` stops wacli, for a bridge that is stopping.
 - wacli's warning on stderr that two sends came less than 5 seconds apart isn't a failure: the send goes out all the same ([Pacing](delivery.md#pacing)).
