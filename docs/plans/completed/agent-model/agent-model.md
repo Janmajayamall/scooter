@@ -1,6 +1,6 @@
 # Agents, runs and backfills on a simpler model
 
-Status: active. Written 2026-11-21 from [issue 25](https://github.com/Janmajayamall/scooter/issues/25), which holds the owner's decisions of that day. The workflow [`agent-model.workflow.js`](agent-model.workflow.js), beside this plan, runs it.
+Status: completed. Written 2026-11-21 from [issue 25](https://github.com/Janmajayamall/scooter/issues/25), which holds the owner's decisions of that day. Pieces 1 to 9 were merged by 2026-11-23, as pull requests 27, 30 to 32, 34, 35 and 37 to 39, and the plan moved to this folder on 2026-11-23. The workflow [`agent-model.workflow.js`](agent-model.workflow.js), beside this plan, ran it.
 
 Every agent of this work is new, remembers nothing, and starts here. Read this plan whole, then issue 25 (`gh issue view 25`), then `AGENTS.md` and what it tells you to read. Your prompt gives your role, implementer, reviewer or fixer, and a piece's number. [How the work runs](#how-the-work-runs) says what each role does, the piece's own heading says what the piece covers, and [This machine](#this-machine) says how to run things here.
 
