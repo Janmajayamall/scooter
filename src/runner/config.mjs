@@ -450,7 +450,7 @@ export function parseConfig(text, { configDir, dataDir = null, settings = null, 
     }
 
     // What the agent's VM sees, and what it may change. No list limits what they may name: a
-    // mistake there is the owner's to avoid, not the system's to prevent, as the owner decided.
+    // mistake there is the owner's to avoid, not the system's to prevent.
     // What the runner keeps for itself in the agent's folder is the exception.
     agent.reads = raw.reads === undefined ? ['datastore/', `agents/${name}/`] : dataPaths(at('reads'), raw.reads, 'datastore/').filter(Boolean)
     const writes = raw.writes === undefined ? [] : dataPaths(at('writes'), raw.writes, `agents/${name}/views/`)
