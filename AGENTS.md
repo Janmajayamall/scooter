@@ -38,7 +38,7 @@ A change is done when:
 
 - `npm test` passes from a clean checkout, after `npm ci`, and so do the run with the VM image and the run as root wherever the change reaches what only they run ([Development](README.md#development));
 - its tests exist, and cover its cases, the failures among them;
-- the documents say what the code now does. Each rule it adds or changes is in its component's document, once, with the reason beside it where it needs one. A choice the documents didn't settle goes beside the rule it settles, with its reason. A decision of the owner's is written as the rule it settles, with its reason where it needs one, so that the text around it stays coherent: the documents don't say that the owner decided it, or when. Those two facts go in the pull request, in its description or a comment. A contract changed is changed on both sides, and in the frame's table of contracts. The README follows what the owner sees and does. No link leads nowhere;
+- the documents say what the code now does. Each rule it adds or changes is in its component's document, once, with the reason beside it where it needs one. A choice the documents didn't settle goes beside the rule it settles, with its reason. A decision of the owner's is written as the rule it settles, with its reason where it needs one, so that the text around it stays coherent: the documents don't say that the owner decided it, or when. Those two facts go in the pull request or the issue, in its description or a comment. A contract changed is changed on both sides, and in the frame's table of contracts. The README follows what the owner sees and does. No link leads nowhere;
 - its description says what was run to verify it, with the results, and what wasn't verified.
 
 ## When to stop and ask the owner
@@ -50,11 +50,12 @@ When the documents don't settle a question, pick the simplest option that keeps 
 - when two documents disagree, or a document disagrees with the code, and you can't tell which is in force;
 - where a document says to, such as when a fact a rule rests on turns out not to hold;
 - when a check needs root on the owner's machine, the owner's phone, accounts or keys: don't work around it. The README's [Check on the first real run](README.md#check-on-the-first-real-run) lists what waits for the owner.
+- when a fault is one of a kind, and closing the kind at its root is a large change, or one the plan doesn't name. Ask whether to fix it at the root, or to write the cases down as costs.
 - when a review finds that everything to fix before merging is documentation, in a document or in the pull request's description, and nothing in the code or its tests. The reviewer posts its review, and then stops and shows the owner each point, with the text at fault and the text that would settle it, instead of sending the pull request back to be fixed. Whoever runs the work does the same when such a review comes back.
 
-## For whoever writes a plan
+## For work that runs from a plan
 
-Read [`docs/plans/implementer-mistakes.md`](docs/plans/implementer-mistakes.md) first: the mistakes an implementing model makes, and what a plan can say to prevent each.
+Read [`docs/plans/roles.md`](docs/plans/roles.md) first: the rules for the planner, the implementer, the reviewer, the fixer and the orchestrator. Read its part for every role, and then your own.
 
 ## Commits and pull requests
 
